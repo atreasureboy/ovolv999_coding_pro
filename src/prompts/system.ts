@@ -105,64 +105,67 @@ function getMindsetSection(): string {
 
 function getToolUsageSection(): string {
   const fileOps = [
-    '读文件 → Read（不用 cat/head/tail）',
-    '编辑 → Edit（精确字符串替换，不用 sed）',
-    '查找文件 → Glob（不用 find/ls）',
-    '内容搜索 → Grep（不用 grep/rg）',
-    '新建文件 → Write（不用 echo > / heredoc）',
+    'Read files → Read (NOT cat/head/tail)',
+    'Edit files → Edit (exact string replacement, NOT sed)',
+    'Find files → Glob (NOT find/ls)',
+    'Search content → Grep (NOT grep/rg)',
+    'Create files → Write (NOT echo > / heredoc)',
   ]
   const concurrency = [
-    '同一轮响应中，多个独立的只读/Bash 调用会被引擎 Promise.all 并发执行 —— 想并行就在**一个响应里**同时发出多个调用',
-    '依赖的串行命令用 && 拼在同一个 Bash 调用里，不要拆多次',
-    '长时任务用后台运行并重定向到文件，后续用 Read / tail 查进度',
+    'Multiple independent read-only/Bash calls in one response run concurrently via Promise.all',
+    'For dependent commands, chain with && in a single Bash call',
+    'Long tasks: use run_in_background:true, check later with Read',
   ]
   const bashRules = [
-    '路径含空格加引号；尽量用绝对路径；避免 cd（用工具的 workdir 参数）',
-    '后台任务必须重定向 `> file 2>&1`，否则输出丢失',
-    '命令失败 → 读错误输出、诊断、修复后重试，不要直接放弃',
+    'Quote paths with spaces; use absolute paths; avoid cd',
+    'Background tasks must redirect `> file 2>&1`',
+    'On failure → read stderr, diagnose, fix, retry',
   ]
   const tools = [
-    '**Bash** — 执行 shell 命令（编译、运行、git 等）',
-    '**Read / Write / Edit / Glob / Grep** — 文件操作（优先用专用工具而非 Bash）',
-    '**TodoWrite** — 3 步以上任务分解与进度跟踪',
-    '**WebFetch / WebSearch** — 获取网页内容、搜索资料、查文档',
-    '**Agent** — 委派子 agent（预设名或自定义 AgentConfig）',
-    '**load_skill** — 按需加载技能的完整 prompt（懒加载）',
-    '**TmuxSession** — 管理本地交互进程（REPL、需要等待提示符的程序）',
-    '**ShellSession** — 管理入站连接（持久 shell 会话）',
+    '**Bash** — Shell commands (build, test, git)',
+    '**Read / Write / Edit / Glob / Grep** — File ops (prefer over Bash)',
+    '**TodoWrite** — Task tracking for 3+ step work',
+    '**WebFetch / WebSearch** — Web content / docs',
+    '**Agent** — Delegate sub-agent (preset or custom config)',
+    '**load_skill** — Load skill prompt on demand',
+    '**memory_write/search/recall** — Store/find/recall knowledge',
+    '**TmuxSession** — Interactive process management',
+    '**ShellSession** — Inbound persistent shell connections',
   ]
   return [
-    '# 工具使用',
+    '# Tool Usage',
     '',
-    '## 文件操作（用专用工具，不用 Bash）',
+    '## File Operations (use dedicated tools, not Bash)',
     ...prependBullets(fileOps),
     '',
-    '## 并发执行',
+    '## Concurrency',
     ...prependBullets(concurrency),
     '',
-    '## Bash 规范',
+    '## Bash Rules',
     ...prependBullets(bashRules),
     '',
-    '## 工具清单',
+    '## Tool List',
     ...prependBullets(tools),
   ].join('\n')
 }
 
 function getInteractiveSection(): string {
-  return `# 交互式进程管理
+  return `# Interactive Process Management
 
-以下程序不能直接用 Bash 前台运行（会挂住等待输入导致超时）：
-交互式 REPL、需要等待提示符的工具（如 python REPL、mysql client）、任何显示 \`> / # / $\` 等待输入的程序。
+Never run interactive processes in foreground Bash (they block until timeout):
+- REPLs (python3 -i, node, irb)
+- Tools waiting for prompts (mysql client)
+- Anything showing \`> / # / $\` waiting for input
 
-## 用 TmuxSession 管理本地交互进程
+## Use TmuxSession for local interactive processes
     TmuxSession({ action: "new", session: "repl", command: "python3 -i" })
     TmuxSession({ action: "wait_for", session: "repl", pattern: ">>>", timeout: 10000 })
     TmuxSession({ action: "send", session: "repl", text: "print(1+1)" })
     TmuxSession({ action: "capture", session: "repl" })
 
-## 用 ShellSession 管理入站持久连接
- - **TmuxSession**：本地启动的交互工具（本地进程）
- - **ShellSession**：外部连回来的持久 shell（入站连接）`
+## TmuxSession vs ShellSession
+ - **TmuxSession**: local interactive tools (local processes)
+ - **ShellSession**: inbound persistent connections (external shells)`
 }
 
 function getMultiAgentSection(): string {
@@ -188,20 +191,21 @@ function getMultiAgentSection(): string {
  - **无依赖**（如同时探索两个模块、同时审查多个文件）→ 一个响应里发多个 Agent，并发执行
  - **有依赖**（如需要 A 的结果才能让 B 干活）→ 串行，先 A 后 B
 
-## 编写子 agent prompt 的规范
-每个 sub-agent 的 prompt 必须**完全自包含**：
-  - 具体任务（做什么、输出什么）
-  - 上下文（相关文件路径、已有发现、约束）
-  - 工作目录 / 会话目录（如需写产物）
+## Writing the Prompt
+Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation.
+- Explain what you're trying to accomplish and why
+- Describe what you've already learned or ruled out
+- Include file paths, line numbers, what specifically to change
+- If you need a short response, say so ("report in under 200 words")
 
-Sub-agent 没有父对话上下文，所有信息必须在 prompt 中提供。Sub-agent 禁止再调 Agent（禁止递归）。`
+Terse command-style prompts produce shallow, generic work. Sub-agent cannot call Agent (no recursion, max depth 5).`
 }
 
 function getCriticInteractSection(): string {
-  return `# 会话交互
- - 用户可按 **ESC** 暂停 —— 当前工具执行完后会停下并允许注入建议。收到新指令后继续任务，不要从头重复已完成的步骤。
- - 每若干轮会有自动 critic 检查，发现失误时会注入纠错提示。**收到后立即按建议调整行动，不要反驳。**
- - 任务 ≥3 步 → 用 TodoWrite 维护进度`
+  return `# Session Interaction
+ - Press **ESC** to pause — the current tool will finish, then you can inject guidance. After receiving new instructions, continue the task without repeating completed steps.
+ - An automatic critic check runs every few iterations. If corrections are injected, **adjust immediately — do not argue.**
+ - For tasks with 3+ steps → use TodoWrite to track progress`
 }
 
 function getOutputStyleSection(): string {
@@ -238,22 +242,22 @@ export function getSystemPrompt(cwd: string, taskContext?: TaskContext, sessionD
 }
 
 function formatTaskContextSection(t: TaskContext, sessionDir?: string): string {
-  const lines: string[] = ['# 当前任务上下文 (Task Context)']
+  const lines: string[] = ['# Task Context']
 
-  if (t.name) lines.push(` - 任务名称: ${t.name}`)
-  if (t.phase) lines.push(` - 当前阶段: **${t.phase}**`)
+  if (t.name) lines.push(` - Name: ${t.name}`)
+  if (t.phase) lines.push(` - Phase: **${t.phase}**`)
 
   if (t.scope && t.scope.length > 0) {
-    lines.push(` - 工作范围:`)
+    lines.push(` - Scope:`)
     t.scope.forEach((s) => lines.push(`   - ${s}`))
   }
 
-  if (t.notes) lines.push(` - 备注: ${t.notes}`)
+  if (t.notes) lines.push(` - Notes: ${t.notes}`)
 
   if (sessionDir) {
     lines.push('')
-    lines.push('## 会话输出目录')
-    lines.push(`产物（生成文件、日志、报告）保存到 **${sessionDir}/**，使用绝对路径。`)
+    lines.push('## Session Output Directory')
+    lines.push(`Artifacts (generated files, logs, reports) go in **${sessionDir}/** — use absolute paths.`)
   }
 
   return lines.join('\n')
