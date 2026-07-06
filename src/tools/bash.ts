@@ -221,8 +221,26 @@ export class BashTool implements Tool {
           const out = [nodeErr.stdout ?? stdout, nodeErr.stderr ?? stderr].filter(Boolean).join('\n').trimEnd()
           const exitCode = nodeErr.code ?? 1
           const prefix = follow_mode ? `[Spectator mode: output streamed to tmux pane] ${followModeHint}\n` : ''
+
+          // Error pattern detection — help the LLM diagnose common coding errors
+          let hint = ''
+          const lowerOut = out.toLowerCase()
+          if (lowerOut.includes('command not found')) {
+            hint = '\n\n[Hint: command not found — check if the tool is installed or in PATH. Try `which <cmd>` or install it.]'
+          } else if (lowerOut.includes('no such file or directory')) {
+            hint = '\n\n[Hint: file/directory not found — check the path. Use Glob to find the correct location.]'
+          } else if (lowerOut.includes('permission denied')) {
+            hint = '\n\n[Hint: permission denied — check file permissions or try with appropriate privileges.]'
+          } else if (lowerOut.includes('econnrefused') || lowerOut.includes('etimedout')) {
+            hint = '\n\n[Hint: connection error — check if the service is running and the port is correct.]'
+          } else if (lowerOut.includes('cannot find module') || lowerOut.includes('could not resolve')) {
+            hint = '\n\n[Hint: module not found — run `npm install` or check the import path.]'
+          } else if (lowerOut.includes('syntax error') || lowerOut.includes('unexpected token')) {
+            hint = '\n\n[Hint: syntax error — check for missing brackets, semicolons, or incorrect syntax.]'
+          }
+
           resolve({
-            content: truncateOutput(prefix + `Exit code: ${exitCode}\n${out}`, MAX_OUTPUT_LENGTH).trimEnd(),
+            content: truncateOutput(prefix + `Exit code: ${exitCode}\n${out}${hint}`, MAX_OUTPUT_LENGTH).trimEnd(),
             isError: false,  // non-zero exit is not necessarily fatal
           })
         },

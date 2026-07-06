@@ -117,11 +117,11 @@ export function detectProjectContext(cwd: string): ProjectContext {
 
 /** Format project context as a system prompt section */
 export function formatProjectContext(ctx: ProjectContext): string {
-  const lines: string[] = ['# 项目上下文 (Auto-detected)']
+  const lines: string[] = ['# Project Context (Auto-detected)']
 
-  if (ctx.language) lines.push(` - 语言: ${ctx.language}`)
-  if (ctx.framework) lines.push(` - 框架: ${ctx.framework}`)
-  if (ctx.packageManager) lines.push(` - 包管理器: ${ctx.packageManager}`)
+  if (ctx.language) lines.push(` - Language: ${ctx.language}`)
+  if (ctx.framework) lines.push(` - Framework: ${ctx.framework}`)
+  if (ctx.packageManager) lines.push(` - Package manager: ${ctx.packageManager}`)
 
   if (ctx.scripts) {
     const s = ctx.scripts
@@ -132,19 +132,46 @@ export function formatProjectContext(ctx: ProjectContext): string {
     if (s.format) scripts.push(`format: \`${s.format}\``)
     if (s.dev) scripts.push(`dev: \`${s.dev}\``)
     if (scripts.length > 0) {
-      lines.push(` - 常用命令:`)
+      lines.push(` - Commands:`)
       for (const sc of scripts) lines.push(`   - ${sc}`)
+    }
+  }
+
+  // Framework-specific guidance
+  if (ctx.framework) {
+    lines.push('')
+    lines.push('## Framework Notes')
+    switch (ctx.framework) {
+      case 'Next.js':
+        lines.push(' - App Router: components in `app/`, API routes in `app/api/`')
+        lines.push(' - Use `next/script` for scripts, `next/image` for images')
+        lines.push(' - Server components by default; `"use client"` for client components')
+        break
+      case 'Vite':
+        lines.push(' - Entry: `src/main.ts`, config: `vite.config.ts`')
+        lines.push(' - Dev server: `npm run dev`, build: `npm run build`')
+        break
+      case 'React':
+        lines.push(' - Components in `src/components/`, hooks in `src/hooks/`')
+        lines.push(' - Check for state management (Redux/Zustand/Context) before adding new state')
+        break
+      case 'Express':
+        lines.push(' - Routes in `src/routes/`, middleware in `src/middleware/`')
+        lines.push(' - Use asyncHandler wrapper for async route handlers')
+        break
+      default:
+        lines.push(` - Follow existing ${ctx.framework} conventions in the codebase`)
     }
   }
 
   if (ctx.git) {
     lines.push('')
-    lines.push('## Git 状态')
-    lines.push(` - 分支: ${ctx.git.branch}`)
-    if (ctx.git.modifiedCount! > 0) lines.push(` - 未暂存修改: ${ctx.git.modifiedCount} 个文件`)
-    if (ctx.git.stagedCount! > 0) lines.push(` - 已暂存: ${ctx.git.stagedCount} 个文件`)
+    lines.push('## Git Status')
+    lines.push(` - Branch: ${ctx.git.branch}`)
+    if (ctx.git.modifiedCount! > 0) lines.push(` - Modified: ${ctx.git.modifiedCount} files`)
+    if (ctx.git.stagedCount! > 0) lines.push(` - Staged: ${ctx.git.stagedCount} files`)
     if (ctx.git.recentCommits && ctx.git.recentCommits.length > 0) {
-      lines.push(` - 最近提交:`)
+      lines.push(` - Recent commits:`)
       for (const c of ctx.git.recentCommits) lines.push(`   - ${c}`)
     }
   }

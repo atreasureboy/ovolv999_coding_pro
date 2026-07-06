@@ -18,6 +18,7 @@ export interface GrepInput {
   output_mode?: 'files_with_matches' | 'content' | 'count'
   context?: number
   case_insensitive?: boolean
+  include?: string
 }
 
 export class GrepTool implements Tool {
@@ -43,6 +44,10 @@ export class GrepTool implements Tool {
             type: 'string',
             description: 'File pattern filter (e.g. "*.ts", "**/*.tsx")',
           },
+          include: {
+            type: 'string',
+            description: 'File extension filter (e.g. "ts", "js", "py"). Shorthand for glob: "*.ts"',
+          },
           output_mode: {
             type: 'string',
             enum: ['files_with_matches', 'content', 'count'],
@@ -67,10 +72,14 @@ export class GrepTool implements Tool {
       pattern,
       path: searchPath,
       glob: globPattern,
+      include: includePattern,
       output_mode = 'files_with_matches',
       context: contextLines,
       case_insensitive,
     } = input as unknown as GrepInput
+
+    // include shorthand: "ts" → glob "*.ts"
+    const effectiveGlob = globPattern ?? (includePattern ? `*.${includePattern}` : undefined)
 
     if (!pattern || typeof pattern !== 'string') {
       return { content: 'Error: pattern is required', isError: true }
@@ -98,15 +107,15 @@ export class GrepTool implements Tool {
         break
     }
 
-    if (globPattern) {
-      args.push(`--glob`, `${globPattern}`)
+    if (effectiveGlob) {
+      args.push(`--glob`, `${effectiveGlob}`)
     }
 
     // Escape the pattern for shell
     const escapedPattern = pattern.replace(/'/g, "'\\''")
     const escapedPath = searchDir.replace(/'/g, "'\\''")
 
-    const cmd = `rg ${args.join(' ')} '${escapedPattern}' '${escapedPath}' 2>/dev/null || grep -r${case_insensitive ? 'i' : ''}${output_mode === 'files_with_matches' ? 'l' : 'n'} --include='${globPattern ?? '*'}' -E '${escapedPattern}' '${escapedPath}' 2>/dev/null`
+    const cmd = `rg ${args.join(' ')} '${escapedPattern}' '${escapedPath}' 2>/dev/null || grep -r${case_insensitive ? 'i' : ''}${output_mode === 'files_with_matches' ? 'l' : 'n'} --include='${effectiveGlob ?? '*'}' -E '${escapedPattern}' '${escapedPath}' 2>/dev/null`
 
     try {
       const { stdout } = await execAsync(cmd, {

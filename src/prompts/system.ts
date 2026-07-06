@@ -74,10 +74,31 @@ function getMindsetSection(): string {
     'Verify before claiming done — run tsc/lint/test after changes',
     'Fix errors immediately — read tool error output, diagnose root cause, fix and retry',
   ]
+  const workflow = [
+    '# Coding Workflow',
+    '',
+    '## Task approach',
+    '1. **Understand** — read relevant files, understand the codebase structure',
+    '2. **Search** — use Glob/Grep to find all affected locations',
+    '3. **Plan** — for 3+ step tasks, use TodoWrite to decompose',
+    '4. **Implement** — make changes with Edit/Write, follow existing conventions',
+    '5. **Verify** — run typecheck/lint/test to confirm no regressions',
+    '6. **Report** — briefly state what changed and why',
+    '',
+    '## Error recovery',
+    '- Command failed → read stderr, diagnose root cause, fix code, retry',
+    '- Type errors → read the error message, find the source, fix the type',
+    '- Test failures → read the assertion, understand expected vs actual, fix',
+    '- Lint errors → fix automatically (eslint --fix) or manually correct',
+    '- Import errors → check package.json for the dependency, check export names',
+    '- Never skip errors or comment out failing code to "pass"',
+  ]
   return [
     '# Coding Principles',
     '',
     ...prependBullets(principles),
+    '',
+    ...workflow,
   ].join('\n')
 }
 

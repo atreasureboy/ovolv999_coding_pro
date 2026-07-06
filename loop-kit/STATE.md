@@ -1,29 +1,35 @@
-# STATE — ovolv999 coding 特化 + loop-kit 集成
+# STATE — ovolv999 深度 coding 特化
 
 ## 迭代进度
-- 第 1/12 轮  | 模式: 单目标
-- 验收通过: 8 / 8 条 ✅ DONE
+- 第 3/12 轮  | 模式: 单目标
+- 验收通过: 11 / 11 条 ✅ DONE
 
 ## 已完成
-- system.ts: coding 专用提示词（英文，Claude Code 风格，简洁直接）
-- projectContext.ts: 自动检测 package.json/tsconfig/git 状态 → 注入系统提示词
-- fileEdit.ts: Edit 成功后显示 diff（- old / + new 变更行）
-- loopEngine.ts: 内置 loop 协议引擎（WAKE→PLAN→DO→REVIEW→CHECK→ACT）
-- bin: --loop 参数 + --loop-max-iters + 项目上下文注入系统提示词
-- bin: git 状态显示在启动信息
+### Iteration 1
+- system.ts: coding workflow 指导（Understand→Search→Plan→Implement→Verify→Report）
+- system.ts: error recovery 模式（command failed/type errors/test failures/lint errors/import errors）
+- fileEdit.ts: Edit 后自动格式化（检测 .prettierrc/.eslintrc，跑 prettier --write 或 eslint --fix）
+
+### Iteration 2
+- bash.ts: 错误模式识别（command not found/file not found/permission denied/connrefused/module not found/syntax error → 附带 hint）
+- fileRead.ts: 二进制文件检测（null bytes → 提示用 xxd/strings）
+- fileRead.ts: 大文件分页提示（"Use offset=N to read next page"）
+- grep.ts: include 简写参数（include:"ts" → glob:"*.ts"）
+
+### Iteration 3
+- loader.ts: 新增 4 个 coding skills（refactor/debug/doc-gen + 原有 commit/review/fix-types/test = 8 个）
+- projectContext.ts: framework-specific guidance（Next.js/Vite/React/Express 各有专属提示）
+- projectContext.ts: 全部英文化（系统提示词一致性）
 
 ## 验收结果
-- A1: tsc --noEmit → exit 0 ✓
-- A2: eslint → exit 0 ✓
-- A3: vitest → 66 passed ✓
-- A4: "coding" in system.ts → 2 ✓
-- A5: detectProjectContext in bin → 2 ✓
-- A6: "diff" in fileEdit → 8 ✓
-- A7: loopEngine.ts exists → True ✓
-- A8: "loop" in bin → 19 ✓
-
-## 当前卡点
-- (无)
-
-## 下一步
-- DONE — 全部验收通过
+- A1: tsc exit 0 ✓
+- A2: eslint exit 0 ✓
+- A3: 66 tests passed ✓
+- A4: workflow/Verify/Search first in system.ts = 6 ✓
+- A5: framework in projectContext = 13 ✓
+- A6: prettier/format in fileEdit = 8 ✓
+- A7: error patterns in bash = 3 ✓
+- A8: offset/limit in fileRead = 9 ✓
+- A9: include/glob in grep = 12 ✓
+- A10: refactor/debug in loader = 7 ✓
+- A11: retry/recover in system.ts = 3 ✓

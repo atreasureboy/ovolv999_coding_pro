@@ -7,6 +7,9 @@
  */
 
 import { readFile, writeFile } from 'fs/promises'
+import { existsSync } from 'fs'
+import { dirname } from 'path'
+import { execSync } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { EDIT_FILE_DESCRIPTION } from '../prompts/tools.js'
 
@@ -93,6 +96,19 @@ export class FileEditTool implements Tool {
 
       await writeFile(file_path, newContent, 'utf8')
 
+      // Auto-format: detect prettier/eslint config in project and run after edit
+      const projectRoot = dirname(file_path)
+      let formatNote = ''
+      try {
+        if (existsSync(`${projectRoot}/.prettierrc`) || existsSync(`${projectRoot}/.prettierrc.js`) || existsSync(`${projectRoot}/prettier.config.js`)) {
+          execSync(`npx prettier --write "${file_path}" 2>&1`, { cwd: projectRoot, encoding: 'utf8', timeout: 10_000 })
+          formatNote = ' (formatted with prettier)'
+        } else if (existsSync(`${projectRoot}/.eslintrc`) || existsSync(`${projectRoot}/.eslintrc.js`) || existsSync(`${projectRoot}/eslint.config.js`)) {
+          execSync(`npx eslint --fix "${file_path}" 2>&1`, { cwd: projectRoot, encoding: 'utf8', timeout: 10_000 })
+          formatNote = ' (fixed with eslint)'
+        }
+      } catch { /* best-effort format — don't fail the edit */ }
+
       // Build a simple diff for display
       const oldLines = old_string.split('\n')
       const newLines = new_string.split('\n')
@@ -108,7 +124,7 @@ export class FileEditTool implements Tool {
 
       const count = replace_all ? occurrences : 1
       return {
-        content: `Edited ${file_path}: replaced ${count} occurrence${count !== 1 ? 's' : ''}${diff}`,
+        content: `Edited ${file_path}: replaced ${count} occurrence${count !== 1 ? 's' : ''}${formatNote}${diff}`,
         isError: false,
       }
     } catch (err: unknown) {

@@ -53,6 +53,16 @@ export class FileReadTool implements Tool {
 
     try {
       const raw = await readFile(file_path, 'utf8')
+
+      // Binary file detection — check for null bytes in first 8000 chars
+      const sample = raw.slice(0, 8000)
+      if (sample.includes('\0')) {
+        return {
+          content: `File: ${file_path}\n(Binary file — not displayed. Use Bash to process: \`xxd\`, \`file\`, or \`strings\`)`,
+          isError: false,
+        }
+      }
+
       const lines = raw.split('\n')
       const total = lines.length
 
@@ -67,7 +77,7 @@ export class FileReadTool implements Tool {
 
       const header =
         total > maxLines
-          ? `File: ${file_path} (showing lines ${startLine}-${endLine} of ${total})\n`
+          ? `File: ${file_path} (showing lines ${startLine}-${endLine} of ${total})\nUse offset=${endLine + 1} to read next page.\n`
           : `File: ${file_path}\n`
 
       return { content: header + numbered, isError: false }

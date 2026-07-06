@@ -207,6 +207,71 @@ Steps:
 5. Re-run tests to confirm all pass`,
     source: 'builtin',
   },
+  {
+    name: 'refactor',
+    description: 'Refactor code for clarity, reduce complexity, extract functions',
+    prompt: `Refactor the specified code for clarity and maintainability.
+$ARGS
+
+Steps:
+1. Read the target file/function specified in $ARGS
+2. Identify improvement opportunities:
+   - Long functions (>40 lines) → extract sub-functions
+   - Deep nesting (>3 levels) → early returns / guard clauses
+   - Duplicate logic → extract shared helper
+   - Unclear names → rename for intent
+   - Dead code → remove
+3. Make changes incrementally, verifying \`tsc --noEmit\` after each
+4. Run tests to confirm no behavior change
+5. Summarize what was refactored and why
+
+Rules:
+- Do NOT change public API signatures
+- Do NOT add new dependencies
+- Preserve all existing tests passing
+- One logical change per commit`,
+    source: 'builtin',
+  },
+  {
+    name: 'debug',
+    description: 'Debug an issue — reproduce, diagnose, fix, verify',
+    prompt: `Debug the specified issue systematically.
+$ARGS
+
+Steps:
+1. **Reproduce**: Run the command/scenario that triggers the issue
+2. **Isolate**: Use Grep/Read to find the relevant code path
+3. **Diagnose**: Read the error message, trace the execution flow, identify root cause
+4. **Hypothesize**: Form a theory about why it fails
+5. **Fix**: Make the minimal change to fix the root cause (not just the symptom)
+6. **Verify**: Re-run the reproduction to confirm the fix
+7. **Regression**: Run \`tsc --noEmit && npm test\` to check for side effects
+
+If the issue is environmental (missing dep, wrong config), say so and suggest the fix.
+If you can't reproduce it, say what you tried and what info is missing.`,
+    source: 'builtin',
+  },
+  {
+    name: 'doc-gen',
+    description: 'Generate or update documentation for code',
+    prompt: `Generate documentation for the specified code.
+$ARGS
+
+Steps:
+1. Read the target file/module specified in $ARGS
+2. For each exported function/class/interface:
+   - Write a JSDoc/TSDoc comment (one-line summary + params + returns)
+   - For complex logic, add a brief example
+3. If a README section is needed, create one
+4. Do NOT change code logic — only add/improve comments
+5. Run \`tsc --noEmit\` to verify no syntax issues from comments
+
+Style:
+- @param and @returns only when not obvious from types
+- Use \`{\`backtick\`}\` for type references in comments
+- Keep comments concise — describe WHY, not WHAT`,
+    source: 'builtin',
+  },
 ]
 
 // ─────────────────────────────────────────────────────────────
