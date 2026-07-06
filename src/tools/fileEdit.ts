@@ -12,6 +12,7 @@ import { dirname } from 'path'
 import { execSync } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { EDIT_FILE_DESCRIPTION } from '../prompts/tools.js'
+import { hasFileBeenRead } from '../core/fileState.js'
 
 export interface EditFileInput {
   file_path: string
@@ -67,6 +68,14 @@ export class FileEditTool implements Tool {
     }
     if (old_string === new_string) {
       return { content: 'Error: old_string and new_string are identical — no change needed', isError: true }
+    }
+
+    // Enforce read-before-edit (like Claude Code — prevents blind edits)
+    if (existsSync(file_path) && !hasFileBeenRead(file_path)) {
+      return {
+        content: `Error: You must Read ${file_path} before editing it. Use the Read tool first to see the current contents.`,
+        isError: true,
+      }
     }
 
     try {

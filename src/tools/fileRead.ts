@@ -6,6 +6,7 @@
 import { readFile } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { READ_FILE_DESCRIPTION } from '../prompts/tools.js'
+import { markFileRead } from '../core/fileState.js'
 
 export interface ReadFileInput {
   file_path: string
@@ -79,6 +80,8 @@ export class FileReadTool implements Tool {
         total > maxLines
           ? `File: ${file_path} (showing lines ${startLine}-${endLine} of ${total})\nUse offset=${endLine + 1} to read next page.\n`
           : `File: ${file_path}\n`
+
+      markFileRead(file_path)
 
       return { content: header + numbered, isError: false }
     } catch (err: unknown) {

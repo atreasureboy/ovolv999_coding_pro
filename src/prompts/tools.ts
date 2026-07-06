@@ -1,5 +1,5 @@
 /**
- * Tool descriptions
+ * Tool descriptions — Claude Code-level detail for coding tools.
  */
 
 export const BASH_DESCRIPTION = `Executes a bash command and returns its output (stdout + stderr combined).
@@ -13,7 +13,7 @@ IMPORTANT: Avoid using this for file operations when dedicated tools exist:
 - Edit files: Use Edit (NOT sed/awk)
 - Write files: Use Write (NOT echo > or cat <<EOF)
 
-Reserve Bash for: shell commands, build tools, test runners, git, scripts, system operations.
+Reserve Bash for: build tools, test runners, git operations, system commands, scripts.
 
 ## Timeout Strategy
 
@@ -23,28 +23,25 @@ Always set an explicit timeout for long-running commands based on expected durat
 - Quick commands (ls, git status): default is fine
 - Build / compile: timeout=300000
 - Test suites: timeout=600000
-- Long-running tasks (full builds, large migrations): timeout=3600000+
 
-## Background Pattern for Long-Running Commands
+## Background Pattern
 
-For commands expected to run >5 minutes, ALWAYS use background mode to avoid blocking:
+For commands expected to run >5 minutes, ALWAYS use background mode:
 
 \`\`\`
-# Step 1: Launch in background, redirect output to file
 run_in_background=true
 command: "npm run build > /tmp/build.log 2>&1"
 
-# Step 2 (later): Check progress or read results
+# Step 2 (later): Check progress
 command: "tail -50 /tmp/build.log"
 
-# Or wait for completion and read
+# Or wait for completion
 command: "wait && cat /tmp/build.log"
 \`\`\`
 
 ## Parallel Execution
 
 To run multiple commands simultaneously, call Bash multiple times with run_in_background=true in the SAME response.
-All background jobs start simultaneously. Check results later by reading their output files.
 
 Example: Run build + lint + test all at once:
 - Call 1: build → /tmp/build.log (background)
@@ -52,74 +49,89 @@ Example: Run build + lint + test all at once:
 - Call 3: test → /tmp/test.log (background)
 Then in next turn: read all three output files.
 
-## Interactive Processes — CRITICAL WARNING
+## Git Safety Protocol
 
-NEVER run interactive processes that wait for user input in a foreground Bash call.
-These will block until timeout (30 min) and produce no useful output:
-
-BLOCKED patterns:
-- python3 / irb / node REPL (blocks on stdin)
-- CLI tools that show a "> " or "$ " prompt and wait for keystrokes
-- nc / ncat without -l in a piped shell
-
-CORRECT pattern — use TmuxSession for ALL interactive processes:
-  TmuxSession({ action: "new", session: "py", command: "python3 -i" })
-  TmuxSession({ action: "wait_for", session: "py", pattern: ">>>", timeout: 10000 })
-  TmuxSession({ action: "send", session: "py", text: "print('hello')" })
-  TmuxSession({ action: "capture", session: "py", lines: 10 })
+- NEVER update the git config
+- NEVER run destructive git commands (push --force, reset --hard, clean -f) unless explicitly requested
+- NEVER skip hooks (--no-verify) unless explicitly requested
+- NEVER force push to main/master
+- Always create NEW commits rather than amending (amending after hook failure can destroy work)
+- When staging files, prefer specific filenames over \`git add -A\` (avoid committing secrets)
+- NEVER commit unless the user explicitly asks
 
 ## Other Instructions
 - Always quote paths with spaces: "path with spaces/file.txt"
-- Use absolute paths to avoid cwd confusion
+- Use absolute paths; avoid cd
 - For dependent sequential commands, chain with && in one call`
 
-export const READ_FILE_DESCRIPTION = `Reads a file from the filesystem and returns its contents with line numbers.
+export const READ_FILE_DESCRIPTION = `Reads a file from the local filesystem. You can access any file directly by using this tool.
 
 Usage:
-- Provide an absolute file path
+- The file_path parameter must be an absolute path
+- By default, reads up to 2000 lines starting from the beginning of the file
 - Optionally specify offset (start line) and limit (number of lines) for large files
-- Returns content in cat -n format: "line_number\\tcontent"
-- Can read text files, code files, JSON, YAML, etc.`
+- Results are returned with line numbers starting at 1
+- Can read text files, code files, JSON, YAML, etc.
+- Binary files are detected and not displayed (use Bash with xxd/strings)
+- If the file is larger than the limit, a hint shows how to read the next page
+
+IMPORTANT: You MUST read a file before you can Edit or Write to it. The Edit and Write tools will fail if you have not read the file first in this session.`
 
 export const WRITE_FILE_DESCRIPTION = `Writes content to a file, creating it if it doesn't exist or overwriting if it does.
 
-IMPORTANT: For existing files, prefer Edit (precise string replacement) over Write (full overwrite).
-Only use Write for:
-- Creating new files
-- Complete rewrites where the entire content changes
+Usage:
+- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
+- Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites.
+- NEVER create documentation files (*.md) or README files unless explicitly requested.
 
 Always read the file first before overwriting to avoid losing content.`
 
-export const EDIT_FILE_DESCRIPTION = `Performs exact string replacement in a file.
+export const EDIT_FILE_DESCRIPTION = `Performs exact string replacements in files.
 
 Usage:
-- Provide the file path, the exact string to find (old_string), and the replacement (new_string)
-- The old_string must match EXACTLY including whitespace and indentation
-- If old_string appears multiple times, use more context to make it unique
-- Use replace_all=true to replace all occurrences
+- You must use the Read tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- The edit will FAIL if \`old_string\` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use \`replace_all\` to change every instance of \`old_string\`.
+- Use \`replace_all\` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.
+- After editing, the tool auto-formats with prettier/eslint if detected in the project.
+- A diff showing changed lines (- old / + new) is displayed after each edit.
 
 This is the preferred way to modify existing files — it's precise and shows exactly what changed.`
 
 export const GLOB_DESCRIPTION = `Finds files matching a glob pattern, sorted by modification time (newest first).
 
+- Fast file pattern matching that works with any codebase size
+- Supports glob patterns like "**/*.ts" or "src/**/*.{js,ts}"
+- Returns matching file paths sorted by modification time
+- Use this tool when you need to find files by name patterns
+- For open-ended searches requiring multiple rounds, use the Agent tool instead
+
 Examples:
 - "**/*.ts" — all TypeScript files recursively
 - "src/**/*.{js,ts}" — JS/TS files under src/
-- "*.json" — JSON files in current directory
-
-Returns a list of matching absolute file paths.`
+- "*.json" — JSON files in current directory`
 
 export const GREP_DESCRIPTION = `Searches file contents using regex patterns (powered by ripgrep).
+
+Usage:
+- ALWAYS use Grep for search tasks. NEVER invoke \`grep\` or \`rg\` as a Bash command.
+- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")
+- Filter files with the \`glob\` parameter (e.g., "*.ts", "**/*.tsx") or \`include\` shorthand (e.g., "ts", "py")
+- Output modes: "content" shows matching lines with line numbers, "files_with_matches" (default) shows file paths, "count" shows match counts
+- Use the Agent tool for open-ended searches requiring multiple rounds
 
 Parameters:
 - pattern: regex pattern to search for
 - path: directory or file to search (defaults to cwd)
 - glob: file pattern filter (e.g. "*.ts")
+- include: file extension shorthand (e.g. "ts" → glob "*.ts")
 - output_mode: "files_with_matches" (default) | "content" | "count"
-- context: lines before/after each match (when output_mode="content")
+- context: lines of context around matches (when output_mode="content")
 - case_insensitive: true/false
 
 Examples:
 - Find files containing "useEffect": pattern="useEffect", glob="*.tsx"
 - Show matching lines: pattern="TODO", output_mode="content"
-- Count matches: pattern="console.log", output_mode="count"`
+- Count matches: pattern="console.log", output_mode="count"
+- Search only TypeScript: pattern="import", include="ts"`

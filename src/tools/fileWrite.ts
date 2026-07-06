@@ -4,9 +4,11 @@
  */
 
 import { writeFile, mkdir } from 'fs/promises'
+import { existsSync } from 'fs'
 import { dirname } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
+import { hasFileBeenRead } from '../core/fileState.js'
 
 export interface WriteFileInput {
   file_path: string
@@ -46,6 +48,14 @@ export class FileWriteTool implements Tool {
     }
     if (typeof content !== 'string') {
       return { content: 'Error: content must be a string', isError: true }
+    }
+
+    // Enforce read-before-overwrite for existing files (like Claude Code)
+    if (existsSync(file_path) && !hasFileBeenRead(file_path)) {
+      return {
+        content: `Error: ${file_path} already exists. You must Read it first before overwriting. Use the Read tool.`,
+        isError: true,
+      }
     }
 
     try {
