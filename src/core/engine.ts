@@ -24,6 +24,8 @@
  */
 
 import OpenAI from 'openai'
+import { writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import type {
   EngineConfig,
   OpenAIMessage,
@@ -50,6 +52,39 @@ import { clearFileState } from './fileState.js'
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_TOOL_RESULT_LENGTH = 20_000
+/** Results exceeding this get persisted to session dir and replaced with a preview */
+const TOOL_RESULT_PERSIST_THRESHOLD = 10_000
+
+/**
+ * Truncate or persist a tool result to stay within context budget.
+ * Claude Code approach: large results → save to disk, inject preview + file path.
+ */
+function truncateToolResult(result: string, sessionDir?: string): string {
+  if (result.length <= MAX_TOOL_RESULT_LENGTH) return result
+
+  // Try persisting to disk if sessionDir available (Claude Code pattern)
+  if (sessionDir && result.length > TOOL_RESULT_PERSIST_THRESHOLD) {
+    try {
+      const dir = join(sessionDir, 'tool-results')
+      mkdirSync(dir, { recursive: true })
+      const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
+      const filePath = join(dir, fileName)
+      writeFileSync(filePath, result, 'utf8')
+      const preview = result.slice(0, 2000)
+      return `${preview}\n\n[... Full output (${result.length} chars) saved to: ${filePath} ...]`
+    } catch {
+      // Fall through to truncation
+    }
+  }
+
+  // Fallback: head + tail truncation
+  const half = MAX_TOOL_RESULT_LENGTH / 2
+  return (
+    result.slice(0, half) +
+    `\n\n[... ${result.length - MAX_TOOL_RESULT_LENGTH} chars truncated ...]\n\n` +
+    result.slice(result.length - half)
+  )
+}
 
 /** Plan mode — only read-only tools are exposed */
 const PLAN_MODE_TOOLS = new Set([
@@ -118,17 +153,6 @@ function partitionToolCalls(calls: ParsedToolCall[]): ToolBatch[] {
   }
 
   return batches
-}
-
-/** Truncate a tool result to stay within token budget */
-function truncateToolResult(result: string): string {
-  if (result.length <= MAX_TOOL_RESULT_LENGTH) return result
-  const half = MAX_TOOL_RESULT_LENGTH / 2
-  return (
-    result.slice(0, half) +
-    `\n\n[... ${result.length - MAX_TOOL_RESULT_LENGTH} chars truncated ...]\n\n` +
-    result.slice(result.length - half)
-  )
 }
 
 // ── Engine class ─────────────────────────────────────────────────────────────
@@ -328,6 +352,35 @@ export class ExecutionEngine {
       )
     } catch (err: unknown) {
       this.renderer.stopSpinner()
+
+      // Reactive compact: if API rejected due to context length, auto-compact and retry once
+      const errMsg = (err as Error).message || ''
+      if (errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length') || errMsg.includes('too long')) {
+        this.renderer.warn('Context too long — auto-compacting and retrying...')
+        const compactResult = await maybeCompact(this.client, this.config.model, messages)
+        if (compactResult.compacted) {
+          messages.length = 0
+          messages.push(...compactResult.messages)
+          this.renderer.compactDone(compactResult.originalTokens, compactResult.summaryTokens)
+          // Retry the call with compacted messages
+          stream = await this.client.chat.completions.create(
+            {
+              model: this.config.model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
+              ],
+              tools: toolDefs,
+              tool_choice: 'auto',
+              temperature: this.config.temperature ?? 0,
+              max_tokens: this.config.maxOutputTokens ?? 8192,
+              stream: true,
+            },
+            { signal: turnAbortSignal },
+          )
+          return this.consumeStream(stream, turnAbortSignal)
+        }
+      }
       throw err
     }
 
@@ -501,7 +554,7 @@ export class ExecutionEngine {
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(result.content),
+            content: truncateToolResult(result.content, this.config.sessionDir),
             name: tc.name,
           })
         }
@@ -541,7 +594,7 @@ export class ExecutionEngine {
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(result.content),
+            content: truncateToolResult(result.content, this.config.sessionDir),
             name: tc.name,
           })
 

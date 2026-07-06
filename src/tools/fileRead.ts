@@ -6,7 +6,7 @@
 import { readFile } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { READ_FILE_DESCRIPTION } from '../prompts/tools.js'
-import { markFileRead } from '../core/fileState.js'
+import { markFileRead, hasFileChanged, hasFileBeenRead } from '../core/fileState.js'
 
 export interface ReadFileInput {
   file_path: string
@@ -53,6 +53,15 @@ export class FileReadTool implements Tool {
     }
 
     try {
+      // File unchanged detection (Claude Code pattern) — skip re-reading if not modified
+      // Only applies to full reads (no offset/limit) of previously-read files
+      if (!offset && !limit && hasFileBeenRead(file_path) && !hasFileChanged(file_path)) {
+        return {
+          content: `File: ${file_path}\nFile unchanged since last read. The content from the earlier Read is still current.`,
+          isError: false,
+        }
+      }
+
       const raw = await readFile(file_path, 'utf8')
 
       // Binary file detection — check for null bytes in first 8000 chars
