@@ -45,6 +45,7 @@ import {
 import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { applyAgentToConfig } from './agentPresets.js'
+import { clearFileState } from './fileState.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -594,6 +595,9 @@ export class ExecutionEngine {
     history: OpenAIMessage[],
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
     const planMode = this.config.planMode ?? false
+
+    // Clear file read state for this turn (read-before-edit is per-turn, not cross-turn)
+    clearFileState()
 
     // ── Boot Sequence: resolve + boot modules ──
     const bootCtx: ModuleBootContext = {

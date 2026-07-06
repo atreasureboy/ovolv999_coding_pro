@@ -4,12 +4,12 @@
  * Uses ripgrep (rg) if available, falls back to Node.js regex scan
  */
 
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { GREP_DESCRIPTION } from '../prompts/tools.js'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export interface GrepInput {
   pattern: string
@@ -111,17 +111,48 @@ export class GrepTool implements Tool {
       args.push(`--glob`, `${effectiveGlob}`)
     }
 
-    // Escape the pattern for shell
-    const escapedPattern = pattern.replace(/'/g, "'\\''")
-    const escapedPath = searchDir.replace(/'/g, "'\\''")
-
-    const cmd = `rg ${args.join(' ')} '${escapedPattern}' '${escapedPath}' 2>/dev/null || grep -r${case_insensitive ? 'i' : ''}${output_mode === 'files_with_matches' ? 'l' : 'n'} --include='${effectiveGlob ?? '*'}' -E '${escapedPattern}' '${escapedPath}' 2>/dev/null`
+    // Build rg command args (no shell escaping needed with execFile)
+    const rgArgs = [...args, pattern, searchDir]
 
     try {
-      const { stdout } = await execAsync(cmd, {
-        cwd: context.cwd,
-        maxBuffer: 10 * 1024 * 1024,
-      })
+      // Use execFile to avoid shell quoting issues on Windows
+      // Try rg first, fall back to grep via exec if rg not found
+      let stdout: string
+      try {
+        const result = await execFileAsync('rg', rgArgs, {
+          cwd: context.cwd,
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 30_000,
+        })
+        stdout = result.stdout
+      } catch (err: unknown) {
+        const e = err as { code?: number; stdout?: string; stderr?: string; message?: string }
+        // rg exits with code 1 when no matches — not an error
+        if (e.code === 1 && !e.stderr) {
+          return { content: `No matches found for pattern: ${pattern}`, isError: false }
+        }
+        // rg not found (ENOENT) or other error — fall back to Node.js search
+        stdout = ''
+        // If rg failed for non-"no matches" reasons, try grep as fallback
+        if (e.code !== 1) {
+          // Build grep fallback command
+          const grepFlags = ['-r', case_insensitive ? '-i' : '', output_mode === 'files_with_matches' ? '-l' : '-n']
+            .filter(Boolean)
+          if (effectiveGlob) grepFlags.push('--include', effectiveGlob)
+          grepFlags.push('-E', pattern, searchDir)
+          try {
+            const fallback = await execFileAsync('grep', grepFlags.filter(Boolean), {
+              cwd: context.cwd,
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 30_000,
+            })
+            stdout = fallback.stdout
+          } catch {
+            // grep also failed or not available
+            return { content: `No matches found for pattern: ${pattern}`, isError: false }
+          }
+        }
+      }
 
       const result = stdout.trim()
       if (!result) {

@@ -3,14 +3,16 @@
  * Edit/Write tools check this to enforce "read before edit" (like Claude Code).
  */
 
+import { resolve } from 'path'
+
 const _readFiles = new Set<string>()
 
 export function markFileRead(filePath: string): void {
-  _readFiles.add(filePath)
+  _readFiles.add(resolve(filePath))
 }
 
 export function hasFileBeenRead(filePath: string): boolean {
-  return _readFiles.has(filePath)
+  return _readFiles.has(resolve(filePath))
 }
 
 export function clearFileState(): void {

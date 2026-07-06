@@ -99,8 +99,15 @@ export function detectProjectContext(cwd: string): ProjectContext {
   const gitBranch = tryExec('git branch --show-current', cwd)
   if (gitBranch) {
     const status = tryExec('git status --porcelain', cwd)
-    const modified = status ? status.split('\n').filter(l => l.trim().startsWith(' M') || l.trim().startsWith('MM')).length : 0
-    const staged = status ? status.split('\n').filter(l => l.trim().startsWith('M') || l.trim().startsWith('A')).length : 0
+    const lines = status ? status.split('\n').filter(l => l.trim()) : []
+    const modified = lines.filter(l => {
+      const code = l.trim().slice(0, 2)
+      return code[1] === 'M' || code[1] === 'D' // working tree modified/deleted
+    }).length
+    const staged = lines.filter(l => {
+      const code = l.trim().slice(0, 2)
+      return code[0] === 'M' || code[0] === 'A' || code[0] === 'D' // index modified/added/deleted
+    }).length
     const log = tryExec('git log --oneline -3', cwd)
     const commits = log ? log.split('\n').filter(Boolean) : []
 

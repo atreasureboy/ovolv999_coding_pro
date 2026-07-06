@@ -17,6 +17,7 @@
  */
 
 import { release, type as osType } from 'os'
+import { platform as osPlatform } from 'os'
 import type { OvogoMdFile } from '../config/ovogomd.js'
 import { formatOvogoMdForPrompt } from '../config/ovogomd.js'
 import type { TaskContext } from '../config/settings.js'
@@ -61,7 +62,7 @@ function getIntroSection(cwd: string, sessionDir?: string): string {
  - Working directory: ${cwd}
  - OS: ${os}
  - Date: ${date}
- - Shell: ${process.env.OVOGO_SHELL || 'bash'}${sessionDir ? `\n - Session dir: ${sessionDir}` : ''}`
+ - Shell: ${osPlatform() === 'win32' ? (process.env.OVOGO_SHELL || 'cmd.exe') : (process.env.OVOGO_SHELL || 'bash')}${sessionDir ? `\n - Session dir: ${sessionDir}` : ''}`
 }
 
 function getMindsetSection(): string {

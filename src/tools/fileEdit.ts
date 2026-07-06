@@ -106,7 +106,18 @@ export class FileEditTool implements Tool {
       await writeFile(file_path, newContent, 'utf8')
 
       // Auto-format: detect prettier/eslint config in project and run after edit
-      const projectRoot = dirname(file_path)
+      // Walk up from file's directory to find project root (where config files live)
+      let projectRoot = dirname(file_path)
+      for (let i = 0; i < 10; i++) {
+        if (existsSync(`${projectRoot}/.prettierrc`) || existsSync(`${projectRoot}/.prettierrc.js`) ||
+            existsSync(`${projectRoot}/eslint.config.js`) || existsSync(`${projectRoot}/.eslintrc`) ||
+            existsSync(`${projectRoot}/.eslintrc.js`) || existsSync(`${projectRoot}/package.json`)) {
+          break
+        }
+        const parent = dirname(projectRoot)
+        if (parent === projectRoot) break
+        projectRoot = parent
+      }
       let formatNote = ''
       try {
         if (existsSync(`${projectRoot}/.prettierrc`) || existsSync(`${projectRoot}/.prettierrc.js`) || existsSync(`${projectRoot}/prettier.config.js`)) {

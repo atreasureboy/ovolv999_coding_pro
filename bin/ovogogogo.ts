@@ -142,7 +142,7 @@ function parseArgs(argv: string[]): Args {
       case '--help': case '-h': help = true; break
       case '--version': case '-v': case '-V': version = true; break
       case '--model': case '-m': model = args[++i] ?? model; break
-      case '--max-iter': maxIter = parseInt(args[++i] ?? '30', 10); break
+      case '--max-iter': maxIter = parseInt(args[++i] ?? '200', 10); break
       case '--cwd': cwd = args[++i] ?? cwd; break
       case '--loop': loop = true; break
       case '--loop-max-iters': loopMaxIters = parseInt(args[++i] ?? '12', 10); break
@@ -739,7 +739,9 @@ async function main(): Promise<void> {
   globalModuleRegistry.register('reflection', (ctx) =>
     new ReflectionModule(ctx.client, ctx.model, ctx.config.semanticMemory!))
 
-  const maxCtxTokens = 200_000 // claude-sonnet-4-x default
+  const maxCtxTokens = process.env.OVOGO_MAX_CONTEXT_TOKENS
+    ? parseInt(process.env.OVOGO_MAX_CONTEXT_TOKENS, 10)
+    : 200_000 // default: claude-sonnet-4-x 200k; DeepSeek: set to 64000 or 128000
 
   // Create load_skill tool bound to the loaded skills map
   const loadSkillTool = createLoadSkillTool(skills)
