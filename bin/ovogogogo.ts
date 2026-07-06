@@ -26,9 +26,32 @@
  *   ~/.ovogo/skills/*.md  — global user slash commands
  */
 
-import { resolve, join } from 'path'
-import { writeFileSync, mkdirSync } from 'fs'
+import { resolve, join, dirname } from 'path'
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'fs'
 import { homedir } from 'os'
+import { fileURLToPath } from 'url'
+
+// ── .env auto-loader (no external dep, never overrides existing env vars) ──
+{
+  const __scriptDir = dirname(fileURLToPath(import.meta.url))
+  const __projectRoot = resolve(__scriptDir, '..', '..')
+  for (const dir of [process.cwd(), __projectRoot]) {
+    const envPath = join(dir, '.env')
+    if (!existsSync(envPath)) continue
+    try {
+      for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+        const t = line.trim()
+        if (!t || t.startsWith('#')) continue
+        const eq = t.indexOf('=')
+        if (eq <= 0) continue
+        const key = t.slice(0, eq).trim()
+        const val = t.slice(eq + 1).trim()
+        if (!process.env[key]) process.env[key] = val
+      }
+    } catch { /* best-effort */ }
+    break
+  }
+}
 import { ExecutionEngine } from '../src/core/engine.js'
 import { Renderer } from '../src/ui/renderer.js'
 import { InputHandler, readStdin } from '../src/ui/input.js'
@@ -718,6 +741,8 @@ async function main(): Promise<void> {
     systemPrompt,
     sessionDir,
     maxContextTokens: maxCtxTokens,
+    temperature: process.env.OVOGO_TEMPERATURE ? parseFloat(process.env.OVOGO_TEMPERATURE) : undefined,
+    maxOutputTokens: process.env.OVOGO_MAX_OUTPUT_TOKENS ? parseInt(process.env.OVOGO_MAX_OUTPUT_TOKENS, 10) : undefined,
     eventLog,
     semanticMemory,
     episodicMemory,
