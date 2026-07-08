@@ -20,7 +20,21 @@ export const MODEL_MAX_CONTEXT_TOKENS = 200_000
 
 // Percentage-based thresholds — the single source of truth for context pressure
 const CONTEXT_WARN_PCT    = 0.70   // 70%  → display yellow warning
-const CONTEXT_COMPACT_PCT = 0.85   // 85%  → force auto-compact
+const CONTEXT_COMPACT_PCT = 0.85   // 85%  → force auto-compact (LLM summarization)
+
+// microCompact — lightweight pre-compact that clears old tool results WITHOUT
+// an LLM call. Runs at a lower threshold than full compact, buying headroom
+// cheaply. Inspired by Claude Code's microCompact.
+const CONTEXT_MICROCOMPACT_PCT = 0.50  // 50%  → clear old tool results
+const KEEP_RECENT_TOOL_RESULTS = 6     // keep the N most recent tool results
+const CLEARED_PLACEHOLDER = '[Old tool result content cleared — re-run the tool if needed]'
+
+// Tools whose results are safe to clear (they can be re-fetched).
+// State-mutating tools (Write, Edit) are NOT compactable — their results
+// are small and meaningful (success/failure confirmation).
+const COMPACTABLE_TOOLS = new Set([
+  'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash',
+])
 
 /** Compression strategy selected based on context pressure */
 export type CompressionStrategy = 'proportional' | 'priority' | 'aggressive'
@@ -47,6 +61,8 @@ export interface ContextState {
   maxTokens: number
   /** Usage fraction 0–1 */
   pct: number
+  /** True when ≥ CONTEXT_MICROCOMPACT_PCT — clear old tool results (no LLM call) */
+  shouldMicroCompact: boolean
   /** True when ≥ CONTEXT_WARN_PCT — show a yellow warning */
   shouldWarn: boolean
   /** True when ≥ CONTEXT_COMPACT_PCT — trigger auto-compact immediately */
@@ -68,6 +84,7 @@ export function calculateContextState(
     currentTokens,
     maxTokens,
     pct,
+    shouldMicroCompact: pct >= CONTEXT_MICROCOMPACT_PCT,
     shouldWarn:   pct >= CONTEXT_WARN_PCT,
     shouldCompact: pct >= CONTEXT_COMPACT_PCT,
     strategy: getCompressionStrategy(pct),
@@ -118,10 +135,16 @@ Then write the summary in <summary> tags with these sections:
 ## Task Overview
 What the user asked for and the overall goal.
 
+## All User Messages
+List ALL user messages (excluding tool results) verbatim or closely paraphrased. This preserves user feedback, changing requirements, and corrections across compaction. Never omit a user message.
+
 ## Work Completed
 - Files created/modified (with paths and key changes)
 - Commands run and their outcomes
 - Problems solved and how
+
+## Errors and Fixes
+Any errors encountered and how they were resolved. Include the error message and the fix applied.
 
 ## Current State
 What has been done, what is working, what is still pending.
@@ -131,7 +154,9 @@ Important decisions, patterns, constraints, or user preferences to remember.
 Include relevant code snippets, function signatures, or file contents that are critical for continuing.
 
 ## Next Steps
-What needs to be done next (if anything is incomplete).`
+What needs to be done next (if anything is incomplete). If the user's last message contained a specific request, quote it verbatim here.
+
+IMPORTANT: Do NOT call any tools. Respond with TEXT ONLY.`
 
 /**
  * Extract content between tags, stripping the analysis scratchpad.
@@ -286,3 +311,71 @@ export async function maybeCompact(
     originalTokens,
   }
 }
+
+// ── microCompact ────────────────────────────────────────────────────────────
+
+export interface MicroCompactResult {
+  compacted: boolean
+  messages: OpenAIMessage[]
+  tokensBefore: number
+  tokensAfter: number
+  toolsCleared: number
+}
+
+/**
+ * Lightweight context reduction — clears old tool result content WITHOUT
+ * calling the LLM. Replaces compactable tool results (Read, Grep, Glob,
+ * Bash, Web*) that are older than KEEP_RECENT_TOOL_RESULTS with a placeholder.
+ *
+ * Inspired by Claude Code's microCompact. This is a first-line defense that
+ * runs at 50% context pressure — much cheaper and faster than the full
+ * LLM-summarization compact (maybeCompact) which runs at 85%.
+ *
+ * The tool results can be re-fetched by the LLM if needed (re-run Read/Grep/etc).
+ * State-mutating tools (Write, Edit, Agent) are NOT cleared — their results
+ * are small and meaningful.
+ *
+ * Mutates messages in place (like maybeCompact does).
+ */
+export function microCompact(messages: OpenAIMessage[]): MicroCompactResult {
+  const tokensBefore = estimateTokens(messages)
+
+  // Collect indices of compactable tool results, in order
+  const toolResultIndices: number[] = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (msg.role === 'tool' && msg.name && COMPACTABLE_TOOLS.has(msg.name)) {
+      // Skip already-cleared results (idempotency)
+      if (msg.content === CLEARED_PLACEHOLDER) continue
+      toolResultIndices.push(i)
+    }
+  }
+
+  // Nothing to compact
+  if (toolResultIndices.length <= KEEP_RECENT_TOOL_RESULTS) {
+    return { compacted: false, messages, tokensBefore, tokensAfter: tokensBefore, toolsCleared: 0 }
+  }
+
+  // Keep the N most recent, clear the rest
+  const toClear = new Set(
+    toolResultIndices.slice(0, toolResultIndices.length - KEEP_RECENT_TOOL_RESULTS),
+  )
+
+  let toolsCleared = 0
+  for (const idx of toClear) {
+    const msg = messages[idx]
+    // Only clear if the content is substantial (don't bother for tiny results)
+    if (typeof msg.content === 'string' && msg.content.length > CLEARED_PLACEHOLDER.length) {
+      messages[idx] = { ...msg, content: CLEARED_PLACEHOLDER }
+      toolsCleared++
+    }
+  }
+
+  if (toolsCleared === 0) {
+    return { compacted: false, messages, tokensBefore, tokensAfter: tokensBefore, toolsCleared: 0 }
+  }
+
+  const tokensAfter = estimateTokens(messages)
+  return { compacted: true, messages, tokensBefore, tokensAfter, toolsCleared }
+}
+

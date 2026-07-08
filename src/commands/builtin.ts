@@ -1,0 +1,573 @@
+/**
+ * Built-in slash commands for the ovolv999 REPL.
+ *
+ * Each command is registered at module load. Import this file once
+ * in bin/ovogogogo.ts to activate all commands.
+ */
+
+import { registerCommand } from './index.js'
+import type { SlashCommandResult } from './index.js'
+import { listCommands } from './index.js'
+import { getCurrentMode, setCurrentMode, cycleMode, getAllModes, type Mode } from '../core/modes.js'
+import { estimateTokens, calculateContextState, microCompact } from '../core/compact.js'
+import { existsSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { execSync } from 'child_process'
+import { homedir } from 'os'
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const text = (value: string): SlashCommandResult => ({ type: 'text', value })
+const exit = (): SlashCommandResult => ({ type: 'exit' })
+
+// ── Session & History ──────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'exit',
+  description: 'Exit the REPL',
+  aliases: ['quit', 'q'],
+  handler: () => exit(),
+})
+
+registerCommand({
+  name: 'clear',
+  description: 'Clear conversation history',
+  handler: (_args, ctx) => {
+    ctx.setHistory([])
+    return text('Conversation history cleared.')
+  },
+})
+
+registerCommand({
+  name: 'history',
+  description: 'Show message count in current session',
+  handler: (_args, ctx) => {
+    const tokens = estimateTokens(ctx.history)
+    return text(`Session: ${ctx.history.length} messages, ~${tokens.toLocaleString()} tokens estimated.`)
+  },
+})
+
+// ── /compact — manually trigger compaction ─────────────────────────────────
+
+registerCommand({
+  name: 'compact',
+  description: 'Summarize conversation to save context (manual trigger)',
+  usage: '/compact [optional instructions]',
+  handler: (args, ctx) => {
+    if (ctx.history.length < 4) {
+      return text('Not enough messages to compact (need at least 4).')
+    }
+    ctx.renderer.warn('Compacting conversation...')
+    // Use microCompact first (free, no LLM call)
+    const mc = microCompact([...ctx.history])
+    if (mc.compacted) {
+      ctx.setHistory(mc.messages)
+      return text(`Micro-compacted: cleared ${mc.toolsCleared} old tool results (${mc.tokensBefore}→${mc.tokensAfter} tokens). Full LLM compaction will trigger automatically at 85% pressure.`)
+    }
+    return text('Nothing to micro-compact. Full LLM summarization will trigger automatically at 85% context pressure.')
+  },
+})
+
+// ── /cost — show cost summary ───────────────────────────────────────────────
+
+registerCommand({
+  name: 'cost',
+  description: 'Show token usage and cost summary',
+  handler: (_args, ctx) => {
+    const tracker = ctx.engine.getCostTracker()
+    if (tracker.getTotalAPICalls() === 0) {
+      return text('No API calls made yet in this session.')
+    }
+    return text(tracker.formatSummary())
+  },
+})
+
+// ── /mode — switch persona/mode ─────────────────────────────────────────────
+
+registerCommand({
+  name: 'mode',
+  description: 'Switch or list agent modes (personas)',
+  usage: '/mode [slug]  or  /mode cycle  or  /mode list',
+  handler: (args, ctx) => {
+    const modesDir = ctx.sessionDir ? join(homedir(), '.ovogo', 'modes') : undefined
+    if (args === 'list' || args === '') {
+      const modes = getAllModes(modesDir)
+      const current = getCurrentMode(modesDir)
+      const lines = modes.map((m: Mode) =>
+        '  ' + m.icon + ' ' + m.name.padEnd(14) + ' ' + m.slug.padEnd(14) + ' ' + (m.slug === current.slug ? '<- current ' : '') + m.description
+      )
+      return text('Available modes:\n' + lines.join('\n') + '\n\nUse /mode <slug> to switch, or /mode cycle to rotate.')
+    }
+    if (args === 'cycle') {
+      const next = cycleMode(modesDir)
+      return text(`${next.icon} Mode switched to: ${next.name} (${next.slug}) — ${next.description}`)
+    }
+    try {
+      const mode = setCurrentMode(args, modesDir)
+      return text(`${mode.icon} Mode switched to: ${mode.name} (${mode.slug}) — ${mode.description}`)
+    } catch {
+      return text(`Unknown mode: "${args}". Use /mode list to see available modes.`)
+    }
+  },
+})
+
+// ── /context — show context window usage ────────────────────────────────────
+
+registerCommand({
+  name: 'context',
+  description: 'Show context window usage breakdown',
+  handler: (_args, ctx) => {
+    const state = calculateContextState(ctx.history)
+    const bar_len = 30
+    const filled = Math.round(state.pct * bar_len)
+    const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(bar_len - filled)
+    const pct_str = (state.pct * 100).toFixed(1)
+
+    const status =
+      state.shouldCompact ? '!! COMPACTING' :
+      state.shouldWarn ? '! HIGH' :
+      'OK'
+
+    return text(
+      'Context Window:\n' +
+      '  ' + bar + ' ' + pct_str + '%  ' + status + '\n' +
+      '  Tokens: ' + state.currentTokens.toLocaleString() + ' / ' + state.maxTokens.toLocaleString() + '\n' +
+      '  Strategy: ' + state.strategy + '\n' +
+      '  Messages: ' + ctx.history.length
+    )
+  },
+})
+
+// ── /model — show or change model ───────────────────────────────────────────
+
+registerCommand({
+  name: 'model',
+  description: 'Show current model',
+  handler: (_args, ctx) => text(`Current model: ${ctx.engine.getModel()}`),
+})
+
+// ── /permissions — show permission mode ─────────────────────────────────────
+
+registerCommand({
+  name: 'permissions',
+  description: 'Show permission configuration (default: full access, no restrictions)',
+  aliases: ['perms'],
+  usage: '/permissions  or  /permissions rules',
+  handler: (args, _ctx) => {
+    if (args === 'rules') {
+      return text('Permission rules: None configured.\n\nTo restrict the agent, add deny rules in OVOGO.md:\n  - "Deny: rm -rf"\n  - "Deny: git push --force"\n  - "Deny: curl *"\n\nBy default the agent has full access and never asks for permission.')
+    }
+    return text(
+      'Permission: FULL ACCESS (default)\n' +
+      '  - Agent executes all tools and commands automatically\n' +
+      '  - No confirmation prompts\n' +
+      '  - Dangerous command patterns are logged but NOT blocked\n' +
+      '\n' +
+      'To add restrictions, edit OVOGO.md or use /permissions rules.\n' +
+      'Plan mode: use /plan <task> for read-only analysis.'
+    )
+  },
+})
+
+// ── /rewind — file history ─────────────────────────────────────────────────
+
+registerCommand({
+  name: 'rewind',
+  description: 'Show or restore file edit history',
+  usage: '/rewind [file_path] [version]',
+  handler: (_args, ctx) => {
+    const fh = ctx.engine.getFileHistory()
+    if (!fh) {
+      return text('File history not available (no session directory configured).')
+    }
+    const files = fh.getEditedFiles()
+    if (files.length === 0) {
+      return text('No file edits tracked in this session.')
+    }
+    return text(fh.getSummary())
+  },
+})
+
+// ── /tasks — show background tasks ──────────────────────────────────────────
+
+registerCommand({
+  name: 'tasks',
+  description: 'List background tasks',
+  handler: (_args, ctx) => {
+    const mgr = ctx.engine.getBackgroundTaskManager()
+    const tasks = mgr.listTasks()
+    if (tasks.length === 0) {
+      return text('No background tasks.')
+    }
+    // Inline formatTaskList
+    const lines = tasks.map(t => {
+      const icon = t.status === 'running' ? '\u25C6' : t.status === 'completed' ? '\u2713' : t.status === 'failed' ? '\u2717' : '\u2299'
+      const dur = t.durationMs !== null ? ' (' + (t.durationMs / 1000).toFixed(1) + 's)' : ''
+      return '  ' + icon + ' ' + t.id + ' [' + t.status + ']' + dur + ' ' + t.description
+    })
+    return text('Background tasks (' + tasks.length + '):\n' + lines.join('\n'))
+  },
+})
+
+// ── /doctor — health diagnostics ────────────────────────────────────────────
+
+registerCommand({
+  name: 'doctor',
+  description: 'Run health diagnostics',
+  handler: (_args, ctx) => {
+    const OK = '\x1b[32m\u2713\x1b[0m'
+    const FAIL = '\x1b[31m\u2717\x1b[0m'
+    const INFO = '\x1b[36mi\x1b[0m'
+    const checks: string[] = []
+
+    // API key
+    const apiKey = process.env.OPENAI_API_KEY
+    if (apiKey && apiKey.length > 10) {
+      checks.push('  ' + OK + ' API key: set (' + apiKey.slice(0, 6) + '...' + apiKey.slice(-4) + ')')
+    } else {
+      checks.push('  ' + FAIL + ' API key: NOT SET (export OPENAI_API_KEY=...)')
+    }
+
+    // Base URL
+    const baseURL = process.env.OPENAI_BASE_URL
+    checks.push('  ' + INFO + ' Base URL: ' + (baseURL || 'default (OpenAI)'))
+
+    // Model
+    checks.push('  ' + INFO + ' Model: ' + ctx.engine.getModel())
+
+    // Working directory
+    checks.push('  ' + INFO + ' CWD: ' + ctx.cwd)
+
+    // Session dir
+    checks.push('  ' + INFO + ' Session: ' + (ctx.sessionDir || 'none'))
+
+    // Plan mode
+    checks.push('  ' + INFO + ' Plan mode: ' + (ctx.engine.isPlanMode() ? 'ON' : 'OFF'))
+
+    // Cost
+    const cost = ctx.engine.getCostTracker()
+    checks.push('  ' + INFO + ' API calls: ' + cost.getTotalAPICalls())
+    if (cost.getTotalAPICalls() > 0) {
+      checks.push('  ' + INFO + ' Cost: $' + cost.getTotalCost().toFixed(4))
+    }
+
+    // File history
+    const fh = ctx.engine.getFileHistory()
+    if (fh) {
+      const files = fh.getEditedFiles()
+      checks.push('  ' + INFO + ' File history: ' + files.length + ' file(s) tracked')
+    }
+
+    // Background tasks
+    const mgr = ctx.engine.getBackgroundTaskManager()
+    const tasks = mgr.listTasks()
+    if (tasks.length > 0) {
+      const running = tasks.filter(t => t.status === 'running').length
+      checks.push('  ' + INFO + ' Background tasks: ' + tasks.length + ' (' + running + ' running)')
+    }
+
+    // Context
+    const state = calculateContextState(ctx.history)
+    const pct = (state.pct * 100).toFixed(0)
+    checks.push('  ' + INFO + ' Context: ' + pct + '% used (' + state.currentTokens.toLocaleString() + '/' + state.maxTokens.toLocaleString() + ' tokens)')
+
+    // Node version
+    checks.push('  ' + INFO + ' Node: ' + process.version)
+
+    // Platform
+    checks.push('  ' + INFO + ' Platform: ' + process.platform + ' ' + process.arch)
+
+    return text('Health Check:\n' + checks.join('\n'))
+  },
+})
+
+// ── /diff — show git diff ───────────────────────────────────────────────────
+
+registerCommand({
+  name: 'diff',
+  description: 'Show git diff (unstaged changes)',
+  handler: (_args, ctx) => {
+    try {
+      const diff = execSync('git diff --stat', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+      if (!diff) {
+        return text('No unstaged changes.')
+      }
+      return text(`Git diff (unstaged):\n\n${diff}`)
+    } catch {
+      return text('Not a git repository or git not available.')
+    }
+  },
+})
+
+// ── /commit — git commit helper ─────────────────────────────────────────────
+
+registerCommand({
+  name: 'commit',
+  description: 'Stage all changes and create a git commit',
+  usage: '/commit <message>',
+  handler: (args, ctx) => {
+    if (!args.trim()) {
+      return text('Usage: /commit <commit message>')
+    }
+    try {
+      execSync('git add -A', { cwd: ctx.cwd, timeout: 10_000 })
+      execSync(`git commit -m "${args.replace(/"/g, '\\"')}"`, { cwd: ctx.cwd, encoding: 'utf8', timeout: 30_000 })
+      return text(`Committed: ${args}`)
+    } catch (err) {
+      return text(`Commit failed: ${(err as Error).message}`)
+    }
+  },
+})
+
+// ── /init — initialize project config ───────────────────────────────────────
+
+registerCommand({
+  name: 'init',
+  description: 'Create OVOGO.md project config file',
+  handler: (_args, ctx) => {
+    const configPath = join(ctx.cwd, 'OVOGO.md')
+    if (existsSync(configPath)) {
+      return text(`OVOGO.md already exists at ${configPath}`)
+    }
+    const template = `# Project Instructions
+
+## Overview
+Describe your project here.
+
+## Conventions
+- Coding style and patterns
+- Testing approach
+- Build commands
+
+## Important Notes
+- Architecture decisions
+- Known issues
+- Security constraints
+`
+    writeFileSync(configPath, template, 'utf8')
+    return text(`Created ${configPath} — edit it to add project-specific instructions.`)
+  },
+})
+
+// ── /skills — list available skills ─────────────────────────────────────────
+
+registerCommand({
+  name: 'skills',
+  description: 'List available skills',
+  handler: (_args, _ctx) => {
+    // This is a stub — the actual skills listing is handled in the REPL
+    // because skills are loaded in bin/ovogogogo.ts
+    return text('Use the REPL /skills command to list loaded skills.')
+  },
+})
+
+// ── /help — show available commands ─────────────────────────────────────────
+
+registerCommand({
+  name: 'help',
+  description: 'Show all available commands',
+  aliases: ['h', '?'],
+  handler: (_args, _ctx) => {
+    // Build help text directly — list all registered commands
+    const cmds = listCommands()
+    const lines = cmds.map(cmd =>
+      '  /' + cmd.name.padEnd(16) + ' ' + cmd.description
+    )
+    return text(
+      'Available commands:\n' +
+      lines.join('\n') +
+      '\n\n  /plan <task>       Plan mode — analyze then confirm before execute\n' +
+      '  /<skill_name>      Run a loaded skill\n\n' +
+      'Type / for quick command list. ESC to interrupt. Ctrl+D to exit.'
+    )
+  },
+})
+
+// ── /export — export conversation transcript ────────────────────────────────
+
+registerCommand({
+  name: 'export',
+  description: 'Export conversation transcript to a file',
+  usage: '/export [format: text|json|markdown] (default: markdown)',
+  handler: (args, ctx) => {
+    if (ctx.history.length === 0) {
+      return text('No conversation to export.')
+    }
+    const format = args.trim() || 'markdown'
+    let content = ''
+    let ext = 'md'
+
+    if (format === 'json') {
+      ext = 'json'
+      content = JSON.stringify(ctx.history, null, 2)
+    } else if (format === 'text') {
+      ext = 'txt'
+      for (const msg of ctx.history) {
+        const role = msg.role.toUpperCase()
+        const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.tool_calls ?? '')
+        content += '[' + role + ']\n' + body + '\n\n'
+      }
+    } else {
+      // markdown
+      content = '# Conversation Export\n\n'
+      content += 'Exported: ' + new Date().toISOString() + '\n'
+      content += 'Messages: ' + ctx.history.length + '\n\n---\n\n'
+      for (const msg of ctx.history) {
+        if (msg.role === 'system') continue
+        const header = msg.role === 'user' ? '**User:**' :
+                       msg.role === 'assistant' ? '**Assistant:**' :
+                       msg.role === 'tool' ? '**Tool:**' : '**' + (msg.role as string) + ':**'
+        const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.tool_calls ?? '', null, 2)
+        content += header + '\n\n' + body + '\n\n---\n\n'
+      }
+    }
+
+    const exportPath = ctx.sessionDir
+      ? join(ctx.sessionDir, 'transcript.' + ext)
+      : join(ctx.cwd, 'transcript.' + ext)
+    try {
+      writeFileSync(exportPath, content, 'utf8')
+      return text('Exported ' + ctx.history.length + ' messages to: ' + exportPath)
+    } catch (err) {
+      return text('Export failed: ' + (err as Error).message)
+    }
+  },
+})
+
+// ── /review — trigger code review ───────────────────────────────────────────
+
+registerCommand({
+  name: 'review',
+  description: 'Review code changes in the working directory',
+  handler: (_args, _ctx) => {
+    return { type: 'prompt', value: 'Review all uncommitted changes in this repository. Analyze each modified file for bugs, security issues, performance problems, and convention violations. Group findings by severity: [CRITICAL] / [HIGH] / [MEDIUM] / [LOW]. Use git diff to see changes.' }
+  },
+})
+
+// ── /security-review — security audit ───────────────────────────────────────
+
+registerCommand({
+  name: 'security-review',
+  description: 'Run a security audit on the codebase',
+  aliases: ['sec'],
+  handler: (_args, _ctx) => {
+    return { type: 'prompt', value: 'Perform a comprehensive security review of this codebase. Check for: OWASP Top 10 vulnerabilities, injection risks (SQL/command/XSS), authentication/authorization issues, secrets/keys in code, insecure dependencies, input validation gaps, and unsafe file operations. Report findings with severity, location (file:line), and remediation steps.' }
+  },
+})
+
+// ── /branch — git branch operations ─────────────────────────────────────────
+
+registerCommand({
+  name: 'branch',
+  description: 'Show git branches or create a new one',
+  usage: '/branch [name]  (no args = list branches)',
+  handler: (args, ctx) => {
+    try {
+      if (args.trim()) {
+        execSync('git checkout -b ' + args.trim(), { cwd: ctx.cwd, timeout: 10_000 })
+        return text('Created and switched to branch: ' + args.trim())
+      }
+      const branches = execSync('git branch -v', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+      return text('Git branches:\n' + branches)
+    } catch {
+      return text('Not a git repository or git not available.')
+    }
+  },
+})
+
+// ── /resume — resume a saved session ────────────────────────────────────────
+
+registerCommand({
+  name: 'resume',
+  description: 'List or resume saved sessions',
+  usage: '/resume [session_name]',
+  handler: (_args, _ctx) => {
+    // Delegate to the old handler which has session listing logic
+    return text('Use: ovolv999 --resume <session_name>  or  ovolv999 --continue\nOr use /sessions to list available sessions.')
+  },
+})
+
+// ── /sessions — list saved sessions ─────────────────────────────────────────
+
+registerCommand({
+  name: 'sessions',
+  description: 'List saved sessions for this project',
+  handler: (_args, _ctx) => {
+    return text('__LIST_SESSIONS__')
+  },
+})
+
+// ── /status — show session status ───────────────────────────────────────────
+
+registerCommand({
+  name: 'status',
+  description: 'Show current session status',
+  handler: (_args, ctx) => {
+    const cost = ctx.engine.getCostTracker()
+    const state = calculateContextState(ctx.history)
+    const fh = ctx.engine.getFileHistory()
+    const mgr = ctx.engine.getBackgroundTaskManager()
+    const tasks = mgr.listTasks()
+    const running = tasks.filter(t => t.status === 'running').length
+
+    const lines = [
+      'Model: ' + ctx.engine.getModel(),
+      'Messages: ' + ctx.history.length,
+      'Context: ' + (state.pct * 100).toFixed(0) + '% (' + state.currentTokens.toLocaleString() + '/' + state.maxTokens.toLocaleString() + ' tokens)',
+      'API calls: ' + cost.getTotalAPICalls(),
+      'Cost: $' + cost.getTotalCost().toFixed(4),
+      'Plan mode: ' + (ctx.engine.isPlanMode() ? 'ON' : 'OFF'),
+    ]
+    if (fh) {
+      const files = fh.getEditedFiles()
+      if (files.length > 0) lines.push('Files edited: ' + files.length)
+    }
+    if (tasks.length > 0) lines.push('Background tasks: ' + tasks.length + ' (' + running + ' running)')
+
+    return text('Session Status:\n  ' + lines.join('\n  '))
+  },
+})
+
+// ── /config — show current configuration ────────────────────────────────────
+
+registerCommand({
+  name: 'config',
+  description: 'Show current configuration',
+  handler: (_args, ctx) => {
+    const lines = [
+      'API key: ' + (process.env.OPENAI_API_KEY ? 'set' : 'NOT SET'),
+      'Base URL: ' + (process.env.OPENAI_BASE_URL || 'default'),
+      'Model: ' + ctx.engine.getModel(),
+      'CWD: ' + ctx.cwd,
+      'Session: ' + (ctx.sessionDir || 'none'),
+    ]
+    const temp = process.env.OVOGO_TEMPERATURE
+    if (temp) lines.push('Temperature: ' + temp)
+    const maxTok = process.env.OVOGO_MAX_OUTPUT_TOKENS
+    if (maxTok) lines.push('Max output tokens: ' + maxTok)
+
+    return text('Configuration:\n  ' + lines.join('\n  '))
+  },
+})
+
+// ── /cwd — show working directory ───────────────────────────────────────────
+
+registerCommand({
+  name: 'cwd',
+  description: 'Show current working directory',
+  handler: (_args, ctx) => text('Working directory: ' + ctx.cwd),
+})
+
+// ── /version — show version ─────────────────────────────────────────────────
+
+registerCommand({
+  name: 'version',
+  description: 'Show ovolv999 version',
+  aliases: ['v'],
+  handler: () => text('ovolv999 v0.1.0'),
+})
+
+// ── Export for REPL ─────────────────────────────────────────────────────────
+
+export { registerCommand } from './index.js'
+export type { Command, SlashCommandContext, SlashCommandResult } from './index.js'

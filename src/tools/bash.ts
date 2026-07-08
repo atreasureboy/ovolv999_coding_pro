@@ -102,8 +102,8 @@ export class BashTool implements Tool {
     const command = typeof input.command === 'string' ? input.command.toLowerCase() : ''
     if (!command) return false
 
-    // Background and follow-mode always safe (they don't block)
-    if (input.run_in_background === true) return true
+    // Background commands still run the pattern check below — two parallel
+    // `npm install` in background will corrupt node_modules just the same.
 
     // Safe: read-only commands
     const safePatterns = [
@@ -173,7 +173,7 @@ export class BashTool implements Tool {
 
       const ts = Date.now()
       const safeCmd = command.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40)
-      const logFile = join(bgLogDir, `${ts}_${safeCmd}.log`)
+      const logFile = join(bgLogDir, `${ts}_${safeCmd}_${Math.random().toString(36).slice(2, 6)}.log`)
 
       // Append redirect if the caller didn't already redirect
       const alreadyRedirected = command.includes('>') || command.includes('2>&1') || command.includes('/dev/null')
@@ -181,10 +181,17 @@ export class BashTool implements Tool {
 
       // Use appropriate shell flags: bash uses -c, cmd.exe uses /c
       const shellArgs = IS_WIN_CMD ? ['/c', actualCommand] : ['-c', actualCommand]
-      const child = spawn(SHELL, shellArgs, {
-        cwd: context.cwd,
-        env: process.env,
-      })
+      let child: ReturnType<typeof spawn>
+      try {
+        child = spawn(SHELL, shellArgs, {
+          cwd: context.cwd,
+          env: process.env,
+        })
+      } catch (e) {
+        return { content: `Failed to start background command: ${(e as Error).message}`, isError: true }
+      }
+      // Prevent ENOENT crash — spawn emits async 'error' if shell binary is missing
+      child.on('error', () => {})
       child.unref()
 
       const redirectInfo = alreadyRedirected ? '' : `\nOutput redirected to: ${logFile}`
@@ -226,17 +233,17 @@ export class BashTool implements Tool {
           spawn('tmux', ['new-session', '-d', '-s', tmuxSessionName, '-x', '200', '-y', '50'], {
             cwd: context.cwd,
             detached: true,
-          })
+          }).on('error', () => {})
           spawn('tmux', ['send-keys', '-t', tmuxSessionName, `tail -n +1 -f "${followLogFile}"`, 'Enter'], {
             cwd: context.cwd,
-          })
+          }).on('error', () => {})
           // Try to join the follow pane into the user's current tmux window
           try {
             const currentTmux = process.env.TMUX_PANE ? process.env.TMUX?.split(',')[0]?.replace(/^\//, '') : null
             if (currentTmux) {
               spawn('tmux', ['join-pane', '-t', `${currentTmux}`, '-s', `${tmuxSessionName}`, '-l', '15'], {
                 cwd: context.cwd,
-              })
+              }).on('error', () => {})
               paneJoined = true
             }
           } catch { /* best-effort: user can manually attach */ }
@@ -246,7 +253,7 @@ export class BashTool implements Tool {
             : `[Spectator: tmux attach -t ${tmuxSessionName}]`
 
           followCleanup = () => {
-            try { spawn('tmux', ['kill-session', '-t', tmuxSessionName], { detached: true }) } catch { /* ignore */ }
+            try { spawn('tmux', ['kill-session', '-t', tmuxSessionName], { detached: true }).on('error', () => {}) } catch { /* ignore */ }
           }
         } catch { /* tmux not available, degrade gracefully */ }
       }
@@ -276,7 +283,9 @@ export class BashTool implements Tool {
 
           // Check if we were cancelled
           if (context.signal?.aborted) {
-            resolve({ content: 'Command cancelled.', isError: true })
+            const partialOut = [stdout, stderr].filter(Boolean).join('\n').trimEnd()
+            const partial = partialOut ? `\n\nPartial output before cancellation:\n${truncateOutput(partialOut, 5000)}` : ''
+            resolve({ content: `Command cancelled (abort signal).${partial}\n\nHint: re-run with a smaller scope, or use run_in_background:true for long commands.`, isError: true })
             return
           }
 
@@ -296,7 +305,9 @@ export class BashTool implements Tool {
           }
 
           if (nodeErr.killed || nodeErr.signal === 'SIGTERM') {
-            resolve({ content: `Command timed out after ${timeoutMs / 1000}s`, isError: true })
+            const partialOut = [nodeErr.stdout ?? stdout, nodeErr.stderr ?? stderr].filter(Boolean).join('\n').trimEnd()
+            const partial = partialOut ? `\n\nPartial output before timeout:\n${truncateOutput(partialOut, 5000)}` : ''
+            resolve({ content: `Command timed out after ${timeoutMs / 1000}s.${partial}\n\nHint: for long-running commands, use run_in_background:true and check results with TaskGet, or raise the timeout argument.`, isError: true })
             return
           }
 

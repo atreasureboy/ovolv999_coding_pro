@@ -26,6 +26,7 @@
 import OpenAI from 'openai'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import type {
   EngineConfig,
   OpenAIMessage,
@@ -40,6 +41,7 @@ import { getPlanModePrefix } from '../prompts/system.js'
 import type { Renderer } from '../ui/renderer.js'
 import {
   maybeCompact,
+  microCompact,
   estimateTokens,
   getCompressionStrategy,
   MODEL_MAX_CONTEXT_TOKENS,
@@ -48,10 +50,27 @@ import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { applyAgentToConfig } from './agentPresets.js'
 import { clearFileState } from './fileState.js'
+import {
+  transitionQueryState,
+  isTerminal,
+  createBudgetTracker,
+  checkTokenBudget,
+  type QueryState,
+} from './queryStateMachine.js'
+import { CostTracker, type TokenUsage } from './costTracker.js'
+import { BackgroundTaskManager } from './backgroundTaskManager.js'
+import { FileHistory } from './fileHistory.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_TOOL_RESULT_LENGTH = 20_000
+/** Aggregate budget for all tool results in a single LLM response.
+ * When the total exceeds this, the largest results are persisted to disk
+ * individually until the aggregate fits. Prevents parallel tool calls
+ * (e.g. 10× Grep returning 15K each = 150K total) from blowing context.
+ * Inspired by claude-code-best's enforceToolResultBudget.
+ */
+const MAX_AGGREGATE_TOOL_RESULTS = 60_000
 
 /**
  * Truncate or persist a tool result to stay within context budget.
@@ -84,6 +103,52 @@ function truncateToolResult(result: string, sessionDir?: string): string {
   )
 }
 
+/**
+ * Enforce an aggregate budget across all tool results in a single batch.
+ * When the total character count exceeds MAX_AGGREGATE_TOOL_RESULTS,
+ * the largest results are individually persisted to disk (replaced with
+ * preview + file path) until the aggregate fits.
+ *
+ * This solves the "10 parallel Grep calls each returning 15K = 150K total"
+ * problem that per-result truncation cannot catch.
+ *
+ * Inspired by claude-code-best's enforceToolResultBudget.
+ */
+function enforceAggregateToolResultBudget(
+  results: { content: string; tc: { id: string; name: string } }[],
+  sessionDir?: string,
+): void {
+  const totalChars = results.reduce((sum, r) => sum + r.content.length, 0)
+  if (totalChars <= MAX_AGGREGATE_TOOL_RESULTS) return
+  if (!sessionDir) return // can't persist without sessionDir
+
+  // Sort by size descending — persist the largest first
+  const indexed = results.map((r, i) => ({ r, i, size: r.content.length }))
+  indexed.sort((a, b) => b.size - a.size)
+
+  let currentTotal = totalChars
+  for (const item of indexed) {
+    if (currentTotal <= MAX_AGGREGATE_TOOL_RESULTS) break
+    if (item.size <= MAX_TOOL_RESULT_LENGTH) break // already small enough
+
+    // Persist this result to disk
+    const original = item.r.content
+    try {
+      const dir = join(sessionDir, 'tool-results')
+      mkdirSync(dir, { recursive: true })
+      const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
+      const filePath = join(dir, fileName)
+      writeFileSync(filePath, original, 'utf8')
+      const preview = original.slice(0, 2000)
+      results[item.i].content =
+        `${preview}\n\n[... Full output (${original.length} chars) saved to: ${filePath} ...]`
+      currentTotal -= original.length - results[item.i].content.length
+    } catch {
+      break // can't persist — stop trying
+    }
+  }
+}
+
 /** Plan mode — only read-only tools are exposed */
 const PLAN_MODE_TOOLS = new Set([
   'Read',
@@ -91,6 +156,7 @@ const PLAN_MODE_TOOLS = new Set([
   'Grep',
   'WebFetch',
   'WebSearch',
+  'ExitPlanMode', // the tool to exit plan mode is always available in plan mode
 ])
 
 /**
@@ -181,6 +247,20 @@ export class ExecutionEngine {
   private systemPromptTokens = 0
   /** All available tools — base + module-provided (populated in runTurn) */
   private allTools: Tool[]
+  /** Cost tracker — accumulates real API token usage and USD cost */
+  private costTracker: CostTracker
+  /** Background task manager — async long-running task lifecycle */
+  private backgroundTaskManager: BackgroundTaskManager
+  /** Mutable plan-mode flag — can be toggled off by ExitPlanMode tool */
+  private planModeActive: boolean
+  /** File history — backs up files before edits for undo/checkpoint */
+  private fileHistory: FileHistory | null
+  /** Whether the endpoint supports stream_options.include_usage (most do) */
+  private _streamUsageSupported = true
+  /** Consecutive compact failure counter — stops retrying after 3 */
+  private _consecutiveCompactFailures = 0
+  /** Suppress compact warning after successful compaction (next turn only) */
+  private _suppressCompactWarning = false
 
   constructor(config: EngineConfig, renderer: Renderer) {
     // Merge agent config into effective config (overrides legacy fields)
@@ -195,6 +275,10 @@ export class ExecutionEngine {
     this.tools = createTools(config.extraTools ?? [])
     this.allTools = this.tools  // will be updated with module tools in runTurn
     this.eventLog = config.eventLog
+    this.costTracker = new CostTracker()
+    this.backgroundTaskManager = new BackgroundTaskManager()
+    this.planModeActive = config.planMode ?? false
+    this.fileHistory = config.sessionDir ? new FileHistory(config.sessionDir) : null
 
     // Resolve enabled modules
     const enabledNames = this.deriveEnabledModules()
@@ -221,7 +305,7 @@ export class ExecutionEngine {
     if (this.config.semanticMemory && this.config.episodicMemory) {
       auto.push('memory')
     }
-    if (this.config.sessionDir && !(this.config.planMode ?? false)) {
+    if (this.config.sessionDir && !this.planModeActive) {
       auto.push('critic')
     }
     if (this.config.sessionDir) {
@@ -275,21 +359,67 @@ export class ExecutionEngine {
   // ── Context budget ──────────────────────────────────────────────────────
 
   private async evaluateContextBudget(messages: OpenAIMessage[]): Promise<void> {
+    // Clear the compact-warning suppression flag from last turn
+    this._suppressCompactWarning = false
+
     const maxCtxTokens =
       this.config.maxContextTokens ?? MODEL_MAX_CONTEXT_TOKENS
     // Count messages + system prompt for accurate budget
     const messageTokens = estimateTokens(messages)
     const totalTokens = messageTokens + this.systemPromptTokens
     const pct = totalTokens / maxCtxTokens
+    const shouldMicroCompact = pct >= 0.50
     const shouldWarn = pct >= 0.70
     const shouldCompact = pct >= 0.85
     const strategy = getCompressionStrategy(pct)
 
-    if (this.config.sessionDir && shouldWarn) {
+    // ── Time-based microCompact: when the session was idle for >5 min,
+    // the prompt cache is guaranteed cold — clearing old tool results
+    // costs nothing (the full prefix will be rewritten anyway).
+    if (!shouldCompact) {
+      let lastAssistantIdx = -1
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') { lastAssistantIdx = i; break }
+      }
+      if (lastAssistantIdx >= 0) {
+        // Heuristic: if there are many messages since the last assistant turn,
+        // the session was likely idle. We can't know the wall-clock from messages
+        // alone, so we use message count as a proxy for elapsed time.
+        const messagesSinceLastTurn = messages.length - lastAssistantIdx
+        if (messagesSinceLastTurn > 20) {
+          const mcResult = microCompact(messages)
+          if (mcResult.compacted) {
+            this.eventLog?.append('context_compact', 'engine', {
+              type: 'time_based_microcompact',
+              tokens_before: mcResult.tokensBefore,
+              tokens_after: mcResult.tokensAfter,
+              tools_cleared: mcResult.toolsCleared,
+            })
+          }
+        }
+      }
+    }
+
+    // ── Pressure-based microCompact: clear old tool results at 50% pressure ──
+    // Clear old tool results at 50% pressure, before resorting to full
+    // LLM-summarization compact at 85%.
+    if (shouldMicroCompact && !shouldCompact) {
+      const mcResult = microCompact(messages)
+      if (mcResult.compacted) {
+        this.eventLog?.append('context_compact', 'engine', {
+          type: 'microcompact',
+          tokens_before: mcResult.tokensBefore,
+          tokens_after: mcResult.tokensAfter,
+          tools_cleared: mcResult.toolsCleared,
+        })
+      }
+    }
+
+    if (this.config.sessionDir && shouldWarn && !this._suppressCompactWarning) {
       this.renderer.contextWarning(totalTokens, maxCtxTokens, pct)
     }
 
-    if (shouldCompact) {
+    if (shouldCompact && this._consecutiveCompactFailures < 3) {
       this.renderer.compactStart(totalTokens)
       this.eventLog?.append('context_compact', 'engine', {
         strategy,
@@ -315,11 +445,21 @@ export class ExecutionEngine {
           tokens_after: compactResult.summaryTokens,
           reduction: compactResult.originalTokens - compactResult.summaryTokens,
         })
+        this._consecutiveCompactFailures = 0  // reset on success
+        this._suppressCompactWarning = true   // suppress warning next turn
         // Lifecycle hook: OnContextOverflow
         this.config.hookRunner?.runOnContextOverflow?.(
           compactResult.originalTokens,
           compactResult.summaryTokens,
         )
+      } else {
+        // Compaction failed — increment circuit breaker
+        this._consecutiveCompactFailures++
+        if (this._consecutiveCompactFailures >= 3) {
+          this.renderer.warn(
+            `Auto-compact failed ${this._consecutiveCompactFailures} consecutive times — skipping further attempts. Consider starting a new session.`,
+          )
+        }
       }
     }
   }
@@ -335,8 +475,11 @@ export class ExecutionEngine {
     assistantText: string
     finishReason: string | null
     rawToolCalls: StreamingToolCall[]
+    usage: TokenUsage | null
   }> {
     this.renderer.startSpinner()
+
+    const callStartMs = Date.now()
 
     let stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>
     try {
@@ -347,20 +490,46 @@ export class ExecutionEngine {
             { role: 'system', content: systemPrompt },
             ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
           ],
-          tools: toolDefs,
-          tool_choice: 'auto',
+          tools: toolDefs.length > 0 ? toolDefs : undefined,
+          tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
           temperature: this.config.temperature ?? 0,
           max_tokens: this.config.maxOutputTokens ?? 8192,
           stream: true,
+          ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
         },
         { signal: turnAbortSignal },
       )
     } catch (err: unknown) {
       this.renderer.stopSpinner()
 
-      // Reactive compact: if API rejected due to context length, auto-compact and retry once
       const errMsg = (err as Error).message || ''
-      if (errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length') || errMsg.includes('too long')) {
+
+      // Fallback: some endpoints reject stream_options with 400 — retry without it
+      if (errMsg.includes('stream_options') || errMsg.includes('stream_options is not supported')) {
+        this._streamUsageSupported = false
+        stream = await this.client.chat.completions.create(
+          {
+            model: this.config.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
+            ],
+            tools: toolDefs,
+            tool_choice: 'auto',
+            temperature: this.config.temperature ?? 0,
+            max_tokens: this.config.maxOutputTokens ?? 8192,
+            stream: true,
+          },
+          { signal: turnAbortSignal },
+        )
+        const result = await this.consumeStream(stream, turnAbortSignal)
+        this.recordUsage(result.usage, callStartMs)
+        return result
+      }
+
+      // Reactive compact: if API rejected due to context length, auto-compact and retry once
+      const compactErrMsg = (err as Error).message || ''
+      if (compactErrMsg.includes('context_length_exceeded') || compactErrMsg.includes('maximum context length') || compactErrMsg.includes('too long')) {
         this.renderer.warn('Context too long — auto-compacting and retrying...')
         const compactResult = await maybeCompact(this.client, this.config.model, messages)
         if (compactResult.compacted) {
@@ -375,21 +544,39 @@ export class ExecutionEngine {
                 { role: 'system', content: systemPrompt },
                 ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
               ],
-              tools: toolDefs,
-              tool_choice: 'auto',
+              tools: toolDefs.length > 0 ? toolDefs : undefined,
+              tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
               temperature: this.config.temperature ?? 0,
           max_tokens: this.config.maxOutputTokens ?? 16_384,  // higher default: reasoning models (deepseek-reasoner) include reasoning in max_tokens
               stream: true,
+              ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
             },
             { signal: turnAbortSignal },
           )
-          return this.consumeStream(stream, turnAbortSignal)
+          const result = await this.consumeStream(stream, turnAbortSignal)
+          this.recordUsage(result.usage, callStartMs)
+          return result
         }
       }
       throw err
     }
 
-    return this.consumeStream(stream, turnAbortSignal)
+    const result = await this.consumeStream(stream, turnAbortSignal)
+    this.recordUsage(result.usage, callStartMs)
+    return result
+  }
+
+  /** Feed API usage into the cost tracker (if present) */
+  private recordUsage(usage: TokenUsage | null, callStartMs: number): void {
+    if (usage) {
+      const durationMs = Date.now() - callStartMs
+      this.costTracker.addUsage(this.config.model, usage, durationMs)
+      this.eventLog?.append('tool_call', 'llm_api', {
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        duration_ms: durationMs,
+      })
+    }
   }
 
   /** Consume the streaming response, accumulating text and tool calls */
@@ -400,9 +587,11 @@ export class ExecutionEngine {
     assistantText: string
     finishReason: string | null
     rawToolCalls: StreamingToolCall[]
+    usage: TokenUsage | null
   }> {
     let assistantText = ''
     let finishReason: string | null = null
+    let usage: TokenUsage | null = null
     const toolCallsMap = new Map<number, StreamingToolCall>()
     let firstToken = true
 
@@ -426,6 +615,15 @@ export class ExecutionEngine {
         if (turnAbortSignal.aborted) break
 
         lastChunkTime = Date.now()  // reset watchdog on each chunk
+
+        // Capture usage from the final chunk (stream_options.include_usage)
+        // The usage chunk often has an empty choices array, so check before delta.
+        if (chunk.usage) {
+          usage = {
+            inputTokens: chunk.usage.prompt_tokens,
+            outputTokens: chunk.usage.completion_tokens,
+          }
+        }
 
         const delta = chunk.choices[0]?.delta
         if (!delta) continue
@@ -471,15 +669,28 @@ export class ExecutionEngine {
     clearInterval(watchdog)
     this.renderer.stopSpinner()
 
+    // Stream-timeout watchdog: if the stream was aborted due to stall,
+    // throw so the engine's error path fires (instead of looking like success)
+    if (turnAbortSignal.aborted && !finishReason) {
+      throw new Error('Stream timed out — no data received for 120s')
+    }
+
     if (assistantText) {
       this.renderer.endAssistantText()
     }
 
     const rawToolCalls = Array.from(toolCallsMap.values()).sort(
       (a, b) => a.index - b.index,
-    )
+    ).map((tc) => {
+      // Some providers (vLLM, LM Studio, Ollama) omit tool_call id;
+      // synthesize one to prevent "tool_call_id does not match" on next turn
+      if (!tc.id) {
+        tc.id = `call_${randomUUID()}`
+      }
+      return tc
+    })
 
-    return { assistantText, finishReason, rawToolCalls }
+    return { assistantText, finishReason, rawToolCalls, usage }
   }
 
   // ── Tool execution ──────────────────────────────────────────────────────
@@ -557,6 +768,18 @@ export class ExecutionEngine {
           ),
         )
 
+        // Enforce aggregate budget: if the total of all parallel results
+        // exceeds the limit, persist the largest to disk before pushing
+        const aggregateResults = batch.calls.map((call, i) => ({
+          content: results[i].content,
+          tc: { id: call.tc.id, name: call.tc.name },
+        }))
+        enforceAggregateToolResultBudget(aggregateResults, this.config.sessionDir)
+        // Write back any persisted replacements
+        for (let i = 0; i < results.length; i++) {
+          results[i] = { ...results[i], content: aggregateResults[i].content }
+        }
+
         for (let i = 0; i < batch.calls.length; i++) {
           const { tc } = batch.calls[i]
           const result = results[i]
@@ -575,10 +798,13 @@ export class ExecutionEngine {
             },
             [tc.name, result.isError ? 'error' : 'success'],
           )
+          // Prevent empty tool-result content — some models emit stop sequence
+          // and end their turn with zero output when tool_result is empty
+          const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(result.content, this.config.sessionDir),
+            content: truncateToolResult(safeContent, this.config.sessionDir),
             name: tc.name,
           })
         }
@@ -615,10 +841,11 @@ export class ExecutionEngine {
             [tc.name, result.isError ? 'error' : 'success'],
           )
 
+          const serialSafeContent = result.content.trim() || `(${tc.name} completed with no output)`
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(result.content, this.config.sessionDir),
+            content: truncateToolResult(serialSafeContent, this.config.sessionDir),
             name: tc.name,
           })
 
@@ -656,6 +883,14 @@ export class ExecutionEngine {
         model: this.config.model,
       },
       eventLog: this.eventLog,
+      backgroundTaskManager: this.backgroundTaskManager,
+      askUserQuestion: this.config.askUserQuestion,
+      exitPlanMode: async (plan: string): Promise<boolean> => {
+        const approved = await this.config.exitPlanMode?.(plan) ?? true
+        if (approved) this.exitPlanMode()
+        return approved
+      },
+      fileHistory: this.fileHistory ?? undefined,
       // Module patches override/extend the base context (incl. availableToolNames)
       ...modulePatches,
     }
@@ -665,13 +900,19 @@ export class ExecutionEngine {
 
   /**
    * Execute a single user turn with streaming output.
-   * Full Think → Act → Observe loop with module lifecycle hooks.
+   *
+   * State-machine-driven Think → Act → Observe loop with module lifecycle hooks.
+   * The loop drives a pure reducer (transitionQueryState) — each iteration
+   * inspects the current state, performs its side effects, and emits the next
+   * event. This replaces the legacy inline while-loop with explicit, testable
+   * states: boot → check_abort → budget_check → module_iteration → llm_call →
+   * continuation_check → parse_response → tool_execution → check_abort …
    */
   async runTurn(
     userMessage: string,
     history: OpenAIMessage[],
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
-    const planMode = this.config.planMode ?? false
+    const planMode = this.planModeActive
 
     // Clear file read state for this turn (read-before-edit is per-turn, not cross-turn)
     clearFileState()
@@ -717,148 +958,247 @@ export class ExecutionEngine {
     // Initialize messages
     const messages: OpenAIMessage[] = [...history, { role: 'user', content: userMessage }]
 
-    let iterations = 0
-    let finalOutput = ''
-    let turnNumber = 0
     const toolContext = this.buildToolContext(
       turnAbortController.signal,
       { ...toolContextPatch, availableToolNames: toolDefs.map(t => t.function.name) },
     )
 
-    let result: TurnResult
+    // ── State machine driver ───────────────────────────────────────────
+    let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
+
+    let finalOutput = ''
     let lastToolName: string | undefined
+    // Tool calls pending parse — stashed in llm_call, consumed in parse_response
+    let pendingToolCalls: StreamingToolCall[] = []
+    // Parsed tool calls — stashed in parse_response, consumed in tool_execution
+    let pendingParsedCalls: ParsedToolCall[] = []
+    // Continuation budget tracking (opt-in via config.enableContinuation)
+    const enableContinuation = this.config.enableContinuation ?? false
+    const turnTokenBudget =
+      this.config.turnTokenBudget ?? (this.config.maxOutputTokens ?? 8192) * 4
+    const budgetTracker = createBudgetTracker()
+    let turnTokensProduced = 0
+    let emptyResponseCount = 0
+    const MAX_EMPTY_RETRIES = 2
+    let lengthRetryCount = 0
+    const MAX_LENGTH_RETRIES = 3
+
+    let result: TurnResult
     try {
-      while (iterations < this.config.maxIterations) {
-        // Check for cancellation
-        if (turnAbortController.signal.aborted) {
-          result = { stopped: true, reason: 'error', output: finalOutput }
-          break
-        }
-
-        iterations++
-        turnNumber++
-
-        // Soft-interrupt check
-        if (this.softAbortRequested) {
-          this.softAbortRequested = false
-          result = { stopped: true, reason: 'interrupted', output: finalOutput }
-          break
-        }
-
-        // Context budget + auto-compact
-        await this.evaluateContextBudget(messages)
-
-        // Module iteration hooks (critic, etc.)
-        for (const module of this.modules) {
-          if (!module.onIteration) continue
-          const iterResult = await module.onIteration({
-            iteration: iterations,
-            messages,
-            abortSignal: turnAbortController.signal,
-          })
-          if (iterResult?.injectMessage) {
-            const msg = iterResult.injectMessage
-            // Show full critic output to user via renderer (not raw stdout)
-            const lines = msg.split('\n').filter(l => l.trim())
-            for (const line of lines) {
-              this.renderer.warn(`[${module.name}] ${line}`)
+      while (!isTerminal(state)) {
+        switch (state.kind) {
+          case 'check_abort': {
+            if (turnAbortController.signal.aborted) {
+              state = transitionQueryState(state, { type: 'hard_abort', output: finalOutput })
+            } else if (this.softAbortRequested) {
+              this.softAbortRequested = false
+              state = transitionQueryState(state, { type: 'soft_abort', output: finalOutput })
+            } else if (state.iteration > this.config.maxIterations) {
+              this.renderer.warn(
+                `Max iterations (${this.config.maxIterations}) reached`,
+              )
+              state = transitionQueryState(state, { type: 'max_iterations', output: finalOutput })
+            } else {
+              state = transitionQueryState(state, { type: 'continue' })
             }
-            this.eventLog?.append('module_flag', module.name, {
-              message: msg.slice(0, 500),
-              iteration: iterations,
+            break
+          }
+
+          case 'budget_check': {
+            await this.evaluateContextBudget(messages)
+            state = transitionQueryState(state, { type: 'continue' })
+            break
+          }
+
+          case 'module_iteration': {
+            for (const module of this.modules) {
+              if (!module.onIteration) continue
+              const iterResult = await module.onIteration({
+                iteration: state.iteration,
+                messages,
+                abortSignal: turnAbortController.signal,
+              })
+              if (iterResult?.injectMessage) {
+                const msg = iterResult.injectMessage
+                // Show full critic output to user via renderer (not raw stdout)
+                const lines = msg.split('\n').filter(l => l.trim())
+                for (const line of lines) {
+                  this.renderer.warn(`[${module.name}] ${line}`)
+                }
+                this.eventLog?.append('module_flag', module.name, {
+                  message: msg.slice(0, 500),
+                  iteration: state.iteration,
+                })
+                messages.push({ role: 'user', content: msg })
+              }
+            }
+            state = transitionQueryState(state, { type: 'continue' })
+            break
+          }
+
+          case 'llm_call': {
+            const { assistantText, finishReason, rawToolCalls } =
+              await this.callLLM(
+                systemPrompt,
+                messages,
+                toolDefs,
+                turnAbortController.signal,
+              )
+
+            if (assistantText) {
+              finalOutput = assistantText
+              turnTokensProduced += Math.ceil(assistantText.length / 3.5)
+            }
+
+            // Build assistant message
+            const assistantMsg: OpenAIMessage = {
+              role: 'assistant',
+              content: assistantText || null,
+              tool_calls:
+                rawToolCalls.length > 0
+                  ? rawToolCalls.map((tc) => ({
+                      id: tc.id,
+                      type: 'function' as const,
+                      function: { name: tc.name, arguments: tc.arguments },
+                    }))
+                  : undefined,
+            }
+            messages.push(assistantMsg)
+
+            // Detect empty response (no text AND no tool calls) — nudge the model
+            if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
+              emptyResponseCount++
+              messages.push({
+                role: 'user',
+                content: 'Your previous response was empty (no text, no tool call). Please respond with text or invoke a tool.',
+              })
+              // Re-enter budget_check to loop back to llm_call
+              state = transitionQueryState(state, { type: 'continue' })
+              break
+            }
+
+            // Detect truncated response (finish_reason='length') — the model
+            // hit max_tokens mid-response. Inject "continue" and retry up to 3x.
+            if (finishReason === 'length' && rawToolCalls.length === 0 && lengthRetryCount < MAX_LENGTH_RETRIES) {
+              lengthRetryCount++
+              this.eventLog?.append('module_flag', 'length_retry', {
+                retry: lengthRetryCount,
+                max: MAX_LENGTH_RETRIES,
+                partial_length: assistantText.length,
+              })
+              messages.push({
+                role: 'user',
+                content: 'Continue your previous response from where it was cut off. Do not repeat what you already wrote — just continue.',
+              })
+              state = transitionQueryState(state, { type: 'continue' })
+              break
+            }
+
+            pendingToolCalls = rawToolCalls
+            state = transitionQueryState(state, {
+              type: 'llm_done',
+              finishReason,
+              hasToolCalls: rawToolCalls.length > 0,
+              output: finalOutput,
             })
-            messages.push({ role: 'user', content: msg })
+            break
           }
-        }
 
-        // ── Streaming LLM call ───────────────────────────────────
-        const { assistantText, finishReason, rawToolCalls } =
-          await this.callLLM(
-            systemPrompt,
-            messages,
-            toolDefs,
-            turnAbortController.signal,
-          )
-
-        if (assistantText) {
-          finalOutput = assistantText
-        }
-
-        // Build assistant message
-        const assistantMsg: OpenAIMessage = {
-          role: 'assistant',
-          content: assistantText || null,
-          tool_calls:
-            rawToolCalls.length > 0
-              ? rawToolCalls.map((tc) => ({
-                  id: tc.id,
-                  type: 'function' as const,
-                  function: { name: tc.name, arguments: tc.arguments },
-                }))
-              : undefined,
-        }
-        messages.push(assistantMsg)
-
-        // Check if we're done (no tool calls)
-        if (finishReason === 'stop' || rawToolCalls.length === 0) {
-          result = { stopped: true, reason: 'stop_sequence', output: finalOutput }
-          break
-        }
-
-        // Parse tool calls
-        const parsedCalls: ParsedToolCall[] = rawToolCalls.map((tc) => {
-          let input: Record<string, unknown>
-          try {
-            input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>
-          } catch {
-            // Malformed JSON (likely truncated by token limit) — diagnose
-            this.renderer.warn(`Warning: malformed tool arguments for ${tc.name} (JSON parse failed, likely truncated). Args: ${tc.arguments.slice(0, 100)}...`)
-            this.eventLog?.append('tool_call', tc.name, { parse_error: true, raw_args: tc.arguments.slice(0, 200) })
-            input = {}
+          case 'continuation_check': {
+            // When continuation is enabled and budget remains, nudge the model
+            // to keep producing instead of stopping on finish_reason=stop.
+            if (enableContinuation) {
+              const decision = checkTokenBudget(budgetTracker, turnTokenBudget, turnTokensProduced)
+              if (decision.action === 'continue') {
+                this.eventLog?.append('module_flag', 'continuation', {
+                  continuation_count: decision.continuationCount,
+                  pct: decision.pct,
+                  turn_tokens: decision.turnTokens,
+                  budget: decision.budget,
+                })
+                messages.push({ role: 'user', content: decision.nudgeMessage })
+                state = transitionQueryState(state, { type: 'continue' })
+                break
+              }
+            }
+            // Default: stop and complete
+            state = transitionQueryState(state, { type: 'stop' })
+            break
           }
-          return { tc, input }
-        })
 
-        // Track last tool name for OnError hook
-        if (parsedCalls.length > 0) {
-          lastToolName = parsedCalls[parsedCalls.length - 1].tc.name
-        }
+          case 'parse_response': {
+            const validCalls: ParsedToolCall[] = []
+            for (const tc of pendingToolCalls) {
+              let input: Record<string, unknown>
+              try {
+                input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>
+              } catch {
+                // Malformed JSON — do NOT execute the tool. Push a synthetic
+                // error result so the LLM knows its arguments were bad.
+                this.renderer.warn(`Warning: malformed tool arguments for ${tc.name} (JSON parse failed, likely truncated).`)
+                this.eventLog?.append('tool_call', tc.name, { parse_error: true, raw_args: tc.arguments.slice(0, 200) })
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: tc.id,
+                  name: tc.name,
+                  content: `Could not parse tool arguments as valid JSON (likely truncated by max_tokens). Raw args (first 200 chars): ${tc.arguments.slice(0, 200)}. Retry with shorter or simpler arguments.`,
+                })
+                continue  // skip this call — don't add to validCalls
+              }
+              validCalls.push({ tc, input })
+            }
 
-        // Schedule and execute tool calls
-        const { aborted } = await this.scheduleToolCalls(
-          parsedCalls,
-          toolContext,
-          planMode,
-          turnAbortController.signal,
-          messages,
-          turnNumber,
-        )
+            pendingParsedCalls = validCalls
 
-        if (aborted || turnAbortController.signal.aborted) {
-          // Soft-abort (ESC during tools): 'interrupted' so REPL can resume
-          // Hard-abort (Ctrl+C): 'error'
-          const isSoftAbort = aborted && !turnAbortController.signal.aborted
-          result = {
-            stopped: true,
-            reason: isSoftAbort ? 'interrupted' : 'error',
-            output: finalOutput,
+            // Track last tool name for OnError hook
+            if (pendingParsedCalls.length > 0) {
+              lastToolName = pendingParsedCalls[pendingParsedCalls.length - 1].tc.name
+            }
+
+            state = transitionQueryState(state, { type: 'continue' })
+            break
           }
-          break
+
+          case 'tool_execution': {
+            const { aborted } = await this.scheduleToolCalls(
+              pendingParsedCalls,
+              toolContext,
+              planMode,
+              turnAbortController.signal,
+              messages,
+              state.iteration,
+            )
+
+            const hardAborted = turnAbortController.signal.aborted
+            state = transitionQueryState(state, {
+              type: 'tools_done',
+              aborted: aborted || hardAborted,
+              hardAborted,
+              output: finalOutput,
+            })
+            break
+          }
+
+          case 'boot':
+            // Unreachable — boot transitions to check_abort before the loop
+            state = transitionQueryState(state, { type: 'booted' })
+            break
         }
       }
 
-      // If loop completed without break (max iterations)
-      if (!result!) {
-        this.renderer.warn(
-          `Max iterations (${this.config.maxIterations}) reached`,
-        )
-        result = { stopped: true, reason: 'max_iterations', output: finalOutput }
+      // State machine reached a terminal state
+      if (state.kind === 'complete') {
+        result = { stopped: true, reason: state.reason, output: state.output }
+      } else {
+        // Defensive fallback — should never happen
+        result = { stopped: true, reason: 'error', output: finalOutput }
       }
     } catch (err) {
       // Lifecycle hook: OnError
       const errMsg = (err as Error).message || String(err)
+      const errorIteration = 'iteration' in state ? state.iteration : 0
       this.config.hookRunner?.runOnError?.(err as Error, {
-        turnNumber: iterations,
+        turnNumber: errorIteration,
         lastToolName,
       })
       // Surface the error to the user — don't swallow it silently
@@ -892,6 +1232,31 @@ export class ExecutionEngine {
 
   getModel(): string {
     return this.config.model
+  }
+
+  /** Expose the cost tracker for end-of-session cost display */
+  getCostTracker(): CostTracker {
+    return this.costTracker
+  }
+
+  /** Expose the background task manager for cleanup / inspection */
+  getBackgroundTaskManager(): BackgroundTaskManager {
+    return this.backgroundTaskManager
+  }
+
+  /** Whether plan mode is currently active */
+  isPlanMode(): boolean {
+    return this.planModeActive
+  }
+
+  /** Exit plan mode — called by the ExitPlanMode tool after user approval */
+  exitPlanMode(): void {
+    this.planModeActive = false
+  }
+
+  /** Get the file history tracker (null if no sessionDir) */
+  getFileHistory(): FileHistory | null {
+    return this.fileHistory
   }
 }
 

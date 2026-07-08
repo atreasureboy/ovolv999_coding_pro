@@ -73,12 +73,12 @@ export class ShellSessionTool implements Tool {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['listen', 'exec', 'list', 'kill'], description: '操作类型' },
-          port: { type: 'number', description: '监听端口' },
-          session_id: { type: 'string', description: '会话 ID (格式 shell_PORT)' },
-          command: { type: 'string', description: '要执行的命令 (exec 时必填)' },
-          timeout: { type: 'number', description: '等待输出的最长毫秒数 (默认 8000)' },
-          log_dir: { type: 'string', description: '日志写入目录 (默认 /tmp)' },
+          action: { type: 'string', enum: ['listen', 'exec', 'list', 'kill'], description: 'Operation type' },
+          port: { type: 'number', description: 'TCP port to listen on' },
+          session_id: { type: 'string', description: 'Session ID (format: shell_PORT)' },
+          command: { type: 'string', description: 'Command to execute (required for exec)' },
+          timeout: { type: 'number', description: 'Max wait for output in milliseconds (default 8000)' },
+          log_dir: { type: 'string', description: 'Directory for session logs (default /tmp)' },
         },
         required: ['action'],
       },

@@ -214,13 +214,36 @@ function createMemoryRecallTool(episodic: EpisodicMemory): Tool {
 
 // ── Relevance scoring (approximates AgentOS embedding retrieval) ─────────────
 
-/** Extract meaningful keywords from a user message */
-function extractKeywords(text: string): string[] {
-  return text
-    .toLowerCase()
+/** Extract meaningful keywords from a user message.
+ *  Handles both English (whitespace-split) and CJK (Chinese/Japanese/Korean)
+ *  text — CJK characters are segmented into 2-char bigrams since they
+ *  have no word boundaries.
+ *  Exported for testing.
+ */
+export function extractKeywords(text: string): string[] {
+  const lower = text.toLowerCase()
+  // English / Latin keywords: split on whitespace + punctuation
+  const latinWords = lower
     .split(/[\s,.;:!?'"\-—–()]+/)
     .filter(w => w.length > 2)
     .filter(w => !['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'have', 'from', 'this', 'that', 'with', 'your', 'what', 'here', 'there', 'their', 'would'].includes(w))
+
+  // CJK keywords: extract Chinese/Japanese/Korean character runs and
+  // segment into 2-char bigrams (approximates word matching for languages
+  // without whitespace word boundaries)
+  const cjkBigrams: string[] = []
+  const cjkRuns = lower.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+/g) ?? []
+  for (const run of cjkRuns) {
+    if (run.length === 1) {
+      cjkBigrams.push(run)
+    } else {
+      for (let i = 0; i < run.length - 1; i++) {
+        cjkBigrams.push(run.slice(i, i + 2))
+      }
+    }
+  }
+
+  return [...latinWords, ...cjkBigrams]
 }
 
 /** Score a memory entry against keywords — higher = more relevant */
@@ -228,7 +251,7 @@ function scoreRelevance(
   entry: { content: string; tags: string[]; confidence: number },
   keywords: string[],
 ): number {
-  if (keywords.length === 0) return entry.confidence
+  if (keywords.length === 0) return 0 // no keywords → no relevance score
   const text = (entry.content + ' ' + entry.tags.join(' ')).toLowerCase()
   let matches = 0
   for (const kw of keywords) {

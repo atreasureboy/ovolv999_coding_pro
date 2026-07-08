@@ -57,7 +57,7 @@ export class GlobTool implements Tool {
       })
 
       if (files.length === 0) {
-        return { content: `No files found matching: ${pattern} in ${cwd}`, isError: false }
+        return { content: `No files found matching: ${pattern} in ${cwd}. Tip: try a broader pattern (e.g. "**/*.ts"), check the path, or omit 'path' to search cwd.`, isError: false }
       }
 
       // Sort by modification time (newest first)

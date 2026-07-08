@@ -16,17 +16,38 @@ export type RiskLevel = 'safe' | 'needs_approval' | 'dangerous'
 
 // Patterns that are ALWAYS dangerous — irreversible or system-destroying
 const DANGEROUS_PATTERNS: RegExp[] = [
+  // File deletion
   /\brm\b(?=.*(?:\s-[a-zA-Z]*r[a-zA-Z]*\b|\s--recursive\b))/,  // rm -rf
+  /\brm\s+.*--no-preserve-root/,                                  // rm --no-preserve-root
+  // Disk / device destruction
   /\bdd\s+.*of=\/dev\//,                                          // dd to device
   /\bmkfs\./,                                                     // format filesystem
   />\s*\/dev\/(sd|nvme|hd|vd)/,                                   // write to block device
+  // Power / system
   /\b(shutdown|reboot|halt|poweroff)\b/,                          // power off
   /\binit\s+[06]\b/,                                              // init 0/6
   /:\(\)\s*\{\s*:\|:&\s*\};:/,                                   // fork bomb
+  // Privilege escalation
   /(?:^|[;&|]+|`|\$\()\s*(sudo|su)\b/,                            // privilege escalation
+  // Dangerous chmod/chown
   /\bchmod\s+(-R\s+)?[0-7]*7[0-7]*\s+\//,                         // chmod 777 on root
   /\bchown\s+-R\s+.*\s+\//,                                       // chown -R on root
+  // Git destructive (ported from Claude Code destructiveCommandWarning.ts)
   /\bgit\s+push\s+.*--force.*\b(main|master)\b/,                  // force push to main
+  /\bgit\s+reset\s+--hard/,                                       // git reset --hard
+  /\bgit\s+clean\s+(-[a-zA-Z]*[fd])/,                             // git clean -fd
+  /\bgit\s+checkout\s+\./,                                        // git checkout . (discard all)
+  /\bgit\s+restore\s+\./,                                         // git restore . (discard all)
+  /\bgit\s+stash\s+(drop|clear)\b/,                               // git stash drop/clear
+  /\bgit\s+branch\s+-D\b/,                                        // git branch -D (force delete)
+  /\bgit\s+commit\s+--amend/,                                     // git commit --amend
+  /\bgit\s+.*--no-verify/,                                        // skip git hooks
+  // Database destruction
+  /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA|INDEX)\b/i,        // DROP/TRUNCATE
+  /\bDELETE\s+FROM\b(?=.*[^;]*$)(?!.*\bWHERE\b)/i,                // DELETE without WHERE
+  // Infrastructure
+  /\bkubectl\s+delete\b/,                                         // kubectl delete
+  /\bterraform\s+destroy\b/,                                      // terraform destroy
 ]
 
 // Commands that are always safe to run

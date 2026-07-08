@@ -14,7 +14,7 @@ import type { AgentConfig } from '../core/agentPresets.js'
 import { resolveAgentConfig, validateAgentConfig, PRESET_NAMES } from '../core/agentPresets.js'
 import { Renderer } from '../ui/renderer.js'
 import { tmuxLayout } from '../ui/tmuxLayout.js'
-import { appendFileSync } from 'fs'
+import { appendFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { str } from '../core/strings.js'
@@ -26,20 +26,47 @@ const MAX_CALL_DEPTH = 5
 
 // ── Verification gate (AgentOS §6 "No Tuple, No Merge") ─────────────────────
 
-/** Default verification commands */
-const VERIFY_COMMANDS = [
-  'npx tsc --noEmit 2>&1',
-]
+/**
+ * Detect appropriate verification command based on project files.
+ * Falls back to tsc for TypeScript projects (the most common case).
+ */
+function detectVerifyCommands(cwd: string): string[] {
+  const has = (f: string): boolean => {
+    try { return existsSync(join(cwd, f)) } catch { return false }
+  }
+
+  // Python
+  if (has('pyproject.toml') || has('setup.py') || has('requirements.txt')) {
+    return ['python -m py_compile $(find . -name "*.py" -not -path "./.venv/*" | head -20) 2>&1 || ruff check . 2>&1 || true']
+  }
+  // Go
+  if (has('go.mod')) {
+    return ['go vet ./... 2>&1']
+  }
+  // Rust
+  if (has('Cargo.toml')) {
+    return ['cargo check 2>&1']
+  }
+  // TypeScript / JavaScript (default)
+  if (has('tsconfig.json') || has('package.json')) {
+    return ['npx tsc --noEmit 2>&1']
+  }
+  // No known project type — skip verification
+  return []
+}
 
 /**
  * Run verification commands and return results.
- * Returns null if all pass, or a formatted failure summary.
+ * Returns null if no commands or all pass, or a formatted failure summary.
  */
 function runVerification(cwd: string): { passed: boolean; output: string } | null {
+  const commands = detectVerifyCommands(cwd)
+  if (commands.length === 0) return null
+
   const results: string[] = []
   let allPassed = true
 
-  for (const cmd of VERIFY_COMMANDS) {
+  for (const cmd of commands) {
     try {
       execSync(cmd, { cwd, encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
       results.push(`✓ ${cmd.split(' ')[1] || cmd} — passed`)

@@ -69,6 +69,15 @@ const TOOL_VIZ: Record<string, ToolVisual> = {
   memory_write:  { icon: '✦',  color: C.bgreen },
   memory_search: { icon: '✦',  color: C.bcyan },
   memory_recall: { icon: '✦',  color: C.byellow },
+  TaskCreate:    { icon: '▶',  color: C.bgreen },
+  TaskGet:       { icon: '◉',  color: C.bcyan },
+  TaskList:      { icon: '☰',  color: C.bblue },
+  TaskUpdate:    { icon: '✎',  color: C.byellow },
+  TaskStop:      { icon: '■',  color: C.bred },
+  AskUserQuestion: { icon: '?', color: C.byellow },
+  ExitPlanMode:   { icon: '⚡', color: C.bgreen },
+  Sleep:          { icon: '⏸', color: C.gray },
+  NotebookEdit:   { icon: '📓', color: C.bpurple },
 }
 
 function viz(name: string): ToolVisual {
@@ -145,7 +154,11 @@ export class Renderer {
   }
 
   streamToken(token: string): void {
-    if (!this.streaming) this.beginAssistantText()
+    if (!this.streaming) {
+      // Ensure spinner is stopped before first token
+      this.stopSpinner()
+      this.beginAssistantText()
+    }
     this.w(token)
   }
 
@@ -172,7 +185,7 @@ export class Renderer {
     const lines = result.split('\n').filter(l => l.trim())
 
     if (isError) {
-      for (const line of lines.slice(0, 5)) {
+      for (const line of lines.slice(0, 6)) {
         this.w(`    ${C.red}${line.length > 120 ? line.slice(0, 117) + '...' : line}${R}\n`)
       }
       return
@@ -197,13 +210,18 @@ export class Renderer {
         return c.length > 80 ? c.slice(0, 77) + '...' : c
       }
       case 'Read': {
-        return str(input.file_path) + (input.offset ? ` +${str(input.offset)}` : '')
+        const off = input.offset ? ` from line ${str(input.offset)}` : ''
+        return str(input.file_path) + off
       }
       case 'Write': {
         return `${str(input.file_path)} (${str(input.content).split('\n').length}L)`
       }
       case 'Edit': {
         return str(input.file_path)
+      }
+      case 'NotebookEdit': {
+        const cell = input.cell_id ? ` cell ${str(input.cell_id)}` : ''
+        return `${str(input.notebook_path)}${cell} (${str(input.edit_mode ?? 'replace')})`
       }
       case 'Glob': {
         return str(input.pattern)
@@ -212,9 +230,66 @@ export class Renderer {
         const g = input.include ? ` [${str(input.include)}]` : ''
         return `/${str(input.pattern)}/${g}`
       }
+      case 'WebFetch': {
+        return str(input.url)
+      }
+      case 'WebSearch': {
+        return `"${str(input.query)}"`
+      }
       case 'Agent': {
         const t = input.subagent_type ? `[${str(input.subagent_type)}] ` : ''
         return `${t}${input.description ? str(input.description) : ''}`
+      }
+      case 'TodoWrite': {
+        const todos = input.todos
+        const count = Array.isArray(todos) ? todos.length : 0
+        return `${count} item${count === 1 ? '' : 's'}`
+      }
+      case 'TaskCreate': {
+        const cmd = str(input.command).trim()
+        return cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd
+      }
+      case 'TaskGet': {
+        const block = input.block ? ' (blocking)' : ''
+        return `${str(input.task_id)}${block}`
+      }
+      case 'TaskList': {
+        return ''
+      }
+      case 'TaskUpdate': {
+        return str(input.task_id)
+      }
+      case 'TaskStop': {
+        return str(input.task_id)
+      }
+      case 'AskUserQuestion': {
+        const qs = input.questions
+        const count = Array.isArray(qs) ? qs.length : 0
+        return `${count} question${count === 1 ? '' : 's'}`
+      }
+      case 'ExitPlanMode': {
+        return 'presenting plan...'
+      }
+      case 'Sleep': {
+        return `${str(input.duration_ms)}ms`
+      }
+      case 'TmuxSession': {
+        return `${str(input.action)} ${str(input.session ?? '')}`.trim()
+      }
+      case 'ShellSession': {
+        return `${str(input.action)} ${str(input.session_id ?? input.port ?? '')}`.trim()
+      }
+      case 'load_skill': {
+        return str(input.skill_name)
+      }
+      case 'memory_write': {
+        return str(input.key)
+      }
+      case 'memory_search': {
+        return `"${str(input.query)}"`
+      }
+      case 'memory_recall': {
+        return str(input.key ?? 'recall')
       }
       default:
         return ''
@@ -226,9 +301,16 @@ export class Renderer {
   startSpinner(_verb?: string): void {
     if (!this.tty) return
     if (this.spinTimer) this.stopSpinner()
+    // Don't start spinner if we're streaming text — would corrupt output
+    if (this.streaming) return
     this.spinVerb = Math.floor(Math.random() * VERBS.length)
     this.renderSpin()
     this.spinTimer = setInterval(() => {
+      // Guard: stop immediately if streaming started since last tick
+      if (this.streaming) {
+        this.stopSpinner()
+        return
+      }
       this.spinFrame = (this.spinFrame + 1) % FRAMES.length
       if (this.spinFrame % 15 === 0) {
         this.spinVerb = (this.spinVerb + 1) % VERBS.length
@@ -238,16 +320,21 @@ export class Renderer {
   }
 
   private renderSpin(): void {
+    // Never render spinner while streaming — prevents output corruption
+    if (this.streaming) return
     const f = FRAMES[this.spinFrame]
     const v = VERBS[this.spinVerb]
     this.w(`\r  ${C.bpurple}${f}${R} ${D}${v}...${R}  `)
   }
 
   stopSpinner(): void {
-    if (!this.spinTimer) return
-    clearInterval(this.spinTimer)
-    this.spinTimer = null
-    if (this.tty) this.w('\r\x1b[K')
+    if (this.spinTimer) {
+      clearInterval(this.spinTimer)
+      this.spinTimer = null
+    }
+    if (this.tty && !this.streaming) {
+      this.w('\r\x1b[K')
+    }
   }
 
   // ── Status ────────────────────────────────────────────────

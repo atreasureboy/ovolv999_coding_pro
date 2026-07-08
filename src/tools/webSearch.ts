@@ -181,6 +181,12 @@ Use this to:
 
 Results include URLs you can then fetch with WebFetch for full content.
 
+**Important**: After answering based on search results, you MUST include a "Sources:" section at the end of your response citing the URLs used.
+
+Tips:
+- Use the current year in queries for fresh results (e.g. "Node.js best practices 2025")
+- Keep queries concise (under 70 characters)
+
 Backends (set env vars for better results):
 - OVOGO_SEARCH_API_KEY + OVOGO_SEARCH_ENGINE_ID → Google Custom Search
 - SERPAPI_KEY → SerpAPI

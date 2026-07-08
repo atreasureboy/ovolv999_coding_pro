@@ -68,6 +68,7 @@ import type { Skill } from '../src/skills/loader.js'
 import { loadOvogoMd } from '../src/config/ovogomd.js'
 import { getMemoryDir, getMemoryStats } from '../src/memory/index.js'
 import { buildFullSystemPrompt } from '../src/prompts/system.js'
+import { getCurrentMode, getVerbosityPrompt } from '../src/core/modes.js'
 import { EventLog } from '../src/core/eventLog.js'
 import { SemanticMemory } from '../src/core/semanticMemory.js'
 import { EpisodicMemory } from '../src/core/episodicMemory.js'
@@ -78,6 +79,9 @@ import { WorkspaceModule } from '../src/modules/workspace.js'
 import { ReflectionModule, consolidateSession } from '../src/modules/reflection.js'
 import { detectProjectContext, formatProjectContext } from '../src/config/projectContext.js'
 import { createLoadSkillTool } from '../src/tools/loadSkill.js'
+import { createTerminalAskUserHandler } from '../src/tools/askUser.js'
+import { dispatchSlashCommand, type SlashCommandContext } from '../src/commands/index.js'
+import '../src/commands/builtin.js' // register all built-in commands
 import { tmuxLayout } from '../src/ui/tmuxLayout.js'
 
 const VERSION = '0.1.0'
@@ -478,15 +482,24 @@ function handleBuiltin(
     case '/help': {
       renderer.newline()
       const COMMANDS = {
-        '/plan <task>': 'Plan mode — analyze then confirm before execute',
-        '/skills':      'List available skills',
-        '/<skill>':     'Run a skill (e.g. /commit, /review)',
-        '/clear':       'Clear conversation history',
-        '/history':     'Show message count in session',
-        '/model':       'Show current model',
-        '/cwd':         'Show working directory',
-        '/help':        'Show this help',
-        '/exit':        'Exit ovogogogo',
+        '/plan <task>':    'Plan mode — analyze then confirm before execute',
+        '/compact':        'Summarize conversation to save context',
+        '/cost':           'Show token usage and cost summary',
+        '/context':        'Show context window usage',
+        '/mode [slug]':    'Switch agent mode/persona (or /mode list)',
+        '/doctor':         'Run health diagnostics',
+        '/rewind':         'Show file edit history',
+        '/tasks':          'List background tasks',
+        '/diff':           'Show git diff (unstaged)',
+        '/commit <msg>':   'Stage all and git commit',
+        '/init':           'Create OVOGO.md project config',
+        '/skills':         'List available skills',
+        '/model':          'Show current model',
+        '/permissions':    'Show permission mode',
+        '/clear':          'Clear conversation history',
+        '/history':        'Show message count and tokens',
+        '/help':           'Show this help',
+        '/exit':           'Exit the REPL',
       }
       for (const [c, desc] of Object.entries(COMMANDS)) {
         process.stdout.write(`  \x1b[36m${c.padEnd(20)}\x1b[0m ${desc}\n`)
@@ -526,8 +539,8 @@ async function runRepl(
   const input = new InputHandler()
   const history: OpenAIMessage[] = resumedHistory ? [...resumedHistory] : []
 
-  renderer.info(`Type your task and press Enter · /plan /skills /help /exit`)
-  renderer.info(`ESC to pause/inject · Ctrl+D to exit`)
+  renderer.info(`Commands: /compact /cost /context /mode /doctor /rewind /tasks /diff /commit /init /help`)
+  renderer.info(`ESC to interrupt · Ctrl+D to exit`)
 
   let running = false
   // Whether we are currently awaiting the user's interrupt-prompt input
@@ -648,6 +661,7 @@ async function runRepl(
 
     const trimmed = text.trim()
     if (!trimmed) continue
+    let pendingPrompt: string | null = null
 
     // ── /plan command ─────────────────────────────────────────
     if (trimmed.startsWith('/plan')) {
@@ -661,8 +675,107 @@ async function runRepl(
       continue
     }
 
-    // ── Other /commands ───────────────────────────────────────
+    // ── /commands ─────────────────────────────────────────────
     if (trimmed.startsWith('/')) {
+      // typing "/" alone → show all commands
+      if (trimmed === '/') {
+        const { listCommands } = await import('../src/commands/index.js')
+        const cmds = listCommands()
+        renderer.newline()
+        for (const cmd of cmds) {
+          process.stdout.write('  \x1b[36m/' + cmd.name.padEnd(16) + '\x1b[0m \x1b[2m' + cmd.description + '\x1b[0m\n')
+        }
+        process.stdout.write('\n  \x1b[2mAlso: /plan <task>, /<skill_name>\x1b[0m\n\n')
+        continue
+      }
+
+      // partial match: "/co" when not an exact command → show suggestions
+      const partialName = trimmed.slice(1).split(/\s+/)[0] ?? ''
+      const { getCommand: _getCmd, listCommands: _listCmds } = await import('../src/commands/index.js')
+      const exactCmd = _getCmd(partialName)
+      if (!exactCmd && partialName && !trimmed.includes(' ')) {
+        // Check old handler for skills first
+        const oldResult = handleBuiltin(trimmed, history, engine, renderer, cwd, skills)
+        if (oldResult === true || oldResult === 'exit' || typeof oldResult === 'object') {
+          if (oldResult === 'exit') {
+            if (sessionDir) saveSession(sessionDir, history)
+            input.close()
+            break
+          }
+          if (typeof oldResult === 'object') {
+            const { skill, args } = oldResult
+            const expandedPrompt = expandSkillPrompt(skill, args)
+            renderer.info('Running skill: /' + skill.name + (args ? ' ' + args : ''))
+            hookRunner.runUserPromptSubmit(trimmed)
+            renderer.humanPrompt(expandedPrompt.split('\n')[0] + (expandedPrompt.includes('\n') ? ' ...' : ''))
+            updateProgressLog(cwd, 'running', '/' + skill.name)
+            await runTask(expandedPrompt, [...history], Date.now())
+            updateProgressLog(cwd, 'idle', 'waiting for next task')
+          }
+          continue
+        }
+        // Show matching commands
+        const allCmds = _listCmds()
+        const matches = allCmds.filter(c => c.name.startsWith(partialName) || (c.aliases ?? []).some(a => a.startsWith(partialName)))
+        if (matches.length > 0) {
+          renderer.newline()
+          process.stdout.write('  \x1b[2mDid you mean?\x1b[0m\n')
+          for (const m of matches) {
+            process.stdout.write('  \x1b[36m/' + m.name.padEnd(16) + '\x1b[0m \x1b[2m' + m.description + '\x1b[0m\n')
+          }
+          renderer.newline()
+        } else {
+          renderer.warn('Unknown command: ' + trimmed + '. Type / for available commands.')
+        }
+        continue
+      }
+
+      // Try the new modular command system
+      const slashCtx: SlashCommandContext = {
+        engine,
+        renderer,
+        history,
+        cwd,
+        sessionDir,
+        setHistory: (msgs: OpenAIMessage[]) => {
+          history.length = 0
+          history.push(...msgs)
+        },
+        runPrompt: (p: string) => {
+          pendingPrompt = p
+        },
+      }
+
+      const slashResult = await dispatchSlashCommand(trimmed, slashCtx)
+
+      if (slashResult !== null) {
+        // Handle new command system result
+        if (slashResult.type === 'exit') {
+          if (sessionDir) saveSession(sessionDir, history)
+          input.close()
+          break
+        }
+        if (slashResult.type === 'text') {
+          renderer.info(slashResult.value)
+        }
+        if (slashResult.type === 'prompt') {
+          pendingPrompt = slashResult.value
+        }
+        if (slashResult.type === 'clear-history') {
+          history.length = 0
+          if (sessionDir) saveSession(sessionDir, history)
+        }
+        if (pendingPrompt) {
+          renderer.humanPrompt(pendingPrompt.slice(0, 80) + (pendingPrompt.length > 80 ? ' ...' : ''))
+          hookRunner.runUserPromptSubmit(pendingPrompt)
+          updateProgressLog(cwd, 'running', pendingPrompt.slice(0, 100))
+          await runTask(pendingPrompt, [...history], Date.now())
+          updateProgressLog(cwd, 'idle', 'waiting for next task')
+        }
+        continue
+      }
+
+      // Fall back to old handler for /plan and skill matching
       const result = handleBuiltin(trimmed, history, engine, renderer, cwd, skills)
 
       if (result === 'exit') {
@@ -862,7 +975,12 @@ async function main(): Promise<void> {
 
   // Build the full system prompt once (memory section injected by MemoryModule at boot)
   const skillIndex = formatSkillIndex(skills)
-  const systemPrompt = buildFullSystemPrompt(cwd, ovogoMdFiles, '', taskContext, sessionDir, skillIndex, projectCtxSection)
+  // Load current mode persona — prepends its system prompt + verbosity guidance
+  const modesDir = join(homedir(), '.ovogo', 'modes')
+  const mode = getCurrentMode(modesDir)
+  const verbosityPrompt = getVerbosityPrompt(mode.verbosity)
+  const modePrompt = [mode.systemPrompt, verbosityPrompt].filter(Boolean).join('\n\n')
+  const systemPrompt = buildFullSystemPrompt(cwd, ovogoMdFiles, modePrompt, taskContext, sessionDir, skillIndex, projectCtxSection)
 
   // Initialize optimization components
   const eventLog = new EventLog(sessionDir)
@@ -907,6 +1025,20 @@ async function main(): Promise<void> {
     episodicMemory,
     extraTools: skills.size > 0 ? [loadSkillTool] : [],
     enabledModules: ['memory', 'critic', 'workspace', 'reflection'],
+    askUserQuestion: createTerminalAskUserHandler((s) => process.stdout.write(s)),
+    exitPlanMode: async (plan: string): Promise<boolean> => {
+      process.stdout.write('\n\x1b[95m❯❯ Plan:\x1b[0m\n')
+      process.stdout.write(plan + '\n')
+      process.stdout.write('\n\x1b[93mApprove this plan? (y/n):\x1b[0m ')
+      const rl = await import('readline')
+      const rlInterface = rl.createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdout.isTTY })
+      return new Promise<boolean>((resolve) => {
+        rlInterface.question('', (answer) => {
+          rlInterface.close()
+          resolve(answer.trim().toLowerCase().startsWith('y'))
+        })
+      })
+    },
   }
 
   // Plan-mode config: read-only analysis, no reflection (plans aren't completed work)
@@ -931,6 +1063,11 @@ async function main(): Promise<void> {
     if (cleanedUp) return
     cleanedUp = true
     tmuxLayout.destroy()
+    // Display cost summary if any API calls were made
+    const costTracker = engine.getCostTracker()
+    if (costTracker.getTotalAPICalls() > 0) {
+      process.stdout.write('\n' + costTracker.formatSummary() + '\n')
+    }
   }
   process.on('exit', cleanup)
   process.on('SIGTERM', () => { cleanup(); process.exit(0) })

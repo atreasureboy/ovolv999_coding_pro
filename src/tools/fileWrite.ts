@@ -8,7 +8,7 @@ import { existsSync } from 'fs'
 import { dirname } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
-import { hasFileBeenRead } from '../core/fileState.js'
+import { hasFileBeenRead, hasFileChanged } from '../core/fileState.js'
 
 export interface WriteFileInput {
   file_path: string
@@ -40,7 +40,7 @@ export class FileWriteTool implements Tool {
     },
   }
 
-  async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { file_path, content } = input as unknown as WriteFileInput
 
     if (!file_path || typeof file_path !== 'string') {
@@ -58,19 +58,35 @@ export class FileWriteTool implements Tool {
       }
     }
 
+    // Staleness detection: reject if file was modified externally since last Read
+    // (prevents silent overwrite of linter/formatter/user changes)
+    if (existsSync(file_path) && hasFileBeenRead(file_path) && hasFileChanged(file_path)) {
+      return {
+        content: `Error: ${file_path} has been modified since you last read it (by a linter, formatter, or the user). Read the file again before overwriting to avoid losing changes.`,
+        isError: true,
+      }
+    }
+
+    // Back up the file before modifying (undo/checkpoint support)
+    context.fileHistory?.trackEdit(file_path)
+
     try {
       // Ensure parent directory exists
       await mkdir(dirname(file_path), { recursive: true })
       await writeFile(file_path, content, 'utf8')
 
-      const lines = content.split('\n').length
+      // Line count: strip one trailing newline so "hello\n" = 1 line, not 2
+      const lines = content.endsWith('\n') ? content.slice(0, -1).split('\n').length : content.split('\n').length
       return {
         content: `File written: ${file_path} (${lines} lines, ${content.length} bytes)`,
         isError: false,
       }
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException
-      return { content: `Error writing file: ${error.message}`, isError: true }
+      if (error.code === 'EISDIR') {
+        return { content: `Error: ${file_path} is a directory, not a file.`, isError: true }
+      }
+      return { content: `Error writing file: ${error.message} (code: ${error.code ?? 'unknown'})`, isError: true }
     }
   }
 }

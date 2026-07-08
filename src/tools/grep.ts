@@ -6,6 +6,7 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { relative } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { GREP_DESCRIPTION } from '../prompts/tools.js'
 
@@ -111,15 +112,23 @@ export class GrepTool implements Tool {
       args.push(`--glob`, `${effectiveGlob}`)
     }
 
-    // Build rg command args (no shell escaping needed with execFile)
-    const rgArgs = [...args, pattern, searchDir]
+    // Truncate long lines to prevent context pollution from minified/base64 content
+    args.push('--max-columns', '500')
+
+    // Use -e flag for patterns starting with '-' (prevents rg from interpreting as flag)
+    if (pattern.startsWith('-')) {
+      args.push('-e', pattern)
+    } else {
+      args.push(pattern)
+    }
+    args.push(searchDir)
 
     try {
       // Use execFile to avoid shell quoting issues on Windows
       // Try rg first, fall back to grep via exec if rg not found
       let stdout: string
       try {
-        const result = await execFileAsync('rg', rgArgs, {
+        const result = await execFileAsync('rg', args, {
           cwd: context.cwd,
           maxBuffer: 10 * 1024 * 1024,
           timeout: 30_000,
@@ -129,7 +138,7 @@ export class GrepTool implements Tool {
         const e = err as { code?: number; stdout?: string; stderr?: string; message?: string }
         // rg exits with code 1 when no matches — not an error
         if (e.code === 1 && !e.stderr) {
-          return { content: `No matches found for pattern: ${pattern}`, isError: false }
+          return { content: `No matches found for pattern: ${pattern}. Try case_insensitive:true, broaden the regex, remove the glob filter, or use Glob to confirm the file exists.`, isError: false }
         }
         // rg not found (ENOENT) or other error — fall back to Node.js search
         stdout = ''
@@ -147,34 +156,55 @@ export class GrepTool implements Tool {
               timeout: 30_000,
             })
             stdout = fallback.stdout
-          } catch {
-            // grep also failed or not available
-            return { content: `No matches found for pattern: ${pattern}`, isError: false }
+          } catch (grepErr) {
+            const ge = grepErr as { code?: string | number }
+            // Distinguish "grep not installed" from "no matches"
+            if (ge.code === 'ENOENT') {
+              return { content: `Error: neither ripgrep (rg) nor grep is available on this system. Install ripgrep for best results.`, isError: true }
+            }
+            // grep ran but exited non-zero (no matches or error) — treat as no matches
+            return { content: `No matches found for pattern: ${pattern}. Try case_insensitive:true, broaden the regex, remove the glob filter, or use Glob to confirm the file exists.`, isError: false }
           }
         }
       }
 
       const result = stdout.trim()
       if (!result) {
-        return { content: `No matches found for pattern: ${pattern}`, isError: false }
+        return { content: `No matches found for pattern: ${pattern}. Try case_insensitive:true, broaden the regex, remove the glob filter, or use Glob to confirm the file exists.`, isError: false }
       }
 
       // Cap output to avoid flooding context
       const lines = result.split('\n')
-      if (lines.length > 500) {
-        const truncated = lines.slice(0, 500).join('\n')
+      // Convert absolute paths to relative — saves tokens in large codebases
+      // (e.g. /home/user/projects/myapp/src/foo.ts → src/foo.ts)
+      const relLines = lines.map((line) => {
+        try {
+          return line.replace(/^([^\s:]+):/, (match, p1: string) => {
+            if (p1.startsWith('/')) {
+              const rel = relative(context.cwd, p1)
+              return rel.startsWith('..') ? match : `${rel}:`
+            }
+            return match
+          })
+        } catch {
+          return line
+        }
+      })
+
+      if (relLines.length > 500) {
+        const truncated = relLines.slice(0, 500).join('\n')
         return {
-          content: `${truncated}\n\n[... truncated: ${lines.length - 500} more lines]`,
+          content: `${truncated}\n\n[... truncated: ${relLines.length - 500} more lines. Narrow your pattern or use output_mode="count" to reduce results.]`,
           isError: false,
         }
       }
 
-      return { content: result, isError: false }
+      return { content: relLines.join('\n'), isError: false }
     } catch (err: unknown) {
       // rg exits with code 1 when no matches — that's not an error
       const error = err as { code?: number; stdout?: string; stderr?: string }
       if (error.code === 1 && !error.stderr) {
-        return { content: `No matches found for pattern: ${pattern}`, isError: false }
+        return { content: `No matches found for pattern: ${pattern}. Try case_insensitive:true, broaden the regex, remove the glob filter, or use Glob to confirm the file exists.`, isError: false }
       }
       const msg = error.stderr ?? (err as Error).message ?? 'Unknown grep error'
       return { content: `Grep error: ${msg}`, isError: true }

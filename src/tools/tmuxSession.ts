@@ -98,39 +98,39 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
           action: {
             type: 'string',
             enum: ['new', 'send', 'keys', 'capture', 'wait_for', 'list', 'kill'],
-            description: '操作类型',
+            description: 'Operation type',
           },
           session: {
             type: 'string',
-            description: '会话名称（new 时创建，其他时引用）。建议语义化命名：py / node / cli-1',
+            description: 'Session name (created on "new", referenced by others). Use semantic names: py / node / cli-1',
           },
           command: {
             type: 'string',
-            description: '(new) 会话启动后立即执行的命令，如 "python3"。不填则创建空 shell',
+            description: '(new) Command to run on session start, e.g. "python3". Empty creates a bare shell',
           },
           text: {
             type: 'string',
-            description: '(send) 要发送的文本，自动追加 Enter。长文本会自动分 50 字节块发送',
+            description: '(send) Text to send, auto-appends Enter. Long text is chunked into 50-byte segments',
           },
           key: {
             type: 'string',
-            description: '(keys) tmux 特殊按键名：C-c / C-d / Escape / Enter / Up / Down / Tab。支持多个用空格分隔',
+            description: '(keys) Special key names: C-c / C-d / Escape / Enter / Up / Down / Tab. Space-separated for multiple',
           },
           lines: {
             type: 'number',
-            description: '(capture) 返回最近 N 行输出，默认 50。设为 0 返回完整历史（可能很长）',
+            description: '(capture) Return last N lines of output, default 50. Set to 0 for full history (may be large)',
           },
           pattern: {
             type: 'string',
-            description: '(wait_for) 等待匹配的正则表达式，如 ">>>" / "ready" / "\\\\$"',
+            description: '(wait_for) Regex pattern to wait for, e.g. ">>>" / "ready" / "\\\\$"',
           },
           timeout: {
             type: 'number',
-            description: '(wait_for) 最长等待毫秒数，默认 30000。首次加载慢的进程可适当调大',
+            description: '(wait_for) Max wait in milliseconds, default 30000',
           },
           interval: {
             type: 'number',
-            description: '(wait_for) 轮询间隔毫秒数，默认 1000',
+            description: '(wait_for) Polling interval in milliseconds, default 1000',
           },
         },
         required: ['action'],

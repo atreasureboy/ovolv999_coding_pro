@@ -89,11 +89,11 @@ export const AGENT_PRESETS: Record<string, AgentConfig> = {
   'code-reviewer': {
     identity: {
       systemPrompt: (cwd: string) =>
-        `Working directory: ${cwd}\n\nYou are a code-review sub-agent. Review code for correctness, maintainability, security, and performance.\n\nRules:\n- Only READ operations are available to you (Read, Glob, Grep)\n- Do NOT modify anything — analyze and report only\n- Review dimensions: bugs/logic errors, maintainability, security issues, performance, convention adherence\n- Group findings by severity: [CRITICAL] / [HIGH] / [MEDIUM] / [LOW]\n- Each finding: code location (path:line), issue, why it matters, suggested fix\n- If no issues found, say so explicitly`,
+        `Working directory: ${cwd}\n\nYou are a code-review sub-agent. Review code for correctness, maintainability, security, and performance.\n\nRules:\n- Only READ operations are available to you (Read, Glob, Grep, WebFetch, WebSearch)\n- Do NOT modify anything — analyze and report only\n- Review dimensions: bugs/logic errors, maintainability, security issues, performance, convention adherence\n- Group findings by severity: [CRITICAL] / [HIGH] / [MEDIUM] / [LOW]\n- Each finding: code location (path:line), issue, why it matters, suggested fix\n- If no issues found, say so explicitly`,
       planMode: true,
     },
     modules: {}, // lightweight
-    tools: ['Read', 'Glob', 'Grep'],
+    tools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
     maxIterations: 30,
   },
 
@@ -125,7 +125,12 @@ export function resolveAgentConfig(input: {
 }): AgentConfig {
   if (input.config) return input.config
   const preset = input.preset ?? 'general-purpose'
-  const found = AGENT_PRESETS[preset] ?? AGENT_PRESETS['general-purpose']
+  if (!AGENT_PRESETS[preset]) {
+    // Reject unknown presets instead of silently falling back — prevents
+    // typos like "expoler" from spawning a full general-purpose agent
+    throw new Error(`Unknown agent preset: "${preset}". Valid presets: ${PRESET_NAMES.join(' | ')}`)
+  }
+  const found = AGENT_PRESETS[preset]
   // Return a shallow clone so callers can safely mutate (e.g. maxIterations override)
   return { ...found, identity: { ...found.identity } }
 }
@@ -160,7 +165,7 @@ export function validateAgentConfig(raw: unknown): AgentConfig | null {
       : undefined,
     tools: Array.isArray(obj.tools) ? (obj.tools as unknown[]).filter((t): t is string => typeof t === 'string') : undefined,
     maxIterations: typeof obj.maxIterations === 'number' ? Math.min(obj.maxIterations, 200) : undefined,
-    temperature: typeof obj.temperature === 'number' ? obj.temperature : undefined,
+    temperature: typeof obj.temperature === 'number' ? Math.min(Math.max(obj.temperature, 0), 2) : undefined,
     maxOutputTokens: typeof obj.maxOutputTokens === 'number' ? obj.maxOutputTokens : undefined,
   }
 }

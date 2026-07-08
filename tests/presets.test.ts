@@ -29,10 +29,8 @@ describe('resolveAgentConfig', () => {
     expect(config.identity.systemPrompt('')).toBe('custom prompt')
   })
 
-  it('falls back to general-purpose for unknown preset', () => {
-    const config = resolveAgentConfig({ preset: 'nonexistent' })
-    expect(config.identity.systemPrompt).toBe(AGENT_PRESETS['general-purpose'].identity.systemPrompt)
-    expect(config.maxIterations).toBe(AGENT_PRESETS['general-purpose'].maxIterations)
+  it('throws on unknown preset (prevents typos)', () => {
+    expect(() => resolveAgentConfig({ preset: 'nonexistent' })).toThrow(/Unknown agent preset/)
   })
 
   it('falls back to general-purpose when nothing specified', () => {
@@ -75,7 +73,7 @@ describe('AGENT_PRESETS', () => {
   it('code-reviewer preset is read-only with minimal tools', () => {
     const c = AGENT_PRESETS['code-reviewer']
     expect(c.identity.planMode).toBe(true)
-    expect(c.tools).toEqual(['Read', 'Glob', 'Grep'])
+    expect(c.tools).toEqual(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
   })
 
   it('general-purpose preset has modules enabled', () => {

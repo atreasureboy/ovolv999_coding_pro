@@ -125,8 +125,13 @@ Large pages are truncated — use start_index to paginate.`,
       clearTimeout(timer)
 
       if (!response.ok) {
+        const status = response.status
+        let hint = ''
+        if (status === 401 || status === 403) hint = ' Hint: the resource may require authentication or a different User-Agent.'
+        else if (status === 404) hint = ' Hint: verify the URL is correct, or use WebSearch to find the current location.'
+        else if (status >= 500) hint = ' Hint: server error — try again later or use WebSearch as an alternative.'
         return {
-          content: `HTTP ${response.status} ${response.statusText} for ${url}`,
+          content: `HTTP ${status} ${response.statusText} for ${url}.${hint}`,
           isError: true,
         }
       }

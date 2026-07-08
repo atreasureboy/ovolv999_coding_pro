@@ -54,7 +54,7 @@ export class FileEditTool implements Tool {
     },
   }
 
-  async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { file_path, old_string, new_string, replace_all } = input as unknown as EditFileInput
 
     if (!file_path || typeof file_path !== 'string') {
@@ -101,7 +101,10 @@ export class FileEditTool implements Tool {
 
       const newContent = replace_all
         ? content.split(old_string).join(new_string)
-        : content.replace(old_string, new_string)
+        : content.replace(old_string, () => new_string) // arrow fn prevents $ pattern interpretation
+
+      // Back up the file before modifying (undo/checkpoint support)
+      context.fileHistory?.trackEdit(file_path)
 
       await writeFile(file_path, newContent, 'utf8')
 
@@ -150,9 +153,9 @@ export class FileEditTool implements Tool {
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException
       if (error.code === 'ENOENT') {
-        return { content: `File not found: ${file_path}`, isError: true }
+        return { content: `File not found: ${file_path}. Use Glob to locate it, or create it with Write first.`, isError: true }
       }
-      return { content: `Error editing file: ${error.message}`, isError: true }
+      return { content: `Error editing file: ${error.message} (code: ${error.code ?? 'unknown'})`, isError: true }
     }
   }
 }

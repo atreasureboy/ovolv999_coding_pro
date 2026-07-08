@@ -4,6 +4,8 @@ import type { EventLog } from './eventLog.js'
 import type { SemanticMemory } from './semanticMemory.js'
 import type { EpisodicMemory } from './episodicMemory.js'
 import type { AgentConfig } from './agentPresets.js'
+import type { BackgroundTaskManager } from './backgroundTaskManager.js'
+import type { FileHistory } from './fileHistory.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -77,7 +79,41 @@ export interface ToolContext {
   episodicMemory?: EpisodicMemory
   /** Tool names available to this agent — used for skill permission checks */
   availableToolNames?: string[]
+  /** Background task manager — for async long-running task lifecycle */
+  backgroundTaskManager?: BackgroundTaskManager
+  /**
+   * Ask-user-question callback — lets the AskUserQuestion tool pause the
+   * LLM loop and prompt the user for input. Provided by the REPL; absent
+   * in sub-agents / piped mode (tool degrades gracefully).
+   */
+  askUserQuestion?: (questions: AskUserQuestionInput[]) => Promise<Record<string, string>>
+  /**
+   * Exit-plan-mode callback — lets the ExitPlanMode tool present a plan
+   * for user approval and switch off plan mode. Returns true if approved.
+   * Provided by the REPL; absent in sub-agents / piped mode.
+   */
+  exitPlanMode?: (plan: string) => Promise<boolean>
+  /** File history — backs up files before edits for undo/checkpoint */
+  fileHistory?: FileHistory
 }
+
+// ── AskUserQuestion types (shared between tool, context, and REPL) ──────────
+
+export interface AskUserOption {
+  label: string
+  description: string
+}
+
+export interface AskUserQuestionInput {
+  question: string
+  header: string
+  options: AskUserOption[]
+  multiSelect?: boolean
+}
+
+export type AskUserQuestionHandler = (
+  questions: AskUserQuestionInput[],
+) => Promise<Record<string, string>>
 
 /**
  * Interface for hook runners — decouples engine from config layer.
@@ -123,6 +159,18 @@ export interface EngineConfig {
   temperature?: number
   /** Max output tokens per LLM response (default: 8192) */
   maxOutputTokens?: number
+  /**
+   * Continuation nudging — when the LLM stops (finish_reason=stop) but output
+   * token budget remains, inject a "continue" nudge instead of completing.
+   * Default: false (preserve original stop-on-finish behavior).
+   * Inspired by Claude Code's tokenBudget continuation logic.
+   */
+  enableContinuation?: boolean
+  /**
+   * Output token budget for a single turn — drives continuation decisions when
+   * enableContinuation is true. Defaults to maxOutputTokens * 4 if unset.
+   */
+  turnTokenBudget?: number
   /** Event log for audit trail */
   eventLog?: EventLog
   /** Semantic memory — cross-turn knowledge persistence */
@@ -141,6 +189,18 @@ export interface EngineConfig {
    * Replaces the legacy AgentType enum with config-driven differentiation.
    */
   agent?: AgentConfig
+  /**
+   * Ask-user-question callback — provided by the REPL so the
+   * AskUserQuestion tool can prompt the user. Absent in sub-agents /
+   * piped mode (tool degrades gracefully).
+   */
+  askUserQuestion?: AskUserQuestionHandler
+  /**
+   * Exit-plan-mode callback — provided by the REPL so the ExitPlanMode
+   * tool can present a plan for user approval. Returns true if approved.
+   * Absent in sub-agents / piped mode (tool auto-approves).
+   */
+  exitPlanMode?: (plan: string) => Promise<boolean>
 }
 
 export interface TurnResult {

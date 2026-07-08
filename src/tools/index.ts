@@ -15,6 +15,17 @@ import { WebSearchTool } from './webSearch.js'
 import { AgentTool } from './agent.js'
 import { TmuxSessionTool } from './tmuxSession.js'
 import { ShellSessionTool } from './shellSession.js'
+import {
+  TaskCreateTool,
+  TaskGetTool,
+  TaskListTool,
+  TaskUpdateTool,
+  TaskStopTool,
+} from './tasks.js'
+import { AskUserQuestionTool } from './askUser.js'
+import { ExitPlanModeTool } from './exitPlanMode.js'
+import { SleepTool } from './sleep.js'
+import { NotebookEditTool } from './notebookEdit.js'
 
 export function createTools(extraTools: Tool[] = []): Tool[] {
   return [
@@ -30,6 +41,15 @@ export function createTools(extraTools: Tool[] = []): Tool[] {
     new AgentTool(),
     new TmuxSessionTool(),
     new ShellSessionTool(),
+    new TaskCreateTool(),
+    new TaskGetTool(),
+    new TaskListTool(),
+    new TaskUpdateTool(),
+    new TaskStopTool(),
+    new AskUserQuestionTool(),
+    new ExitPlanModeTool(),
+    new SleepTool(),
+    new NotebookEditTool(),
     ...extraTools,
   ]
 }
@@ -55,4 +75,13 @@ export {
   AgentTool,
   TmuxSessionTool,
   ShellSessionTool,
+  TaskCreateTool,
+  TaskGetTool,
+  TaskListTool,
+  TaskUpdateTool,
+  TaskStopTool,
+  AskUserQuestionTool,
+  ExitPlanModeTool,
+  SleepTool,
+  NotebookEditTool,
 }

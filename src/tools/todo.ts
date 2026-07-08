@@ -66,7 +66,7 @@ Use this tool proactively in these scenarios:
 
 ## Rules
 - Exactly ONE task must be in_progress at any time (not zero, not two)
-- Mark tasks complete IMMMEDIATELY after finishing (don't batch)
+- Mark tasks complete IMMEDIATELY after finishing (don't batch)
 - NEVER mark completed if: tests failing, implementation partial, errors unresolved
 - Remove tasks that are no longer relevant
 - Create specific, actionable items (not vague goals)

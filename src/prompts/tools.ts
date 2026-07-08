@@ -35,8 +35,8 @@ command: "npm run build > /tmp/build.log 2>&1"
 # Step 2 (later): Check progress
 command: "tail -50 /tmp/build.log"
 
-# Or wait for completion
-command: "wait && cat /tmp/build.log"
+# Step 3: Check if finished (look for completion marker or exit)
+command: "ps aux | grep 'npm run build' | grep -v grep || echo 'BUILD DONE'; tail -20 /tmp/build.log"
 \`\`\`
 
 ## Parallel Execution
@@ -75,7 +75,9 @@ Usage:
 - Binary files are detected and not displayed (use Bash with xxd/strings)
 - If the file is larger than the limit, a hint shows how to read the next page
 
-IMPORTANT: You MUST read a file before you can Edit or Write to it. The Edit and Write tools will fail if you have not read the file first in this session.`
+IMPORTANT: You MUST read a file before you can Edit or Write to it. The Edit and Write tools will fail if you have not read the file first in this session.
+
+It is okay to read a file that does not exist — an error will be returned, which is safe. Use this to check file state without side effects.`
 
 export const WRITE_FILE_DESCRIPTION = `Writes content to a file, creating it if it doesn't exist or overwriting if it does.
 
@@ -106,6 +108,7 @@ export const GLOB_DESCRIPTION = `Finds files matching a glob pattern, sorted by 
 - Returns matching file paths sorted by modification time
 - Use this tool when you need to find files by name patterns
 - For open-ended searches requiring multiple rounds, use the Agent tool instead
+- Results are capped at 100 files; refine your pattern if truncated
 
 Examples:
 - "**/*.ts" — all TypeScript files recursively
@@ -120,6 +123,7 @@ Usage:
 - Filter files with the \`glob\` parameter (e.g., "*.ts", "**/*.tsx") or \`include\` shorthand (e.g., "ts", "py")
 - Output modes: "content" shows matching lines with line numbers, "files_with_matches" (default) shows file paths, "count" shows match counts
 - Use the Agent tool for open-ended searches requiring multiple rounds
+- Output is capped at 500 lines; if truncated, narrow your pattern or use output_mode="files_with_matches"
 
 Parameters:
 - pattern: regex pattern to search for

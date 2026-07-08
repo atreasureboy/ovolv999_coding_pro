@@ -3,7 +3,7 @@
  * Reference: src/tools/FileReadTool/
  */
 
-import { readFile } from 'fs/promises'
+import { readFile, stat } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { READ_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { markFileRead, hasFileChanged, hasFileBeenRead } from '../core/fileState.js'
@@ -15,6 +15,7 @@ export interface ReadFileInput {
 }
 
 const MAX_LINES_DEFAULT = 2000
+const MAX_FILE_SIZE_BYTES = 25_000_000 // 25MB — refuse larger, point to offset/limit
 
 export class FileReadTool implements Tool {
   name = 'Read'
@@ -54,11 +55,26 @@ export class FileReadTool implements Tool {
 
     try {
       // File unchanged detection (Claude Code pattern) — skip re-reading if not modified
-      // Only applies to full reads (no offset/limit) of previously-read files
-      if (!offset && !limit && hasFileBeenRead(file_path) && !hasFileChanged(file_path)) {
+      // Only applies to full reads (no offset/limit) of previously-read files.
+      // Use === undefined (not falsy) so offset:0 is treated as "read from line 0"
+      if (offset === undefined && limit === undefined && hasFileBeenRead(file_path) && !hasFileChanged(file_path)) {
         return {
           content: `File: ${file_path}\nFile unchanged since last read. The content from the earlier Read is still current.`,
           isError: false,
+        }
+      }
+
+      // Size guard — prevent OOM on very large files (binary detection reads
+      // the entire file into memory, so we must check size first)
+      let fileSize: number | undefined
+      try {
+        const fstat = await stat(file_path)
+        fileSize = fstat.size
+      } catch { /* will be caught by readFile below */ }
+      if (fileSize !== undefined && fileSize > MAX_FILE_SIZE_BYTES) {
+        return {
+          content: `File: ${file_path} (${(fileSize / 1_000_000).toFixed(1)}MB) is too large to read in full. Use offset and limit parameters to read a portion, e.g. Read({ file_path: "${file_path}", offset: 1, limit: 200 }).`,
+          isError: true,
         }
       }
 
@@ -67,6 +83,7 @@ export class FileReadTool implements Tool {
       // Binary file detection — check for null bytes in first 8000 chars
       const sample = raw.slice(0, 8000)
       if (sample.includes('\0')) {
+        markFileRead(file_path)
         return {
           content: `File: ${file_path}\n(Binary file — not displayed. Use Bash to process: \`xxd\`, \`file\`, or \`strings\`)`,
           isError: false,
@@ -75,6 +92,15 @@ export class FileReadTool implements Tool {
 
       const lines = raw.split('\n')
       const total = lines.length
+
+      // Handle empty files — don't render a phantom "1\t" line
+      if (total === 1 && lines[0] === '') {
+        markFileRead(file_path)
+        return {
+          content: `File: ${file_path} (empty file, 0 bytes)`,
+          isError: false,
+        }
+      }
 
       const startLine = typeof offset === 'number' ? Math.max(1, offset) : 1
       const maxLines = typeof limit === 'number' ? limit : MAX_LINES_DEFAULT
@@ -96,12 +122,15 @@ export class FileReadTool implements Tool {
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException
       if (error.code === 'ENOENT') {
-        return { content: `File not found: ${file_path}`, isError: true }
+        return { content: `File not found: ${file_path}. Use Glob with a broad pattern (e.g. "**/<basename>") to locate the correct path.`, isError: true }
       }
       if (error.code === 'EACCES') {
-        return { content: `Permission denied: ${file_path}`, isError: true }
+        return { content: `Permission denied: ${file_path}. Hint: check file permissions with Bash 'ls -la ${file_path}'.`, isError: true }
       }
-      return { content: `Error reading file: ${error.message}`, isError: true }
+      if (error.code === 'EISDIR') {
+        return { content: `Path is a directory, not a file: ${file_path}. Use Glob to list directory contents.`, isError: true }
+      }
+      return { content: `Error reading file: ${error.message} (code: ${error.code ?? 'unknown'}). Hint: try Bash 'file ${file_path}' to check the file type.`, isError: true }
     }
   }
 }

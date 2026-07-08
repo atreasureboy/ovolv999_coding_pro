@@ -4,6 +4,7 @@ import { join } from 'path'
 import { SemanticMemory } from '../src/core/semanticMemory.js'
 import { EpisodicMemory } from '../src/core/episodicMemory.js'
 import { ModuleRegistry } from '../src/core/moduleRegistry.js'
+import { extractKeywords } from '../src/modules/memory.js'
 import type { AgentModule, ModuleBootResult, ModuleContext } from '../src/core/module.js'
 
 // ── SemanticMemory ───────────────────────────────────────────────────────────
@@ -188,5 +189,61 @@ describe('ModuleRegistry', () => {
     reg.register('a', () => makeModule('a'))
     expect(reg.has('a')).toBe(true)
     expect(reg.has('b')).toBe(false)
+  })
+})
+
+// ── extractKeywords (CJK support) ───────────────────────────────────────────
+
+describe('extractKeywords', () => {
+  it('extracts English keywords', () => {
+    const kws = extractKeywords('Fix the authentication bug in login flow')
+    expect(kws).toContain('fix')
+    expect(kws).toContain('authentication')
+    expect(kws).toContain('bug')
+    expect(kws).toContain('login')
+    expect(kws).toContain('flow')
+  })
+
+  it('filters out English stopwords', () => {
+    const kws = extractKeywords('the and for you was this that with')
+    expect(kws).toHaveLength(0)
+  })
+
+  it('handles Chinese text — segments into bigrams', () => {
+    const kws = extractKeywords('修复登录认证模块的bug')
+    // Should produce CJK bigrams like 修复, 复登, 登录, 录认, 认证, 证模, 模块...
+    const cjkBigrams = kws.filter(k => /[\u4e00-\u9fff]/.test(k))
+    expect(cjkBigrams.length).toBeGreaterThan(0)
+    expect(cjkBigrams).toContain('登录')
+    expect(cjkBigrams).toContain('认证')
+  })
+
+  it('handles mixed English + Chinese', () => {
+    const kws = extractKeywords('Fix 认证 module in 登录流程')
+    expect(kws).toContain('fix')
+    expect(kws).toContain('module')
+    expect(kws.some(k => /[\u4e00-\u9fff]/.test(k))).toBe(true)
+  })
+
+  it('handles Japanese text', () => {
+    const kws = extractKeywords('ログイン認証のバグを修正')
+    const jpBigrams = kws.filter(k => /[\u3040-\u30ff]/.test(k))
+    expect(jpBigrams.length).toBeGreaterThan(0)
+  })
+
+  it('handles empty string', () => {
+    expect(extractKeywords('')).toHaveLength(0)
+  })
+
+  it('handles single CJK character', () => {
+    const kws = extractKeywords('查')
+    expect(kws).toContain('查')
+  })
+
+  it('scoreRelevance no longer degenerates to confidence when keywords empty', () => {
+    // When keywords is empty, scoreRelevance should return 0 (not confidence)
+    // This means irrelevant memories are NOT injected via the relevance path
+    const kws = extractKeywords('the and for') // all stopwords → empty keywords
+    expect(kws).toHaveLength(0)
   })
 })
