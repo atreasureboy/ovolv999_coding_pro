@@ -26,6 +26,7 @@ import { AskUserQuestionTool } from './askUser.js'
 import { ExitPlanModeTool } from './exitPlanMode.js'
 import { SleepTool } from './sleep.js'
 import { NotebookEditTool } from './notebookEdit.js'
+import { ClaudeCodeTool } from './claudeCode.js'
 
 export function createTools(extraTools: Tool[] = []): Tool[] {
   return [
@@ -50,6 +51,7 @@ export function createTools(extraTools: Tool[] = []): Tool[] {
     new ExitPlanModeTool(),
     new SleepTool(),
     new NotebookEditTool(),
+    new ClaudeCodeTool(),
     ...extraTools,
   ]
 }
@@ -84,4 +86,5 @@ export {
   ExitPlanModeTool,
   SleepTool,
   NotebookEditTool,
+  ClaudeCodeTool,
 }
