@@ -26,19 +26,26 @@ const MAX_CALL_DEPTH = 5
 
 // ── Verification gate (AgentOS §6 "No Tuple, No Merge") ─────────────────────
 
-function packageManagerCommand(cwd: string, script: string): string {
-  if (existsSync(join(cwd, 'pnpm-lock.yaml'))) return `pnpm run ${script} 2>&1`
-  if (existsSync(join(cwd, 'yarn.lock'))) return `yarn ${script} 2>&1`
+function packageManagerCommand(cwd: string, script: string, packageManager?: string): string {
+  const pm = packageManager?.split('@')[0]
+  if (pm === 'bun' || existsSync(join(cwd, 'bun.lock')) || existsSync(join(cwd, 'bun.lockb'))) return `bun run ${script} 2>&1`
+  if (pm === 'pnpm' || existsSync(join(cwd, 'pnpm-lock.yaml'))) return `pnpm run ${script} 2>&1`
+  if (pm === 'yarn' || existsSync(join(cwd, 'yarn.lock'))) return `yarn ${script} 2>&1`
   return script === 'test' ? 'npm test 2>&1' : `npm run ${script} 2>&1`
 }
 
-function readPackageScripts(cwd: string): Record<string, string> {
+function readPackageInfo(cwd: string): { scripts: Record<string, string>; packageManager?: string } {
   try {
     const raw = readFileSync(join(cwd, 'package.json'), 'utf8')
-    const parsed = JSON.parse(raw) as { scripts?: Record<string, string> }
-    return parsed.scripts ?? {}
+    const parsed = JSON.parse(raw) as { scripts?: unknown; packageManager?: unknown }
+    return {
+      scripts: parsed.scripts && typeof parsed.scripts === 'object' && !Array.isArray(parsed.scripts)
+        ? parsed.scripts as Record<string, string>
+        : {},
+      packageManager: typeof parsed.packageManager === 'string' ? parsed.packageManager : undefined,
+    }
   } catch {
-    return {}
+    return { scripts: {} }
   }
 }
 
@@ -65,12 +72,12 @@ export function detectVerifyCommands(cwd: string): string[] {
   }
   // TypeScript / JavaScript
   if (has('package.json')) {
-    const scripts = readPackageScripts(cwd)
+    const { scripts, packageManager } = readPackageInfo(cwd)
     const commands: string[] = []
-    const firstTypecheck = scripts.typecheck ? 'typecheck' : scripts.build ? 'build' : null
-    if (firstTypecheck) commands.push(packageManagerCommand(cwd, firstTypecheck))
-    if (scripts.lint) commands.push(packageManagerCommand(cwd, 'lint'))
-    if (scripts.test) commands.push(packageManagerCommand(cwd, 'test'))
+    const firstTypecheck = scripts.typecheck ? 'typecheck' : scripts.tsc ? 'tsc' : scripts.build ? 'build' : null
+    if (firstTypecheck) commands.push(packageManagerCommand(cwd, firstTypecheck, packageManager))
+    if (scripts.lint) commands.push(packageManagerCommand(cwd, 'lint', packageManager))
+    if (scripts.test) commands.push(packageManagerCommand(cwd, 'test', packageManager))
     if (commands.length > 0) return commands
   }
   if (has('tsconfig.json')) {

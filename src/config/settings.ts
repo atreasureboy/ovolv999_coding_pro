@@ -31,6 +31,10 @@ import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
 import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
 
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'])
+const PERMISSION_BEHAVIORS = new Set(['allow', 'deny', 'ask'])
+const PERMISSION_SOURCES = new Set(['builtin', 'user', 'project'])
+
 export interface HookEntry {
   /** Comma-separated tool names to match, or "*" / omit for all. Supports trailing "*" wildcard. */
   matcher?: string
@@ -78,9 +82,52 @@ export interface OvogoSettings {
 
 function tryParse(path: string): OvogoSettings {
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as OvogoSettings
+    return normalizeSettings(JSON.parse(readFileSync(path, 'utf8')))
   } catch {
     return {}
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizePermissionRule(value: unknown): PermissionRule | null {
+  if (!isObject(value)) return null
+  if (typeof value.toolName !== 'string' || !value.toolName.trim()) return null
+  if (typeof value.ruleContent !== 'string' || !value.ruleContent.trim()) return null
+  if (typeof value.behavior !== 'string' || !PERMISSION_BEHAVIORS.has(value.behavior)) return null
+  if (typeof value.source !== 'string' || !PERMISSION_SOURCES.has(value.source)) return null
+
+  return {
+    toolName: value.toolName,
+    ruleContent: value.ruleContent,
+    behavior: value.behavior as PermissionRule['behavior'],
+    source: value.source as PermissionRule['source'],
+  }
+}
+
+function normalizeSettings(value: unknown): OvogoSettings {
+  if (!isObject(value)) return {}
+  const settings = value as OvogoSettings
+  const rawPermissions = isObject(value.permissions) ? value.permissions : undefined
+  const rawMode = rawPermissions?.mode
+  const rawRules = Array.isArray(rawPermissions?.rules) ? rawPermissions.rules : []
+  const rules = rawRules
+    .map(normalizePermissionRule)
+    .filter((rule): rule is PermissionRule => rule !== null)
+
+  return {
+    hooks: settings.hooks,
+    taskContext: settings.taskContext,
+    permissions: rawPermissions
+      ? {
+          mode: typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
+            ? rawMode as PermissionMode
+            : undefined,
+          rules,
+        }
+      : undefined,
   }
 }
 

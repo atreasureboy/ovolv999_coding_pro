@@ -401,128 +401,6 @@ async function runPlanMode(
 }
 
 // ─────────────────────────────────────────────────────────────
-// Built-in REPL commands
-// ─────────────────────────────────────────────────────────────
-
-function handleBuiltin(
-  cmd: string,
-  history: OpenAIMessage[],
-  engine: ExecutionEngine,
-  renderer: Renderer,
-  cwd: string,
-  skills: Map<string, Skill>,
-): boolean | 'exit' | { skill: Skill; args: string } {
-  const parts = cmd.split(/\s+/)
-  const command = parts[0]
-  const rest = parts.slice(1).join(' ')
-
-  switch (command) {
-    case '/exit':
-    case '/quit':
-      renderer.info('Goodbye.')
-      return 'exit'
-
-    case '/clear':
-      history.length = 0
-      renderer.success('History cleared.')
-      return true
-
-    case '/history':
-      renderer.info(`Session: ${history.length} messages in history`)
-      return true
-
-    case '/sessions': {
-      renderer.newline()
-      const sessions = listSessions(cwd)
-      if (sessions.length === 0) {
-        renderer.info('No saved sessions found.')
-      } else {
-        renderer.info(`Found ${sessions.length} session(s):`)
-        for (const s of sessions.slice(0, 10)) {
-          process.stdout.write(`  \x1b[36m${s.name}\x1b[0m \x1b[2m${s.messages} msgs\x1b[0m\n`)
-        }
-        if (sessions.length > 10) {
-          renderer.info(`  ... and ${sessions.length - 10} more`)
-        }
-        renderer.info(`\nResume with: ovolv999 --continue  or  ovolv999 --resume <session_name>`)
-      }
-      renderer.newline()
-      return true
-    }
-
-    case '/model':
-      renderer.info(`Model: ${engine.getModel()}`)
-      return true
-
-    case '/cwd':
-      renderer.info(`Working directory: ${cwd}`)
-      return true
-
-    case '/skills': {
-      renderer.newline()
-      if (skills.size === 0) {
-        renderer.info('No skills available.')
-        return true
-      }
-      const bySource = new Map<string, Skill[]>()
-      for (const s of skills.values()) {
-        const list = bySource.get(s.source) ?? []
-        list.push(s)
-        bySource.set(s.source, list)
-      }
-      for (const [source, list] of bySource) {
-        process.stdout.write(`  \x1b[2m── ${source} ──\x1b[0m\n`)
-        for (const s of list) {
-          process.stdout.write(`  \x1b[36m/${s.name.padEnd(16)}\x1b[0m \x1b[2m${s.description}\x1b[0m\n`)
-        }
-      }
-      renderer.newline()
-      return true
-    }
-
-    case '/help': {
-      renderer.newline()
-      const COMMANDS = {
-        '/plan <task>':    'Plan mode — analyze then confirm before execute',
-        '/compact':        'Summarize conversation to save context',
-        '/cost':           'Show token usage and cost summary',
-        '/context':        'Show context window usage',
-        '/mode [slug]':    'Switch agent mode/persona (or /mode list)',
-        '/doctor':         'Run health diagnostics',
-        '/rewind':         'Show file edit history',
-        '/tasks':          'List background tasks',
-        '/diff':           'Show git diff (unstaged)',
-        '/commit <msg>':   'Stage all and git commit',
-        '/init':           'Create OVOGO.md project config',
-        '/skills':         'List available skills',
-        '/model':          'Show current model',
-        '/permissions':    'Show permission mode',
-        '/clear':          'Clear conversation history',
-        '/history':        'Show message count and tokens',
-        '/help':           'Show this help',
-        '/exit':           'Exit the REPL',
-      }
-      for (const [c, desc] of Object.entries(COMMANDS)) {
-        process.stdout.write(`  \x1b[36m${c.padEnd(20)}\x1b[0m ${desc}\n`)
-      }
-      renderer.newline()
-      return true
-    }
-
-    default: {
-      // Check if command matches a loaded skill
-      const skillName = command.slice(1) // strip leading /
-      const skill = skills.get(skillName)
-      if (skill) {
-        return { skill, args: rest }
-      }
-      renderer.warn(`Unknown command: ${command}. Type /help for available commands.`)
-      return true
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
 // REPL — interactive conversation loop
 // ─────────────────────────────────────────────────────────────
 
@@ -570,7 +448,7 @@ async function runRepl(
     return lines.join('\n')
   }
 
-  renderer.info(`Commands: /compact /cost /context /mode /doctor /rewind /tasks /diff /commit /init /help`)
+  renderer.info(`Commands: /compact /cost /context /mode /doctor /rewind /tasks /workers /diff /commit /init /help`)
   renderer.info(`ESC to interrupt · Ctrl+D to exit`)
 
   let running = false
@@ -772,6 +650,10 @@ async function runRepl(
           saveProjectSettings(cwd, { permissions: { mode, rules } })
           return getProjectSettingsPath(cwd)
         },
+        resolveSkillPrompt: (name, args) => {
+          const skill = skills.get(name)
+          return skill ? expandSkillPrompt(skill, args) : null
+        },
       }
 
       const slashResult = await dispatchSlashCommand(trimmed, slashCtx)
@@ -803,30 +685,7 @@ async function runRepl(
         continue
       }
 
-      // Fall back to old handler for /plan and skill matching
-      const result = handleBuiltin(trimmed, history, engine, renderer, cwd, skills)
-
-      if (result === 'exit') {
-        // Save session before exiting
-        if (sessionDir) saveSession(sessionDir, history)
-        input.close()
-        break
-      }
-
-      // Skill matched — result is {skill, args}
-      if (typeof result === 'object') {
-        const { skill, args } = result
-        const expandedPrompt = expandSkillPrompt(skill, args)
-        renderer.info(`Running skill: /${skill.name}${args ? ' ' + args : ''}`)
-        hookRunner.runUserPromptSubmit(trimmed)
-        renderer.humanPrompt(expandedPrompt.split('\n')[0] + (expandedPrompt.includes('\n') ? ' …' : ''))
-        updateProgressLog(cwd, 'running', `/${skill.name}`)
-
-        await runTask(expandedPrompt, [...history], Date.now())
-        updateProgressLog(cwd, 'idle', 'waiting for next task')
-        continue
-      }
-
+      renderer.warn('Unknown command: ' + trimmed + '. Type / for available commands.')
       continue
     }
 

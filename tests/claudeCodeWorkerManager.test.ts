@@ -40,16 +40,25 @@ describe('ClaudeCodeWorkerManager', () => {
     const { calls, runner } = fakeRunner()
     const manager = new ClaudeCodeWorkerManager(runner)
 
-    const synced = await manager.syncClaudeEnvironment({
+    const synced = await manager.syncClaudeEnvironment('worker-1', {
       ANTHROPIC_AUTH_TOKEN: 'secret-token',
       ANTHROPIC_BASE_URL: 'https://example.test',
     })
 
     expect(synced).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'])
     expect(calls).toEqual([
-      ['set-environment', '-g', 'ANTHROPIC_AUTH_TOKEN', 'secret-token'],
-      ['set-environment', '-g', 'ANTHROPIC_BASE_URL', 'https://example.test'],
+      ['set-environment', '-t', 'worker-1', 'ANTHROPIC_AUTH_TOKEN', 'secret-token'],
+      ['set-environment', '-t', 'worker-1', 'ANTHROPIC_BASE_URL', 'https://example.test'],
     ])
+  })
+
+  it('rejects multiline Claude environment variables', async () => {
+    const { runner } = fakeRunner()
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.syncClaudeEnvironment('worker-1', {
+      ANTHROPIC_AUTH_TOKEN: 'line1\nline2',
+    })).rejects.toThrow('multiline environment variable')
   })
 
   it('starts a new tmux session when missing', async () => {
@@ -62,7 +71,9 @@ describe('ClaudeCodeWorkerManager', () => {
 
     expect(result).toMatchObject({ session: 'worker-1', created: true })
     expect(calls).toContainEqual(['has-session', '-t', 'worker-1'])
-    expect(calls).toContainEqual(['new-session', '-d', '-s', 'worker-1', '-c', '/repo', 'claude'])
+    const newSession = calls.find((args) => args[0] === 'new-session')
+    expect(newSession?.slice(0, 6)).toEqual(['new-session', '-d', '-s', 'worker-1', '-c', '/repo'])
+    expect(newSession?.at(-1)).toBe('claude')
   })
 
   it('reuses an existing tmux session', async () => {
@@ -72,7 +83,7 @@ describe('ClaudeCodeWorkerManager', () => {
     const result = await manager.start({ session: 'worker-1', cwd: '/repo' })
 
     expect(result).toMatchObject({ session: 'worker-1', created: false })
-    expect(calls).not.toContainEqual(['new-session', '-d', '-s', 'worker-1', '-c', '/repo', 'claude'])
+    expect(calls.some((args) => args[0] === 'new-session')).toBe(false)
   })
 
   it('sends text via tmux buffer and enter key', async () => {
@@ -86,7 +97,8 @@ describe('ClaudeCodeWorkerManager', () => {
     expect(calls[1][0]).toBe('paste-buffer')
     expect(calls[1]).toContain('worker-1')
     expect(calls[2]).toEqual(['send-keys', '-t', 'worker-1', 'Enter'])
-    expect(calls[3][0]).toBe('delete-buffer')
+    expect(calls[3]).toEqual(['send-keys', '-t', 'worker-1', 'Enter'])
+    expect(calls[4][0]).toBe('delete-buffer')
   })
 
   it('runs a task by starting then sending the structured prompt', async () => {

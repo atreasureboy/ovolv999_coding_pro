@@ -54,7 +54,9 @@ export function detectProjectContext(cwd: string): ProjectContext {
       ctx.language = 'TypeScript/JavaScript'
 
       // Detect scripts
-      const scripts = pkg.scripts as Record<string, string> | undefined
+      const scripts = pkg.scripts && typeof pkg.scripts === 'object' && !Array.isArray(pkg.scripts)
+        ? pkg.scripts as Record<string, string>
+        : undefined
       if (scripts) {
         ctx.scripts = {
           build: scripts.build,
@@ -79,7 +81,14 @@ export function detectProjectContext(cwd: string): ProjectContext {
   if (existsSync(join(cwd, 'pnpm-lock.yaml'))) ctx.packageManager = 'pnpm'
   else if (existsSync(join(cwd, 'yarn.lock'))) ctx.packageManager = 'yarn'
   else if (existsSync(join(cwd, 'package-lock.json'))) ctx.packageManager = 'npm'
-  else if (existsSync(join(cwd, 'bun.lockb'))) ctx.packageManager = 'bun'
+  else if (existsSync(join(cwd, 'bun.lock')) || existsSync(join(cwd, 'bun.lockb'))) ctx.packageManager = 'bun'
+
+  const pkgPathForManager = join(cwd, 'package.json')
+  if (!ctx.packageManager && existsSync(pkgPathForManager)) {
+    const pkg = tryReadJSON(pkgPathForManager)
+    const packageManager = typeof pkg?.packageManager === 'string' ? pkg.packageManager.split('@')[0] : undefined
+    if (packageManager) ctx.packageManager = packageManager
+  }
 
   // TypeScript
   if (existsSync(join(cwd, 'tsconfig.json'))) ctx.language = 'TypeScript'

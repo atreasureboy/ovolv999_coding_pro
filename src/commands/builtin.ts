@@ -15,11 +15,13 @@ import { existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { homedir } from 'os'
+import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const text = (value: string): SlashCommandResult => ({ type: 'text', value })
 const exit = (): SlashCommandResult => ({ type: 'exit' })
+const workerManager = new ClaudeCodeWorkerManager()
 
 function persistPermissionState(ctx: SlashCommandContext): string {
   const path = ctx.persistPermissions?.(
@@ -255,6 +257,49 @@ registerCommand({
       return '  ' + icon + ' ' + t.id + ' [' + t.status + ']' + dur + ' ' + t.description
     })
     return text('Background tasks (' + tasks.length + '):\n' + lines.join('\n'))
+  },
+})
+
+// ── /workers — external Claude Code workers ────────────────────────────────
+
+registerCommand({
+  name: 'workers',
+  description: 'Manage external Claude Code tmux workers',
+  usage: '/workers [list|start [session]|capture [session] [lines]|stop <session>]',
+  handler: async (args, ctx) => {
+    const parts = args.trim().split(/\s+/).filter(Boolean)
+    const action = parts[0] ?? 'list'
+    const session = parts[1] ?? 'ovogo-claude-worker'
+
+    if (action === 'list') {
+      const sessions = await workerManager.list()
+      const workers = sessions.filter((s) => s.startsWith('ovogo-'))
+      if (workers.length === 0) return text('No ovogo worker sessions.')
+      return text('Worker sessions:\n' + workers.map((s) => '  ' + s).join('\n'))
+    }
+
+    if (action === 'start') {
+      const result = await workerManager.start({ session, cwd: ctx.cwd })
+      return text([
+        `Worker: ${result.session}`,
+        result.created ? 'Status: started' : 'Status: already running',
+        `Synced env: ${result.syncedEnv.length ? result.syncedEnv.join(', ') : 'none'}`,
+      ].join('\n'))
+    }
+
+    if (action === 'capture') {
+      const lines = Number(parts[2] ?? 80)
+      const output = await workerManager.capture(session, lines)
+      return text(output || '(no output)')
+    }
+
+    if (action === 'stop') {
+      if (!parts[1]) return text('Usage: /workers stop <session>')
+      await workerManager.stop(session)
+      return text('Stopped worker: ' + session)
+    }
+
+    return text('Usage: /workers [list|start [session]|capture [session] [lines]|stop <session>]')
   },
 })
 

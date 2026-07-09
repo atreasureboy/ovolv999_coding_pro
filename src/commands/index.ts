@@ -33,6 +33,8 @@ export interface SlashCommandContext {
   getSessionsText?: () => string
   /** Persist current permission state; returns destination path when available. */
   persistPermissions?: (mode: PermissionMode, rules: PermissionRule[]) => string | undefined
+  /** Resolve a dynamic skill slash command into an executable prompt. */
+  resolveSkillPrompt?: (name: string, args: string) => string | null
 }
 
 export type SlashCommandResult =
@@ -102,7 +104,10 @@ export async function dispatchSlashCommand(
   const args = parts.slice(1).join(' ')
 
   const cmd = getCommand(cmdName)
-  if (!cmd) return null
+  if (!cmd) {
+    const skillPrompt = ctx.resolveSkillPrompt?.(cmdName, args)
+    return skillPrompt ? { type: 'prompt', value: skillPrompt } : null
+  }
   if (cmd.enabled && !cmd.enabled(ctx)) {
     return { type: 'text', value: `Command /${cmdName} is not available in this context.` }
   }

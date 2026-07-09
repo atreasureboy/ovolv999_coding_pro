@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-324%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-337%20passed-brightgreen)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -28,7 +28,7 @@ ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code，核心设计参
 - **Session 整合** — REPL 退出时自动总结 episodic 经验写入 SemanticMemory（关闭学习闭环）
 - **调用链追踪** — 子 agent spawn 深度追踪（max 5），防递归 + 审计
 - **Skill 懒加载** — Boot 时注入技能索引，LLM 按需通过 `load_skill` 加载
-- **外部 Worker** — `ClaudeCode` 工具通过 tmux 指挥本机 Claude Code CLI 执行窄任务
+- **外部 Worker** — `ClaudeCode` 工具和 `/workers` 命令通过 tmux 指挥本机 Claude Code CLI 执行窄任务
 - **生命周期 Hooks** — 6 种：PreToolCall / PostToolCall / OnError / OnComplete / OnContextOverflow / UserPromptSubmit
 - **工具元信息** — Tool 自声明 readOnly / concurrencySafe / mutatesState / longRunning / requiresNetwork，运行时据此过滤与调度
 - **统一权限管理** — PermissionManager 接入 Engine 执行路径，`/permissions` 可查看、切换模式、添加 allow/deny 规则并持久化到 `.ovogo/settings.json`
@@ -44,7 +44,7 @@ ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code，核心设计参
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                        ovolv999 — 统一 Harness + 模块化 Agent 基座             ║
-║               build OK · eslint OK · 18 test files · 324 tests passed        ║
+║               build OK · eslint OK · 20 test files · 337 tests passed        ║
 ║               Runtime deps: openai · glob · zod (仅 3 个)                     ║
 ║               API retry: 5x exponential backoff · 120s timeout                ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -373,7 +373,7 @@ ovolv999/
 │   │   └── loader.ts                   # frontmatter 解析 + formatSkillIndex
 │   └── memory/                         # 记忆桥接
 │       └── index.ts                    # SemanticMemory → 系统提示词注入
-├── tests/                              # 18 test files · 324 tests
+├── tests/                              # 20 test files · 337 tests
 │   ├── engine.test.ts                  # partitionToolCalls + compact + critic
 │   ├── presets.test.ts                 # AgentConfig + preset 解析 + applyAgent
 │   ├── modules.test.ts                 # SemanticMemory + EpisodicMemory + ModuleRegistry

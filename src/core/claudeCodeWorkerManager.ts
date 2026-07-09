@@ -42,6 +42,19 @@ const CLAUDE_ENV_KEYS = [
   'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
 ]
 
+function collectClaudeEnvironment(env: NodeJS.ProcessEnv): Array<[string, string]> {
+  const entries: Array<[string, string]> = []
+  for (const key of CLAUDE_ENV_KEYS) {
+    const value = env[key]
+    if (!value) continue
+    if (value.includes('\n')) {
+      throw new Error(`Refusing to sync multiline environment variable: ${key}`)
+    }
+    entries.push([key, value])
+  }
+  return entries
+}
+
 export function claudeWorkerSessionName(name: string): string {
   const clean = name
     .trim()
@@ -88,15 +101,12 @@ async function defaultTmuxRunner(args: string[]): Promise<TmuxResult> {
 export class ClaudeCodeWorkerManager {
   constructor(private readonly runner: TmuxRunner = defaultTmuxRunner) {}
 
-  async syncClaudeEnvironment(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
-    const synced: string[] = []
-    for (const key of CLAUDE_ENV_KEYS) {
-      const value = env[key]
-      if (!value) continue
-      await this.runner(['set-environment', '-g', key, value])
-      synced.push(key)
+  async syncClaudeEnvironment(session: string, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+    const entries = collectClaudeEnvironment(env)
+    for (const [key, value] of entries) {
+      await this.runner(['set-environment', '-t', session, key, value])
     }
-    return synced
+    return entries.map(([key]) => key)
   }
 
   async sessionExists(session: string): Promise<boolean> {
@@ -110,8 +120,10 @@ export class ClaudeCodeWorkerManager {
 
   async start(options: ClaudeWorkerStartOptions): Promise<{ session: string; created: boolean; syncedEnv: string[] }> {
     const session = claudeWorkerSessionName(options.session)
-    const syncedEnv = await this.syncClaudeEnvironment()
+    const envEntries = collectClaudeEnvironment(process.env)
+    const syncedEnv = envEntries.map(([key]) => key)
     if (await this.sessionExists(session)) {
+      await this.syncClaudeEnvironment(session)
       return { session, created: false, syncedEnv }
     }
 
@@ -122,6 +134,7 @@ export class ClaudeCodeWorkerManager {
       session,
       '-c',
       options.cwd,
+      ...envEntries.flatMap(([key, value]) => ['-e', `${key}=${value}`]),
       options.command ?? DEFAULT_CLAUDE_COMMAND,
     ])
     return { session, created: true, syncedEnv }
@@ -132,6 +145,10 @@ export class ClaudeCodeWorkerManager {
     await this.runner(['set-buffer', '-b', buffer, text])
     try {
       await this.runner(['paste-buffer', '-t', session, '-b', buffer])
+      await this.runner(['send-keys', '-t', session, 'Enter'])
+      // Claude Code's terminal editor may keep the pasted text staged after the
+      // first Enter. A second Enter reliably submits while a blank follow-up is
+      // ignored by the idle prompt.
       await this.runner(['send-keys', '-t', session, 'Enter'])
     } finally {
       try {

@@ -36,4 +36,27 @@ describe('settings permissions', () => {
     expect(loaded.taskContext?.name).toBe('coding')
     expect(loaded.permissions?.mode).toBe('plan')
   })
+
+  it('filters invalid permission modes and rules while loading settings', () => {
+    const cwd = tmpProject()
+    mkdirSync(join(cwd, '.ovogo'), { recursive: true })
+    writeFileSync(getProjectSettingsPath(cwd), JSON.stringify({
+      permissions: {
+        mode: 'root',
+        rules: [
+          { toolName: 'Bash', ruleContent: 'git *', behavior: 'allow', source: 'user' },
+          { toolName: '', ruleContent: 'rm *', behavior: 'deny', source: 'user' },
+          { toolName: 'Bash', ruleContent: 'npm *', behavior: 'maybe', source: 'user' },
+          { toolName: 'Read', ruleContent: 'src/**', behavior: 'allow', source: 'unknown' },
+        ],
+      },
+    }), 'utf8')
+
+    const loaded = loadSettings(cwd)
+
+    expect(loaded.permissions?.mode).toBeUndefined()
+    expect(loaded.permissions?.rules).toEqual([
+      { toolName: 'Bash', ruleContent: 'git *', behavior: 'allow', source: 'user' },
+    ])
+  })
 })
