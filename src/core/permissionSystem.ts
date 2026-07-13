@@ -117,11 +117,14 @@ export function getModeBehavior(
     return isDangerous ? 'ask' : 'allow'
   }
 
-  // AcceptEdits: auto-approve file operations, still gate Bash
+  // AcceptEdits: auto-approve file operations, prompt for dangerous Bash
+  // (regression: was 'deny' — silent denial confused users running one-off
+  // dangerous commands; matching 'default'/'auto' with 'ask' lets the REPL
+  // surface a confirmation instead of dropping the call.)
   if (mode === 'acceptEdits') {
     const editTools = ['Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep']
     if (editTools.includes(toolName)) return 'allow'
-    return isDangerous ? 'deny' : 'allow'
+    return isDangerous ? 'ask' : 'allow'
   }
 
   // Default: ask for dangerous, allow known-safe

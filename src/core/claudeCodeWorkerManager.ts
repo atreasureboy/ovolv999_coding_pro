@@ -171,6 +171,9 @@ export class ClaudeCodeWorkerManager {
   }
 
   async send(session: string, text: string): Promise<void> {
+    if (!text || !text.trim()) {
+      throw new Error('Cannot send empty text to worker')
+    }
     const buffer = `ovogo-${Date.now()}-${Math.random().toString(16).slice(2)}`
     await this.runner(['set-buffer', '-b', buffer, text])
     try {
@@ -196,7 +199,8 @@ export class ClaudeCodeWorkerManager {
   }
 
   async capture(session: string, lines = 80): Promise<string> {
-    const start = lines <= 0 ? '-' : `-${Math.max(1, Math.floor(lines))}`
+    const safeLines = Number.isFinite(lines) ? lines : 80
+    const start = safeLines <= 0 ? '-' : `-${Math.max(1, Math.floor(safeLines))}`
     const { stdout } = await this.runner(['capture-pane', '-t', session, '-p', '-S', start])
     return stdout.trim()
   }
@@ -231,7 +235,19 @@ export class ClaudeCodeWorkerManager {
     }
   }
 
-  async stop(session: string): Promise<void> {
+  /** Like `list()` but throws when tmux itself is unreachable. */
+  async listOrThrow(): Promise<string[]> {
+    const { stdout } = await this.runner(['list-sessions', '-F', '#S'])
+    return stdout.split('\n').map((line) => line.trim()).filter(Boolean)
+  }
+
+  /**
+   * Kill a tmux session.  Idempotent — returns `{ stopped: false }` when the
+   * session is already gone so callers don't need a pre-check.
+   */
+  async stop(session: string): Promise<{ stopped: boolean }> {
+    if (!await this.sessionExists(session)) return { stopped: false }
     await this.runner(['kill-session', '-t', session])
+    return { stopped: true }
   }
 }

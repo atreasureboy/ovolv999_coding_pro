@@ -16,7 +16,10 @@
 
 // ── Model pricing (USD per 1M tokens) ───────────────────────────────────────
 // Sources: OpenAI / Anthropic / DeepSeek public pricing pages.
-// Prices change — treat as approximate. Unknown models → cost 0 + flag.
+// Prices change — treat as approximate. Unknown models → cost 0; the
+// unknown-model signal is tracked PER CostTracker instance (see
+// `CostTracker.hasUnknownModel()`) so multiple concurrent sessions cannot
+// pollute each other.
 
 export interface ModelPricing {
   inputPer1M: number
@@ -50,9 +53,6 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'deepseek-coder': { inputPer1M: 0.14, outputPer1M: 0.28 },
 }
 
-/** Unknown-model flag — set when a model isn't in the pricing table. */
-let _hasUnknownModelCost = false
-
 /**
  * Look up pricing for a model. Tries exact match, then longest-prefix match
  * (so "gpt-4o-2024-08-06" matches "gpt-4o", "claude-sonnet-4-6-20250514"
@@ -74,16 +74,6 @@ export function getModelPricing(model: string): ModelPricing | null {
   return best
 }
 
-/** Whether any unknown model was encountered (costs may be inaccurate). */
-export function hasUnknownModelCost(): boolean {
-  return _hasUnknownModelCost
-}
-
-/** Reset the unknown-model flag (for tests / new sessions). */
-export function resetUnknownModelCost(): void {
-  _hasUnknownModelCost = false
-}
-
 // ── Usage & cost types ──────────────────────────────────────────────────────
 
 export interface TokenUsage {
@@ -101,14 +91,14 @@ export interface ModelUsage {
 
 /**
  * Compute USD cost for a single API call.
- * Returns 0 and sets the unknown-model flag if pricing is unavailable.
+ * Returns 0 if pricing is unavailable. NOTE: this function is intentionally
+ * side-effect-free — the unknown-model signal is tracked per CostTracker
+ * instance via `CostTracker.addUsage()` + `hasUnknownModel()`, so concurrent
+ * sessions cannot pollute one another's cost summary.
  */
 export function calculateUSDCost(model: string, usage: TokenUsage): number {
   const pricing = getModelPricing(model)
-  if (!pricing) {
-    _hasUnknownModelCost = true
-    return 0
-  }
+  if (!pricing) return 0
   return (
     (usage.inputTokens / 1_000_000) * pricing.inputPer1M +
     (usage.outputTokens / 1_000_000) * pricing.outputPer1M

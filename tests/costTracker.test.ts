@@ -6,8 +6,6 @@ import {
   formatCost,
   formatNumber,
   formatDuration,
-  hasUnknownModelCost,
-  resetUnknownModelCost,
   roughTokenCountEstimation,
   bytesPerTokenForFileType,
   roughTokenCountEstimationForFileType,
@@ -49,7 +47,9 @@ describe('getModelPricing', () => {
 // ── calculateUSDCost ────────────────────────────────────────────────────────
 
 describe('calculateUSDCost', () => {
-  beforeEach(() => resetUnknownModelCost())
+  // calculateUSDCost is now side-effect-free (the unknown-model signal is
+  // tracked per CostTracker instance). It should still return 0 for unknown
+  // models — the cost itself is unknowable — but no global state mutates.
 
   it('computes cost for known model', () => {
     // gpt-4o: $2.5/1M input, $10/1M output
@@ -58,16 +58,13 @@ describe('calculateUSDCost', () => {
     expect(cost).toBeCloseTo(0.0075, 6)
   })
 
-  it('returns 0 for unknown model and sets flag', () => {
+  it('returns 0 for unknown model (no side effects)', () => {
     const cost = calculateUSDCost('unknown-model', { inputTokens: 1000, outputTokens: 500 })
     expect(cost).toBe(0)
-    expect(hasUnknownModelCost()).toBe(true)
-  })
-
-  it('does not set flag for known model', () => {
-    resetUnknownModelCost()
-    calculateUSDCost('gpt-4o-mini', { inputTokens: 100, outputTokens: 50 })
-    expect(hasUnknownModelCost()).toBe(false)
+    // A subsequent call for a known model must still compute correctly,
+    // proving no global flag can suppress it.
+    const knownCost = calculateUSDCost('gpt-4o', { inputTokens: 1000, outputTokens: 500 })
+    expect(knownCost).toBeCloseTo(0.0075, 6)
   })
 
   it('handles zero tokens', () => {
@@ -128,7 +125,6 @@ describe('CostTracker', () => {
   let tracker: CostTracker
 
   beforeEach(() => {
-    resetUnknownModelCost()
     tracker = new CostTracker()
   })
 
@@ -205,6 +201,99 @@ describe('CostTracker', () => {
     expect(tracker.getTotalCost()).toBe(0)
     expect(tracker.getTotalInputTokens()).toBe(0)
     expect(tracker.getModelUsage()).toHaveLength(0)
+  })
+
+  // ── Multi-instance isolation (regression) ─────────────────────────────────
+  // Guards against any future re-introduction of module-level state in
+  // CostTracker. Two trackers must never see each other's unknown-model
+  // signal, accumulated cost, or model breakdown.
+
+  it('two fresh instances start independent (no shared unknown-model signal)', () => {
+    const a = new CostTracker()
+    const b = new CostTracker()
+    expect(a.hasUnknownModel()).toBe(false)
+    expect(b.hasUnknownModel()).toBe(false)
+  })
+
+  it('unknown model on instance A does not leak to instance B', () => {
+    const a = new CostTracker()
+    const b = new CostTracker()
+
+    a.addUsage('totally-unknown-model-a', { inputTokens: 100, outputTokens: 50 })
+
+    expect(a.hasUnknownModel()).toBe(true)
+    expect(b.hasUnknownModel()).toBe(false)
+    expect(a.formatSummary()).toContain('unknown model pricing')
+    expect(b.formatSummary()).not.toContain('unknown model pricing')
+  })
+
+  it('known-model usage on instance A does not mark B as unknown', () => {
+    const a = new CostTracker()
+    const b = new CostTracker()
+
+    a.addUsage('gpt-4o', { inputTokens: 1000, outputTokens: 500 })
+
+    expect(a.hasUnknownModel()).toBe(false)
+    expect(b.hasUnknownModel()).toBe(false)
+  })
+
+  it('reset on instance A does not affect instance B', () => {
+    const a = new CostTracker()
+    const b = new CostTracker()
+
+    a.addUsage('totally-unknown', { inputTokens: 10, outputTokens: 5 })
+    a.addUsage('gpt-4o', { inputTokens: 100, outputTokens: 50 })
+    b.addUsage('gpt-4o-mini', { inputTokens: 200, outputTokens: 100 })
+
+    a.reset()
+
+    // A is empty
+    expect(a.getTotalAPICalls()).toBe(0)
+    expect(a.getTotalCost()).toBe(0)
+    expect(a.hasUnknownModel()).toBe(false)
+    expect(a.getModelUsage()).toHaveLength(0)
+
+    // B is untouched
+    expect(b.getTotalAPICalls()).toBe(1)
+    expect(b.hasUnknownModel()).toBe(false)
+    expect(b.getModelUsage()).toHaveLength(1)
+    expect(b.getModelUsage()[0].model).toBe('gpt-4o-mini')
+  })
+
+  it('mixed known/unknown calls per instance — signal reflects only its own usage', () => {
+    const a = new CostTracker()
+    const b = new CostTracker()
+
+    // A sees one known then one unknown
+    a.addUsage('gpt-4o', { inputTokens: 100, outputTokens: 50 })
+    a.addUsage('mystery-model', { inputTokens: 10, outputTokens: 5 })
+
+    // B sees only known
+    b.addUsage('claude-sonnet-4', { inputTokens: 200, outputTokens: 100 })
+
+    expect(a.hasUnknownModel()).toBe(true)
+    expect(b.hasUnknownModel()).toBe(false)
+
+    // Costs are also isolated
+    expect(a.getTotalAPICalls()).toBe(2)
+    expect(b.getTotalAPICalls()).toBe(1)
+    expect(a.getModelUsage()).toHaveLength(2)
+    expect(b.getModelUsage()).toHaveLength(1)
+  })
+
+  it('simulates concurrent sessions: independent lifecycles do not pollute', () => {
+    // Pattern from real use: session 1 starts, adds unknown, finishes.
+    // Session 2 starts later — must not inherit session 1's flag.
+    const session1 = new CostTracker()
+    session1.addUsage('experimental-model', { inputTokens: 1, outputTokens: 1 })
+    expect(session1.hasUnknownModel()).toBe(true)
+
+    // Session 1 completes — in old code this left the module flag set.
+    // Now: a brand-new tracker must start clean.
+    const session2 = new CostTracker()
+    expect(session2.hasUnknownModel()).toBe(false)
+    session2.addUsage('gpt-4o', { inputTokens: 10, outputTokens: 5 })
+    expect(session2.hasUnknownModel()).toBe(false)
   })
 })
 

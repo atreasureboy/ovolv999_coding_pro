@@ -63,8 +63,21 @@ describe('getModeBehavior', () => {
     expect(getModeBehavior('acceptEdits', 'Write', false)).toBe('allow')
     expect(getModeBehavior('acceptEdits', 'Edit', false)).toBe('allow')
     expect(getModeBehavior('acceptEdits', 'Read', false)).toBe('allow')
-    // But still gates dangerous Bash
-    expect(getModeBehavior('acceptEdits', 'Bash', true)).toBe('deny')
+    // Dangerous Bash prompts for confirmation (regression: previously 'deny')
+    expect(getModeBehavior('acceptEdits', 'Bash', true)).toBe('ask')
+  })
+
+  // Regression: acceptEdits must prompt — not silently deny — for dangerous
+  // Bash, matching the behaviour of 'default' and 'auto'. Otherwise users
+  // see "Permission denied" with no opportunity to confirm a one-off command.
+  it('acceptEdits dangerous Bash behaves like default (ask, not deny)', () => {
+    expect(getModeBehavior('acceptEdits', 'Bash', true)).toBe('ask')
+    // Non-dangerous Bash still allowed
+    expect(getModeBehavior('acceptEdits', 'Bash', false)).toBe('allow')
+    // Confirm the other modes are unchanged — regression guard for this fix.
+    expect(getModeBehavior('default', 'Bash', true)).toBe('ask')
+    expect(getModeBehavior('auto', 'Bash', true)).toBe('ask')
+    expect(getModeBehavior('bypassPermissions', 'Bash', true)).toBe('allow')
   })
 
   it('default allows safe, asks for dangerous', () => {

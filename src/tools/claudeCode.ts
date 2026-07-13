@@ -223,8 +223,8 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
 
   private async stop(input: Record<string, unknown>): Promise<ToolResult> {
     const session = defaultSession(input)
-    if (!await this.manager.sessionExists(session)) return this.sessionNotFound(session)
-    await this.manager.stop(session)
+    const result = await this.manager.stop(session)
+    if (!result.stopped) return this.sessionNotFound(session)
     return { content: `Stopped ClaudeCode worker: ${session}`, isError: false }
   }
 

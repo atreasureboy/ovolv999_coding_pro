@@ -160,4 +160,80 @@ describe('ClaudeCodeWorkerManager', () => {
       pattern: '[',
     })).rejects.toThrow('Invalid regex pattern')
   })
+
+  it('rejects empty or whitespace-only text in send()', async () => {
+    const { calls, runner } = fakeRunner()
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.send('worker-1', '')).rejects.toThrow('Cannot send empty text')
+    await expect(manager.send('worker-1', '   \n  ')).rejects.toThrow('Cannot send empty text')
+    expect(calls.length).toBe(0)
+  })
+
+  it('falls back to safe line count when capture gets a non-finite value', async () => {
+    const { calls, runner } = fakeRunner(() => ({ stdout: 'hello\n' }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.capture('worker-1', Number.NaN)).resolves.toBe('hello')
+    expect(calls[0]).toEqual(['capture-pane', '-t', 'worker-1', '-p', '-S', '-80'])
+  })
+
+  it('treats lines <= 0 as full history in capture', async () => {
+    const { calls, runner } = fakeRunner(() => ({ stdout: 'pane output\n' }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.capture('worker-1', 0)).resolves.toBe('pane output')
+    expect(calls[0]).toEqual(['capture-pane', '-t', 'worker-1', '-p', '-S', '-'])
+  })
+
+  it('floor()s fractional line counts', async () => {
+    const { calls, runner } = fakeRunner(() => ({ stdout: 'output\n' }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await manager.capture('worker-1', 12.9)
+    expect(calls[0]).toEqual(['capture-pane', '-t', 'worker-1', '-p', '-S', '-12'])
+  })
+
+  it('stop() is idempotent — returns stopped:false when session is gone', async () => {
+    const { calls, runner } = fakeRunner((args) => {
+      if (args[0] === 'has-session') throw new Error('missing')
+    })
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.stop('ghost')).resolves.toEqual({ stopped: false })
+    expect(calls.some((c) => c[0] === 'kill-session')).toBe(false)
+  })
+
+  it('stop() returns stopped:true after kill-session', async () => {
+    const { runner } = fakeRunner()
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.stop('worker-1')).resolves.toEqual({ stopped: true })
+  })
+
+  it('listOrThrow() propagates tmux errors instead of swallowing them', async () => {
+    const { runner } = fakeRunner(() => {
+      throw new Error('tmux: command not found')
+    })
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.listOrThrow()).rejects.toThrow('tmux: command not found')
+  })
+
+  it('list() swallows tmux errors and returns [] for a clean fallback', async () => {
+    const { runner } = fakeRunner(() => {
+      throw new Error('tmux: command not found')
+    })
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    await expect(manager.list()).resolves.toEqual([])
+  })
+
+  it('claudeWorkerSessionName produces a stable fallback when input is fully stripped', () => {
+    const fallback = claudeWorkerSessionName('   /  ')
+    expect(fallback).toMatch(/^ovogo-claude-\d+$/)
+    // Trimming-only input collapses to a single dash that gets stripped
+    const stripped = claudeWorkerSessionName('!!!')
+    expect(stripped).toMatch(/^ovogo-claude-\d+$/)
+  })
 })

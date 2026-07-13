@@ -27,7 +27,7 @@
  */
 
 import { resolve, join, dirname } from 'path'
-import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 
@@ -84,6 +84,16 @@ import { dispatchSlashCommand, type SlashCommandContext } from '../src/commands/
 import '../src/commands/builtin.js' // register all built-in commands
 import { tmuxLayout } from '../src/ui/tmuxLayout.js'
 import { PermissionManager } from '../src/core/permissionSystem.js'
+import {
+  AmbiguousSessionError,
+  SessionNotFoundError,
+  createSessionDir,
+  findLatestSession,
+  listSessions,
+  loadSession,
+  resolveSessionPath,
+  saveSession,
+} from '../src/core/sessionManager.js'
 
 const VERSION = '0.1.0'
 
@@ -251,80 +261,6 @@ EXAMPLES
 }
 
 // ─────────────────────────────────────────────────────────────
-// Session directory — 按目标+时间戳隔离扫描输出
-// ─────────────────────────────────────────────────────────────
-
-function createSessionDir(cwd: string): string {
-  const ts = new Date()
-    .toISOString()
-    .replace('T', '_')
-    .replace(/:/g, '')
-    .slice(0, 15)   // YYYYMMDD_HHMMSS
-
-  const dirName = `session_${ts}`
-  const sessionDir = join(cwd, 'sessions', dirName)
-  mkdirSync(sessionDir, { recursive: true })
-  return sessionDir
-}
-
-// ─────────────────────────────────────────────────────────────
-// Session persistence — save/load conversation history
-// ─────────────────────────────────────────────────────────────
-
-function saveSession(sessionDir: string, history: OpenAIMessage[]): void {
-  try {
-    writeFileSync(join(sessionDir, 'history.json'), JSON.stringify(history, null, 2), 'utf8')
-  } catch { /* best-effort */ }
-}
-
-function loadSession(sessionDir: string): OpenAIMessage[] {
-  try {
-    const raw = readFileSync(join(sessionDir, 'history.json'), 'utf8')
-    return JSON.parse(raw) as OpenAIMessage[]
-  } catch {
-    return []
-  }
-}
-
-function findLatestSession(cwd: string): string | null {
-  const sessionsDir = join(cwd, 'sessions')
-  if (!existsSync(sessionsDir)) return null
-  try {
-    const entries = readdirSync(sessionsDir)
-      .filter(e => e.startsWith('session_'))
-      .sort()
-      .reverse()
-    for (const entry of entries) {
-      const histPath = join(sessionsDir, entry, 'history.json')
-      if (existsSync(histPath)) return join(sessionsDir, entry)
-    }
-    return null  // don't return sessions without history.json
-  } catch {
-    return null
-  }
-}
-
-function listSessions(cwd: string): Array<{ dir: string; name: string; messages: number }> {
-  const sessionsDir = join(cwd, 'sessions')
-  if (!existsSync(sessionsDir)) return []
-  try {
-    return readdirSync(sessionsDir)
-      .filter(e => e.startsWith('session_'))
-      .sort()
-      .reverse()
-      .map(name => {
-        const dir = join(sessionsDir, name)
-        let messages = 0
-        try {
-          const hist = JSON.parse(readFileSync(join(dir, 'history.json'), 'utf8')) as unknown[]
-          messages = hist.length
-        } catch { /* no history */ }
-        return { dir, name, messages }
-      })
-  } catch {
-    return []
-  }
-}
 // Progress log (断点续传)
 // ─────────────────────────────────────────────────────────────
 
@@ -515,8 +451,14 @@ async function runRepl(
         history.push(...trimHistoryForNextTurn(newHistory))
         currentHistory = [...history]
 
-        // Persist session after each turn
-        if (sessionDir) saveSession(sessionDir, history)
+        // Persist session after each turn (best-effort — warn on disk failure)
+        if (sessionDir) {
+          try {
+            saveSession(sessionDir, history)
+          } catch (err: unknown) {
+            renderer.warn(`Failed to persist session: ${(err as Error).message}`)
+          }
+        }
 
         if (result.reason === 'interrupted' || result.reason === 'error') {
           // ESC interrupted or error — ask for feedback, then resume
@@ -661,7 +603,13 @@ async function runRepl(
       if (slashResult !== null) {
         // Handle new command system result
         if (slashResult.type === 'exit') {
-          if (sessionDir) saveSession(sessionDir, history)
+          if (sessionDir) {
+            try {
+              saveSession(sessionDir, history)
+            } catch (err: unknown) {
+              renderer.warn(`Failed to persist session on exit: ${(err as Error).message}`)
+            }
+          }
           input.close()
           break
         }
@@ -673,7 +621,15 @@ async function runRepl(
         }
         if (slashResult.type === 'clear-history') {
           history.length = 0
-          if (sessionDir) saveSession(sessionDir, history)
+          if (sessionDir) {
+            // /clear: atomically persist the empty history so the cleared state
+            // survives a crash. No tmp file should remain afterwards.
+            try {
+              saveSession(sessionDir, history)
+            } catch (err: unknown) {
+              renderer.warn(`Failed to persist cleared history: ${(err as Error).message}`)
+            }
+          }
           renderer.info('Conversation history cleared.')
         }
         if (pendingPrompt) {
@@ -831,13 +787,19 @@ async function main(): Promise<void> {
   let sessionDir: string
   let resumedHistory: OpenAIMessage[] = []
   if (resumeSession) {
-    // Always look under sessions/ unless the path already contains a separator
-    sessionDir = resumeSession.includes('/') || resumeSession.includes('\\')
-      ? resolve(resumeSession)
-      : resolve(cwd, 'sessions', resumeSession)
-    if (!existsSync(sessionDir)) {
-      renderer.error(`Session not found: ${sessionDir}`)
-      process.exit(1)
+    try {
+      sessionDir = resolveSessionPath(cwd, resumeSession)
+    } catch (err: unknown) {
+      if (err instanceof AmbiguousSessionError) {
+        renderer.error(err.message)
+        for (const m of err.matches) renderer.error(`  - ${m}`)
+        process.exit(1)
+      }
+      if (err instanceof SessionNotFoundError) {
+        renderer.error(err.message)
+        process.exit(1)
+      }
+      throw err
     }
     resumedHistory = loadSession(sessionDir)
     renderer.info(`Resumed session: ${sessionDir} (${resumedHistory.length} messages)`)

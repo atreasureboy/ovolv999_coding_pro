@@ -21,7 +21,23 @@ import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 
 const text = (value: string): SlashCommandResult => ({ type: 'text', value })
 const exit = (): SlashCommandResult => ({ type: 'exit' })
-const workerManager = new ClaudeCodeWorkerManager()
+
+/** Module-level singleton — overridable via {@link setWorkerManager} for tests. */
+let workerManager: ClaudeCodeWorkerManager = new ClaudeCodeWorkerManager()
+
+/** Replace the /workers manager. Used by tests; safe to call once at startup. */
+export function setWorkerManager(manager: ClaudeCodeWorkerManager): void {
+  workerManager = manager
+}
+
+/** Reset to a fresh default manager — restores production behavior in tests. */
+export function resetWorkerManager(): void {
+  workerManager = new ClaudeCodeWorkerManager()
+}
+
+function getWorkerManager(): ClaudeCodeWorkerManager {
+  return workerManager
+}
 
 function persistPermissionState(ctx: SlashCommandContext): string {
   const path = ctx.persistPermissions?.(
@@ -270,36 +286,46 @@ registerCommand({
     const parts = args.trim().split(/\s+/).filter(Boolean)
     const action = parts[0] ?? 'list'
     const session = parts[1] ?? 'ovogo-claude-worker'
+    const mgr = getWorkerManager()
 
-    if (action === 'list') {
-      const sessions = await workerManager.list()
-      const workers = sessions.filter((s) => s.startsWith('ovogo-'))
-      if (workers.length === 0) return text('No ovogo worker sessions.')
-      return text('Worker sessions:\n' + workers.map((s) => '  ' + s).join('\n'))
+    try {
+      if (action === 'list') {
+        const sessions = await mgr.list()
+        const workers = sessions.filter((s) => s.startsWith('ovogo-'))
+        if (workers.length === 0) return text('No ovogo worker sessions.')
+        return text('Worker sessions:\n' + workers.map((s) => '  ' + s).join('\n'))
+      }
+
+      if (action === 'start') {
+        const result = await mgr.start({ session, cwd: ctx.cwd })
+        return text([
+          `Worker: ${result.session}`,
+          result.created ? 'Status: started' : 'Status: already running',
+          `Synced env: ${result.syncedEnv.length ? result.syncedEnv.join(', ') : 'none'}`,
+        ].join('\n'))
+      }
+
+      if (action === 'capture') {
+        const rawLines = parts[2]
+        const lines = rawLines === undefined ? 80 : Number(rawLines)
+        const safeLines = Number.isFinite(lines) ? Math.max(0, Math.floor(lines)) : 80
+        if (!await mgr.sessionExists(session)) {
+          return text(`Worker session not found: ${session}. Use /workers list to see active workers.`)
+        }
+        const output = await mgr.capture(session, safeLines)
+        return text(output || '(no output)')
+      }
+
+      if (action === 'stop') {
+        if (!parts[1]) return text('Usage: /workers stop <session>')
+        const result = await mgr.stop(session)
+        return text(result.stopped ? `Stopped worker: ${session}` : `Worker not running: ${session}`)
+      }
+
+      return text('Usage: /workers [list|start [session]|capture [session] [lines]|stop <session>]')
+    } catch (err) {
+      return text(`Workers command failed: ${(err as Error).message}`)
     }
-
-    if (action === 'start') {
-      const result = await workerManager.start({ session, cwd: ctx.cwd })
-      return text([
-        `Worker: ${result.session}`,
-        result.created ? 'Status: started' : 'Status: already running',
-        `Synced env: ${result.syncedEnv.length ? result.syncedEnv.join(', ') : 'none'}`,
-      ].join('\n'))
-    }
-
-    if (action === 'capture') {
-      const lines = Number(parts[2] ?? 80)
-      const output = await workerManager.capture(session, lines)
-      return text(output || '(no output)')
-    }
-
-    if (action === 'stop') {
-      if (!parts[1]) return text('Usage: /workers stop <session>')
-      await workerManager.stop(session)
-      return text('Stopped worker: ' + session)
-    }
-
-    return text('Usage: /workers [list|start [session]|capture [session] [lines]|stop <session>]')
   },
 })
 
