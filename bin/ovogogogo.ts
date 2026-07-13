@@ -157,7 +157,7 @@ function trimHistoryForNextTurn(messages: OpenAIMessage[]): OpenAIMessage[] {
 function parseArgs(argv: string[]): Args {
   const args = argv.slice(2)
   let task: string | undefined
-  let model = process.env.OVOGO_MODEL ?? 'gpt-4o'
+  let model = resolveApiEnvironment().model
   let maxIter = parseInt(process.env.OVOGO_MAX_ITER ?? '200', 10)
   if (isNaN(maxIter) || maxIter <= 0) maxIter = 200
   let cwd = process.env.OVOGO_CWD ?? process.cwd()
@@ -193,18 +193,57 @@ function parseArgs(argv: string[]): Args {
   return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession }
 }
 
+interface ResolvedApiEnvironment {
+  apiKey: string | undefined
+  baseURL: string | undefined
+  model: string
+  provider: 'minimax' | 'openai'
+}
+
+/**
+ * MiniMax exposes both Anthropic- and OpenAI-compatible endpoints. Reuse the
+ * Claude Code environment when it points at MiniMax so the CLI can share the
+ * same account without copying credentials into another config file.
+ */
+function resolveApiEnvironment(): ResolvedApiEnvironment {
+  const anthropicBaseURL = process.env.ANTHROPIC_BASE_URL
+  const anthropicApiKey = process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY
+  const isMiniMax = Boolean(
+    anthropicApiKey &&
+    anthropicBaseURL &&
+    /^https:\/\/api\.(?:minimax\.io|minimaxi\.com)\/anthropic\/?$/i.test(anthropicBaseURL),
+  )
+
+  if (isMiniMax) {
+    return {
+      apiKey: anthropicApiKey,
+      baseURL: anthropicBaseURL!.replace(/\/anthropic\/?$/i, '/v1'),
+      model: process.env.OVOGO_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'MiniMax-M3',
+      provider: 'minimax',
+    }
+  }
+
+  return {
+    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: process.env.OPENAI_BASE_URL,
+    model: process.env.OVOGO_MODEL ?? 'gpt-4o',
+    provider: 'openai',
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Help text
 // ─────────────────────────────────────────────────────────────
 
 function printHelp(skills: Map<string, Skill>): void {
   const r = new Renderer()
-  r.banner(VERSION, 'gpt-4o')
+  const defaultModel = resolveApiEnvironment().model
+  r.banner(VERSION, defaultModel)
   process.stdout.write(`USAGE
   ovogogogo [options] [task]
 
 OPTIONS
-  -m, --model <model>    LLM model  (env: OVOGO_MODEL, default: gpt-4o)
+  -m, --model <model>    LLM model  (env: OVOGO_MODEL, default: ${defaultModel})
   --max-iter <n>         Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
   --cwd <path>           Working directory  (env: OVOGO_CWD, default: cwd)
   -v, --version          Print version and exit
@@ -703,6 +742,7 @@ async function runTask(
 async function main(): Promise<void> {
   const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession } = parseArgs(process.argv)
   const cwd = resolve(rawCwd)
+  const apiEnvironment = resolveApiEnvironment()
 
   // Load skills early so --help can list them
   const skills = loadSkills(cwd)
@@ -717,11 +757,11 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = apiEnvironment.apiKey
   if (!apiKey) {
     process.stderr.write(
-      '\x1b[31mError:\x1b[0m OPENAI_API_KEY is not set.\n' +
-        'Export it with: export OPENAI_API_KEY=sk-...\n',
+      '\x1b[31mError:\x1b[0m no API key is configured.\n' +
+        'Set OPENAI_API_KEY, or configure MiniMax through ANTHROPIC_AUTH_TOKEN.\n',
     )
     process.exit(1)
   }
@@ -878,7 +918,7 @@ async function main(): Promise<void> {
   const config: EngineConfig = {
     model,
     apiKey,
-    baseURL: process.env.OPENAI_BASE_URL,
+    baseURL: apiEnvironment.baseURL,
     maxIterations: maxIter,
     cwd,
     permissionMode: 'auto',

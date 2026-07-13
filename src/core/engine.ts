@@ -24,6 +24,7 @@
  */
 
 import OpenAI from 'openai'
+import { ThinkingTagFilter } from './thinkingTagFilter.js'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
@@ -671,6 +672,7 @@ export class ExecutionEngine {
     let finishReason: string | null = null
     let usage: TokenUsage | null = null
     const toolCallsMap = new Map<number, StreamingToolCall>()
+    const thinkingTagFilter = new ThinkingTagFilter()
     let firstToken = true
 
     // Stream-level timeout — if no chunk arrives for 120s, abort (prevents API hang)
@@ -707,13 +709,16 @@ export class ExecutionEngine {
         if (!delta) continue
 
         if (delta.content) {
-          if (firstToken) {
-            this.renderer.stopSpinner()
-            this.renderer.beginAssistantText()
-            firstToken = false
+          const visibleContent = thinkingTagFilter.push(delta.content)
+          if (visibleContent) {
+            if (firstToken) {
+              this.renderer.stopSpinner()
+              this.renderer.beginAssistantText()
+              firstToken = false
+            }
+            this.renderer.streamToken(visibleContent)
+            assistantText += visibleContent
           }
-          this.renderer.streamToken(delta.content)
-          assistantText += delta.content
         }
 
         if (delta.tool_calls) {
@@ -737,6 +742,17 @@ export class ExecutionEngine {
         if (chunk.choices[0]?.finish_reason) {
           finishReason = chunk.choices[0].finish_reason
         }
+      }
+
+      const trailingContent = thinkingTagFilter.finish()
+      if (trailingContent) {
+        if (firstToken) {
+          this.renderer.stopSpinner()
+          this.renderer.beginAssistantText()
+          firstToken = false
+        }
+        this.renderer.streamToken(trailingContent)
+        assistantText += trailingContent
       }
     } catch (err: unknown) {
       clearInterval(watchdog)

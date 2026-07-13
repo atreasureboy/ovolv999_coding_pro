@@ -105,8 +105,10 @@ export class TmuxLayout {
         { stdio: 'pipe' },
       )
 
-      // 重命名第一个窗口为状态总览
-      execSync(`tmux rename-window -t ${sq(this.sessionName + ':0')} 'OVOGO-Status'`)
+      // A trailing colon targets the session's current window. Do not assume
+      // index 0: users commonly configure tmux base-index to 1 or higher.
+      const statusTarget = this.sessionName + ':'
+      execSync(`tmux rename-window -t ${sq(statusTarget)} 'OVOGO-Status'`)
 
       // 在状态窗口写欢迎信息
       const welcome = [
@@ -116,7 +118,7 @@ export class TmuxLayout {
         `echo "\\033[2m  子 agent 窗口将在这里自动出现（Ctrl+B + 数字 切换）\\033[0m"`,
         `echo "\\033[1m\\033[95m${'═'.repeat(60)}\\033[0m"`,
       ].join(' && ')
-      execSync(`tmux send-keys -t ${sq(this.sessionName + ':0')} ${JSON.stringify(welcome)} Enter`)
+      execSync(`tmux send-keys -t ${sq(statusTarget)} ${JSON.stringify(welcome)} Enter`)
 
       this.initialized = true
       return true

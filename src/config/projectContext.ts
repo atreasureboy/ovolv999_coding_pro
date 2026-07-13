@@ -42,6 +42,14 @@ function tryExec(cmd: string, cwd: string): string | null {
   }
 }
 
+function tryExecRaw(cmd: string, cwd: string): string | null {
+  try {
+    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 })
+  } catch {
+    return null
+  }
+}
+
 /** Detect project context from cwd */
 export function detectProjectContext(cwd: string): ProjectContext {
   const ctx: ProjectContext = {}
@@ -107,14 +115,16 @@ export function detectProjectContext(cwd: string): ProjectContext {
   // Git
   const gitBranch = tryExec('git branch --show-current', cwd)
   if (gitBranch) {
-    const status = tryExec('git status --porcelain', cwd)
-    const lines = status ? status.split('\n').filter(l => l.trim()) : []
-    const modified = lines.filter(l => {
-      const code = l.trim().slice(0, 2)
+    // NUL-delimited porcelain preserves the leading space in XY status codes.
+    // Trimming these records would turn an unstaged " M" into staged "M ".
+    const status = tryExecRaw('git status --porcelain=v1 -z', cwd)
+    const records = status ? status.split('\0').filter(Boolean) : []
+    const modified = records.filter(record => {
+      const code = record.slice(0, 2)
       return code[1] === 'M' || code[1] === 'D' // working tree modified/deleted
     }).length
-    const staged = lines.filter(l => {
-      const code = l.trim().slice(0, 2)
+    const staged = records.filter(record => {
+      const code = record.slice(0, 2)
       return code[0] === 'M' || code[0] === 'A' || code[0] === 'D' // index modified/added/deleted
     }).length
     const log = tryExec('git log --oneline -3', cwd)
