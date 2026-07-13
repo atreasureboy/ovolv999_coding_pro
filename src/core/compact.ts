@@ -11,21 +11,183 @@
 import type OpenAI from 'openai'
 import type { OpenAIMessage } from './types.js'
 
-// Rough chars-per-token estimate (conservative — better to compact early)
-const CHARS_PER_TOKEN = 3.5
+// Legacy single-rate constant kept here historically; the multilingual
+// estimator now uses ASCII_CHARS_PER_TOKEN (for ASCII) and
+// NON_ASCII_CHARS_PER_TOKEN (for CJK/emoji/etc.) instead. See estimateTextTokens.
 
 // Model max context window (tokens). Matches claude-sonnet-4-x 200k context.
 // Sub-agents inherit the same model so one constant is sufficient here.
 export const MODEL_MAX_CONTEXT_TOKENS = 200_000
 
+/**
+ * Per-character token estimate factor. ASCII is the common case and the
+ * legacy 3.5 chars/token rate is reasonable for English / code / JSON syntax.
+ * Non-ASCII (CJK / emoji / accented Latin / etc.) is treated SEPARATELY by
+ * {@link NON_ASCII_CHARS_PER_TOKEN}, so this constant applies only to
+ * code-point order 0..127.
+ */
+export const ASCII_CHARS_PER_TOKEN = 3.5
+
+/**
+ * Default `max_tokens` for completion requests. Single source of truth so the
+ * primary, no-stream-options fallback, and post-compact-retry paths can never
+ * silently drift again — the previous code had one path on 8192 and the
+ * retry path on 16_384, which would surface as inconsistent response lengths
+ * depending on which branch the API took.
+ */
+export const MAX_OUTPUT_TOKENS_DEFAULT = 8192
+
+/**
+ * Conservative clamp on max_tokens given a model context window.
+ *
+ * The model needs headroom for input (system prompt + tool definitions +
+ * messages) AND for its own response. If `max_tokens` exceeds ~half the
+ * window, the API will reject anything but the emptiest prompts.
+ *
+ * Strategy:
+ *   - `requested` is sanitised: anything that is not a finite positive
+ *     integer (NaN, Infinity, 0, negative, float, null, undefined) falls back
+ *     to {@link MAX_OUTPUT_TOKENS_DEFAULT} before clamping. This prevents
+ *     corrupt config values from producing illegal `max_tokens` values that
+ *     would either be rejected upstream or never fit in the model's window.
+ *   - Then cap at half the window so input always has at least
+ *     `window - max_tokens ≥ window / 2` tokens of headroom.
+ *   - Floors at 1 to ensure the request is still well-formed on pathological
+ *     configurations (e.g. contextWindow=1).
+ */
+export function clampMaxOutputTokens(
+  maxOutput: number | undefined | null,
+  contextWindow: number,
+): number {
+  const requested = isFinitePositiveInteger(maxOutput)
+    ? maxOutput as number
+    : MAX_OUTPUT_TOKENS_DEFAULT
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return Math.max(1, requested)
+  }
+  const halfWindow = Math.max(1, Math.floor(contextWindow / 2))
+  return Math.max(1, Math.min(requested, halfWindow))
+}
+
+/**
+ * True iff the value is a finite positive integer.
+ * Used by {@link clampMaxOutputTokens} and {@link resolveContextWindow} to
+ * validate numeric config inputs.
+ */
+export function isFinitePositiveInteger(value: unknown): boolean {
+  return (
+    typeof value === 'number'
+    && Number.isFinite(value)
+    && Number.isInteger(value)
+    && value > 0
+  )
+}
+
+/**
+ * Compute the effective INPUT budget for percentage-based checks.
+ *
+ * Subtracts the clamped output budget from the context window. The result is
+ * the maximum input tokens the model can ingest WITHOUT exceeding the window
+ * during generation. Use this as the denominator for `pct` calculations —
+ * otherwise warnings/compactions fire at thresholds that mathematically
+ * guarantee an API rejection for small-window models.
+ *
+ * Example: 8k window, default 8k max → effectiveInput = 4k → warning at 70%
+ * fires at 2.8k input instead of 5.6k, leaving room for 8k output.
+ *
+ * Floors at 1 to keep `pct` finite on degenerate configs.
+ */
+export function effectiveInputBudget(
+  contextWindow: number,
+  maxOutput: number | undefined | null,
+): number {
+  const reservedOutput = clampMaxOutputTokens(maxOutput, contextWindow)
+  const input = contextWindow - reservedOutput
+  return Math.max(1, input)
+}
+
+/**
+ * Known model context windows (tokens). Lookup is by exact name or substring
+ * match (longest match wins). Unknown models fall back to
+ * {@link MODEL_MAX_CONTEXT_TOKENS}. Override via {@link maxContextTokens} in
+ * EngineConfig for any model not listed here.
+ */
+export const KNOWN_MODEL_CONTEXT_WINDOWS: ReadonlyArray<readonly [pattern: RegExp, window: number]> = [
+  // Claude family — 200k context
+  [/^claude-(?:opus|sonnet|haiku)-?4/i, 200_000],
+  [/^claude-3-7-sonnet/i, 200_000],
+  [/^claude-3-5-(?:sonnet|haiku)/i, 200_000],
+  [/^claude-3-(?:opus|sonnet|haiku)/i, 200_000],
+  [/^claude-instant/i, 100_000],
+  // OpenAI o-series / GPT-5 family — 200k+ context
+  [/^o[1-9](?:-mini|-nano)?(?:-preview|-pro)?$/i, 200_000],
+  [/^gpt-5/i, 400_000],
+  [/^chatgpt-4o/i, 128_000],
+  // GPT-4o / GPT-4 Turbo — 128k
+  [/^gpt-4o(?:-mini)?/i, 128_000],
+  [/^gpt-4-turbo/i, 128_000],
+  // Older GPT-4 — 8k context
+  [/^gpt-4(?:-vision)?$/i, 8_192],
+  [/^gpt-4-32k/i, 32_768],
+  // GPT-3.5 — 16k
+  [/^gpt-3\.5-turbo-16k/i, 16_385],
+  [/^gpt-3\.5-turbo/i, 4_096],
+  // DeepSeek — 64k reasoning context
+  [/^deepseek-(?:reasoner|chat)/i, 64_000],
+  // Qwen — 32k+ context
+  [/^qwen(?:-(?:plus|turbo|max|long))?/i, 32_768],
+  // Llama-3.x — 128k context
+  [/^llama-3\.1(?:-\d+b)?/i, 128_000],
+  [/^llama-3(?:\.\d+)?(?:-\d+b)?$/i, 8_192],
+]
+
+/**
+ * Resolve context window for a model name.
+ *
+ * Precedence: explicit override > pattern match against {@link KNOWN_MODEL_CONTEXT_WINDOWS}
+ * > {@link MODEL_MAX_CONTEXT_TOKENS} fallback.
+ *
+ * Override contract: must be a FINITE POSITIVE INTEGER.
+ *   - Infinity / -Infinity are REJECTED — they would silently disable every
+ *     percentage-based check (pct = totalTokens / Infinity → 0) and
+ *     permanently turn off compaction.
+ *   - NaN is REJECTED — all comparisons with NaN are false; the previous
+ *     `override > 0` accidentally let NaN fall through to the lookup, which
+ *     "works" but is fragile (direct callers get silent surprises).
+ *   - Floats are REJECTED — context windows are integer token counts.
+ *   - Non-positive numbers are REJECTED.
+ * Invalid overrides silently fall through to the model lookup.
+ *
+ * The match is the LONGEST pattern that matches anywhere in the model name,
+ * so e.g. "gpt-4o-mini" matches the 128k rule, not the 8k "gpt-4" rule.
+ */
+export function resolveContextWindow(model: string, override?: number): number {
+  if (isFinitePositiveInteger(override)) {
+    return override as number
+  }
+  if (typeof model !== 'string' || !model) return MODEL_MAX_CONTEXT_TOKENS
+
+  // Find longest matching pattern so more-specific rules shadow generic ones
+  let bestMatch: { pattern: RegExp; window: number } | null = null
+  for (const entry of KNOWN_MODEL_CONTEXT_WINDOWS) {
+    if (entry[0].test(model)) {
+      if (!bestMatch || entry[0].source.length > bestMatch.pattern.source.length) {
+        bestMatch = { pattern: entry[0], window: entry[1] }
+      }
+    }
+  }
+  if (bestMatch) return bestMatch.window
+  return MODEL_MAX_CONTEXT_TOKENS
+}
+
 // Percentage-based thresholds — the single source of truth for context pressure
-const CONTEXT_WARN_PCT    = 0.70   // 70%  → display yellow warning
-const CONTEXT_COMPACT_PCT = 0.85   // 85%  → force auto-compact (LLM summarization)
+export const CONTEXT_WARN_PCT    = 0.70   // 70%  → display yellow warning
+export const CONTEXT_COMPACT_PCT = 0.85   // 85%  → force auto-compact (LLM summarization)
 
 // microCompact — lightweight pre-compact that clears old tool results WITHOUT
 // an LLM call. Runs at a lower threshold than full compact, buying headroom
 // cheaply. Inspired by Claude Code's microCompact.
-const CONTEXT_MICROCOMPACT_PCT = 0.50  // 50%  → clear old tool results
+export const CONTEXT_MICROCOMPACT_PCT = 0.50  // 50%  → clear old tool results
 const KEEP_RECENT_TOOL_RESULTS = 6     // keep the N most recent tool results
 const CLEARED_PLACEHOLDER = '[Old tool result content cleared — re-run the tool if needed]'
 
@@ -92,24 +254,145 @@ export function calculateContextState(
 }
 
 /**
+ * Non-ASCII code points are estimated at 2 tokens EACH via this heuristic.
+ * Real-world token cost varies wildly per code point:
+ *   - A CJK character typically tokenizes to 1–2 BPE tokens (occasionally 3
+ *     on older tokenizers).
+ *   - An emoji can be 1–4 BPE tokens depending on family.
+ *   - ZWJ sequences (`👨‍👩‍👧`) are MULTIPLE code points; we count each separately.
+ * This heuristic is more conservative than the legacy single-rate estimator
+ * for non-ASCII content but IS NOT a worst-case bound: certain tokenizers
+ * can emit more tokens for specific code points (very rare CJK ideographs,
+ * regional indicators, complex ZWJ chains). Margin against those is
+ * absorbed by the override-friendly pressure thresholds (micro at 50%,
+ * warn at 70%, compact at 85% of the EFFECTIVE input budget, which itself
+ * already reserves space for the clamped output — see
+ * {@link effectiveInputBudget}). We do not promise exact parity with any
+ * real tokenizer; we promise the estimate stays in the conservative
+ * direction relative to the per-codepoint baseline of 1.
+ *
+ * LOWERING THIS FACTOR would require a real tokenizer dependency
+ * (gpt-tokenizer / js-tiktoken) — out of scope by design.
+ */
+export const NON_ASCII_CHARS_PER_TOKEN = 0.5
+
+/**
+ * Multilingual-aware token estimate for a free-form string.
+ *
+ * Iteration: walks the string as a sequence of Unicode CODE POINTS (NOT
+ * grapheme clusters). `for…of` over a string in JS yields one Unicode code
+ * point per iteration, even when a code point is encoded as a surrogate pair
+ * in UTF-16 (e.g. `🎉` = U+1F389; `length === 2`, but iterated ONCE).
+ *
+ * What this function does NOT do:
+ *   - Grapheme segmentation. A ZWJ sequence like `👨‍👩‍👧` (man + ZWJ + woman +
+ *     ZWJ + girl) iterates as FIVE code points, not as the single visible
+ *     emoji the user sees.
+ *   - Real BPE tokenization. Cost is approximated, not measured.
+ *
+ * Per code point:
+ *   - ASCII (U+0000..U+007F): contributes `1 / ASCII_CHARS_PER_TOKEN = ~0.286`
+ *     tokens (i.e. 3.5 chars/token — the legacy rate for English / code / JSON).
+ *   - non-ASCII: contributes `1 / NON_ASCII_CHARS_PER_TOKEN = 2` tokens each
+ *     (more conservative than the 1-token-per-codepoint baseline; still
+ *     heuristic).
+ *
+ * No external dependency. Deterministic.
+ */
+export function estimateTextTokens(text: string | null | undefined): number {
+  if (!text) return 0
+  let asciiChars = 0
+  let nonAsciiChars = 0
+  // for…of yields one Unicode code point per iteration. A supplementary
+  // plane character encoded as a UTF-16 surrogate pair (e.g. `🎉`, `🚀`,
+  // CJK Extension B characters) contributes ONE iteration here — not two —
+  // because the surrogate halves are a single JavaScript iteration pair.
+  // This is the entire "surrogate-pair safety" guarantee.
+  //
+  // It is NOT grapheme-cluster safe: ZWJ sequences and combining marks split
+  // across multiple iterations. We do not paper over that.
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)
+    if (cp === undefined) continue
+    if (cp <= 0x7F) {
+      asciiChars++
+    } else {
+      nonAsciiChars++
+    }
+  }
+  return asciiChars / ASCII_CHARS_PER_TOKEN + nonAsciiChars / NON_ASCII_CHARS_PER_TOKEN
+}
+
+/**
  * Rough token count estimate from message array.
- * Counts all content strings + JSON overhead.
+ *
+ * Counts:
+ *   - role string ("user"/"assistant"/"tool"/"system" overhead — ~4 tokens)
+ *   - content (multilingual — non-ASCII code points at 2 tokens each,
+ *     ASCII at the legacy 3.5 chars/token rate)
+ *   - tool_calls JSON (multilingual)
+ *   - tool_call_id and name overhead for tool result messages
+ *   - per-message envelope overhead
+ *
+ * Heuristic, not a tokenizer. CJK strings cost roughly what real tokenizers
+ * bill, but the relationship is not exact and may under-count for specific
+ * high-cost code points (rare CJK ideographs, complex ZWJ emoji chains).
+ * The margin against inaccuracy comes from THREE fixed buffers, not from
+ * per-model knob tuning:
+ *   1. Output reservation via {@link effectiveInputBudget}: room for the
+ *      clamped response is carved out BEFORE computing `pct`, so percentage
+ *      thresholds apply to INPUT budget not full window.
+ *   2. The fixed pressure thresholds {@link CONTEXT_MICROCOMPACT_PCT} /
+ *      {@link CONTEXT_WARN_PCT} / {@link CONTEXT_COMPACT_PCT} (50% / 70% /
+ *      85%) are intentionally conservative — built-in headroom for the
+ *      estimate error.
+ *   3. The reactive `context_length_exceeded` retry in the engine, which
+ *      last-resort compacts if the API rejects the request.
+ *
+ * Truly per-model / per-deployment knobs are `maxContextTokens` and
+ * `maxOutputTokens` in EngineConfig (they override the model lookup and
+ * the default output cap respectively). The thresholds above are constants.
  */
 export function estimateTokens(messages: OpenAIMessage[]): number {
-  let chars = 0
+  let tokens = 0
   for (const msg of messages) {
     if (typeof msg.content === 'string') {
-      chars += msg.content.length
+      tokens += estimateTextTokens(msg.content)
     } else if (msg.content === null) {
-      chars += 4
+      tokens += 1 // ≈1 token for null content with tool_calls
     }
+    // Role token (~4) + role string cost
+    tokens += 4 + Math.ceil(msg.role.length / ASCII_CHARS_PER_TOKEN)
     if (msg.tool_calls) {
-      chars += JSON.stringify(msg.tool_calls).length
+      // Tool call name + arguments + JSON syntax overhead (multilingual)
+      tokens += estimateTextTokens(JSON.stringify(msg.tool_calls)) + 1
     }
-    if (msg.name) chars += msg.name.length
-    chars += 20 // message envelope overhead
+    if (msg.name) tokens += 1 + Math.ceil(msg.name.length / ASCII_CHARS_PER_TOKEN)
+    if (msg.tool_call_id) tokens += 1 + Math.ceil(msg.tool_call_id.length / ASCII_CHARS_PER_TOKEN)
+    tokens += 4 // message envelope overhead
   }
-  return Math.ceil(chars / CHARS_PER_TOKEN)
+  return Math.ceil(tokens)
+}
+
+/**
+ * Estimate token cost of a tool definitions array (the `tools` parameter sent
+ * alongside the message list). Each tool definition is JSON-serialized with
+ * name + description + JSON-schema parameters — typically 50–200 tokens per tool.
+ * Multilingual via {@link estimateTextTokens}: a non-ASCII code point in a
+ * tool description contributes 2 tokens (heuristic — see the caveat on
+ * {@link NON_ASCII_CHARS_PER_TOKEN}).
+ *
+ * Ignored if `toolDefs` is absent/empty — falls back to an empty result.
+ */
+export function estimateToolDefinitionTokens(
+  toolDefs: ReadonlyArray<unknown> | undefined | null,
+): number {
+  if (!toolDefs || toolDefs.length === 0) return 0
+  let tokens = 1 // wrapper-level overhead ({"tools":[...]})
+  for (const def of toolDefs) {
+    tokens += estimateTextTokens(JSON.stringify(def))
+  }
+  return Math.ceil(tokens)
 }
 
 // ── Compact prompt ──────────────────────────────────

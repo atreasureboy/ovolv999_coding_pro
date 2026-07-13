@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-546%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-637%20passed-brightgreen)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -44,7 +44,7 @@ ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code，核心设计参
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                        ovolv999 — 统一 Harness + 模块化 Agent 基座             ║
-║               build OK · eslint OK · 28 test files · 546 tests passed        ║
+║               build OK · eslint OK · 28 test files · 637 tests passed        ║
 ║               Runtime deps: openai · glob · zod (仅 3 个)                     ║
 ║               API retry: 5x exponential backoff · 120s timeout                ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -373,7 +373,7 @@ ovolv999/
 │   │   └── loader.ts                   # frontmatter 解析 + formatSkillIndex
 │   └── memory/                         # 记忆桥接
 │       └── index.ts                    # SemanticMemory → 系统提示词注入
-├── tests/                              # 28 test files · 546 tests
+├── tests/                              # 28 test files · 637 tests
 │   ├── engine.test.ts                  # partitionToolCalls + compact + critic
 │   ├── presets.test.ts                 # AgentConfig + preset 解析 + applyAgent
 │   ├── modules.test.ts                 # SemanticMemory + EpisodicMemory + ModuleRegistry

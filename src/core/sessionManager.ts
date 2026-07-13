@@ -11,6 +11,62 @@ export interface SessionInfo {
 /** Matches the default timestamped directory names produced by createSessionDir. */
 const SESSION_DIR_PREFIX = 'session_'
 
+// ── persistence envelope ────────────────────────────────────────────────────
+//
+// All `history.json` files written by ovogogogo are wrapped in an envelope so
+// that schema evolution has a single, explicit decision point — we can detect
+// and migrate on load instead of guessing from file shape or filename.
+//
+// Supported versions form a contiguous range [MIN_SUPPORTED_VERSION..CURRENT_VERSION].
+// Files with version OUTSIDE that range throw UnknownSessionVersionError so
+// callers see an actionable error rather than silent corruption.
+
+/** The schema this binary writes. Bump when the on-disk shape changes. */
+export const CURRENT_SESSION_VERSION = 1
+
+/** The lowest version this binary still understands (>= will migrate; < will reject). */
+export const MIN_SUPPORTED_VERSION = 1
+
+/** Schema name — human-readable identifier separate from numeric version. */
+export const CURRENT_SESSION_SCHEMA = 'ovogo.session.v1'
+
+export interface SessionEnvelope {
+  version: number
+  schema: string
+  /** Last write time. New envelopes always populate this. Validated as ISO. */
+  updatedAt: string
+  messages: OpenAIMessage[]
+}
+
+/**
+ * Canonical schema name for an envelope at a given version. The map keeps
+ * `version` (numeric) tightly bound to `schema` (string) so a file claiming
+ * to be version 1 with a wrong schema name is rejected as corrupt, not
+ * silently loaded as something else. Add an entry here when introducing a
+ * new version.
+ */
+const SCHEMA_FOR_VERSION: Readonly<Record<number, string>> = Object.freeze({
+  [CURRENT_SESSION_VERSION]: CURRENT_SESSION_SCHEMA,
+})
+
+/** Thrown when a session's history.json was written by an unsupported version. */
+export class UnknownSessionVersionError extends Error {
+  readonly version: number
+  readonly minSupported: number
+  readonly maxSupported: number
+  constructor(sessionDir: string, version: number, minSupported: number, maxSupported: number) {
+    super(
+      `Session at ${sessionDir} uses history version ${version}, ` +
+      `but this build of ovogogogo only supports versions ${minSupported}..${maxSupported}. ` +
+      `Upgrade ovogogogo to load this session, or move the directory aside to continue.`,
+    )
+    this.name = 'UnknownSessionVersionError'
+    this.version = version
+    this.minSupported = minSupported
+    this.maxSupported = maxSupported
+  }
+}
+
 /** Thrown when a session cannot be unambiguously resolved from user input. */
 export class SessionNotFoundError extends Error {
   constructor(message: string) {
@@ -72,6 +128,172 @@ function isValidMessageShape(msg: unknown): msg is OpenAIMessage {
 }
 
 /**
+ * Detect whether the parsed JSON root is an envelope object (vs a legacy
+ * root array). Detection is intentionally LENIENT — we only require an
+ * object with a numeric `version`. Anything more specific (schema name,
+ * timestamps, messages array) is validated later in `migrateToCurrent`,
+ * AFTER the version-range gate. This ordering matters: a future version
+ * with truncated fields must still classify as "envelope, unknown
+ * version" rather than "corrupt shape".
+ *
+ * Filename is never consulted — detection is purely from content.
+ */
+function isEnvelope(parsed: unknown): parsed is Record<string, unknown> {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false
+  const obj = parsed as Record<string, unknown>
+  return typeof obj.version === 'number'
+}
+
+/**
+ * Type-narrowed view of an envelope object. Caller must have already used
+ * isEnvelope() to confirm it isn't a legacy root array. Per-field types
+ * are validated inside `migrateToCurrent` — this is just a structural view.
+ */
+type EnvelopeRecord = {
+  version: number
+  schema: unknown
+  updatedAt: unknown
+  messages: unknown
+}
+
+/** Narrow an `isEnvelope()`-confirmed object to its declared shape. */
+function asEnvelopeRecord(parsed: Record<string, unknown>): EnvelopeRecord {
+  return parsed as unknown as EnvelopeRecord
+}
+
+/**
+ * Migration step: take a v0 legacy root array of messages and produce the
+ * current envelope. The per-message shape didn't change between v0 and v1 —
+ * we just promote the root into the envelope. `updatedAt` records the
+ * load/migration time so the freshly-upgraded session reads as "just
+ * modified".
+ */
+function migrateLegacyV0ToV1(messages: OpenAIMessage[]): SessionEnvelope {
+  return {
+    version: CURRENT_SESSION_VERSION,
+    schema: CURRENT_SESSION_SCHEMA,
+    updatedAt: new Date().toISOString(),
+    messages: messages.map((m) => ({ ...m })),
+  }
+}
+
+/**
+ * Validate that a timestamp string is a real ISO-8601 instant. We accept any
+ * string that `Date.parse` round-trips and that also keeps itself as a
+ * string — this rejects `new Date(undefined)`-style undefined values that
+ * produced a NaN epoch.
+ */
+function isValidIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const ms = Date.parse(value)
+  if (Number.isNaN(ms)) return false
+  // Reject values that parse to a real time but were never ISO (e.g. "now").
+  // ISO 8601 strings round-trip via toISOString without changes — a strong
+  // way to surface locale-formatted strings that snuck in.
+  try {
+    return new Date(ms).toISOString() === value
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Walk any known version forward to the current envelope. Throws
+ * UnknownSessionVersionError when the source version is outside the supported
+ * range — that is the single decision point for "can we even read this file".
+ *
+ * **Ordering invariant**: once we've confirmed the root is an envelope
+ * object (and not a legacy root array), the FIRST check we run is the
+ * version range. A future version with truncated or incomplete fields still
+ * produces UnknownSessionVersionError — we don't want field-shape errors
+ * to mask "we don't know how to read this version yet".
+ *
+ * Future versions add new branches in numeric order. Each branch validates
+ * the source envelope's fields before transforming them.
+ */
+function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope {
+  if (Array.isArray(parsed)) {
+    // Legacy v0: root array. Validate messages then migrate to v1.
+    for (let i = 0; i < parsed.length; i++) {
+      if (!isValidMessageShape(parsed[i])) {
+        throw new CorruptSessionError(
+          sessionDir,
+          new Error(`history[${i}] does not match OpenAIMessage shape (role/content invalid)`),
+        )
+      }
+    }
+    return migrateLegacyV0ToV1(parsed as OpenAIMessage[])
+  }
+
+  if (!isEnvelope(parsed)) {
+    throw new CorruptSessionError(
+      sessionDir,
+      new Error('history root is neither an envelope object nor a legacy array'),
+    )
+  }
+
+  const env = asEnvelopeRecord(parsed)
+  const version = env.version
+
+  // Gate (1): version range. Done BEFORE field-shape validation so a future
+  // version file with missing or malformed fields still produces
+  // UnknownSessionVersionError, never CorruptSessionError.
+  if (!Number.isInteger(version) || version < MIN_SUPPORTED_VERSION || version > CURRENT_SESSION_VERSION) {
+    throw new UnknownSessionVersionError(sessionDir, version, MIN_SUPPORTED_VERSION, CURRENT_SESSION_VERSION)
+  }
+
+  // Gate (2): schema name MUST match the canonical name for THIS version.
+  // A file claiming to be version 1 with a foreign schema string is corrupt,
+  // not a successful load — we don't want to import arbitrary content
+  // thinking it's ours. We treat missing or non-string schema as corrupt
+  // AT this gate (version is already known in range), not at gate (1).
+  const expectedSchema = SCHEMA_FOR_VERSION[version]
+  if (typeof env.schema !== 'string' || env.schema !== expectedSchema) {
+    const observed = typeof env.schema === 'string' ? env.schema : '<missing>'
+    throw new CorruptSessionError(
+      sessionDir,
+      new Error(`history schema "${observed}" does not match expected "${expectedSchema}" for version ${version}`),
+    )
+  }
+
+  // Gate (3): timestamp field is a real ISO instant.
+  if (!isValidIsoTimestamp(env.updatedAt)) {
+    throw new CorruptSessionError(
+      sessionDir,
+      new Error(
+        `history.updatedAt ${JSON.stringify(env.updatedAt)} is not a valid ISO-8601 timestamp`,
+      ),
+    )
+  }
+
+  // Gate (4): messages array. Missing/non-array is treated as corrupt here.
+  if (!Array.isArray(env.messages)) {
+    throw new CorruptSessionError(
+      sessionDir,
+      new Error('history.messages must be an array'),
+    )
+  }
+  const messages = env.messages
+  for (let i = 0; i < messages.length; i++) {
+    if (!isValidMessageShape(messages[i])) {
+      throw new CorruptSessionError(
+        sessionDir,
+        new Error(`history[${i}] does not match OpenAIMessage shape (role/content invalid)`),
+      )
+    }
+  }
+
+  if (version === CURRENT_SESSION_VERSION) {
+    // Same-version short-circuit — no transform needed.
+    return env as unknown as SessionEnvelope
+  }
+
+  // Intermediate versions (MIN..CURRENT) — a clean migration step is needed.
+  // Future: add migrateToV2, migrateToV3, ... and dispatch by version here.
+  throw new UnknownSessionVersionError(sessionDir, version, MIN_SUPPORTED_VERSION, CURRENT_SESSION_VERSION)
+}
+
+/**
  * Create a new timestamped session directory under `<cwd>/sessions/session_<ts>/`.
  * Returns the absolute path to the freshly created directory.
  *
@@ -96,8 +318,15 @@ export function createSessionDir(cwd: string, now: Date = new Date()): string {
 /**
  * Atomically persist the conversation history to disk.
  *
- * Writes to `<sessionDir>/history.json.tmp` and renames it into place so the
- * file is never partially written. Cleans up the tmp file if the rename fails.
+ * Writes `<sessionDir>/history.json` wrapped in a versioned envelope:
+ *   { version, schema, updatedAt, messages: [...] }
+ *
+ * `updatedAt` is set to the current write time on every call so a reader
+ * can tell when the session was last touched. There is intentionally no
+ * "creation time" field — `updatedAt` always reflects the last write.
+ *
+ * Writes to `history.json.tmp` first and renames it into place so the file
+ * is never partially written. Cleans up the tmp file if the rename fails.
  * `history` may be an empty array — callers use this to persist /clear as
  * "session exists, history emptied" atomically.
  */
@@ -111,8 +340,15 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
   const tmpPath = `${historyPath}.tmp`
   mkdirSync(sessionDir, { recursive: true })
 
+  const envelope: SessionEnvelope = {
+    version: CURRENT_SESSION_VERSION,
+    schema: CURRENT_SESSION_SCHEMA,
+    updatedAt: new Date().toISOString(),
+    messages: history.map((m) => ({ ...m })),
+  }
+
   try {
-    writeFileSync(tmpPath, JSON.stringify(history, null, 2), 'utf8')
+    writeFileSync(tmpPath, JSON.stringify(envelope, null, 2), 'utf8')
     renameSync(tmpPath, historyPath)
   } catch (err) {
     // Best-effort: remove the orphan tmp file so we don't leak it on disk.
@@ -130,8 +366,16 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
  *
  * Returns an empty array when no history file exists (a freshly-created
  * directory is a valid empty session). Throws CorruptSessionError when the
- * history file is present but unparseable, so callers can distinguish
- * "empty session" from "broken session" without guesswork.
+ * history file is present but unparseable, and UnknownSessionVersionError
+ * when it was written by a version this binary cannot read. The latter is
+ * a first-class error — never silently coerced.
+ *
+ * Supports both:
+ *   - legacy root-array files (v0 → implicitly migrated to the current envelope)
+ *   - current envelope files (version == CURRENT_SESSION_VERSION)
+ * Files at intermediate supported versions are migrated forward in
+ * migrateToCurrent(). Detection is purely from JSON content — filename is
+ * never used to infer the schema.
  */
 export function loadSession(sessionDir: string): OpenAIMessage[] {
   assertNonEmpty(sessionDir, 'sessionDir')
@@ -153,20 +397,7 @@ export function loadSession(sessionDir: string): OpenAIMessage[] {
     throw new CorruptSessionError(sessionDir, err)
   }
 
-  if (!Array.isArray(parsed)) {
-    throw new CorruptSessionError(sessionDir, new Error('history root must be an array'))
-  }
-
-  for (let i = 0; i < parsed.length; i++) {
-    if (!isValidMessageShape(parsed[i])) {
-      throw new CorruptSessionError(
-        sessionDir,
-        new Error(`history[${i}] does not match OpenAIMessage shape (role/content invalid)`),
-      )
-    }
-  }
-
-  return parsed as OpenAIMessage[]
+  return migrateToCurrent(parsed, sessionDir).messages
 }
 
 /**

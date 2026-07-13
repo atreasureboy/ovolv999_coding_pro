@@ -43,8 +43,14 @@ import {
   maybeCompact,
   microCompact,
   estimateTokens,
+  estimateToolDefinitionTokens,
   getCompressionStrategy,
-  MODEL_MAX_CONTEXT_TOKENS,
+  CONTEXT_MICROCOMPACT_PCT,
+  CONTEXT_WARN_PCT,
+  CONTEXT_COMPACT_PCT,
+  resolveContextWindow,
+  clampMaxOutputTokens,
+  effectiveInputBudget,
 } from './compact.js'
 import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
@@ -249,6 +255,33 @@ export class ExecutionEngine {
   private _consecutiveCompactFailures = 0
   /** Suppress compact warning after successful compaction (next turn only) */
   private _suppressCompactWarning = false
+  /** Cached resolved context window for the current model — refreshed lazily */
+  private _resolvedContextWindow: number | null = null
+
+  /**
+   * Resolve the model-aware context window (cached for the engine's
+   * lifetime). The override + lookup is stable since model/maxContextTokens
+   * are constructor-set, so we compute once and reuse.
+   */
+  private getModelContextWindow(): number {
+    if (this._resolvedContextWindow === null) {
+      this._resolvedContextWindow = resolveContextWindow(
+        this.config.model,
+        this.config.maxContextTokens,
+      )
+    }
+    return this._resolvedContextWindow
+  }
+
+  /**
+   * Single source of truth for the `max_tokens` value sent on every
+   * completion request (primary, no-stream-options fallback, post-compact
+   * retry). Goes through `clampMaxOutputTokens` so small-window models can
+   * never silently request more output than the window allows.
+   */
+  private getEffectiveMaxOutputTokens(): number {
+    return clampMaxOutputTokens(this.config.maxOutputTokens, this.getModelContextWindow())
+  }
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     // Merge agent config into effective config (overrides legacy fields)
@@ -388,19 +421,34 @@ export class ExecutionEngine {
 
   // ── Context budget ──────────────────────────────────────────────────────
 
-  private async evaluateContextBudget(messages: OpenAIMessage[]): Promise<void> {
+  private async evaluateContextBudget(messages: OpenAIMessage[], toolDefs?: ReturnType<typeof getToolDefinitions>): Promise<void> {
     // Clear the compact-warning suppression flag from last turn
     this._suppressCompactWarning = false
 
-    const maxCtxTokens =
-      this.config.maxContextTokens ?? MODEL_MAX_CONTEXT_TOKENS
-    // Count messages + system prompt for accurate budget
+    // Resolve the actual context window for the model. Use the cached getter
+    // so we don't recompute the lookup on every iteration.
+    const maxCtxTokens = this.getModelContextWindow()
+    // Count messages + system prompt + tool-definition cost.
+    // Without the tools term we systematically underestimated by
+    // ~50–200 tokens per tool — a real budget pressure on a 20-tool setup.
     const messageTokens = estimateTokens(messages)
-    const totalTokens = messageTokens + this.systemPromptTokens
-    const pct = totalTokens / maxCtxTokens
-    const shouldMicroCompact = pct >= 0.50
-    const shouldWarn = pct >= 0.70
-    const shouldCompact = pct >= 0.85
+    const toolDefTokens = estimateToolDefinitionTokens(toolDefs)
+    const totalTokens = messageTokens + this.systemPromptTokens + toolDefTokens
+    // Reserve room for the model's own output. Using the FULL window as the
+    // budget denominator would let warnings fire at thresholds that
+    // mathematically guarantee an API rejection on small-window models
+    // (e.g. 8k window + 8k default max → firing at 70% of 8k = 5.6k input
+    // would still leave 2.4k of free space, but the model would attempt
+    // 8k output and OVERFLOW). Using `window - reservedOutput` aligns the
+    // percentage with what the model can actually accept.
+    const inputBudget = effectiveInputBudget(maxCtxTokens, this.config.maxOutputTokens)
+    const pct = totalTokens / inputBudget
+    // Pull the pressure thresholds from the compact module so we have ONE
+    // source of truth — the previous inline 0.50/0.70/0.85 numeric copies
+    // could drift from CONTEXT_*_PCT in compact.ts.
+    const shouldMicroCompact = pct >= CONTEXT_MICROCOMPACT_PCT
+    const shouldWarn = pct >= CONTEXT_WARN_PCT
+    const shouldCompact = pct >= CONTEXT_COMPACT_PCT
     const strategy = getCompressionStrategy(pct)
 
     // ── Time-based microCompact: when the session was idle for >5 min,
@@ -523,7 +571,7 @@ export class ExecutionEngine {
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
           temperature: this.config.temperature ?? 0,
-          max_tokens: this.config.maxOutputTokens ?? 8192,
+          max_tokens: this.getEffectiveMaxOutputTokens(),
           stream: true,
           ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
         },
@@ -547,7 +595,7 @@ export class ExecutionEngine {
             tools: toolDefs,
             tool_choice: 'auto',
             temperature: this.config.temperature ?? 0,
-            max_tokens: this.config.maxOutputTokens ?? 8192,
+            max_tokens: this.getEffectiveMaxOutputTokens(),
             stream: true,
           },
           { signal: turnAbortSignal },
@@ -577,7 +625,7 @@ export class ExecutionEngine {
               tools: toolDefs.length > 0 ? toolDefs : undefined,
               tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
               temperature: this.config.temperature ?? 0,
-          max_tokens: this.config.maxOutputTokens ?? 16_384,  // higher default: reasoning models (deepseek-reasoner) include reasoning in max_tokens
+          max_tokens: this.getEffectiveMaxOutputTokens(),  // post-compact retry uses same default as primary path
               stream: true,
               ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
             },
@@ -1022,7 +1070,7 @@ export class ExecutionEngine {
     // Continuation budget tracking (opt-in via config.enableContinuation)
     const enableContinuation = this.config.enableContinuation ?? false
     const turnTokenBudget =
-      this.config.turnTokenBudget ?? (this.config.maxOutputTokens ?? 8192) * 4
+      this.config.turnTokenBudget ?? this.getEffectiveMaxOutputTokens() * 4
     const budgetTracker = createBudgetTracker()
     let turnTokensProduced = 0
     let emptyResponseCount = 0
@@ -1051,7 +1099,7 @@ export class ExecutionEngine {
           }
 
           case 'budget_check': {
-            await this.evaluateContextBudget(messages)
+            await this.evaluateContextBudget(messages, toolDefs)
             state = transitionQueryState(state, { type: 'continue' })
             break
           }
