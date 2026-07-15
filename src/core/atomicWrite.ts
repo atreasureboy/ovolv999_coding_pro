@@ -65,7 +65,6 @@
 import { rename, unlink, stat, mkdir, lstat, realpath, open } from 'fs/promises'
 import type { FileHandle } from 'fs/promises'
 import { dirname } from 'path'
-import { chmodSync } from 'fs'
 import { randomBytes } from 'crypto'
 
 export interface AtomicWriteOptions {
@@ -195,24 +194,35 @@ export async function atomicWrite(
   const counter = (_tmpCounter = (_tmpCounter + 1) | 0)
   const tmpPath = `${realTarget}.tmp.${process.pid}.${Date.now()}.${counter}.${randomBytes(6).toString('hex')}`
 
-  // Open tmp file → write content → fsync → close. The fsync is the
-  // durability guarantee: without it, a power loss between rename and
-  // the kernel's async flush could publish a zero-byte inode at the
-  // target path after recovery.
+  // Open tmp file → write content → chmod (on the open fd) → fsync → close.
+  // The fsync is the durability guarantee: without it, a power loss
+  // between rename and the kernel's async flush could publish a zero-
+  // byte inode at the target path after recovery.
+  //
+  // Why chmod uses the fd (FileHandle.chmod) and runs BEFORE sync, not
+  // after close:
+  //   - chmod-via-path resolves the file by path again. Its mode is a
+  //     SEPARATE inode field than the one fsync flushed. A crash between
+  //     sync and chmod would commit content bytes but leave the umask-
+  //     default (typically 0644) mode on disk — silently downgrading an
+  //     executable script to non-executable.
+  //   - fd-based chmod (uv_fs_fchmod under the hood) updates the SAME
+  //     in-memory inode state that the pending fsync is going to flush.
+  //     A single sync() then publishes content AND the mode metadata
+  //     atomically — so the rename publishes committed bytes WITH the
+  //     right permissions, and a power-cut recovery can never observe
+  //     a file with the wrong mode.
   let fh: FileHandle | null = null
   try {
     fh = await open(tmpPath, 'w')
     await fh.writeFile(content, encoding)
+    if (existingMode !== undefined) {
+      // fd-based chmod — applied to the same inode queued for fsync.
+      await fh.chmod(existingMode)
+    }
     await fh.sync()
     await fh.close()
     fh = null
-    if (existingMode !== undefined) {
-      // chmodSync is intentional — preserve the existing target's mode. We
-      // use sync here because the window between writeFile and rename is
-      // already serial on the same process; making it async would add a
-      // microtask boundary without benefit.
-      chmodSync(tmpPath, existingMode)
-    }
     await rename(tmpPath, realTarget)
   } catch (err) {
     // Single cleanup point for ALL failure modes above (open, writeFile,

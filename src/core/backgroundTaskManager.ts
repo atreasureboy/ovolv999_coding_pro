@@ -266,6 +266,13 @@ export class BackgroundTaskManager {
   /**
    * Spawn a background command. Returns the task ID immediately.
    * The process runs detached; output is accumulated asynchronously.
+   *
+   * `options.signal` (AbortSignal, optional) — when supplied, an abort
+   * stops the running task with SIGTERM (the manager's normal escalation
+   * policy applies). The listener is removed the moment the task closes
+   * so a fired signal can't keep a dangling listener alive, and a
+   * pre-aborted signal triggers an immediate pre-abort stop instead of
+   * spawning a child at all.
    */
   createTask(
     command: string,
@@ -274,6 +281,7 @@ export class BackgroundTaskManager {
       cwd?: string
       sessionDir?: string
       metadata?: Record<string, unknown>
+      signal?: AbortSignal
     },
   ): string {
     const id = `task_${randomUUID().slice(0, 8)}`
@@ -402,6 +410,21 @@ export class BackgroundTaskManager {
       return id
     }
 
+    // Pre-aborted signal: don't bother spawning at all. Return the
+    // task id so callers can still reference it, but mark it stopped
+    // with no actual process. This avoids a wasted fork + immediate-
+    // kill path that would otherwise leave a zombie until SIGKILL
+    // escalation finishes.
+    if (options?.signal?.aborted) {
+      this.tasks.set(id, task)
+      info.status = 'stopped'
+      info.endTime = info.startTime
+      info.durationMs = 0
+      info.exitCode = -1
+      task.stopped = true
+      return id
+    }
+
     // Spawn the process. On POSIX, detached:true makes the child its own
     // process-group leader, which lets us deliver SIGTERM/SIGKILL to every
     // grandchild (e.g. backgrounded `sleep 30 &`) via process.kill(-pid).
@@ -421,12 +444,34 @@ export class BackgroundTaskManager {
     proc.stdout?.on('data', (data: Buffer) => appendOutput(data.toString()))
     proc.stderr?.on('data', (data: Buffer) => appendOutput(data.toString()))
 
+    // Wire the abort signal so an outer cancel stops the task cleanly.
+    // The listener is removed the moment the process exits — see the
+    // close handler below. Without this, a stopTask via signal would
+    // never fire because detached children live independently of the
+    // parent's signal-listener bookkeeping.
+    let signalListener: (() => void) | null = null
+    if (options?.signal) {
+      signalListener = () => {
+        stopInternal(task, this.sigkillGraceMs)
+      }
+      options.signal.addEventListener('abort', signalListener, { once: true })
+    }
+    const removeSignalListener = () => {
+      if (signalListener && options?.signal) {
+        try {
+          options.signal.removeEventListener('abort', signalListener)
+        } catch { /* signal may already be GC'd — best-effort */ }
+        signalListener = null
+      }
+    }
+
     proc.on('close', (code: number | null) => {
       // Process has exited. Always clear timer + null the handle FIRST,
       // so the escalation callback (if it races us) sees task.process
       // !== proc and bails out. Only THEN decide whether to override
       // the status — if the task was already marked stopped by a
       // manual stopTask(), leave the status as 'stopped'.
+      removeSignalListener()
       if (task.killTimer) {
         clearTimeout(task.killTimer)
         task.killTimer = null
@@ -443,6 +488,7 @@ export class BackgroundTaskManager {
     proc.on('error', (err: Error & { code?: string }) => {
       // Same reasoning as 'close': process is gone (or never came up).
       // Always clean up the timer + handle first.
+      removeSignalListener()
       if (task.killTimer) {
         clearTimeout(task.killTimer)
         task.killTimer = null

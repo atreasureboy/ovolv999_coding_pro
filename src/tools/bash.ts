@@ -35,6 +35,19 @@ import { mkdirSync, accessSync, constants } from 'fs'
 import { join } from 'path'
 
 const MAX_OUTPUT_LENGTH = 30_000
+// Per-stream live buffer — head + tail, each up to this many BYTES
+// (UTF-8). The head captures the start of the stream (errors near the
+// beginning, banner output, etc.); the tail continuously tracks the
+// most recent output so a final error at the END of a long run is
+// still visible. Middle bytes (between head and tail) are dropped and
+// summarised in a marker.
+//
+// Sized so the WORST-CASE final render (head + marker + tail) is
+// comfortably below MAX_OUTPUT_LENGTH (30_000). At 14 KB each side +
+// ~150 byte marker we land at ~28.2 KB, leaving headroom for the
+// trailing "characters truncated" notice and any prefix. Going higher
+// would force downstream callers to slice off the head/tail marker.
+const LIVE_BUFFER_BYTES = 14 * 1024
 const DEFAULT_TIMEOUT_MS = 1_800_000  // 30 min — long-running commands default
 const MAX_TIMEOUT_MS = 14_400_000    // 4 h — max for very long tasks
 const DEFAULT_SIGKILL_GRACE_MS = 5_000
@@ -255,6 +268,11 @@ export class BashTool implements Tool {
           cwd: context.cwd,
           sessionDir: context.sessionDir,
           metadata: { source: 'Bash.run_in_background' },
+          // Forward the caller's abort signal so a parent cancel stops
+          // the background task (including its process group). Without
+          // this, a long-running background task would survive its parent
+          // cancellation and leak until something else killed it.
+          signal: context.signal,
         })
         const task = context.backgroundTaskManager.getTask(id)
         return {
@@ -278,23 +296,68 @@ export class BashTool implements Tool {
 
       // Use appropriate shell flags: bash uses -c, cmd.exe uses /c
       const shellArgs = IS_WIN_CMD ? ['/c', actualCommand] : ['-c', actualCommand]
+
+      // Pre-abort: if the signal is already aborted, refuse to spawn the
+      // background process at all. This MUST run before spawn() — otherwise
+      // we waste a fork just to immediately kill the child. Mirrors the
+      // foreground runForeground() pre-abort contract.
+      if (context.signal?.aborted) {
+        return {
+          content: 'Command cancelled (pre-abort) before background spawn.',
+          isError: true,
+        }
+      }
+
       let child: ChildProcess
       try {
-        // Background mode: detached + own process group. unref() so the
-        // foreground REPL can exit without waiting on every fire-and-forget
-        // task the model ever spawned.
+        // Background mode: detached + own process group. We call
+        // `child.unref()` so the spawned process does NOT keep the parent
+        // (the REPL / engine) alive — this is the direct-background
+        // path, which has no BTM tracking the task; without unref the
+        // engine would refuse to exit until the background process
+        // finishes naturally. The abort listener (wired below) is
+        // independent of unref and still fires on cancellation.
         child = spawn(SHELL, shellArgs, {
           cwd: context.cwd,
           env: process.env,
           detached: true,
           stdio: 'ignore',
         })
+        if (typeof child.unref === 'function') child.unref()
       } catch (e) {
         return { content: `Failed to start background command: ${(e as Error).message}`, isError: true }
       }
       // Prevent ENOENT crash — spawn emits async 'error' if shell binary is missing
       child.on('error', () => {})
-      child.unref()
+
+      // Wire the abort signal to the background child. Without this, an
+      // outer cancel would leave the child + its subprocess tree running
+      // unattended (because `stdio: 'ignore'` means we have no output to
+      // poll, and `detached: true` makes the child its own process-group
+      // leader). We carry the child in a closure-local so the listener
+      // can reach it; the listener is removed as soon as the signal
+      // fires (single-shot) OR when the child closes (process exit).
+      const bgChild = child
+      const onBgAbort = () => {
+        if (process.platform === 'win32') {
+          try {
+            execSync(`taskkill /F /T /PID ${bgChild.pid}`, { stdio: 'ignore', timeout: 5000 })
+          } catch { /* best-effort */ }
+        } else {
+          // Negative pid = process group; valid because detached:true.
+          if (bgChild.pid !== undefined) {
+            try { process.kill(-bgChild.pid, 'SIGTERM') } catch { /* ESRCH if already gone */ }
+          }
+        }
+      }
+      if (context.signal) {
+        context.signal.addEventListener('abort', onBgAbort, { once: true })
+        // Drop the listener the moment the child exits so we don't keep
+        // a dead signal-handler pinned to a live parent.
+        bgChild.on('exit', () => {
+          if (context.signal) context.signal.removeEventListener('abort', onBgAbort)
+        })
+      }
 
       const redirectInfo = alreadyRedirected ? '' : `\nOutput redirected to: ${logFile}`
       return {
@@ -424,13 +487,106 @@ export class BashTool implements Tool {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
 
-      // ── Output capture ────────────────────────────────────────
-      let stdoutBuf = ''
-      let stderrBuf = ''
+      // ── Output capture (bounded live streaming) ───────────────
+      // Each stream is capped at MAX_LIVE_OUTPUT_LENGTH BYTES (UTF-8 byte
+      // count, not char count — matches backgroundTaskManager's byte-
+      // accurate accounting and avoids surprises with multibyte chars).
+      // Once a stream crosses the cap we stop appending raw bytes and
+      // emit a single truncation marker so the LLM sees a clear
+      // "output was too long" hint rather than an unbounded buffer
+      // that OOMs the tool. A SINGLE chunk that is itself larger than
+      // the cap is truncated down to the cap before being appended —
+      // without that branch, a `cat 100MB-file` would push 100MB into
+      // the buffer in one chunk before our `>` check fired.
+      // Bounded head+tail live buffer. We keep the FIRST LIVE_BUFFER_BYTES
+      // bytes verbatim (early output — banners, startup errors, etc.) AND
+      // the LAST LIVE_BUFFER_BYTES bytes (final output — usually the
+      // error message). When the running total exceeds head+tail budget
+      // we drop the middle, tracking the dropped byte count for the
+      // marker. Total per-stream footprint is bounded at 2× LIVE_BUFFER_BYTES.
+      //
+      // IMPORTANT: coding scenarios typically emit a long compile/test
+      // trace followed by the final error. A head-only cap loses the
+      // final error — that's the regression we're guarding against.
+      // Head+tail keeps both ends visible.
+      //
+      // Implementation note: state stores raw Buffers, not strings, so
+      // appends/slices happen at byte granularity (no multibyte-char
+      // boundary bookkeeping needed). toString('utf8') happens once at
+      // render time.
+      const stdoutState: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number } = {
+        head: Buffer.alloc(0), tail: Buffer.alloc(0), droppedBytes: 0, totalBytes: 0,
+      }
+      const stderrState: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number } = {
+        head: Buffer.alloc(0), tail: Buffer.alloc(0), droppedBytes: 0, totalBytes: 0,
+      }
+      const TRUNCATION_MARKER_TEMPLATE = (n: number, b: number) =>
+        `\n\n[... ${n.toLocaleString()} bytes of live output dropped from the middle (kept ${b.toLocaleString()} bytes at head + ${b.toLocaleString()} bytes at tail) ...]\n`
+      /**
+       * Append a chunk to a head+tail buffer.
+       *
+       * Invariants (UTF-8 byte terms):
+       *   - head is the FIRST LIVE_BUFFER_BYTES bytes; frozen once full.
+       *   - tail is the LAST LIVE_BUFFER_BYTES bytes received; sliding
+       *     window — always reflects the most recent output.
+       *   - droppedBytes = totalBytes - head.bytes - tail.bytes. Bytes
+       *     that fell between head and tail — surfaced in the marker.
+       *
+       * Memory bound: at most 2 × LIVE_BUFFER_BYTES bytes per stream
+       * regardless of total emitted bytes.
+       */
+      const appendHeadTail = (
+        state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number },
+        chunk: string,
+      ): void => {
+        const chunkBuf = Buffer.from(chunk, 'utf8')
+        state.totalBytes += chunkBuf.length
+        // Fill head first (verbatim early output).
+        if (state.head.length < LIVE_BUFFER_BYTES) {
+          const headRoom = LIVE_BUFFER_BYTES - state.head.length
+          if (chunkBuf.length <= headRoom) {
+            state.head = Buffer.concat([state.head, chunkBuf])
+            return
+          }
+          // Chunk fills the head; remainder flows to tail logic below.
+          state.head = Buffer.concat([state.head, chunkBuf.subarray(0, headRoom)])
+          const remainder = chunkBuf.subarray(headRoom)
+          // Concatenate remainder onto tail, then trim to LIVE_BUFFER_BYTES.
+          const combined = Buffer.concat([state.tail, remainder])
+          if (combined.length <= LIVE_BUFFER_BYTES) {
+            state.tail = combined
+          } else {
+            const trim = combined.length - LIVE_BUFFER_BYTES
+            state.tail = combined.subarray(trim)
+            state.droppedBytes += trim
+          }
+          return
+        }
+        // Head full — entire chunk goes to the sliding tail.
+        const combined = Buffer.concat([state.tail, chunkBuf])
+        if (combined.length <= LIVE_BUFFER_BYTES) {
+          state.tail = combined
+        } else {
+          const trim = combined.length - LIVE_BUFFER_BYTES
+          state.tail = combined.subarray(trim)
+          state.droppedBytes += trim
+        }
+      }
+      /** Render a state to its final UTF-8 string, with marker if any. */
+      const renderState = (state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number }): string => {
+        if (state.droppedBytes > 0) {
+          return state.head.toString('utf8') + TRUNCATION_MARKER_TEMPLATE(state.droppedBytes, LIVE_BUFFER_BYTES) + state.tail.toString('utf8')
+        }
+        return (state.head.toString('utf8') + state.tail.toString('utf8'))
+      }
       child.stdout?.setEncoding('utf8')
       child.stderr?.setEncoding('utf8')
-      child.stdout?.on('data', (d: string) => { stdoutBuf += d })
-      child.stderr?.on('data', (d: string) => { stderrBuf += d })
+      child.stdout?.on('data', (d: string) => {
+        appendHeadTail(stdoutState, d)
+      })
+      child.stderr?.on('data', (d: string) => {
+        appendHeadTail(stderrState, d)
+      })
 
       // ── Cleanup helpers ──────────────────────────────────────
       // settle() only resolves the promise + removes the listener +
@@ -512,7 +668,7 @@ export class BashTool implements Tool {
         // the timeout scheduled. child.on('close') clears it again
         // (idempotent: clearTimeout(null) is a no-op).
         clearTimeoutTimer()
-        const partialOut = [stdoutBuf, stderrBuf].filter(Boolean).join('\n').trimEnd()
+        const partialOut = [renderState(stdoutState), renderState(stderrState)].filter(Boolean).join('\n').trimEnd()
         const partial = partialOut ? `\n\nPartial output before cancellation:\n${truncateOutput(partialOut, 5000)}` : ''
         settle({
           content: `Command cancelled (abort signal).${partial}\n\nHint: re-run with a smaller scope, or use run_in_background:true for long commands.`,
@@ -541,7 +697,13 @@ export class BashTool implements Tool {
         clearKillTimer()
         if (settled) return
 
-        const partialOut = [stdoutBuf, stderrBuf].filter(Boolean).join('\n').trimEnd()
+        // Render each stream — renderState inserts the head/tail
+        // truncation marker (with dropped byte count) when the
+        // middle was dropped. Early output AND the final error at
+        // the tail are both preserved.
+        const stdoutOut = renderState(stdoutState)
+        const stderrOut = renderState(stderrState)
+        const partialOut = [stdoutOut, stderrOut].filter(Boolean).join('\n').trimEnd()
         const prefix = followMode ? `[Spectator mode: output streamed to tmux pane] ${followModeHint}\n` : ''
 
         // Internal timeout fired the kill — child exits with non-zero

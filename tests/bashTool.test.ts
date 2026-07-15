@@ -354,6 +354,74 @@ describe('BashTool — abort signal + process-group cleanup', () => {
     expect(result.content).not.toContain('partial-line-2')
   })
 
+  it('live output keeps the head (early output) and the tail (final error)', async () => {
+    if (!IS_POSIX) {
+      return
+    }
+
+    // Head+tail live buffer regression: a coding session emits a long
+    // compile/test trace (would-be head) followed by a final error
+    // (would-be tail). A head-only cap would lose the tail. LIVE_BUFFER_BYTES
+    // is 14 KB per side, so a 30 KB payload overflows the head and forces
+    // the tail to track the final marker.
+    const { mkdtempSync, writeFileSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const path = await import('path')
+    const dir = mkdtempSync(path.join(tmpdir(), 'bash-headtail-'))
+    const helperPath = path.join(dir, 'helper.js')
+    writeFileSync(
+      helperPath,
+      [
+        'process.stdout.write("EARLY-OUTPUT-MARKER-START-OF-RUN\\n");',
+        '// 30 KB of filler — exceeds the 14 KB head budget, spills into tail',
+        'process.stdout.write("x".repeat(30 * 1024));',
+        'process.stdout.write("\\n");',
+        'process.stdout.write("FINAL-ERROR-MARKER-END-OF-RUN\\n");',
+      ].join('\n') + '\n',
+      'utf8',
+    )
+    const result = await tool.execute({ command: `node ${helperPath}` }, makeCtx())
+    expect(result.isError).toBe(false)
+    // Early output MUST be preserved (head kept verbatim).
+    expect(result.content).toContain('EARLY-OUTPUT-MARKER-START-OF-RUN')
+    // Final error MUST be preserved (tail kept verbatim). A head-only
+    // buffer would have dropped this once headBytes > LIVE_BUFFER_BYTES.
+    expect(result.content).toContain('FINAL-ERROR-MARKER-END-OF-RUN')
+    // Output length must remain bounded for LLM context safety. The
+    // post-truncateOutput result is at most MAX_OUTPUT_LENGTH (~30 KB)
+    // PLUS a small overhead for the prefix/marker.
+    expect(result.content.length).toBeLessThanOrEqual(32_000)
+  })
+
+  it('live output inserts a truncation marker between head and tail when middle is dropped', async () => {
+    if (!IS_POSIX) {
+      return
+    }
+    // LIVE_BUFFER_BYTES = 14 KB. We emit 30 KB via a node helper so
+    // the middle MUST be dropped; the marker must appear between the
+    // head and the tail in the final output.
+    const { mkdtempSync, writeFileSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const path = await import('path')
+    const dir = mkdtempSync(path.join(tmpdir(), 'bash-trunc-'))
+    const helperPath = path.join(dir, 'helper.js')
+    writeFileSync(
+      helperPath,
+      [
+        'process.stdout.write("y".repeat(30 * 1024));',
+        'process.stdout.write("\\n");',
+      ].join('\n') + '\n',
+      'utf8',
+    )
+    const result = await tool.execute({ command: `node ${helperPath}` }, makeCtx())
+    expect(result.isError).toBe(false)
+    // The truncation marker surfaces the dropped byte count.
+    expect(result.content).toMatch(/bytes of live output dropped from the middle/i)
+    // Bounded output length — guard against a regression that returns
+    // the full ~1 MB raw buffer to the LLM context.
+    expect(result.content.length).toBeLessThanOrEqual(32_000)
+  })
+
   it('background mode spawns detached + unref so REPL can exit', async () => {
     if (!IS_POSIX) {
       return
@@ -376,6 +444,24 @@ describe('BashTool — abort signal + process-group cleanup', () => {
     expect(result.content).toMatch(/started in background|Background task created/i)
     // unref'd child should not inflate the handle count permanently.
     expect(after).toBeLessThanOrEqual(before + 2)
+  })
+
+  it('direct background mode pre-aborts before spawn when signal is already aborted', async () => {
+    if (!IS_POSIX) {
+      return
+    }
+    const controller = new AbortController()
+    controller.abort()
+    // No ctx.backgroundTaskManager — direct path. Pre-abort MUST short-circuit
+    // before spawn so we don't fork a useless child. With the pre-abort
+    // check moved ahead of spawn, the command must NEVER have been run.
+    const result = await tool.execute(
+      { command: 'echo should-not-run-bg', run_in_background: true },
+      makeCtx(controller.signal),
+    )
+    expect(result.isError).toBe(true)
+    expect(result.content).toMatch(/pre-abort/i)
+    expect(result.content).not.toContain('should-not-run-bg')
   })
 
   it('isConcurrencySafe still classifies read-only vs mutating commands', () => {

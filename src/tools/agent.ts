@@ -404,24 +404,56 @@ Failed verification includes error details so you can fix immediately.
       prompt_preview: normalizedPrompt.slice(0, 500),
     })
 
-    if (context.signal) {
-      if (context.signal.aborted) {
-        mainRenderer.agentDone(description, false)
-        if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
-        return { content: `[${agentLabel}] Cancelled (parent task aborted)`, isError: true }
-      }
-      context.signal.addEventListener('abort', () => childEngine.abort(), { once: true })
-    }
-
+    // ── Lifecycle scaffolding: timer + abort listener, BOTH torn down
+    //    in `finally` regardless of how the function exits (success,
+    //    error, or pre-aborted early return). Setup is hoisted ABOVE
+    //    the pre-aborted check so the timer exists even on the early-
+    //    return path — otherwise the `finally` would skip a timer that
+    //    was never created, leaving callers to wonder whether the
+    //    "no clearInterval" path is intentional or a leak.
+    //
+    // Heartbeat: `unref()` so a still-active interval does not keep
+    // the Node.js event loop alive on process exit. The interval is
+    // also cleared in `finally` so we don't leak a callback when the
+    // child finishes (success/error/abort). unref() is a Node-specific
+    // extension; the optional-chain tolerates non-Node runtimes.
     const HEARTBEAT_MS = 2 * 60 * 1000
     const heartbeatTimer = setInterval(() => {
       const elapsedSec = Math.round((Date.now() - agentStartTime) / 1000)
       mainRenderer.agentHeartbeat(agentLabel, description, elapsedSec)
     }, HEARTBEAT_MS)
+    if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref()
+
+    // Abort listener: store in a named variable so `finally` can
+    // remove it. The previous anonymous-arrow pattern meant the
+    // listener could never be detached — a long-lived parent signal
+    // would retain a reference to `childEngine` forever, defeating
+    // the `dispose()` teardown below. `{ once: true }` keeps the
+    // fire-and-forget semantics so we don't need to track removal
+    // for the "abort already fired" case, but explicit removal is
+    // still required on the normal (no-abort) exit path.
+    let abortListener: (() => void) | null = null
 
     try {
+      if (context.signal) {
+        if (context.signal.aborted) {
+          // Pre-aborted path: the parent task was already cancelled
+          // BEFORE we got to attach our abort listener. Surface a
+          // synthetic cancellation result and let `finally` clean up
+          // the timer + dispose the child. Without the move-into-try
+          // refactor, the early `return` would skip both — leaking
+          // the heartbeat timer AND leaving the child engine's
+          // background tasks (its BackgroundTaskManager, transient
+          // caches) running indefinitely.
+          mainRenderer.agentDone(description, false)
+          if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+          return { content: `[${agentLabel}] Cancelled (parent task aborted)`, isError: true }
+        }
+        abortListener = () => childEngine.abort()
+        context.signal.addEventListener('abort', abortListener, { once: true })
+      }
+
       const { result } = await childEngine.runTurn(delegatedPrompt, [])
-      clearInterval(heartbeatTimer)
       const durationMs = Date.now() - agentStartTime
 
       mainRenderer.agentDone(description, result.reason !== 'error')
@@ -473,7 +505,6 @@ Failed verification includes error details so you can fix immediately.
         isError: false,
       }
     } catch (err: unknown) {
-      clearInterval(heartbeatTimer)
       mainRenderer.agentDone(description, false)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
       appendAgentEvent(parentConfig, {
@@ -489,19 +520,42 @@ Failed verification includes error details so you can fix immediately.
         isError: true,
       }
     } finally {
-      // ── Tear down the child engine's background tasks ──────────────
-      // The child ExecutionEngine owns its own BackgroundTaskManager
-      // distinct from the parent's — so `run_in_background:true` Bash
-      // calls inside the sub-agent are tracked on the child, not the
-      // host. Without an explicit dispose, a sub-agent that spawns a
-      // long-running process would keep that process alive after the
-      // sub-agent finishes (or aborts, or errors). The parent's turn
-      // has fully resolved by this point — disposal is the correct
-      // final step regardless of outcome.
+      // ── Always tear down timer + listener + child engine ──────────
+      // Three pieces of teardown that MUST happen on every exit path
+      // (success, error, pre-aborted early return):
       //
-      // `dispose()` is optional on ChildEngineLike (simple test stubs
-      // omit it). The call MUST be wrapped in try/catch — disposal
-      // failures must NOT propagate out of the host runTurn.
+      // 1. clearInterval — heartbeat runs forever otherwise. Safe to
+      //    call even when the interval was never scheduled (e.g. some
+      //    future refactor moves setInterval back inside the try); an
+      //    already-cleared timer is a no-op for clearInterval.
+      //
+      // 2. removeEventListener — detach the parent-signal listener so
+      //    the AbortSignal no longer holds a strong reference to the
+      //    child engine closure. Without this, the parent's signal
+      //    (which can outlive the child) would prevent the child from
+      //    being GC'd until the parent itself is torn down. Safe even
+      //    when no listener was registered (removeEventListener on a
+      //    never-added handler is a no-op).
+      //
+      // 3. childEngine.dispose?.() — tear down the child engine's
+      //    background tasks. The child ExecutionEngine owns its own
+      //    BackgroundTaskManager distinct from the parent's — so
+      //    `run_in_background:true` Bash calls inside the sub-agent
+      //    are tracked on the child, not the host. Without an explicit
+      //    dispose, a sub-agent that spawns a long-running process
+      //    would keep that process alive after the sub-agent finishes
+      //    (or aborts, or errors). `dispose()` is optional on
+      //    ChildEngineLike (simple test stubs omit it); the call is
+      //    wrapped in try/catch so disposal failures never propagate
+      //    out of the host's runTurn.
+      clearInterval(heartbeatTimer)
+      if (abortListener && context.signal) {
+        try {
+          context.signal.removeEventListener('abort', abortListener)
+        } catch {
+          // signal may have been detached elsewhere; teardown is best-effort
+        }
+      }
       try {
         childEngine.dispose?.()
       } catch {

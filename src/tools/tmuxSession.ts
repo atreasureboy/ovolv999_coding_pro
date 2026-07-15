@@ -139,13 +139,13 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
     },
   }
 
-  async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     switch (String(input.action)) {
       case 'new':      return this._new(input)
       case 'send':     return this._send(input)
       case 'keys':     return this._keys(input)
       case 'capture':  return this._capture(input)
-      case 'wait_for': return this._waitFor(input)
+      case 'wait_for': return this._waitFor(input, context)
       case 'list':     return this._list()
       case 'kill':     return this._kill(input)
       default:
@@ -274,7 +274,7 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
 
   // ── wait_for ──────────────────────────────────────────────────────────────
 
-  private async _waitFor(input: Record<string, unknown>): Promise<ToolResult> {
+  private async _waitFor(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const name     = str(input.session)
     const pattern  = str(input.pattern)
     const timeout  = Number(input.timeout  ?? 30_000)
@@ -282,6 +282,13 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
 
     if (!name)    return { content: 'Error: session is required for wait_for', isError: true }
     if (!pattern) return { content: 'Error: pattern is required for wait_for', isError: true }
+
+    // Pre-aborted signal short-circuit — mirror the contract used by
+    // WebFetch / WebSearch so the LLM gets a clear cancellation error
+    // instead of an unrelated tmux error.
+    if (context.signal?.aborted) {
+      return { content: 'wait_for cancelled (signal already aborted).', isError: true }
+    }
 
     if (!await sessionExists(name)) {
       return { content: `Session "${name}" not found. Use: TmuxSession({ action: "list" })`, isError: true }
@@ -295,9 +302,16 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
     }
 
     const deadline = Date.now() + timeout
+    const signal = context.signal
     let lastOutput = ''
 
     while (Date.now() < deadline) {
+      // Honor cancellation between polls too — otherwise a mid-flight
+      // Ctrl+C would still wait for the next capture to finish.
+      if (signal?.aborted) {
+        return { content: 'wait_for cancelled.', isError: true }
+      }
+
       try {
         const raw = await tmux(`capture-pane -t ${shellEsc(name)} -p -S -`)
         lastOutput = raw
@@ -314,7 +328,15 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
         return { content: `Error polling "${name}": ${(e as Error).message}`, isError: true }
       }
 
-      await new Promise(r => setTimeout(r, interval))
+      // Race the inter-poll sleep against the abort signal — without
+      // this a Ctrl+C fired during the sleep would only take effect on
+      // the *next* capture, blowing past the user's intent.
+      if (signal) {
+        const aborted = await this._sleepWithAbort(interval, signal)
+        if (aborted) return { content: 'wait_for cancelled.', isError: true }
+      } else {
+        await new Promise(r => setTimeout(r, interval))
+      }
     }
 
     // Timeout — return last output for diagnosis
@@ -333,6 +355,26 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
       ].join('\n'),
       isError: true,
     }
+  }
+
+  /**
+   * Sleep that races an AbortSignal. Returns true if the signal fired
+   * during the wait, false on natural completion. Honors pre-aborted
+   * signals without waiting.
+   */
+  private _sleepWithAbort(ms: number, signal: AbortSignal): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (signal.aborted) return resolve(true)
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(false)
+      }, ms)
+      const onAbort = (): void => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
   }
 
   // ── list ──────────────────────────────────────────────────────────────────

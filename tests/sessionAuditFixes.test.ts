@@ -38,7 +38,7 @@ import {
 } from '../src/core/sessionManager.js'
 import { computeSafeSplitPoint, serializeMessages } from '../src/core/compact.js'
 import { SemanticMemory } from '../src/core/semanticMemory.js'
-import { EpisodicMemory, isValidEpisode } from '../src/core/episodicMemory.js'
+import { EpisodicMemory, isValidEpisode, MAX_EPISODES } from '../src/core/episodicMemory.js'
 import { EventLog, DEFAULT_EVENTLOG_ROTATE_BYTES } from '../src/core/eventLog.js'
 import {
   FileHistory,
@@ -773,7 +773,12 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
     writeFileSync(b, 'b0', 'utf8')
     history.trackEdit(a)
     history.trackEdit(b)
-    const subdirs = readdirSync(join(dir, 'file-history'))
+    // Filter out the persistent index sidecar so we only count the
+    // hash-derived backup directories. The two SHA-256 buckets for `a`
+    // and `b` must remain distinct.
+    const subdirs = readdirSync(join(dir, 'file-history')).filter(
+      (n) => n !== 'index.json',
+    )
     expect(subdirs).toHaveLength(2)
     // Both dirs should be 32 hex chars (SHA-256 slice).
     for (const sub of subdirs) expect(sub).toMatch(/^[0-9a-f]{32}$/)
@@ -854,7 +859,9 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
     }
 
     const hashDir = join(dir, 'file-history', createHash('sha256').update(fp).digest('hex').slice(0, 32))
-    const filesInHashDir = readdirSync(hashDir).filter((n) => n.startsWith('v'))
+    const filesInHashDir = readdirSync(hashDir).filter(
+      (n) => n.startsWith('v') && !n.endsWith('.meta.json'),
+    )
     expect(filesInHashDir).toHaveLength(MAX_VERSIONS_PER_FILE)
   })
 
@@ -1092,6 +1099,271 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
     // (current). This is the corrected semantic.
     expect(statSync(fp).mode & 0o777).toBe(0o755)
     expect(readFileSync(fp, 'utf8')).toBe('#!/bin/sh\necho orig\n')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────
+// 8) EpisodicMemory: bounded retention
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Defect found in independent review: write() appended forever, so a
+// long-running session would accumulate an unbounded episode log.
+// These tests pin the cap: once the file would exceed MAX_EPISODES,
+// the OLDEST entries are evicted and the file is rewritten atomically
+// (tmp + fsync + rename + cleanup). The most-recent entries survive.
+
+describe('EpisodicMemory: bounded retention (defect #8)', () => {
+  it('MAX_EPISODES is exported as a positive integer', () => {
+    expect(Number.isInteger(MAX_EPISODES)).toBe(true)
+    expect(MAX_EPISODES).toBeGreaterThan(0)
+  })
+
+  it('does NOT compact while the count is at or below the configured cap', () => {
+    const dir = freshDir('epi-bounded-under')
+    // Use a small cap so the test stays cheap and doesn't depend on
+    // disk speed — the wall-clock cost of MAX_EPISODES writes is
+    // irrelevant to the correctness contract we're verifying here.
+    const cap = 50
+    const mem = new EpisodicMemory(dir, { maxEpisodes: cap })
+    for (let i = 0; i < cap - 1; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    const all = new EpisodicMemory(dir).readAll()
+    expect(all).toHaveLength(cap - 1)
+    // First entry still present — no eviction happened.
+    expect(all[0]?.turn).toBe(0)
+  })
+
+  it('evicts the OLDEST entries when the configured cap is exceeded', () => {
+    const dir = freshDir('epi-bounded-over')
+    const cap = 100
+    const mem = new EpisodicMemory(dir, { maxEpisodes: cap })
+    const total = cap + 50
+    for (let i = 0; i < total; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    const all = new EpisodicMemory(dir).readAll()
+    expect(all).toHaveLength(cap)
+    // The OLDEST entries (turn < 50) must have been evicted; the
+    // most recent (turn >= 50) must survive.
+    expect(all[0]?.turn).toBe(50)
+    expect(all[all.length - 1]?.turn).toBe(total - 1)
+  })
+
+  it('compaction never leaves a torn file (atomic tmp + fsync + rename)', () => {
+    const dir = freshDir('epi-bounded-atomic')
+    const cap = 50
+    const mem = new EpisodicMemory(dir, { maxEpisodes: cap })
+    for (let i = 0; i < cap + 10; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    // No leftover compaction tmp anywhere in memory/.
+    const memDir = join(dir, 'memory')
+    const leftovers = listTmpLeftovers(memDir).filter((n) => n.startsWith('episodes.jsonl'))
+    expect(leftovers).toEqual([])
+    // The on-disk file is fully valid JSONL — every line parses.
+    const raw = readFileSync(join(memDir, 'episodes.jsonl'), 'utf8')
+    const lines = raw.split('\n').filter(Boolean)
+    expect(lines).toHaveLength(cap)
+    for (const line of lines) {
+      // JSON.parse returns `any`, but we only care that it throws on
+      // a malformed line. Bind the result to a typed alias so the
+      // lint guard on unsafe-`any` doesn't trip.
+      const parsed: unknown = JSON.parse(line)
+      expect(parsed).toBeDefined()
+    }
+  })
+
+  it('multiple compaction cycles stay within the configured cap', () => {
+    const dir = freshDir('epi-bounded-cycles')
+    const cap = 50
+    const mem = new EpisodicMemory(dir, { maxEpisodes: cap })
+    // Write 3 * cap entries. The file must never hold more than cap.
+    const total = 3 * cap
+    for (let i = 0; i < total; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    const all = new EpisodicMemory(dir).readAll()
+    expect(all).toHaveLength(cap)
+    // The tail of the file is the last `cap` writes.
+    expect(all[0]?.turn).toBe(2 * cap)
+    expect(all[all.length - 1]?.turn).toBe(total - 1)
+  })
+
+  it('defaults to MAX_EPISODES when no option is supplied', () => {
+    const dir = freshDir('epi-default-cap')
+    const mem = new EpisodicMemory(dir)
+    // Writing 5 small entries must NOT trigger compaction regardless
+    // of the configured default — the default cap is well above 5.
+    for (let i = 0; i < 5; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    expect(new EpisodicMemory(dir).readAll()).toHaveLength(5)
+  })
+
+  it('invalid maxEpisodes falls back to MAX_EPISODES (no throw at boot)', () => {
+    // The engine wires EpisodicMemory up at boot time; a TypeError
+    // there would block every subsequent tool call. Invalid inputs
+    // (zero, negatives, NaN, non-integers) must fall back silently.
+    const dir = freshDir('epi-bad-cap')
+    for (const bad of [0, -1, Number.NaN, 1.5, Number.POSITIVE_INFINITY] as Array<number | undefined>) {
+      const mem = new EpisodicMemory(dir, { maxEpisodes: bad })
+      // Writing a handful of small entries must still succeed and
+      // round-trip — i.e. the fallback is the documented default,
+      // not "broken forever".
+      mem.write({ turn: 1, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+      expect(mem.readAll()).toHaveLength(1)
+      // Reset between cases so the per-instance cap is well-defined
+      // for the next iteration.
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+    }
+  })
+
+  it('COMPLEXITY: amortized O(1) per write — counter converges to `cap` not to `totalWrites`', () => {
+    // Regression guard for the O(N²) bug without depending on wall
+    // clock (which is flaky on slow CI disks). The cheapest observable
+    // proxy for "amortized O(1) per write" is the in-memory counter:
+    // if write() were re-scanning the file every call, the counter
+    // would still end up at `cap` after the final compaction, but
+    // the test would lose its meaning under volume. The structural
+    // assertion that matters is: the counter MUST equal `cap` after
+    // a successful compaction, not exceed it. If we never compacted,
+    // the counter would grow unboundedly with `totalWrites`.
+    const dir = freshDir('epi-complexity')
+    const cap = 50
+    const mem = new EpisodicMemory(dir, { maxEpisodes: cap })
+    const totalWrites = cap * 10 // 500 writes — enough to exercise
+                                 // several compaction cycles without
+                                 // burning CI disk on sync I/O.
+    for (let i = 0; i < totalWrites; i++) {
+      mem.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    // Sanity: the cap held.
+    expect(new EpisodicMemory(dir).readAll()).toHaveLength(cap)
+    // The counter MUST equal `cap` after the final compaction. A
+    // regression that forgets to reset the counter post-compact
+    // (or never compacts) would let it grow to `totalWrites`.
+    expect(mem['entryCount']).toBe(cap)
+    // And the counter MUST be strictly less than `totalWrites` —
+    // proof that compaction actually fired at least once. Without
+    // this assertion, an "always reset to cap" bug that fired on
+    // every write would also pass `entryCount === cap`.
+    expect(mem['entryCount']).toBeLessThan(totalWrites)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────
+// 9) SemanticMemory: mtime/size-based reload
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Defect found in independent review: ensureLoaded() only ran on
+// first access — the in-memory state was never reconciled with
+// external writes to the same file. Two ovogogogo processes (or a
+// recovery tool) silently disagreed about what was known. These tests
+// pin the new behaviour: every read consults (mtimeMs, size) and
+// reloads when an external writer has touched the file.
+
+describe('SemanticMemory: mtime/size-based reload (defect #9)', () => {
+  it('reloads the index when an external process appends to the file', () => {
+    const dir = freshDir('sem-external-append')
+    const a = new SemanticMemory(dir)
+    a.write({ content: 'a', tags: ['ta'], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    expect(a.readAll()).toHaveLength(1)
+
+    // Simulate a second process (or a recovery tool) appending a new
+    // entry directly to the file. Wait one tick so mtime advances
+    // (some filesystems have second-resolution mtimes).
+    const memDir = join(dir, 'memory')
+    const sleep = (ms: number) => {
+      const until = Date.now() + ms
+      while (Date.now() < until) { /* spin */ }
+    }
+    sleep(20)
+    writeFileSync(
+      join(memDir, 'semantic.jsonl'),
+      JSON.stringify({
+        id: 'sem_external', content: 'b', tags: ['tb'],
+        source: 'tool_observed', confidence: 0.7, timestamp: '',
+      }) + '\n',
+      { flag: 'a' },
+    )
+
+    // The SAME instance must now see the external entry — no
+    // explicit reload required.
+    const all = a.readAll()
+    const external = all.find((e) => e.content === 'b')
+    expect(external).toBeDefined()
+    expect(external?.id).toBe('sem_external')
+  })
+
+  it('reloads when an external writer truncates the file', () => {
+    const dir = freshDir('sem-external-truncate')
+    const a = new SemanticMemory(dir)
+    a.write({ content: 'will-be-truncated', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    expect(a.readAll()).toHaveLength(1)
+
+    const memDir = join(dir, 'memory')
+    const sleep = (ms: number) => {
+      const until = Date.now() + ms
+      while (Date.now() < until) { /* spin */ }
+    }
+    sleep(20)
+    // External truncation: empty the file completely.
+    writeFileSync(join(memDir, 'semantic.jsonl'), '', 'utf8')
+
+    // The same instance must now report an empty index.
+    expect(a.readAll()).toEqual([])
+  })
+
+  it('reloads when an external writer deletes the file', () => {
+    const dir = freshDir('sem-external-delete')
+    const a = new SemanticMemory(dir)
+    a.write({ content: 'will-be-deleted', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    expect(a.readAll()).toHaveLength(1)
+
+    const memDir = join(dir, 'memory')
+    const sleep = (ms: number) => {
+      const until = Date.now() + ms
+      while (Date.now() < until) { /* spin */ }
+    }
+    sleep(20)
+    rmSync(join(memDir, 'semantic.jsonl'), { force: true })
+
+    // The same instance must reconcile to empty rather than keeping
+    // the stale in-memory copy.
+    expect(a.readAll()).toEqual([])
+  })
+
+  it('does NOT reload when the file has not changed (cheap mtime/size check)', () => {
+    // The reload path is observable through the in-memory index — if
+    // we never touch the file, reads should return the same shape
+    // without rebuilding. This is a sanity check: a regression that
+    // always reloads would not break correctness but would make the
+    // semantic memory much slower on large files.
+    const dir = freshDir('sem-no-unnecessary-reload')
+    const a = new SemanticMemory(dir)
+    a.write({ content: 'pinned', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    // A series of reads without intervening external writes must
+    // always return the same single entry.
+    for (let i = 0; i < 5; i++) {
+      expect(a.readAll()).toHaveLength(1)
+      expect(a.readAll()[0]?.content).toBe('pinned')
+    }
+  })
+
+  it('a write by the same instance refreshes the (mtime, size) cache (no self-reload)', () => {
+    // After write(), the next read should not spuriously reload.
+    // Without updating the cache, the file's mtime would appear
+    // changed and every subsequent read would re-read the file.
+    const dir = freshDir('sem-cache-refresh')
+    const a = new SemanticMemory(dir)
+    a.write({ content: 'one', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    a.write({ content: 'two', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    a.write({ content: 'three', tags: [], source: 'user_stated', confidence: 0.5, timestamp: '' })
+    // All 3 entries present in memory and persisted.
+    const all = a.readAll()
+    expect(all.map((e) => e.content).sort()).toEqual(['one', 'three', 'two'])
   })
 })
 

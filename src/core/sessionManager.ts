@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from 'fs'
 import { join, resolve } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
@@ -141,6 +141,15 @@ function isValidToolCallShape(tc: unknown): tc is ToolCall {
  * For `tool_calls` we additionally deep-validate each item — see
  * {@link isValidToolCallShape}. A non-array `tool_calls` is corrupt; an
  * array containing a malformed item is also corrupt.
+ *
+ * For `role: 'tool'` we REQUIRE a non-empty `tool_call_id`: the OpenAI-
+ * compatible API rejects orphan tool results (rows that lack an anchor
+ * back to an assistant `tool_calls[i].id`) as malformed conversation turns.
+ * Letting such a row through at write time and catching it later at the
+ * provider boundary is worse than rejecting it here — the engine would
+ * have to choose between silently dropping the tool message (data loss)
+ * or surfacing a 400 from the API mid-turn. Both are worse than a clear
+ * save-time error pointing at the bad index.
  */
 function isValidMessageShape(msg: unknown): msg is OpenAIMessage {
   if (!msg || typeof msg !== 'object') return false
@@ -156,6 +165,13 @@ function isValidMessageShape(msg: unknown): msg is OpenAIMessage {
   }
   if (m.tool_call_id !== undefined && typeof m.tool_call_id !== 'string') return false
   if (m.name !== undefined && typeof m.name !== 'string') return false
+  // `tool` rows MUST carry a non-empty tool_call_id — orphan tool results
+  // are rejected by the provider as a malformed turn. Both load and save
+  // route through this check, so a missing/empty ID is caught as early as
+  // possible.
+  if (m.role === 'tool') {
+    if (typeof m.tool_call_id !== 'string' || m.tool_call_id.length === 0) return false
+  }
   return true
 }
 
@@ -357,6 +373,12 @@ export function createSessionDir(cwd: string, now: Date = new Date()): string {
  * can tell when the session was last touched. There is intentionally no
  * "creation time" field — `updatedAt` always reflects the last write.
  *
+ * Each message is cloned (shallow spread) before serialization so all
+ * fields round-trip — in particular `tool_call_id` on `tool` rows (the
+ * OpenAI-compatible API rejects orphan tool results without an anchor)
+ * and `tool_calls` on assistant rows. A spread also protects us from
+ * in-place mutation of the caller's array between turns.
+ *
  * Writes to a uniquely-suffixed temp file in the SAME directory and
  * renames it into place so the file is never partially written. The tmp
  * name combines process pid + Date.now() ms + 8 random bytes — collisions
@@ -368,14 +390,41 @@ export function createSessionDir(cwd: string, now: Date = new Date()): string {
  * unique suffix each call gets its own tmp and only the LAST rename
  * survives — exactly the property the caller expects.
  *
+ * Before rename, the tmp is fsync'd so its bytes are committed to
+ * stable storage. writeFileSync alone is not enough — a power loss
+ * between writeFileSync and renameSync can publish a target that points
+ * at zero-byte or partial content. The fd-level open / writeSync /
+ * fsyncSync / closeSync chain closes that gap.
+ *
  * Cleans up OUR tmp file if the rename fails. Other concurrent writers'
  * tmps are left alone. `history` may be an empty array — callers use this
  * to persist /clear as "session exists, history emptied" atomically.
+ *
+ * Pre-flight validation: EVERY entry in `history` is shape-checked BEFORE
+ * any filesystem side effect (mkdir / tmp file open / rename). An invalid
+ * entry raises TypeError synchronously and leaves the directory and any
+ * prior `history.json` untouched. Without this guard, a malformed message
+ * would be written and only caught on the next load — corrupting the
+ * session, breaking resume, and forcing the operator to hand-edit
+ * history.json. Catching it at save time keeps the on-disk state always
+ * self-consistent.
  */
 export function saveSession(sessionDir: string, history: OpenAIMessage[]): void {
   assertNonEmpty(sessionDir, 'sessionDir')
   if (!Array.isArray(history)) {
     throw new TypeError('history must be an array of OpenAIMessage')
+  }
+  // Validate every entry BEFORE touching the filesystem so a bad message
+  // can never produce a half-written / orphan-tmp state. The error path
+  // MUST be free of side effects — callers rely on "saveSession threw,
+  // therefore nothing on disk changed for the history".
+  for (let i = 0; i < history.length; i++) {
+    if (!isValidMessageShape(history[i])) {
+      throw new TypeError(
+        `history[${i}] does not match OpenAIMessage shape ` +
+        `(role='tool' rows must include a non-empty tool_call_id; all rows need a valid role and string-or-null content)`,
+      )
+    }
   }
 
   const historyPath = join(sessionDir, 'history.json')
@@ -389,16 +438,37 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
     version: CURRENT_SESSION_VERSION,
     schema: CURRENT_SESSION_SCHEMA,
     updatedAt: new Date().toISOString(),
+    // Spread each message so all fields are preserved verbatim — in
+    // particular `tool_call_id` on `tool` role messages (without it, the
+    // OpenAI-compatible API rejects the row as orphan-without-anchor)
+    // and `tool_calls` on `assistant` role messages. Using a shallow
+    // clone keeps us safe against in-place mutation of the caller's
+    // array across subsequent turns.
     messages: history.map((m) => ({ ...m })),
   }
 
+  let tmpFd: number | null = null
   try {
-    writeFileSync(tmpPath, JSON.stringify(envelope, null, 2), 'utf8')
+    // Open the tmp file ourselves so we get an explicit fsync on the
+    // fd BEFORE the rename publishes it. writeFileSync alone does NOT
+    // guarantee bytes hit stable storage before renameSync returns —
+    // a power loss between write and rename can leave the target
+    // pointing at zero-byte / partial content. fsyncSync closes that
+    // gap: by the time we rename, the bytes are durably committed.
+    const payload = Buffer.from(JSON.stringify(envelope, null, 2), 'utf8')
+    tmpFd = openSync(tmpPath, 'w')
+    writeSync(tmpFd, payload, 0, payload.length, 0)
+    fsyncSync(tmpFd)
+    closeSync(tmpFd)
+    tmpFd = null
     renameSync(tmpPath, historyPath)
   } catch (err) {
     // Best-effort: remove OUR orphan tmp file so we don't leak it on disk.
     // We only touch the path we just created — concurrent writers' tmps
-    // are deliberately left alone.
+    // are deliberately left alone. Also close the fd if we still hold it.
+    if (tmpFd !== null) {
+      try { closeSync(tmpFd) } catch { /* swallow */ }
+    }
     try {
       if (existsSync(tmpPath)) unlinkSync(tmpPath)
     } catch {

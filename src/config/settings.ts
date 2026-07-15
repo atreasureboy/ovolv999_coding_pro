@@ -26,7 +26,8 @@
  *   UserPromptSubmit:  OVOGO_PROMPT
  */
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs'
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
+import { randomBytes } from 'crypto'
 import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
 import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
@@ -188,9 +189,26 @@ export function saveProjectSettings(cwd: string, patch: OvogoSettings): OvogoSet
   }
 
   mkdirSync(dirname(projectPath), { recursive: true })
-  const tmpPath = projectPath + '.tmp'
-  writeFileSync(tmpPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
-  renameSync(tmpPath, projectPath)
+  // Unique tmp name (pid + ms + 8 random bytes) so concurrent saves
+  // can't race on a fixed `.tmp` suffix. The earlier fixed tmp could
+  // collide when two writers fired in the same ms: writer A's rename
+  // would steal writer B's half-written tmp mid-flight, leaving B's
+  // data overwritten or its tmp clobbered. With a unique suffix each
+  // call gets its own tmp and only the last rename survives. We clean
+  // up OUR tmp on failure — other concurrent writers' tmps are left
+  // alone, mirroring the convention used by saveSession.
+  const tmpPath = `${projectPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
+  try {
+    writeFileSync(tmpPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
+    renameSync(tmpPath, projectPath)
+  } catch (err) {
+    try {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath)
+    } catch {
+      /* swallow cleanup failure — the write error is the important one */
+    }
+    throw err
+  }
   return next
 }
 

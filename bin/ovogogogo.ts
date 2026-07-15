@@ -26,10 +26,10 @@
  *   ~/.ovogo/skills/*.md  — global user slash commands
  */
 
-import { resolve, join, dirname } from 'path'
-import { writeFileSync, readFileSync, existsSync } from 'fs'
+import { resolve, join, dirname, basename } from 'path'
+import { writeFileSync, readFileSync, existsSync, statSync, realpathSync } from 'fs'
 import { homedir } from 'os'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 // ── .env auto-loader (no external dep, never overrides existing env vars) ──
 {
@@ -164,13 +164,189 @@ function requireValue(flag: string, value: string | undefined): string {
   return value
 }
 
+/**
+ * Expand a leading `~` or `~/...` to the current user's home directory.
+ * Other `~user` forms are NOT expanded (we have no user-DB lookup here)
+ * and are passed through unchanged so callers see a clear "no such
+ * directory" error from the OS rather than a silent mis-anchor.
+ *
+ * This is applied to --cwd and --resume paths so a user can write
+ * `--cwd ~/projects/foo` instead of forcing an absolute path.
+ */
+export function expandHome(p: string): string {
+  if (typeof p !== 'string' || p.length === 0) return p
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2))
+  return p
+}
+
+/**
+ * Normalize a user-supplied working directory: expand `~`, then resolve
+ * to an absolute path. Called once on --cwd and once on the implicit
+ * `process.cwd()` default so subsequent code can rely on cwd being
+ * absolute (the engine, session dir creation, settings path, etc.).
+ */
+export function normalizeCwd(p: string): string {
+  return resolve(expandHome(p))
+}
+
+/**
+ * Directory roots we refuse to use as a session directory, even if
+ * `--resume <path>` points at one. Walking into `/etc` (or any other
+ * system root) as a session would let a stray flag inject ovogo
+ * session metadata into a location that almost certainly should not
+ * hold it — and would surface later as a permissions error from a
+ * `--continue` that then tries to write history.json there.
+ *
+ * The check is strict equality against `resolve()`d paths so a path
+ * like `/etc/foo` is NOT automatically blocked (the caller probably
+ * meant something specific) — only the bare system roots are refused.
+ */
+const DANGEROUS_SESSION_ROOTS: ReadonlySet<string> = new Set([
+  '/',
+  '/etc',
+  '/usr',
+  '/var',
+  '/bin',
+  '/sbin',
+  '/lib',
+  '/lib64',
+  '/opt',
+  '/root',
+  '/boot',
+  '/sys',
+  '/proc',
+  '/dev',
+  '/run',
+  '/srv',
+])
+
+/**
+ * Resolve a `--resume <arg>` to an absolute session directory.
+ *
+ * Accepted forms:
+ *   1. Absolute path to a `sessions/session_*` directory   → returned as-is.
+ *   2. Absolute path to a `history.json` file              → normalized to its parent.
+ *   3. Session name / unique prefix under `<cwd>/sessions/` → delegates to
+ *      resolveSessionPath (the existing session-name lookup path).
+ *
+ * Rejected with SessionNotFoundError:
+ *   - paths that resolve to a dangerous system root (e.g. /, /etc)
+ *   - paths that resolve to a directory whose basename doesn't start with
+ *     the `session_` prefix (e.g. /home/user, /tmp)
+ *   - any regular file whose basename is not exactly `history.json`
+ *
+ * This is the gate that keeps a stray `--resume /etc` from treating
+ * the OS root as a session and trying to read or write history.json
+ * inside it. Without it, resolveSessionPath would happily `existsSync`
+ * the path and return it — and the engine would then try to save the
+ * conversation history there.
+ */
+export function resolveResumePath(cwd: string, input: string): string {
+  assertNonEmptyString(input, 'resume input')
+
+  // Form 3: no separators → session name / unique-prefix lookup.
+  if (!input.includes('/') && !input.includes('\\')) {
+    return resolveSessionPath(cwd, input)
+  }
+
+  // Form 1 + 2: an explicit path. Anchor to cwd for relative paths so
+  // --resume behaves the same regardless of process.cwd().
+  const abs = resolve(cwd, expandHome(input))
+  if (!existsSync(abs)) {
+    throw new SessionNotFoundError(`Session path does not exist: ${abs}`)
+  }
+
+  // Reject system roots BEFORE checking dir/file: a user typing
+  // `--resume /` or `--resume /etc` should fail with a clear refusal,
+  // not get silently accepted because some unrelated file happened to
+  // exist there.
+  const normalized = resolve(abs)
+  if (DANGEROUS_SESSION_ROOTS.has(normalized)) {
+    throw new SessionNotFoundError(
+      `Refusing to use system directory as a session: ${normalized}`,
+    )
+  }
+
+  let stat
+  try {
+    stat = statSync(abs)
+  } catch (err) {
+    throw new SessionNotFoundError(`Cannot stat session path: ${abs} (${(err as Error).message})`)
+  }
+
+  if (stat.isDirectory()) {
+    // Accept ONLY directories whose name matches the session_ prefix.
+    // Walking into `/home/user` or `/tmp` as a "session" would silently
+    // accept an arbitrary directory and pollute it with history.json.
+    const base = basename(normalized)
+    if (!base.startsWith('session_')) {
+      throw new SessionNotFoundError(
+        `Not a session directory (basename must start with "session_"): ${normalized}`,
+      )
+    }
+    // Structural check: a real session directory MUST contain a readable
+    // history.json. Relying on the basename alone is too permissive —
+    // any directory the user (or an attacker) names "session_xxx" would
+    // be accepted, even if it holds arbitrary unrelated content. We use
+    // openSync(O_RDONLY) so a permission error surfaces as a clear refusal
+    // rather than being swallowed by a higher-level read.
+    const historyPath = join(normalized, 'history.json')
+    if (!existsSync(historyPath)) {
+      throw new SessionNotFoundError(
+        `Session directory missing history.json: ${normalized}`,
+      )
+    }
+    try {
+      readFileSync(historyPath)
+    } catch (err) {
+      throw new SessionNotFoundError(
+        `Cannot read session history.json: ${historyPath} (${(err as Error).message})`,
+      )
+    }
+    return normalized
+  }
+
+  if (stat.isFile()) {
+    // Only `history.json` is a valid session handle — never a stray
+    // text file or anything else.
+    if (basename(normalized) !== 'history.json') {
+      throw new SessionNotFoundError(
+        `Not a session history file (must be named "history.json"): ${normalized}`,
+      )
+    }
+    // Structural check: a history.json file is only meaningful when its
+    // parent directory is itself a session_*-style directory. A bare
+    // history.json dropped in /etc or /tmp is NOT a session — refusing
+    // here means `--resume /etc/passwd.json` cannot sneak past us just
+    // because the user (or a misconfigured hook) renamed the file.
+    const parentDir = dirname(normalized)
+    if (!basename(parentDir).startsWith('session_')) {
+      throw new SessionNotFoundError(
+        `History file's parent directory must be a session directory (basename must start with "session_"): ${parentDir}`,
+      )
+    }
+    return parentDir
+  }
+
+  throw new SessionNotFoundError(`Not a regular file or directory: ${normalized}`)
+}
+
+function assertNonEmptyString(value: string, name: string): void {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`)
+  }
+}
+
 function parseArgs(argv: string[]): Args {
   const args = argv.slice(2)
   let task: string | undefined
   let model = resolveApiEnvironment().model
   let maxIter = parseInt(process.env.OVOGO_MAX_ITER ?? '200', 10)
   if (isNaN(maxIter) || maxIter <= 0) maxIter = 200
-  let cwd = process.env.OVOGO_CWD ?? process.cwd()
+  // OVOGO_CWD honors `~` / `~/...` just like the `--cwd` flag — both
+  // paths converge through normalizeCwd before any code touches cwd.
+  let cwd = normalizeCwd(process.env.OVOGO_CWD ?? process.cwd())
   let help = false
   let version = false
   let loop = false
@@ -198,7 +374,10 @@ function parseArgs(argv: string[]): Args {
           }
           break
         case '--cwd':
-          cwd = requireValue(arg, args[++i])
+          // `~` / `~/...` are expanded here, not deferred to the OS layer
+          // — that way the resolved absolute path is the one used for
+          // settings, session dirs, and project-context detection.
+          cwd = normalizeCwd(requireValue(arg, args[++i]))
           break
         case '--loop': loop = true; break
         case '--loop-max-iters':
@@ -271,23 +450,39 @@ function resolveApiEnvironment(): ResolvedApiEnvironment {
 // Help text
 // ─────────────────────────────────────────────────────────────
 
-function printHelp(skills: Map<string, Skill>): void {
+export function printHelp(skills: Map<string, Skill>): void {
   const r = new Renderer()
   const defaultModel = resolveApiEnvironment().model
   r.banner(VERSION, defaultModel)
   process.stdout.write(`USAGE
-  ovogogogo [options] [task]
+  ovolv999 [options] [task]
 
 OPTIONS
-  -m, --model <model>    LLM model  (env: OVOGO_MODEL, default: ${defaultModel})
-  --max-iter <n>         Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
-  --cwd <path>           Working directory  (env: OVOGO_CWD, default: cwd)
-  -v, --version          Print version and exit
-  -h, --help             Show this help
+  -m, --model <model>       LLM model  (env: OVOGO_MODEL, default: ${defaultModel})
+  --max-iter <n>            Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
+  --cwd <path>              Working directory  (env: OVOGO_CWD, default: cwd, supports ~/)
+  --loop                    Activate loop mode (reads .loop/ configuration)
+  --loop-max-iters <n>      Cap on loop iterations  (env: OVOGO_LOOP_MAX_ITERS, default: 12)
+  -c, --continue            Resume the most recent session under <cwd>/sessions/
+  -r, --resume <ref>        Resume a specific session by name, prefix, dir, or history.json
+  -v, --version             Print version and exit
+  -h, --help                Show this help
 
 ENVIRONMENT
-  OPENAI_API_KEY         Required — OpenAI API key
-  OPENAI_BASE_URL        Optional — compatible endpoint URL
+  OPENAI_API_KEY            Required for OpenAI-compatible endpoints — API key
+  OPENAI_BASE_URL           Optional — compatible endpoint URL
+  ANTHROPIC_BASE_URL        Optional — when pointing at api.minimax.io/minimaxi.com/anthropic,
+                            MiniMax is auto-detected and ANTHROPIC_AUTH_TOKEN is used
+  ANTHROPIC_AUTH_TOKEN      MiniMax API token (replaces OPENAI_API_KEY when MiniMax is active)
+  ANTHROPIC_API_KEY         Same as ANTHROPIC_AUTH_TOKEN
+  ANTHROPIC_MODEL           Default model override for MiniMax (falls back to OVOGO_MODEL)
+  OVOGO_MODEL               Default model when no ANTHROPIC env vars are present
+  OVOGO_MAX_ITER            Default for --max-iter
+  OVOGO_CWD                 Default for --cwd (supports ~ expansion)
+  OVOGO_LOOP_MAX_ITERS      Default for --loop-max-iters
+  OVOGO_MAX_CONTEXT_TOKENS  Context window size (default: 200000)
+  OVOGO_TEMPERATURE         Sampling temperature
+  OVOGO_MAX_OUTPUT_TOKENS   Cap on completion tokens
 
 TOOLS
   Bash          Execute shell commands
@@ -314,7 +509,7 @@ REPL COMMANDS
   /model         Show current model
   /cwd           Show working directory
   /help          Show this help
-  /exit          Exit ovogogogo
+  /exit          Exit ovolv999
 
 SKILLS (${skills.size} available)
 ${[...skills.values()].map(s => `  /${s.name.padEnd(14)} ${s.description}`).join('\n')}
@@ -328,10 +523,13 @@ HOOKS (configure in .ovogo/settings.json)
   OnContextOverflow Runs after context compaction (env: OVOGO_TOKENS_BEFORE, OVOGO_TOKENS_AFTER)
 
 EXAMPLES
-  ovogogogo
-  ovogogogo "fix the type errors in src/core"
-  ovogogogo -m gpt-4o --cwd /my/project "add unit tests for engine.ts"
-  echo "refactor the tool registry" | ovogogogo
+  ovolv999
+  ovolv999 "fix the type errors in src/core"
+  ovolv999 -m gpt-4o --cwd ~/projects/foo "add unit tests for engine.ts"
+  echo "refactor the tool registry" | ovolv999
+  ovolv999 --continue                          # resume latest session
+  ovolv999 --resume session_2026-07-14_120000  # resume by name
+  ovolv999 --loop --loop-max-iters 20          # activate loop mode
 `)
 }
 
@@ -974,7 +1172,7 @@ async function main(): Promise<void> {
   const skills = loadSkills(cwd)
 
   if (version) {
-    process.stdout.write(`${VERSION} (ovogogogo)\n`)
+    process.stdout.write(`${VERSION} (ovolv999)\n`)
     process.exit(0)
   }
 
@@ -1054,7 +1252,10 @@ async function main(): Promise<void> {
   let resumedHistory: OpenAIMessage[] = []
   if (resumeSession) {
     try {
-      sessionDir = resolveSessionPath(cwd, resumeSession)
+      // resolveResumePath validates path inputs (session dirs only,
+      // history.json normalization, dangerous-root refusal) before
+      // delegating session-name lookups to the existing resolver.
+      sessionDir = resolveResumePath(cwd, resumeSession)
     } catch (err: unknown) {
       if (err instanceof AmbiguousSessionError) {
         renderer.error(err.message)
@@ -1165,8 +1366,19 @@ async function main(): Promise<void> {
       // The handler reads `activePrompt` lazily (it can be null before
       // the REPL has wired up its readline) and falls back to
       // non-TTY auto-answers in that case.
+      //
+      // The TTY gate considers BOTH stdout AND stdin. Checking only
+      // stdout.isTTY gives a false positive when the user redirects
+      // stdout to a file/pipe but keeps stdin attached (so the program
+      // thinks it can prompt, but the prompt would never reach the user).
+      // We require stdin to look like a terminal too — a redirected
+      // stdout is usually paired with a redirected stdin, but if it's
+      // not, asking the user is still the wrong call (we'd block).
       prompt: {
-        get isTTY(): boolean { return activePrompt?.isTTY ?? !!process.stdout.isTTY },
+        get isTTY(): boolean {
+          if (activePrompt) return activePrompt.isTTY
+          return Boolean(process.stdout.isTTY && process.stdin.isTTY)
+        },
         readLine: (p, signal) => activePrompt
           ? activePrompt.readLine(p, signal)
           : Promise.resolve({ text: '', eof: true }),
@@ -1289,7 +1501,65 @@ async function main(): Promise<void> {
   }, sessionDir, resumedHistory)
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`\x1b[31mFatal:\x1b[0m ${(err as Error).message}\n`)
-  process.exit(1)
-})
+/**
+ * ESM entry guard: only run main() when this file is the script invoked
+ * directly by Node. When the file is imported by a test (vitest, etc.)
+ * we want only the exported helpers (expandHome, normalizeCwd,
+ * resolveResumePath, printHelp) — NOT the side-effecting CLI bootstrap.
+ *
+ * Without this guard, `import { expandHome } from '../bin/ovogogogo.js'`
+ * in a test would unconditionally execute main(), banner and all, which
+ * would block on stdin and spawn child engines. Vitest would still pass
+ * if main() somehow completes, but tests would observe banner output,
+ * session dir creation, and tmux init as side effects — and any test
+ * that mocks process.exit would silently mask a real crash.
+ *
+ * The standard ESM guard compares import.meta.url to the URL of
+ * process.argv[1] (the script Node was asked to run). On
+ * `node bin/ovogogogo.ts` they match. On `import '...'` from a test
+ * they don't — the test runner's own URL is in argv[1] (or argv[1]
+ * is undefined when vitest runs in-process).
+ *
+ * **Symlink awareness**: when the CLI is shipped as a symlink
+ * (e.g. `/usr/local/bin/ovolv999` → `dist/bin/ovogogogo.js`), the
+ * argv[1] path is the symlink, but import.meta.url is the resolved
+ * target. Without realpath, the guard would report false and the CLI
+ * would silently do nothing. We realpath BOTH sides (the entry script
+ * AND the import URL) so the comparison survives symlink hops. If
+ * realpath fails (e.g. file deleted between argv capture and this
+ * check), we fall back to the unresolved path so a transient stat
+ * failure doesn't permanently disable the CLI.
+ */
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
+const isMainModule = ((): boolean => {
+  if (!process.argv[1]) return false
+  try {
+    // realpath argv[1] so symlink invocations like
+    // `/usr/local/bin/ovolv999` → `dist/bin/ovogogogo.js` still match
+    // the import URL of the resolved target. If realpath fails (e.g.
+    // the file was deleted between argv capture and this check), fall
+    // back to the unresolved path so a transient stat error doesn't
+    // permanently disable the CLI.
+    const argvResolved = safeRealpath(resolve(process.argv[1]))
+    const target = pathToFileURL(argvResolved).href
+    const importUrlPath = safeRealpath(fileURLToPath(import.meta.url))
+    return target === import.meta.url
+      || pathToFileURL(importUrlPath).href === target
+  } catch {
+    return false
+  }
+})()
+
+if (isMainModule) {
+  main().catch((err: unknown) => {
+    process.stderr.write(`\x1b[31mFatal:\x1b[0m ${(err as Error).message}\n`)
+    process.exit(1)
+  })
+}

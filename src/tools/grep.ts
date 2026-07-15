@@ -110,7 +110,14 @@ export class GrepTool implements Tool {
     }
 
     if (effectiveGlob) {
-      args.push(`--glob`, `${effectiveGlob}`)
+      // Use the long `--glob=<value>` form so a glob starting with `-`
+      // is unambiguously the FLAG's argument, never another flag.
+      // (ripgrep, like most GNU-style CLIs, accepts a separate
+      // positional after a long flag; `--glob -file.ts` would be
+      // parsed as "ignore `--glob`, then take `-file.ts` as a new
+      // flag — which is exactly the misinterpretation we're guarding
+      // against. The `=` form pins the value to its flag.)
+      args.push(`--glob=${effectiveGlob}`)
     }
 
     // Truncate long lines to prevent context pollution from minified/base64 content

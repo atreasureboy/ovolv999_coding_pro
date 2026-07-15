@@ -877,8 +877,19 @@ export class ExecutionEngine {
     this.renderer.stopSpinner()
 
     // Stream-timeout watchdog: if the stream was aborted due to stall,
-    // throw so the engine's error path fires (instead of looking like success)
-    if (turnAbortSignal.aborted && !finishReason) {
+    // throw so the engine's error path fires (instead of looking like
+    // success). The watchdog sets the abort reason to 'stream_timeout'
+    // (see the setInterval above) — we MUST gate on that reason so that
+    // engine.abort() (reason='user_cancelled') does NOT get misreported
+    // as a stream timeout. Without this gate, any user-initiated cancel
+    // during an active stream would surface as a "Stream timed out —
+    // no data received for 120s" error in the renderer, which is wrong
+    // (the user cancelled, the stream didn't stall) and confusing.
+    if (
+      turnAbortSignal.aborted &&
+      !finishReason &&
+      turnAbortSignal.reason === 'stream_timeout'
+    ) {
       throw new Error('Stream timed out — no data received for 120s')
     }
 
@@ -1390,7 +1401,40 @@ export class ExecutionEngine {
             for (const tc of pendingToolCalls) {
               let input: Record<string, unknown>
               try {
-                input = JSON.parse(tc.arguments || '{}') as Record<string, unknown>
+                const parsed: unknown = JSON.parse(tc.arguments || '{}')
+                // Tools require a JSON object — primitives (string/number/
+                // boolean), null, and arrays are NOT valid input shapes.
+                // The legacy code cast any JSON.parse result to
+                // `Record<string, unknown>` regardless of shape, which
+                // meant a model that emitted `null`, `[...]`, `"foo"`, or
+                // `42` as arguments would reach the tool with a
+                // misshaped object — tools then either crashed trying
+                // to read `.foo` on null/undefined or silently produced
+                // nonsense. Reject these shapes here with a clear tool-
+                // result error so the LLM can retry with a real object.
+                if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                  const shape = parsed === null
+                    ? 'null'
+                    : Array.isArray(parsed)
+                      ? 'array'
+                      : typeof parsed
+                  this.renderer.warn(
+                    `Warning: malformed tool arguments for ${tc.name} (expected JSON object, got ${shape}).`,
+                  )
+                  this.eventLog?.append('tool_call', tc.name, {
+                    parse_error: true,
+                    shape,
+                    raw_args: tc.arguments.slice(0, 200),
+                  })
+                  messages.push({
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    name: tc.name,
+                    content: `Tool arguments must be a JSON object, but got ${shape}. Raw args (first 200 chars): ${tc.arguments.slice(0, 200)}. Retry with a JSON object like {"key": "value"}.`,
+                  })
+                  continue
+                }
+                input = parsed as Record<string, unknown>
               } catch {
                 // Malformed JSON — do NOT execute the tool. Push a synthetic
                 // error result so the LLM knows its arguments were bad.

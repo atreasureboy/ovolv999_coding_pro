@@ -8,11 +8,17 @@
  *    newer entries update the confidence/timestamp of existing ones.
  * 3. Tag index — a Map<tag, Set<entryId>> for O(1) tag lookups without
  *    scanning all entries.
+ * 4. mtime/size-based reload — every read consults the on-disk file's
+ *    (mtimeMs, size) tuple and reloads from disk when an external
+ *    writer (another ovogogogo process, a manual edit, a recovery
+ *    tool) has touched the file. Without this, two processes pointing
+ *    at the same project dir would silently disagree about what's
+ *    known.
  *
  * Storage: ~/.ovogo/projects/{slug}/memory/semantic.jsonl
  */
 
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'fs'
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'fs'
 import { join } from 'path'
 import { createHash, randomBytes, randomUUID } from 'crypto'
 
@@ -55,6 +61,21 @@ export class SemanticMemory {
   private entries: Map<string, SemanticMemoryEntry> = new Map()
   private tagIndex: TagIndex = {}
   private loaded = false
+  /**
+   * Cached (mtimeMs, size) tuple captured the last time we read the
+   * file. We compare the CURRENT stat against this on every access;
+   * a mismatch means an external writer (another process, a recovery
+   * tool, a manual edit) has touched the file, so we re-read and
+   * rebuild the in-memory index. Both fields are inspected because
+   * mtime alone is unreliable (some filesystems clamp to second
+   * resolution and `cp` can preserve mtime) and size alone misses
+   * same-size overwrites.
+   *
+   * `-1` is the "we haven't loaded yet" sentinel; both real mtime and
+   * size are non-negative.
+   */
+  private lastLoadedMtimeMs = -1
+  private lastLoadedSize = -1
 
   constructor(projectDir: string) {
     const memDir = join(projectDir, 'memory')
@@ -66,12 +87,72 @@ export class SemanticMemory {
     this.filePath = join(memDir, 'semantic.jsonl')
   }
 
-  /** Lazy-load from disk on first access */
+  /**
+   * Lazy-load from disk on first access, AND reload on external
+   * mutation. The (mtimeMs, size) tuple is the canonical "did anyone
+   * outside this process touch the file?" check; a mismatch triggers
+   * a full reload even on a process that has already loaded once.
+   *
+   * Edge cases that motivate the reload-on-mtime policy:
+   *   - Two ovogogogo processes pointing at the same projectDir: A
+   *     writes, B reads stale state until the file's stat changes.
+   *   - Recovery tooling rewrites the file: A's in-memory index must
+   *     not silently keep the old shape.
+   *   - A manual `truncate -s 0` clears the file: A's index must
+   *     converge on empty, not stay populated.
+   *
+   * Failure modes:
+   *   - File deleted between writes: treat as empty index, do not
+   *     throw. Callers that NEED the file to exist can `existsSync`
+   *     separately.
+   *   - File unreadable: keep whatever the previous in-memory state
+   *     was — a transient read failure shouldn't blow away data we
+   *     already have. The next successful read will reconcile.
+   */
   private ensureLoaded(): void {
-    if (this.loaded) return
-    this.loaded = true
+    let stat: { mtimeMs: number; size: number } | null = null
+    if (existsSync(this.filePath)) {
+      try {
+        const s = statSync(this.filePath)
+        stat = { mtimeMs: s.mtimeMs, size: s.size }
+      } catch {
+        /* file present but unstatable — treat as "no fresh data" */
+      }
+    }
 
-    if (!existsSync(this.filePath)) return
+    if (this.loaded) {
+      if (stat === null) {
+        // File disappeared since last load. Reconcile to empty so the
+        // in-memory index doesn't claim knowledge that no longer has
+        // an on-disk source of truth.
+        if (this.lastLoadedSize !== 0) {
+          this.entries.clear()
+          this.tagIndex = {}
+          this.lastLoadedMtimeMs = -1
+          this.lastLoadedSize = 0
+        }
+        return
+      }
+      if (
+        stat.mtimeMs === this.lastLoadedMtimeMs &&
+        stat.size === this.lastLoadedSize
+      ) {
+        return
+      }
+    }
+
+    // Fresh load OR reload: drop the in-memory state and rebuild from
+    // the current file. A reload always replaces — we never merge an
+    // external file with our local cache because merging would risk
+    // resurrecting entries that the external writer deliberately
+    // removed.
+    this.entries.clear()
+    this.tagIndex = {}
+    this.loaded = true
+    this.lastLoadedMtimeMs = stat?.mtimeMs ?? -1
+    this.lastLoadedSize = stat?.size ?? 0
+
+    if (stat === null) return
 
     try {
       const lines = readFileSync(this.filePath, 'utf8').trim().split('\n').filter(Boolean)
@@ -88,7 +169,8 @@ export class SemanticMemory {
         }
       }
     } catch {
-      // file unreadable — start fresh
+      // file unreadable — keep the cleared in-memory state. The next
+      // successful read will repopulate it.
     }
   }
 
@@ -138,6 +220,17 @@ export class SemanticMemory {
     // the process exited before the microtask ran.
     try {
       appendFileSync(this.filePath, JSON.stringify(full) + '\n', 'utf8')
+      // Refresh the (mtime, size) cache so the very next ensureLoaded()
+      // doesn't reload what we just appended. Catching the stat failure
+      // is non-fatal — a missing cache just costs one reload, which is
+      // safe because the in-memory state is already authoritative.
+      try {
+        const s = statSync(this.filePath)
+        this.lastLoadedMtimeMs = s.mtimeMs
+        this.lastLoadedSize = s.size
+      } catch {
+        /* best-effort */
+      }
     } catch {
       /* best-effort */
     }
@@ -190,6 +283,17 @@ export class SemanticMemory {
       tmpFd = null
 
       renameSync(tmpPath, this.filePath)
+      // Refresh the (mtime, size) cache so the next ensureLoaded()
+      // sees the file as "freshly loaded" and doesn't reload what we
+      // just rewrote. Without this, every search()/readAll() after a
+      // rewrite would re-read the file.
+      try {
+        const s = statSync(this.filePath)
+        this.lastLoadedMtimeMs = s.mtimeMs
+        this.lastLoadedSize = s.size
+      } catch {
+        /* best-effort */
+      }
     } catch {
       /* best-effort — do not let a write failure escape this method */
     } finally {

@@ -26,6 +26,17 @@ export class FileEditTool implements Tool {
   name = 'Edit'
   metadata = { mutatesState: true, concurrencySafe: false }
 
+  /**
+   * Hard upper bound on file size Edit will attempt. Files larger than
+   * this are rejected with a clear error pointing at Write — Edit is
+   * meant for surgical changes to source files, and lifting a 100MB
+   * file into memory just to find/replace a token is wasteful and
+   * dangerous. 25MB is large enough for normal source files (a 25MB
+   * minified JS bundle is still over an order of magnitude above any
+   * reasonable source file) but small enough to bound the worst case.
+   */
+  static readonly MAX_FILE_BYTES = 25 * 1024 * 1024
+
   definition: ToolDefinition = {
     type: 'function',
     function: {
@@ -70,6 +81,24 @@ export class FileEditTool implements Tool {
     }
     if (old_string === new_string) {
       return { content: 'Error: old_string and new_string are identical — no change needed', isError: true }
+    }
+
+    // 25MB hard cap on file size — refuse before any read. Edit is meant
+    // for surgical source-file changes; lifting a huge file into memory
+    // just to find/replace a token is wasteful and risks OOM on modest
+    // hosts. Use Write to regenerate a large file from scratch if needed.
+    if (existsSync(file_path)) {
+      const sz = await statSafely(file_path)
+      if (sz !== null && sz.size > FileEditTool.MAX_FILE_BYTES) {
+        return {
+          content:
+            `Error: ${file_path} is ${sz.size} bytes, exceeding the 25MB Edit cap ` +
+            `(${FileEditTool.MAX_FILE_BYTES} bytes). Edit is meant for surgical ` +
+            `changes — use Write to regenerate the file, or use a ` +
+            `streamed tool for bulk replacement.`,
+          isError: true,
+        }
+      }
     }
 
     // Enforce read-before-edit (like Claude Code — prevents blind edits)
