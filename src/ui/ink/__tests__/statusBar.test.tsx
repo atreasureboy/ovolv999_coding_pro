@@ -50,6 +50,20 @@ describe('StatusBar', () => {
     )
     expect((lastFrame() ?? '')).toContain('PLAN')
   })
+
+  it('shows git branch when provided', () => {
+    const { lastFrame } = render(
+      <StatusBar model="m" messageCount={0} contextPct={0} cost={0} apiCalls={0} planMode={false} gitBranch="feature-x" />,
+    )
+    expect((lastFrame() ?? '')).toContain('feature-x')
+  })
+
+  it('hides git branch when null', () => {
+    const { lastFrame } = render(
+      <StatusBar model="m" messageCount={0} contextPct={0} cost={0} apiCalls={0} planMode={false} gitBranch={null} />,
+    )
+    expect((lastFrame() ?? '')).not.toContain('feature')
+  })
 })
 
 describe('TodoListView', () => {

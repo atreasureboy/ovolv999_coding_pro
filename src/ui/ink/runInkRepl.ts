@@ -191,6 +191,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       },
       initialHistory: history,
       maxContextTokens: opts.maxContextTokens,
+      cwd: opts.cwd,
     }),
   )
 

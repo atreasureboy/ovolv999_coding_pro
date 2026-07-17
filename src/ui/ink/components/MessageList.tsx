@@ -10,6 +10,7 @@ import { Text, Box } from 'ink'
 import type { UIMessage } from '../store.js'
 import { ToolCallView } from '../ToolCallView.js'
 import { TodoListView, type TodoItem } from './TodoListView.js'
+import { Markdown } from './Markdown.js'
 
 function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
   switch (msg.type) {
@@ -24,9 +25,7 @@ function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'assistant':
       return (
         <Box marginLeft={2} flexDirection="column">
-          {msg.text.split('\n').map((line, i) => (
-            <Text key={i}>{line}</Text>
-          ))}
+          <Markdown>{msg.text}</Markdown>
         </Box>
       )
 

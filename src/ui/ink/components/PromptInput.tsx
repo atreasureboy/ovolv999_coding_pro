@@ -180,9 +180,17 @@ export function PromptInput({
     if (input === '\x05') { setCursor(text.length); return }
     if (input === '\x15') { setText(''); setCursor(0); return }
 
-    // ── Printable characters ─────────────────────────────────────────────
+    // Ctrl+J = newline (multi-line input)
+    if (input === '\x0a') {
+      const newText = text.slice(0, cursor) + '\n' + text.slice(cursor)
+      setText(newText)
+      setCursor(cursor + 1)
+      return
+    }
+
+    // ── Printable characters (including multi-line paste) ───────────────
     if (input && !key.ctrl && !key.meta && input !== '\r' && input !== '\n') {
-      // Handle paste (multi-char input)
+      // Handle paste (multi-char input possibly containing newlines)
       const newText = text.slice(0, cursor) + input + text.slice(cursor)
       setText(newText)
       setCursor(cursor + input.length)
@@ -191,16 +199,52 @@ export function PromptInput({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const hasNewline = text.includes('\n')
+
   return (
     <Box flexDirection="column">
-      <Box>
-        <Text bold color="blueBright">❯ </Text>
-        <Text>
-          {text.slice(0, cursor)}
-        </Text>
-        <Text color="blueBright">{cursor < text.length ? text[cursor] : ' '}</Text>
-        {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
-      </Box>
+      {hasNewline ? (
+        // Multi-line render: show each line, cursor on the active line
+        <Box flexDirection="column">
+          <Box>
+            <Text bold color="blueBright">❯ </Text>
+            <Text dimColor>(multi-line · Ctrl+J=newline · Enter=submit)</Text>
+          </Box>
+          {text.split('\n').map((line, i, arr) => {
+            // Calculate absolute position of this line's start
+            const lineStart = i === 0 ? 0 : arr.slice(0, i).join('\n').length + 1
+            const relCursor = cursor - lineStart
+            const isCursorLine = relCursor >= 0 && relCursor <= line.length
+            if (isCursorLine && i === arr.length - 1 || (isCursorLine && relCursor <= line.length)) {
+              return (
+                <Box key={i} marginLeft={2}>
+                  <Text>
+                    {line.slice(0, Math.max(0, relCursor))}
+                  </Text>
+                  <Text color="blueBright">
+                    {relCursor < line.length ? line[relCursor] : ' '}
+                  </Text>
+                  {relCursor < line.length ? <Text>{line.slice(relCursor + 1)}</Text> : null}
+                </Box>
+              )
+            }
+            return (
+              <Box key={i} marginLeft={2}>
+                <Text>{line || ' '}</Text>
+              </Box>
+            )
+          })}
+        </Box>
+      ) : (
+        <Box>
+          <Text bold color="blueBright">❯ </Text>
+          <Text>
+            {text.slice(0, cursor)}
+          </Text>
+          <Text color="blueBright">{cursor < text.length ? text[cursor] : ' '}</Text>
+          {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
+        </Box>
+      )}
       {showMenu && menuEntries.length > 0 ? (
         <SlashMenu entries={menuEntries} selected={menuSelected} />
       ) : null}

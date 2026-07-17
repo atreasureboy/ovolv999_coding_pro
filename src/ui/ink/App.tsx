@@ -25,6 +25,8 @@ import { StatusBar } from './components/StatusBar.js'
 import { PlanView } from './components/PlanView.js'
 import { PermissionDialog } from './components/PermissionDialog.js'
 import { SelectPicker } from './components/SelectPicker.js'
+import { Markdown } from './components/Markdown.js'
+import { getGitBranch } from './gitInfo.js'
 import type { OpenAIMessage } from '../../core/types.js'
 
 // ── Context calculation (lightweight — avoids importing full compact module) ──
@@ -54,6 +56,8 @@ export interface AppProps {
   initialHistory: OpenAIMessage[]
   /** Max context tokens (for StatusBar). */
   maxContextTokens: number
+  /** Working directory (for git branch display). */
+  cwd: string
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -67,6 +71,7 @@ export function App({
   dispatchSlash,
   initialHistory,
   maxContextTokens,
+  cwd,
 }: AppProps): React.ReactElement {
   const state: UIState = useUIStore(store)
   const { exit } = useApp()
@@ -158,9 +163,7 @@ export function App({
       {/* Live streaming text */}
       {state.streamingText ? (
         <Box marginLeft={2} flexDirection="column">
-          {state.streamingText.split('\n').map((line, i) => (
-            <Text key={i}>{line}</Text>
-          ))}
+          <Markdown>{state.streamingText}</Markdown>
         </Box>
       ) : null}
 
@@ -216,6 +219,7 @@ export function App({
         cost={state.cost}
         apiCalls={state.apiCalls}
         planMode={state.planMode}
+        gitBranch={getGitBranch(cwd)}
       />
     </Box>
   )
