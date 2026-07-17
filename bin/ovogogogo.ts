@@ -1294,7 +1294,7 @@ async function main(): Promise<void> {
   }
 
   const permissionManager = new PermissionManager()
-  permissionManager.setMode(settings.permissions?.mode ?? 'bypassPermissions')
+  permissionManager.setMode(settings.permissions?.mode ?? (ink ? 'default' : 'bypassPermissions'))
   for (const rule of settings.permissions?.rules ?? []) {
     permissionManager.addRule(rule)
   }
@@ -1403,6 +1403,16 @@ async function main(): Promise<void> {
   const agentFactory: AgentChildEngineFactory = (childConfig, childRenderer) =>
     new ExecutionEngine(childConfig, childRenderer as Renderer)
 
+  // ── Ink UI mode: create UIStore early so config callbacks can use it ──────
+  let uiStore: UIStore | undefined
+  let inkRendererInstance: InkRenderer | undefined
+  if (ink) {
+    const { UIStore: UIStoreClass } = await import('../src/ui/ink/store.js')
+    const { InkRenderer: InkRendererClass } = await import('../src/ui/ink/inkRenderer.js')
+    uiStore = new UIStoreClass()
+    inkRendererInstance = new InkRendererClass(uiStore)
+  }
+
   const config: EngineConfig = {
     model,
     apiKey,
@@ -1452,6 +1462,10 @@ async function main(): Promise<void> {
       writeOut: (s) => process.stdout.write(s),
     }),
     exitPlanMode: async (plan: string): Promise<boolean> => {
+      // Ink UI mode: show plan approval overlay
+      if (uiStore) {
+        return uiStore.showPlanApproval(plan)
+      }
       // Non-TTY (pipe mode, sub-agent, before REPL has wired its readline):
       // auto-approve. This is the explicit, documented contract — we do NOT
       // wait for stdin to produce a "y" because nobody is typing.
@@ -1472,6 +1486,23 @@ async function main(): Promise<void> {
       }
       return answer.trim().toLowerCase().startsWith('y')
     },
+    requestPermission: uiStore
+      ? async (toolName, input, riskLevel) => {
+          const preview = toolName === 'Bash' && typeof input.command === 'string'
+            ? input.command
+            : JSON.stringify(input).slice(0, 100)
+          const result = await uiStore.showPermissionDialog({ toolName, preview, riskLevel })
+          if (result.alwaysAllow) {
+            permissionManager.addRule({
+              toolName,
+              ruleContent: '*',
+              behavior: 'allow',
+              source: 'user',
+            })
+          }
+          return result.approved
+        }
+      : undefined,
   }
 
   // Plan-mode config: read-only analysis, no reflection (plans aren't completed work).
@@ -1485,15 +1516,7 @@ async function main(): Promise<void> {
     enabledModules: ['memory', 'workspace'],
   }
 
-  // ── Ink UI mode: create UIStore + InkRenderer for the engine ──────────────
-  let uiStore: UIStore | undefined
-  let inkRendererInstance: InkRenderer | undefined
-  if (ink) {
-    const { UIStore } = await import('../src/ui/ink/store.js')
-    const { InkRenderer } = await import('../src/ui/ink/inkRenderer.js')
-    uiStore = new UIStore()
-    inkRendererInstance = new InkRenderer(uiStore)
-  }
+  // ── Ink UI mode: UIStore + InkRenderer already created above (before config)
 
   const engine = new ExecutionEngine(config, inkRendererInstance
     ? (inkRendererInstance as unknown as Renderer)

@@ -7,6 +7,7 @@
 
 import { Text, Box } from 'ink'
 import { str } from '../../core/strings.js'
+import { DiffView, computeLineDiff } from './components/DiffView.js'
 
 interface ToolVisual {
   icon: string
@@ -82,6 +83,11 @@ export function ToolCallView({ name, input, result, isError }: ToolCallProps): R
   const v = viz(name)
   const preview = previewTool(name, input)
 
+  // Show inline diff for Edit tools when result is available
+  const showDiff = name === 'Edit' && result !== undefined && !isError
+  const oldText = showDiff ? str(input.old_string) : ''
+  const newText = showDiff ? str(input.new_string) : ''
+
   return (
     <Box flexDirection="column">
       <Box>
@@ -89,7 +95,12 @@ export function ToolCallView({ name, input, result, isError }: ToolCallProps): R
         <Text bold color={v.color}> {name}</Text>
         {preview ? <Text dimColor> {preview}</Text> : null}
       </Box>
-      {result !== undefined ? (
+      {showDiff ? (
+        <Box marginLeft={4} flexDirection="column">
+          <DiffView lines={computeLineDiff(oldText, newText)} maxLines={12} />
+        </Box>
+      ) : null}
+      {result !== undefined && !showDiff ? (
         <Box marginLeft={4} flexDirection="column">
           {result
             .split('\n')
@@ -108,11 +119,12 @@ export function ToolCallView({ name, input, result, isError }: ToolCallProps): R
             return hidden > 0 ? <Text dimColor> +{hidden} more</Text> : null
           })()}
         </Box>
-      ) : (
+      ) : null}
+      {result === undefined ? (
         <Box marginLeft={4}>
           <Text dimColor italic>running...</Text>
         </Box>
-      )}
+      ) : null}
     </Box>
   )
 }

@@ -18,7 +18,7 @@ import type { ExecutionEngine } from '../../core/engine.js'
 import type { OpenAIMessage } from '../../core/types.js'
 import type { Renderer } from '../renderer.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
-import { listSessions } from '../../core/sessionManager.js'
+import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 
 export interface InkReplOptions {
   store: UIStore
@@ -65,6 +65,15 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
         .map((s) => `  ${s.name}  ${s.messages} msgs`)
         .join('\n')
     },
+    loadSession: (name: string) => {
+      const sessionPath = resolveSessionPath(opts.cwd, name)
+      if (!sessionPath) return null
+      try {
+        return loadSessionFile(sessionPath)
+      } catch {
+        return null
+      }
+    },
   }
 
   // ── Turn execution ────────────────────────────────────────────────────────
@@ -105,6 +114,33 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
         return runOneTurn(prompt)
       },
       dispatchSlash: async (input: string): Promise<boolean> => {
+        // ── Interactive /resume (no args) → SelectPicker ─────────────────────
+        if (input.trim() === '/resume' || input.trim() === '/r') {
+          const sessions = listSessions(opts.cwd)
+          if (sessions.length === 0) {
+            store.addInfo('No saved sessions found.')
+            return true
+          }
+          const items = sessions.slice(0, 20).map((s) => ({
+            label: s.name,
+            description: `${s.messages} msgs`,
+            value: s.name,
+          }))
+          const selected = await store.showSelectPicker('Resume Session', items)
+          if (selected) {
+            const loaded = slashCtx.loadSession?.(selected)
+            if (loaded && loaded.length > 0) {
+              history.length = 0
+              history.push(...loaded)
+              store.clearMessages()
+              store.addInfo(`Resumed session: ${selected} (${loaded.length} messages)`)
+            } else {
+              store.addError(`Failed to load session: ${selected}`)
+            }
+          }
+          return true
+        }
+
         const result = await dispatchSlashCommand(input, slashCtx)
         if (result === null) return false
         switch (result.type) {

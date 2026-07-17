@@ -39,6 +39,20 @@ export type UIMessage =
   | { id: number; type: 'compact'; phase: 'start' | 'done'; origTokens?: number; sumTokens?: number }
   | { id: number; type: 'context-warning'; tokens: number; max: number; pct: number }
 
+// ── Interactive overlay types (plan approval, permission, select picker) ─────
+
+export interface UIPermissionRequest {
+  toolName: string
+  preview: string
+  riskLevel: 'safe' | 'needs-approval' | 'dangerous'
+}
+
+export interface UISelectItem<T = unknown> {
+  label: string
+  description?: string
+  value: T
+}
+
 /** Distributive Omit — properly handles the discriminated union. */
 export type NewUIMessage = {
   [K in UIMessage['type']]: Omit<Extract<UIMessage, { type: K }>, 'id'>
@@ -61,6 +75,12 @@ export interface UIState {
   interrupt: { active: boolean; feedback?: string } | null
   /** Plan mode indicator. */
   planMode: boolean
+  /** Pending plan approval (ExitPlanMode tool). */
+  pendingPlan: { plan: string } | null
+  /** Pending permission request (tool approval). */
+  pendingPermission: UIPermissionRequest | null
+  /** Pending select picker overlay. */
+  selectOverlay: { title: string; items: UISelectItem[] } | null
 }
 
 const INITIAL_STATE: UIState = {
@@ -72,6 +92,9 @@ const INITIAL_STATE: UIState = {
   banner: null,
   interrupt: null,
   planMode: false,
+  pendingPlan: null,
+  pendingPermission: null,
+  selectOverlay: null,
 }
 
 // ── Store implementation ────────────────────────────────────────────────────
@@ -80,6 +103,10 @@ export class UIStore {
   private state: UIState = { ...INITIAL_STATE }
   private listeners = new Set<() => void>()
   private nextId = 1
+  // Resolvers for interactive overlays (kept outside state — not serializable)
+  private planResolver: ((approved: boolean) => void) | null = null
+  private permissionResolver: ((result: { approved: boolean; alwaysAllow: boolean }) => void) | null = null
+  private selectResolver: ((value: unknown) => void) | null = null
 
   getState = (): UIState => this.state
 
@@ -199,6 +226,62 @@ export class UIStore {
   setPlanMode(active: boolean): void {
     this.state = { ...this.state, planMode: active }
     this.emit()
+  }
+
+  // ── Interactive overlays (plan approval, permission, select picker) ───────
+  // These return Promises that resolve when the user responds via the UI.
+  // The resolve functions are stored privately and called by resolveX().
+
+  showPlanApproval(plan: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.planResolver = resolve
+      this.state = { ...this.state, pendingPlan: { plan } }
+      this.emit()
+    })
+  }
+
+  resolvePlan(approved: boolean): void {
+    this.planResolver?.(approved)
+    this.planResolver = null
+    this.state = { ...this.state, pendingPlan: null }
+    this.emit()
+  }
+
+  showPermissionDialog(request: UIPermissionRequest): Promise<{ approved: boolean; alwaysAllow: boolean }> {
+    return new Promise<{ approved: boolean; alwaysAllow: boolean }>((resolve) => {
+      this.permissionResolver = resolve
+      this.state = { ...this.state, pendingPermission: request }
+      this.emit()
+    })
+  }
+
+  resolvePermission(approved: boolean, alwaysAllow: boolean): void {
+    this.permissionResolver?.({ approved, alwaysAllow })
+    this.permissionResolver = null
+    this.state = { ...this.state, pendingPermission: null }
+    this.emit()
+  }
+
+  showSelectPicker<T>(title: string, items: UISelectItem<T>[]): Promise<T | null> {
+    return new Promise<T | null>((resolve) => {
+      this.selectResolver = resolve as (value: unknown) => void
+      this.state = { ...this.state, selectOverlay: { title, items } }
+      this.emit()
+    })
+  }
+
+  resolveSelect(value: unknown): void {
+    this.selectResolver?.(value)
+    this.selectResolver = null
+    this.state = { ...this.state, selectOverlay: null }
+    this.emit()
+  }
+
+  /** True when any interactive overlay is blocking input. */
+  hasOverlay(): boolean {
+    return this.state.pendingPlan !== null
+      || this.state.pendingPermission !== null
+      || this.state.selectOverlay !== null
   }
 
   /** Clear all messages (for /clear). */

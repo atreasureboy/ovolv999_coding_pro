@@ -311,6 +311,17 @@ export interface EngineConfig {
    */
   enterPlanMode?: () => void
   /**
+   * Permission-request callback — when the PermissionManager returns 'ask'
+   * for a tool, the engine calls this (if present) to prompt the user for
+   * approval. Returns true to allow, false to deny. Absent in bypass/auto
+   * mode (tools run without prompts).
+   */
+  requestPermission?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    riskLevel: 'safe' | 'needs-approval' | 'dangerous',
+  ) => Promise<boolean>
+  /**
    * Factory for spawning a child engine from AgentTool. Optional: an
    * ExecutionEngine can be built without one (e.g. for tests / REPLs that
    * don't spawn sub-agents). When set, the engine constructor wires its

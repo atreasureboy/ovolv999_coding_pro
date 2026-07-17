@@ -1011,7 +1011,18 @@ export class ExecutionEngine {
       }
     }
     if (permission === 'ask') {
-      this.renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
+      if (this.config.requestPermission) {
+        const riskLevel = isDangerous ? 'dangerous' : 'needs-approval'
+        const approved = await this.config.requestPermission(toolName, input, riskLevel)
+        if (!approved) {
+          return {
+            content: `Permission denied by user for ${toolName}.`,
+            isError: true,
+          }
+        }
+      } else {
+        this.renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
+      }
     }
 
     const result = await tool.execute(input, context)

@@ -22,6 +22,9 @@ import { Spinner } from './Spinner.js'
 import { MessageList } from './components/MessageList.js'
 import { PromptInput } from './components/PromptInput.js'
 import { StatusBar } from './components/StatusBar.js'
+import { PlanView } from './components/PlanView.js'
+import { PermissionDialog } from './components/PermissionDialog.js'
+import { SelectPicker } from './components/SelectPicker.js'
 import type { OpenAIMessage } from '../../core/types.js'
 
 // ── Context calculation (lightweight — avoids importing full compact module) ──
@@ -165,8 +168,32 @@ export function App({
       {/* Spinner */}
       <Spinner active={state.spinnerActive} verb={state.spinnerVerb} />
 
+      {/* Interactive overlays — these capture keyboard while active */}
+      {state.pendingPlan ? (
+        <PlanView
+          plan={state.pendingPlan.plan}
+          onResolve={(approved) => store.resolvePlan(approved)}
+        />
+      ) : null}
+
+      {state.pendingPermission ? (
+        <PermissionDialog
+          request={state.pendingPermission}
+          onResolve={(approved, alwaysAllow) => store.resolvePermission(approved, alwaysAllow)}
+        />
+      ) : null}
+
+      {state.selectOverlay ? (
+        <SelectPicker
+          items={state.selectOverlay.items}
+          title={state.selectOverlay.title}
+          onSelect={(value) => store.resolveSelect(value)}
+          onCancel={() => store.resolveSelect(null)}
+        />
+      ) : null}
+
       {/* Input or "running..." indicator */}
-      {state.running ? (
+      {state.running || store.hasOverlay() ? (
         <Box marginTop={1}>
           <Text dimColor italic>  (turn in progress — ESC to interrupt)</Text>
         </Box>
