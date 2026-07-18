@@ -100,10 +100,13 @@ export function loadOvogoMd(cwd: string): OvogoMdFile[] {
 
   for (const dir of dirs) {
     // Project instructions (checked into codebase)
-    const projectPath = join(dir, 'OVOGO.md')
-    if (existsSync(projectPath) && projectPath !== userPath) {
-      const content = readAndTruncate(projectPath)
-      if (content) files.push({ path: projectPath, content, type: 'project' })
+    // Support both OVOGO.md and AGENTS.md (cross-tool convention)
+    for (const filename of ['OVOGO.md', 'AGENTS.md']) {
+      const projectPath = join(dir, filename)
+      if (existsSync(projectPath) && projectPath !== userPath) {
+        const content = readAndTruncate(projectPath)
+        if (content) files.push({ path: projectPath, content, type: 'project' })
+      }
     }
 
     // Project-private instructions (.ovogo/OVOGO.md — add to .gitignore)

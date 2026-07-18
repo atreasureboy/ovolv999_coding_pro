@@ -788,6 +788,40 @@ registerCommand({
   handler: (_args, ctx) => text('Working directory: ' + ctx.cwd),
 })
 
+// ── /search — search conversation history ───────────────────────────────────
+
+registerCommand({
+  name: 'search',
+  description: 'Search conversation history for a keyword',
+  usage: '/search <keyword>',
+  handler: (args, ctx) => {
+    const query = args.trim().toLowerCase()
+    if (!query) return text('Usage: /search <keyword>')
+    if (ctx.history.length === 0) return text('No conversation to search.')
+
+    const results: Array<{ role: string; preview: string; idx: number }> = []
+    for (let i = 0; i < ctx.history.length; i++) {
+      const msg = ctx.history[i]
+      if (msg.role === 'system') continue
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      if (content.toLowerCase().includes(query)) {
+        const preview = content.slice(0, 100).replace(/\n/g, ' ')
+        results.push({ role: msg.role, preview, idx: i })
+      }
+    }
+
+    if (results.length === 0) return text(`No matches for "${args.trim()}".`)
+
+    const lines = results.slice(0, 15).map((r) =>
+      `  [${r.idx}] ${r.role}: ${r.preview}${r.preview.length >= 100 ? '...' : ''}`
+    )
+    let out = `Found ${results.length} match${results.length === 1 ? '' : 'es'} for "${args.trim()}":\n`
+    out += lines.join('\n')
+    if (results.length > 15) out += `\n  ... and ${results.length - 15} more`
+    return text(out)
+  },
+})
+
 // ── /version — show version ─────────────────────────────────────────────────
 
 registerCommand({

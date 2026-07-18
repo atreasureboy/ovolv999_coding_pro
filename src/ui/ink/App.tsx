@@ -28,6 +28,7 @@ import { SelectPicker } from './components/SelectPicker.js'
 import { Markdown } from './components/Markdown.js'
 import { getGitBranch } from './gitInfo.js'
 import { HelpOverlay } from './components/HelpOverlay.js'
+import { expandAtMentions } from './expandAtMentions.js'
 import type { OpenAIMessage } from '../../core/types.js'
 
 // ── Context calculation (lightweight — avoids importing full compact module) ──
@@ -94,13 +95,18 @@ export function App({
         // Unknown command — let the engine try it as a prompt
       }
 
-      // Normal turn
+      // Normal turn — expand @file mentions before sending to engine
       store.addUserMessage(text)
+      const { text: expandedText, mentions } = expandAtMentions(text, cwd)
+      if (mentions.some((m) => m.found)) {
+        const found = mentions.filter((m) => m.found)
+        store.addInfo(`📎 Loaded ${found.length} file${found.length > 1 ? 's' : ''}: ${found.map((m) => m.path).join(', ')}`)
+      }
       store.setRunning(true)
       store.setSpinner(true, 'Thinking')
 
       try {
-        const result = await runTurn(text, history)
+        const result = await runTurn(expandedText, history)
         setHistory(result.newHistory)
         store.addInfo(`Done · ${result.reason}`)
       } catch (err: unknown) {
