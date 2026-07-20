@@ -56,7 +56,7 @@ export interface FileContext {
 
 export interface DetectionOptions {
   /** Working directory */
-  cwd: string
+  cwd?: string
   /** Max file size to include (bytes, default 100KB) */
   maxFileSize?: number
   /** Max lines per file (default 500) */

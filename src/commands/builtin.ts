@@ -1800,6 +1800,47 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'cmd-history',
+  aliases: ['hist', 'cmdhist'],
+  description: 'Search past commands/prompts. Usage: /cmd-history [search <query> | stats | clear]',
+  handler: (args, ctx) => {
+    const {
+      getProjectHistoryPath, loadHistory, searchHistory,
+      getHistoryStats, formatHistoryResults, formatHistoryStats, clearHistory,
+    } = require('../core/commandHistory.js') as typeof import('../core/commandHistory.js')
+
+    const path = getProjectHistoryPath(ctx.cwd)
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'recent'
+
+    if (sub === 'stats') {
+      const store = loadHistory(path)
+      return text(formatHistoryStats(getHistoryStats(store)))
+    }
+
+    if (sub === 'clear') {
+      const count = clearHistory(path)
+      return text(`✓ Cleared ${count} history entries`)
+    }
+
+    if (sub === 'search') {
+      const query = parts.slice(1).join(' ')
+      const store = loadHistory(path)
+      const results = searchHistory(store, query)
+      return text(formatHistoryResults(results))
+    }
+
+    if (sub === 'recent' || !sub) {
+      const store = loadHistory(path)
+      const results = searchHistory(store, '', { limit: 20 })
+      return text(formatHistoryResults(results))
+    }
+
+    return text(`Usage: /cmd-history [search <query> | stats | clear]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
