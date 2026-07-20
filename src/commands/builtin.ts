@@ -561,6 +561,69 @@ registerCommand({
   },
 })
 
+// ── /git — general-purpose git command ──────────────────────────────────────
+
+registerCommand({
+  name: 'git',
+  description: 'Run git commands: /git status|log|stash|add|push|pull',
+  usage: '/git <subcommand> [args]',
+  handler: (args, ctx) => {
+    const [subcmd, ...rest] = args.trim().split(/\s+/)
+    const sub = (subcmd ?? '').toLowerCase()
+
+    const safeRun = (cmd: string, params: string[], label: string): SlashCommandResult => {
+      try {
+        const out = execFileSync(cmd, params, { cwd: ctx.cwd, encoding: 'utf8', timeout: 15_000 }).trim()
+        return text(out ? `${label}:\n\n${out}` : `${label}: (no output)`)
+      } catch (err) {
+        return text(`${label} failed: ${(err as Error).message.slice(0, 200)}`)
+      }
+    }
+
+    try {
+      switch (sub) {
+        case '':
+        case 'status':
+          return safeRun('git', ['status', '--short'], 'Git status')
+        case 'log': {
+          const n = rest[0] && /^\d+$/.test(rest[0]) ? rest[0] : '10'
+          return safeRun('git', ['log', `--oneline`, `-${n}`, '--graph'], `Git log (last ${n})`)
+        }
+        case 'stash':
+          if (rest[0] === 'pop' || rest[0] === 'apply') {
+            return safeRun('git', ['stash', rest[0]], `Git stash ${rest[0]}`)
+          }
+          if (rest[0] === 'list') {
+            return safeRun('git', ['stash', 'list'], 'Git stash list')
+          }
+          if (rest[0] === 'drop') {
+            return safeRun('git', ['stash', 'drop', rest[1] ?? ''], 'Git stash drop')
+          }
+          return safeRun('git', ['stash', 'push', '-m', rest.join(' ') || 'ovolv999 stash'], 'Git stash')
+        case 'add':
+          return safeRun('git', ['add', ...(rest.length > 0 ? rest : ['.'])], 'Git add')
+        case 'push':
+          return safeRun('git', ['push', ...rest], 'Git push')
+        case 'pull':
+          return safeRun('git', ['pull', ...rest], 'Git pull')
+        case 'fetch':
+          return safeRun('git', ['fetch', ...rest], 'Git fetch')
+        case 'remote':
+          return safeRun('git', ['remote', '-v'], 'Git remotes')
+        case 'tag':
+          if (rest.length === 0) {
+            return safeRun('git', ['tag', '-l'], 'Git tags')
+          }
+          return safeRun('git', ['tag', ...rest], 'Git tag')
+        default:
+          return text(`Unknown git subcommand: ${sub}\nAvailable: status, log, stash, add, push, pull, fetch, remote, tag`)
+      }
+    } catch {
+      return text('Not a git repository or git not available.')
+    }
+  },
+})
+
 // ── /init — initialize project config ───────────────────────────────────────
 
 registerCommand({
