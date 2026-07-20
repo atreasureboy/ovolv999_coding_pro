@@ -130,6 +130,7 @@ registerCommand({
   name: 'compact',
   description: 'Summarize conversation to save context (manual trigger)',
   usage: '/compact [optional instructions]',
+  aliases: ['c'],
   handler: (args, ctx) => {
     if (ctx.history.length < 4) {
       return text('Not enough messages to compact (need at least 4).')
@@ -167,6 +168,7 @@ registerCommand({
 registerCommand({
   name: 'cost',
   description: 'Show token usage and cost summary',
+  aliases: ['co', '$'],
   handler: (_args, ctx) => {
     const tracker = ctx.engine.getCostTracker()
     if (tracker.getTotalAPICalls() === 0) {
@@ -210,6 +212,7 @@ registerCommand({
 registerCommand({
   name: 'context',
   description: 'Show context window usage breakdown',
+  aliases: ['ctx'],
   handler: (_args, ctx) => {
     const state = calculateContextState(ctx.history)
     const bar_len = 30
@@ -237,6 +240,7 @@ registerCommand({
 registerCommand({
   name: 'model',
   description: 'Show current model',
+  aliases: ['m'],
   handler: (_args, ctx) => text(`Current model: ${ctx.engine.getModel()}`),
 })
 
@@ -358,6 +362,7 @@ registerCommand({
 registerCommand({
   name: 'tasks',
   description: 'List background tasks',
+  aliases: ['t'],
   handler: (_args, ctx) => {
     const mgr = ctx.engine.getBackgroundTaskManager()
     const tasks = mgr.listTasks()
@@ -823,6 +828,7 @@ registerCommand({
 registerCommand({
   name: 'status',
   description: 'Show current session status',
+  aliases: ['st', 'info'],
   handler: (_args, ctx) => {
     const cost = ctx.engine.getCostTracker()
     const state = calculateContextState(ctx.history)
@@ -854,6 +860,7 @@ registerCommand({
 registerCommand({
   name: 'files',
   description: 'Show files edited in this session',
+  aliases: ['fl'],
   handler: (_args, ctx) => {
     const fh = ctx.engine.getFileHistory()
     if (!fh) return text('File history tracking not available.')
