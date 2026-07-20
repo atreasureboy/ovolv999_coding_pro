@@ -151,6 +151,8 @@ interface Args {
   continueSession: boolean
   resumeSession?: string
   ink: boolean
+  pipe: boolean
+  pipeFormat: 'text' | 'json'
 }
 
 /**
@@ -361,6 +363,8 @@ function parseArgs(argv: string[]): Args {
   let continueSession = false
   let resumeSession: string | undefined
   let ink = false
+  let pipe = false
+  let pipeFormat: 'text' | 'json' = 'text'
 
   try {
     for (let i = 0; i < args.length; i++) {
@@ -403,6 +407,13 @@ function parseArgs(argv: string[]): Args {
           resumeSession = requireValue(arg, args[++i])
           break
         case '--ink': ink = true; break
+        case '--pipe': pipe = true; break
+        case '--format':
+          pipeFormat = requireValue(arg, args[++i]) as 'text' | 'json'
+          if (pipeFormat !== 'text' && pipeFormat !== 'json') {
+            throw new ArgError(`Error: --format must be "text" or "json" (got "${pipeFormat}")`)
+          }
+          break
         default:
           if (!arg.startsWith('-')) task = task ? task + ' ' + arg : arg
       }
@@ -414,7 +425,7 @@ function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat }
 }
 
 interface ResolvedApiEnvironment {
@@ -475,6 +486,8 @@ OPTIONS
   -c, --continue            Resume the most recent session under <cwd>/sessions/
   -r, --resume <ref>        Resume a specific session by name, prefix, dir, or history.json
   --ink                     Launch with Ink/React UI (full component tree, live autocomplete)
+  --pipe                    Pipe mode: read stdin as context, output to stdout (no UI)
+  --format <text|json>      Output format for pipe mode (default: text)
   -v, --version             Print version and exit
   -h, --help                Show this help
 
@@ -1218,9 +1231,9 @@ async function runSingleTask(
 // ─────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────
-
 async function main(): Promise<void> {
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat } = parseArgs(process.argv)
+
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
 
@@ -1232,8 +1245,69 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  if (help) {
+  if (help && !pipe) {
     printHelp(skills)
+    process.exit(0)
+  }
+
+  // ── Pipe mode: minimal flow, no banner, no session, clean stdout ────────
+  if (pipe) {
+    if (help) {
+      const { getPipeHelp } = await import('../src/integrations/pipeMode.js')
+      process.stdout.write(getPipeHelp() + '\n')
+      process.exit(0)
+    }
+
+    const apiKey = apiEnvironment.apiKey
+    if (!apiKey) {
+      process.stderr.write('Error: no API key configured for pipe mode\n')
+      process.exit(1)
+    }
+
+    const { readStdin, executePipe, formatPipeOutput } = await import('../src/integrations/pipeMode.js')
+
+    let stdinContent = ''
+    if (!process.stdin.isTTY) {
+      try {
+        stdinContent = await readStdin()
+      } catch (err) {
+        process.stderr.write(`Error reading stdin: ${(err as Error).message}\n`)
+        process.exit(1)
+      }
+    }
+
+    if (!task && !stdinContent.trim()) {
+      process.stderr.write('Error: no prompt or stdin input provided\n')
+      process.exit(1)
+    }
+
+    const OpenAI = (await import('openai')).default
+    const client = new OpenAI({ apiKey, baseURL: apiEnvironment.baseURL })
+
+    const llmCall = async (prompt: string): Promise<string> => {
+      try {
+        const resp = await client.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: 'You are a helpful coding assistant. Respond concisely.' },
+            { role: 'user', content: prompt },
+          ],
+        })
+        return resp.choices[0]?.message?.content ?? ''
+      } catch (err) {
+        process.stderr.write(`API error: ${(err as Error).message}\n`)
+        process.exit(2)
+      }
+    }
+
+    const result = await executePipe(
+      { cwd, prompt: task, format: pipeFormat },
+      stdinContent,
+      llmCall,
+    )
+
+    process.stdout.write(formatPipeOutput(result, pipeFormat))
+    if (!process.stdout.write('\n')) { /* best-effort flush */ }
     process.exit(0)
   }
 
