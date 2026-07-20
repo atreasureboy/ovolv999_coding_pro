@@ -19,6 +19,7 @@ import type { OpenAIMessage } from '../../core/types.js'
 import type { Renderer } from '../renderer.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
+import { registerCleanup } from '../../utils/cleanup.js'
 
 export interface InkReplOptions {
   store: UIStore
@@ -202,5 +203,12 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
 
   store.setBanner(opts.version, opts.model)
 
-  await instance.waitUntilExit()
+  // Register cleanup handlers for signals/crashes
+  const cleanup = registerCleanup({ onCleanup: () => instance.unmount() })
+
+  try {
+    await instance.waitUntilExit()
+  } finally {
+    cleanup()
+  }
 }
