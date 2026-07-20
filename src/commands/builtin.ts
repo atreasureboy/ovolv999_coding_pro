@@ -214,7 +214,8 @@ registerCommand({
   name: 'context',
   description: 'Show context window usage breakdown',
   aliases: ['ctx'],
-  handler: (_args, ctx) => {
+  usage: '/context [top N]  (show top N token consumers)',
+  handler: (args, ctx) => {
     const state = calculateContextState(ctx.history)
     const bar_len = 30
     const filled = Math.round(state.pct * bar_len)
@@ -226,13 +227,34 @@ registerCommand({
       state.shouldWarn ? '! HIGH' :
       'OK'
 
-    return text(
-      'Context Window:\n' +
-      '  ' + bar + ' ' + pct_str + '%  ' + status + '\n' +
-      '  Tokens: ' + state.currentTokens.toLocaleString() + ' / ' + state.maxTokens.toLocaleString() + '\n' +
-      '  Strategy: ' + state.strategy + '\n' +
-      '  Messages: ' + ctx.history.length
-    )
+    const lines: string[] = [
+      'Context Window:',
+      '  ' + bar + ' ' + pct_str + '%  ' + status,
+      '  Tokens: ' + state.currentTokens.toLocaleString() + ' / ' + state.maxTokens.toLocaleString(),
+      '  Strategy: ' + state.strategy,
+      '  Messages: ' + ctx.history.length,
+    ]
+
+    // Show top N token consumers if requested or context is high
+    const topN = args.trim() ? Math.min(20, Math.max(1, parseInt(args.trim(), 10) || 5)) : (state.pct > 0.5 ? 5 : 0)
+    if (topN > 0 && ctx.history.length > 0) {
+      const consumers = ctx.history
+        .map((m, i) => {
+          const content = typeof m.content === 'string'
+            ? m.content
+            : JSON.stringify(m.content ?? m.tool_calls ?? '')
+          return { idx: i, role: m.role, tokens: Math.ceil(content.length / 4), preview: content.slice(0, 60).replace(/\n/g, ' ') }
+        })
+        .sort((a, b) => b.tokens - a.tokens)
+        .slice(0, topN)
+
+      lines.push('', 'Top token consumers:')
+      for (const c of consumers) {
+        lines.push(`  [${c.idx.toString().padStart(3)}] ${c.role.padEnd(9)} ${c.tokens.toString().padStart(6)} tok  ${c.preview}${c.preview.length >= 60 ? '…' : ''}`)
+      }
+    }
+
+    return text(lines.join('\n'))
   },
 })
 
