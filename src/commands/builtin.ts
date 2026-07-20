@@ -1788,6 +1788,18 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'onboard',
+  aliases: ['overview', 'project-info'],
+  description: 'Generate a comprehensive project overview (structure, deps, tests, stats)',
+  handler: (_args, ctx) => {
+    const { analyzeProject, formatOverview } =
+      require('../core/onboarding.js') as typeof import('../core/onboarding.js')
+    const overview = analyzeProject(ctx.cwd)
+    return text(formatOverview(overview))
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
