@@ -2091,6 +2091,85 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'snapshot',
+  aliases: ['snap', 'ws'],
+  description: 'Manage workspace snapshots. Usage: /snapshot [save|list|show|remove|add-file|add-todo|diff]',
+  handler: (args, ctx) => {
+    const {
+      createSnapshot, removeSnapshot, getSnapshot, listSnapshots,
+      updateSnapshot, addFileToSnapshot, addTodoToSnapshot, toggleTodoInSnapshot,
+      diffSnapshots, formatSnapshot, formatSnapshotList, formatSnapshotDiff,
+    } = require('../core/workspace.js') as typeof import('../core/workspace.js')
+
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+
+    if (sub === 'save' || sub === 'create') {
+      const name = parts[1]
+      if (!name) return text('Usage: /snapshot save <name> [notes...]')
+      const notes = parts.slice(2).join(' ') || undefined
+      const snap = createSnapshot(ctx.cwd, name, { notes })
+      return text(`✓ Snapshot saved: ${snap.name} (id: ${snap.id})`)
+    }
+
+    if (sub === 'remove' || sub === 'rm') {
+      const target = parts[1]
+      if (!target) return text('Usage: /snapshot remove <id|name>')
+      return text(removeSnapshot(ctx.cwd, target) ? '✓ Snapshot removed' : 'Snapshot not found')
+    }
+
+    if (sub === 'show') {
+      const target = parts[1]
+      if (!target) return text('Usage: /snapshot show <id|name>')
+      const snap = getSnapshot(ctx.cwd, target)
+      if (!snap) return text('Snapshot not found')
+      return text(formatSnapshot(snap))
+    }
+
+    if (sub === 'add-file') {
+      const target = parts[1]
+      const file = parts[2]
+      if (!target || !file) return text('Usage: /snapshot add-file <id|name> <path>')
+      const snap = addFileToSnapshot(ctx.cwd, target, file)
+      return snap ? text(`✓ Added ${file} to "${snap.name}"`) : text('Snapshot not found')
+    }
+
+    if (sub === 'add-todo') {
+      const target = parts[1]
+      const todo = parts.slice(2).join(' ')
+      if (!target || !todo) return text('Usage: /snapshot add-todo <id|name> <text>')
+      const snap = addTodoToSnapshot(ctx.cwd, target, todo)
+      return snap ? text(`✓ Added todo to "${snap.name}"`) : text('Snapshot not found')
+    }
+
+    if (sub === 'toggle-todo') {
+      const target = parts[1]
+      const idx = parseInt(parts[2] ?? '', 10)
+      if (!target || isNaN(idx)) return text('Usage: /snapshot toggle-todo <id|name> <index>')
+      const snap = toggleTodoInSnapshot(ctx.cwd, target, idx)
+      return snap ? text(`✓ Toggled todo ${idx} in "${snap.name}"`) : text('Snapshot or todo index not found')
+    }
+
+    if (sub === 'diff') {
+      const [oldName, newName] = parts.slice(1)
+      if (!oldName || !newName) return text('Usage: /snapshot diff <old> <new>')
+      const old = getSnapshot(ctx.cwd, oldName)
+      const cur = getSnapshot(ctx.cwd, newName)
+      if (!old || !cur) return text('One or both snapshots not found')
+      const diff = diffSnapshots(old, cur)
+      return text(formatSnapshotDiff(diff, oldName, newName))
+    }
+
+    if (sub === 'list' || !sub) {
+      const snaps = listSnapshots(ctx.cwd)
+      return text(formatSnapshotList(snaps))
+    }
+
+    return text(`Usage: /snapshot [save|list|show|remove|add-file|add-todo|toggle-todo|diff]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
