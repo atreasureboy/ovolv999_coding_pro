@@ -1104,6 +1104,83 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'workflow',
+  aliases: ['wf'],
+  description: 'Run or list workflows. Usage: /workflow [list|run <name>|init <name>]',
+  handler: async (args, ctx) => {
+    const parts = args.trim().split(/\s+/)
+    const subcommand = parts[0] ?? 'list'
+    const { loadWorkflows, loadWorkflow, executeWorkflow, writeSampleWorkflow } =
+      require('../core/workflow.js') as typeof import('../core/workflow.js')
+
+    if (subcommand === 'list' || subcommand === '' || !subcommand) {
+      const workflows = loadWorkflows(ctx.cwd)
+      if (workflows.size === 0) {
+        return text('No workflows found. Create one with: /workflow init <name>\nLocation: .ovolv999/workflows/*.json')
+      }
+      const lines: string[] = [`Workflows (${workflows.size}):`]
+      for (const [name, wf] of workflows) {
+        const desc = wf.description ? ` — ${wf.description}` : ''
+        const stepCount = wf.steps.length
+        lines.push(`  ${name.padEnd(20)} ${stepCount} step(s)${desc}`)
+      }
+      return text(lines.join('\n'))
+    }
+
+    if (subcommand === 'init' || subcommand === 'create') {
+      const name = parts[1]
+      if (!name) return text('Usage: /workflow init <name>')
+      const path = writeSampleWorkflow(ctx.cwd, name)
+      return text(`✓ Created sample workflow: ${path}\nEdit it to define your steps, then run with: /workflow run ${name}`)
+    }
+
+    if (subcommand === 'run') {
+      const name = parts[1]
+      if (!name) return text('Usage: /workflow run <name>')
+      const wf = loadWorkflow(ctx.cwd, name)
+      if (!wf) {
+        const available = loadWorkflows(ctx.cwd)
+        const names = [...available.keys()]
+        return text(`Workflow "${name}" not found.${names.length ? `\nAvailable: ${names.join(', ')}` : ''}`)
+      }
+      // Execute synchronously (shell steps) with basic context
+      const result = await executeWorkflow(wf, {
+        cwd: ctx.cwd,
+        runSlash: async (cmd: string) => {
+          // Dispatch slash command through the context's dispatcher if available
+          const dispatch = (ctx as unknown as { dispatchSlash?: (s: string) => Promise<boolean> }).dispatchSlash
+          if (typeof dispatch === 'function') {
+            await dispatch(cmd)
+            return `(executed: ${cmd})`
+          }
+          return `(slash not available: ${cmd})`
+        },
+      })
+      const lines: string[] = [
+        `Workflow "${result.workflowName}" ${result.success ? '✓ completed' : '✗ failed'} (${result.durationMs}ms)`,
+        '',
+      ]
+      for (const step of result.steps) {
+        const status = step.success ? '✓' : '✗'
+        const out = step.output ? ` → ${step.output.slice(0, 80)}${step.output.length > 80 ? '...' : ''}` : ''
+        const err = step.error ? ` [${step.error.slice(0, 80)}]` : ''
+        lines.push(`  ${status} ${step.name} (${step.durationMs}ms)${out}${err}`)
+      }
+      return text(lines.join('\n'))
+    }
+
+    // If no subcommand matched, try to run as workflow name
+    const wf = loadWorkflow(ctx.cwd, subcommand)
+    if (wf) {
+      const result = await executeWorkflow(wf, { cwd: ctx.cwd })
+      return text(`Workflow "${result.workflowName}" ${result.success ? '✓' : '✗'} — ${result.steps.length} steps in ${result.durationMs}ms`)
+    }
+
+    return text(`Unknown subcommand: ${subcommand}\nUsage: /workflow [list|run <name>|init <name>]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
