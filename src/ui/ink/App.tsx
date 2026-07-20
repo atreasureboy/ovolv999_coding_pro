@@ -176,6 +176,11 @@ export function App({
     if (input === '\x0c') {
       stdout.write('\x1b[2J\x1b[3J\x1b[H')
     }
+
+    // Ctrl+O: toggle verbose/compact mode
+    if (input === '\x0f') {
+      store.toggleVerbose()
+    }
   })
 
   // ── Context state for StatusBar ───────────────────────────────────────────
@@ -203,7 +208,7 @@ export function App({
       ) : null}
 
       {/* Conversation messages */}
-      <MessageList messages={state.messages} />
+      <MessageList messages={state.messages} verbose={state.verbose} />
 
       {/* Reasoning / thinking display */}
       {state.streamingReasoning ? (
@@ -281,6 +286,7 @@ export function App({
         cost={state.cost}
         apiCalls={state.apiCalls}
         planMode={state.planMode}
+        verbose={state.verbose}
         gitBranch={getGitBranch(cwd)}
       />
     </Box>

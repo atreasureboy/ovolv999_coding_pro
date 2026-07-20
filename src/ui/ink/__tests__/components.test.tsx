@@ -157,3 +157,80 @@ describe('MessageList scrollback', () => {
     expect(frame).toContain('msg-054')
   })
 })
+
+describe('MessageList tool collapsing', () => {
+  function makeToolMsg(id: number, name: string, result?: string): UIMessage {
+    return {
+      id,
+      type: 'tool',
+      name,
+      input: { file_path: `file${id}.ts` },
+      result: result ?? `result ${id}`,
+      isError: false,
+    }
+  }
+
+  it('collapses 3+ consecutive Read calls into a summary', () => {
+    const msgs: UIMessage[] = [
+      makeToolMsg(1, 'Read'),
+      makeToolMsg(2, 'Read'),
+      makeToolMsg(3, 'Read'),
+      makeToolMsg(4, 'Read'),
+    ]
+    const { lastFrame } = render(<MessageList messages={msgs} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('⤿')
+    expect(frame).toContain('Read ×4')
+    expect(frame).toContain('Ctrl+O')
+  })
+
+  it('does not collapse fewer than 3 consecutive reads', () => {
+    const msgs: UIMessage[] = [
+      makeToolMsg(1, 'Read'),
+      makeToolMsg(2, 'Read'),
+    ]
+    const { lastFrame } = render(<MessageList messages={msgs} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('⤿')
+    expect(frame).toContain('result 1')
+    expect(frame).toContain('result 2')
+  })
+
+  it('verbose mode shows all tool results expanded', () => {
+    const msgs: UIMessage[] = [
+      makeToolMsg(1, 'Read'),
+      makeToolMsg(2, 'Read'),
+      makeToolMsg(3, 'Read'),
+    ]
+    const { lastFrame } = render(<MessageList messages={msgs} verbose />)
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('⤿')
+    expect(frame).toContain('result 1')
+    expect(frame).toContain('result 3')
+  })
+
+  it('collapses mixed Read/Grep/Glob calls', () => {
+    const msgs: UIMessage[] = [
+      makeToolMsg(1, 'Read'),
+      makeToolMsg(2, 'Grep'),
+      makeToolMsg(3, 'Glob'),
+    ]
+    const { lastFrame } = render(<MessageList messages={msgs} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('⤿')
+    expect(frame).toContain('Read/Grep/Glob ×3')
+  })
+
+  it('does not collapse non-collapsible tools (Bash, Write)', () => {
+    const msgs: UIMessage[] = [
+      makeToolMsg(1, 'Bash'),
+      makeToolMsg(2, 'Bash'),
+      makeToolMsg(3, 'Bash'),
+    ]
+    const { lastFrame } = render(<MessageList messages={msgs} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('⤿')
+    expect(frame).toContain('result 1')
+    expect(frame).toContain('result 3')
+  })
+})

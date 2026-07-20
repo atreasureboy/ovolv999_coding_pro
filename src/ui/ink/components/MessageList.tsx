@@ -3,8 +3,9 @@
  *
  * Implements scrollback limiting: only the most recent `maxMessages` are
  * rendered (default 50). When truncated, a dim indicator shows the count.
- * This prevents terminal flooding in long conversations while keeping
- * the terminal's native scrollback buffer intact for full history.
+ *
+ * In compact mode (default), consecutive Read/Grep/Glob tool calls are
+ * collapsed into a single summary line. Verbose mode (Ctrl+O) shows all.
  */
 
 import { Text, Box } from 'ink'
@@ -12,6 +13,9 @@ import type { UIMessage } from '../store.js'
 import { ToolCallView } from '../ToolCallView.js'
 import { TodoListView, type TodoItem } from './TodoListView.js'
 import { Markdown } from './Markdown.js'
+
+/** Tool types that are collapsible when appearing consecutively. */
+const COLLAPSIBLE_TOOLS = new Set(['Read', 'Grep', 'Glob'])
 
 function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
   switch (msg.type) {
@@ -137,12 +141,72 @@ export interface MessageListProps {
   messages: UIMessage[]
   /** Maximum number of messages to render (default 50). */
   maxMessages?: number
+  /** Show all tool results expanded (default false = compact). */
+  verbose?: boolean
 }
 
-export function MessageList({ messages, maxMessages = 50 }: MessageListProps): React.ReactElement {
+/**
+ * Group consecutive collapsible tool messages for compact display.
+ * Returns groups: each item is either a single message or a group of
+ * consecutive collapsible tools.
+ */
+type MessageGroup =
+  | { type: 'single'; msg: UIMessage }
+  | { type: 'collapsed'; msgs: UIMessage[] }
+
+function groupMessages(messages: UIMessage[]): MessageGroup[] {
+  const groups: MessageGroup[] = []
+  let i = 0
+  while (i < messages.length) {
+    const msg = messages[i]
+    if (msg.type === 'tool' && COLLAPSIBLE_TOOLS.has(msg.name) && msg.result !== undefined) {
+      // Start a potential group
+      const group: UIMessage[] = [msg]
+      let j = i + 1
+      while (j < messages.length) {
+        const next = messages[j]
+        if (next.type === 'tool' && COLLAPSIBLE_TOOLS.has(next.name) && next.result !== undefined) {
+          group.push(next)
+          j++
+        } else {
+          break
+        }
+      }
+      if (group.length >= 3) {
+        groups.push({ type: 'collapsed', msgs: group })
+        i = j
+      } else {
+        for (const m of group) groups.push({ type: 'single', msg: m })
+        i = j
+      }
+    } else {
+      groups.push({ type: 'single', msg })
+      i++
+    }
+  }
+  return groups
+}
+
+function CollapsedToolGroup({ msgs }: { msgs: UIMessage[] }): React.ReactElement {
+  const types = new Set(msgs.map((m) => (m.type === 'tool' ? m.name : '')))
+  const typeStr = [...types].join('/')
+  const errors = msgs.filter((m) => m.type === 'tool' && m.isError).length
+
+  return (
+    <Box marginTop={1}>
+      <Text dimColor>⤿ {typeStr} ×{msgs.length}</Text>
+      {errors > 0 ? <Text color="redBright"> ({errors} errors)</Text> : null}
+      <Text dimColor> — Ctrl+O to expand</Text>
+    </Box>
+  )
+}
+
+export function MessageList({ messages, maxMessages = 50, verbose = false }: MessageListProps): React.ReactElement {
   const total = messages.length
   const truncated = total > maxMessages
   const visible = truncated ? messages.slice(total - maxMessages) : messages
+
+  const groups = verbose ? visible.map((msg) => ({ type: 'single' as const, msg })) : groupMessages(visible)
 
   return (
     <Box flexDirection="column">
@@ -151,9 +215,13 @@ export function MessageList({ messages, maxMessages = 50 }: MessageListProps): R
           <Text dimColor italic>↑ {total - maxMessages} earlier message{(total - maxMessages) !== 1 ? 's' : ''} hidden (showing last {maxMessages})</Text>
         </Box>
       ) : null}
-      {visible.map((msg) => (
-        <MessageRow key={msg.id} msg={msg} />
-      ))}
+      {groups.map((group, gi) => {
+        if (group.type === 'collapsed') {
+          return <CollapsedToolGroup key={gi} msgs={group.msgs} />
+        }
+        const msg = group.msg
+        return <MessageRow key={msg.id} msg={msg} />
+      })}
     </Box>
   )
 }

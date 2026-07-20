@@ -15,6 +15,7 @@ export interface StatusBarProps {
   cost: number
   apiCalls: number
   planMode: boolean
+  verbose?: boolean
   gitBranch?: string | null
 }
 
@@ -28,7 +29,7 @@ function contextBar(pct: number): { bar: string; color: string } {
   return { bar, color }
 }
 
-export function StatusBar({ model, messageCount, contextPct, cost, apiCalls, planMode, gitBranch }: StatusBarProps): React.ReactElement {
+export function StatusBar({ model, messageCount, contextPct, cost, apiCalls, planMode, verbose, gitBranch }: StatusBarProps): React.ReactElement {
   const pct = Math.round(contextPct * 100)
   const { bar, color } = contextBar(contextPct)
   const costStr = cost < 0.01 ? cost.toFixed(4) : cost < 1 ? cost.toFixed(3) : cost.toFixed(2)
@@ -39,6 +40,7 @@ export function StatusBar({ model, messageCount, contextPct, cost, apiCalls, pla
         <Text bold color="cyan">{model}</Text>
         {gitBranch ? <Text color="magenta"> {gitBranch}</Text> : null}
         {planMode ? <Text color="blueBright">◆ PLAN</Text> : null}
+        {verbose ? <Text color="yellowBright">± VERBOSE</Text> : null}
         <Text dimColor>· {messageCount} msgs</Text>
       </Box>
       <Box gap={1}>

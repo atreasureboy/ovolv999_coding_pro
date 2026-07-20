@@ -88,6 +88,8 @@ export interface UIState {
   /** Cost tracking (updated after each turn). */
   cost: number
   apiCalls: number
+  /** Verbose mode (Ctrl+O) — show all tool results expanded. */
+  verbose: boolean
 }
 
 const INITIAL_STATE: UIState = {
@@ -105,6 +107,7 @@ const INITIAL_STATE: UIState = {
   selectOverlay: null,
   cost: 0,
   apiCalls: 0,
+  verbose: false,
 }
 
 // ── Store implementation ────────────────────────────────────────────────────
@@ -258,8 +261,12 @@ export class UIStore {
     this.emit()
   }
 
+  toggleVerbose(): void {
+    this.state = { ...this.state, verbose: !this.state.verbose }
+    this.emit()
+  }
+
   // ── Interactive overlays (plan approval, permission, select picker) ───────
-  // These return Promises that resolve when the user responds via the UI.
   // The resolve functions are stored privately and called by resolveX().
 
   showPlanApproval(plan: string): Promise<boolean> {

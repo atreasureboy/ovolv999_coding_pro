@@ -32,6 +32,7 @@ const GROUPS: ShortcutGroup[] = [
       { key: 'Ctrl+R', desc: 'Reverse history search (bash-style)' },
       { key: 'Ctrl+Y', desc: 'Copy last assistant reply' },
       { key: 'Ctrl+L', desc: 'Clear screen and redraw' },
+      { key: 'Ctrl+O', desc: 'Toggle verbose/compact tool results' },
       { key: 'Ctrl+C ×2', desc: 'Exit ovolv999' },
       { key: '?', desc: 'Toggle this help overlay' },
     ],
