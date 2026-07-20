@@ -1438,6 +1438,35 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'suggest',
+  aliases: ['suggestions'],
+  description: 'Show proactive suggestions based on current context',
+  handler: (_args, ctx) => {
+    const {
+      generateSuggestions, enrichContext, formatSuggestionList,
+    } = require('../core/suggestions.js') as typeof import('../core/suggestions.js')
+
+    const enriched = enrichContext({
+      conversationLength: ctx.history.length,
+      lastTurnCompleted: true,
+      recentToolResults: [],
+    }, ctx.cwd)
+
+    const suggestions = generateSuggestions(enriched)
+    if (suggestions.length === 0) {
+      return text('No suggestions at this time.')
+    }
+    const list = formatSuggestionList(suggestions)
+    const hints = suggestions.map((s: { actionCommand?: string; actionPrompt?: string; label: string }, i: number) => {
+      if (s.actionCommand) return `  ${i + 1}. Run: ${s.actionCommand}`
+      if (s.actionPrompt) return `  ${i + 1}. Prompt: "${s.actionPrompt.slice(0, 60)}"`
+      return null
+    }).filter(Boolean).join('\n')
+    return text(`${list}\n\n${hints}`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
