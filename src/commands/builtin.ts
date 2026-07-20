@@ -1724,6 +1724,70 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'knowledge',
+  aliases: ['kb'],
+  description: 'Project knowledge base. Usage: /knowledge [add <cat> <key> <val> | search <q> | remove <key> | list | stats]',
+  handler: (args, ctx) => {
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+
+    const {
+      loadKnowledge, addEntry, removeEntry, searchKnowledge,
+      formatKnowledgeList, formatSearchResults, formatStats,
+      extractKnowledgeFromText,
+    } = require('../core/knowledgeBase.js') as typeof import('../core/knowledgeBase.js')
+
+    if (sub === 'list' || !sub) {
+      const store = loadKnowledge(ctx.cwd)
+      return text(formatKnowledgeList(store.entries))
+    }
+
+    if (sub === 'stats') {
+      const store = loadKnowledge(ctx.cwd)
+      return text(formatStats(store))
+    }
+
+    if (sub === 'add') {
+      const category = parts[1] as any
+      const key = parts[2]
+      const value = parts.slice(3).join(' ')
+      if (!category || !key || !value) {
+        return text('Usage: /knowledge add <category> <key> <value>\nCategories: file, pattern, decision, gotcha, dependency, convention, architecture, general')
+      }
+      const entry = addEntry(ctx.cwd, category, key, value)
+      return text(`✓ ${entry.category} entry saved: ${entry.key}`)
+    }
+
+    if (sub === 'search') {
+      const query = parts.slice(1).join(' ')
+      if (!query) return text('Usage: /knowledge search <query>')
+      const results = searchKnowledge(ctx.cwd, query)
+      return text(formatSearchResults(results, query))
+    }
+
+    if (sub === 'remove' || sub === 'delete') {
+      const key = parts[1]
+      if (!key) return text('Usage: /knowledge remove <key or id>')
+      const success = removeEntry(ctx.cwd, key)
+      return text(success ? `✓ Removed: ${key}` : `⚠ Not found: ${key}`)
+    }
+
+    if (sub === 'extract') {
+      const text_content = ctx.history.map(m =>
+        typeof m.content === 'string' ? m.content : '',
+      ).join('\n')
+      const suggestions = extractKnowledgeFromText(text_content)
+      if (suggestions.length === 0) return text('No knowledge patterns found in conversation.')
+      const lines = suggestions.map((s, i) =>
+        `${i + 1}. [${s.category}] ${s.key}: ${s.value.slice(0, 80)} (${Math.round(s.confidence * 100)}%)`)
+      return text(`Found ${suggestions.length} potential knowledge:\n${lines.join('\n')}`)
+    }
+
+    return text(`Unknown subcommand: ${sub}\nUsage: /knowledge [list|add|search|remove|stats|extract]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
