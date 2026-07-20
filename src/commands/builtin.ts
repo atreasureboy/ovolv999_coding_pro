@@ -1191,6 +1191,66 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'models',
+  aliases: ['providers'],
+  description: 'List known LLM providers and models. Usage: /models [provider]',
+  handler: (args) => {
+    const { MODELS, PROVIDERS, listProviders, detectProviderFromModel, getModelInfo } =
+      require('../core/providers.js') as typeof import('../core/providers.js')
+
+    const trimmed = args.trim().toLowerCase()
+
+    // Show specific provider's models
+    if (trimmed && PROVIDERS[trimmed as keyof typeof PROVIDERS]) {
+      const provider = PROVIDERS[trimmed as keyof typeof PROVIDERS]
+      const models = MODELS.filter((m: typeof MODELS[0]) => m.provider === trimmed)
+      const lines: string[] = [
+        `${provider.name} (${provider.id})`,
+        provider.baseURL ? `  Base URL: ${provider.baseURL}` : '',
+        provider.apiKeyEnv ? `  API Key:  $${provider.apiKeyEnv}` : '',
+        `  OpenAI-compatible: ${provider.openAICompatible ? 'yes' : 'no'}`,
+        '',
+        `  Models (${models.length}):`,
+      ]
+      for (const m of models) {
+        const ctx = `${(m.contextWindow / 1000).toFixed(0)}k`
+        const price = `$${m.pricing.inputPer1M}/$${m.pricing.outputPer1M}/1M`
+        const caps = [
+          m.supportsVision ? 'vision' : '',
+          m.supportsTools ? 'tools' : '',
+          m.supportsReasoning ? 'reasoning' : '',
+        ].filter(Boolean).join(',')
+        lines.push(`    ${m.id.padEnd(35)} ${ctx.padEnd(8)} ${price.padEnd(16)} ${caps}`)
+      }
+      return text(lines.filter(Boolean).join('\n'))
+    }
+
+    // Show all providers
+    const lines: string[] = ['LLM Providers:', '']
+    for (const id of listProviders()) {
+      const p = PROVIDERS[id]
+      const modelCount = MODELS.filter((m: typeof MODELS[0]) => m.provider === id).length
+      lines.push(`  ${p.name.padEnd(20)} ${modelCount} model(s)${p.baseURL ? `  ${p.baseURL}` : ''}`)
+    }
+
+    lines.push('', 'Current model: ' + (process.env.OVOLV_MODEL ?? 'gpt-4o'))
+    const detected = detectProviderFromModel(process.env.OVOLV_MODEL ?? 'gpt-4o')
+    if (detected !== 'unknown') {
+      lines.push(`  Detected provider: ${PROVIDERS[detected].name}`)
+    }
+
+    const info = getModelInfo(process.env.OVOLV_MODEL ?? 'gpt-4o')
+    if (info) {
+      lines.push(`  Context window: ${(info.contextWindow / 1000).toFixed(0)}k`)
+      lines.push(`  Pricing: $${info.pricing.inputPer1M}/$${info.pricing.outputPer1M} per 1M tokens`)
+    }
+
+    lines.push('', 'Usage: /models <provider> to see models for a specific provider')
+    return text(lines.join('\n'))
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
