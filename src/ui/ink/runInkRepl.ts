@@ -20,6 +20,7 @@ import type { Renderer } from '../renderer.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
+import { formatApiError } from '../../utils/apiError.js'
 
 export interface InkReplOptions {
   store: UIStore
@@ -95,7 +96,8 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
     } catch (err: unknown) {
       const error = err as Error
       if (error.name !== 'AbortError') {
-        store.addError(`Error: ${error.message}`)
+        const fe = formatApiError(err)
+        store.addError(`${fe.title}: ${fe.detail}${fe.hint ? ' ' + fe.hint : ''}`)
       }
       return { newHistory: history, reason: 'error' }
     } finally {

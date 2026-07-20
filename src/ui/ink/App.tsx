@@ -300,6 +300,8 @@ export function App({
         model={state.banner?.model ?? model}
         messageCount={history.length}
         contextPct={contextPct}
+        tokenCount={tokens}
+        maxTokens={maxContextTokens}
         cost={state.cost}
         apiCalls={state.apiCalls}
         planMode={state.planMode}

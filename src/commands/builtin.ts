@@ -510,14 +510,31 @@ registerCommand({
 
 registerCommand({
   name: 'diff',
-  description: 'Show git diff (unstaged changes)',
-  handler: (_args, ctx) => {
+  description: 'Show git diff (unstaged, staged, or full)',
+  usage: '/diff [staged|full|stat]',
+  handler: (args, ctx) => {
+    const subcmd = args.trim().toLowerCase()
     try {
-      const diff = execSync('git diff --stat', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
-      if (!diff) {
-        return text('No unstaged changes.')
+      let output: string
+      if (subcmd === 'staged') {
+        output = execSync('git diff --cached --stat', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+        if (!output) return text('No staged changes.')
+        return text(`Git diff (staged):\n\n${output}`)
       }
-      return text(`Git diff (unstaged):\n\n${diff}`)
+      if (subcmd === 'full') {
+        output = execSync('git diff', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+        if (!output) return text('No unstaged changes.')
+        // Truncate very large diffs
+        const lines = output.split('\n')
+        if (lines.length > 200) {
+          return text(`Git diff (unstaged, first 200 of ${lines.length} lines):\n\n${lines.slice(0, 200).join('\n')}\n... +${lines.length - 200} more lines (use /diff stat for summary)`)
+        }
+        return text(`Git diff (unstaged):\n\n${output}`)
+      }
+      // Default: stat summary
+      output = execSync('git diff --stat', { cwd: ctx.cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+      if (!output) return text('No unstaged changes. Try /diff staged or /diff full')
+      return text(`Git diff (unstaged):\n\n${output}\n\nUse /diff full for complete diff, /diff staged for staged changes.`)
     } catch {
       return text('Not a git repository or git not available.')
     }
