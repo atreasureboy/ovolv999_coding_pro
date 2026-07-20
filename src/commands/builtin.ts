@@ -2385,6 +2385,272 @@ registerCommand({
   },
 })
 
+// ── /hooks ──────────────────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'hooks',
+  description: 'Manage lifecycle hooks. Usage: /hooks [list | add <event> <matcher> <command> | remove <event> <index> | clear <event> | test <event> <tool>]',
+  handler: (args, ctx) => {
+    const hooksModule = require('../core/hooks.js') as typeof import('../core/hooks.js')
+    const { loadHooksConfig, saveHooksConfig, formatHooksConfig, runHook } = hooksModule
+
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+    const config = loadHooksConfig() as Record<string, Array<{ matcher: string; command: string; timeout?: number }>>
+
+    if (sub === 'list' || sub === 'show') {
+      return text(formatHooksConfig(loadHooksConfig()))
+    }
+
+    if (sub === 'add') {
+      const event = parts[1]
+      const matcher = parts[2] ?? '*'
+      const command = parts.slice(3).join(' ')
+      if (!command) return text('Usage: /hooks add <event> <matcher> <command>')
+      if (!config[event]) config[event] = []
+      config[event].push({ matcher, command })
+      saveHooksConfig(config)
+      return text(`Added hook: [${event}] ${matcher} → ${command}`)
+    }
+
+    if (sub === 'remove') {
+      const event = parts[1]
+      const idx = parseInt(parts[2] ?? '', 10)
+      if (!config[event] || isNaN(idx)) return text('Usage: /hooks remove <event> <index>')
+      if (idx < 0 || idx >= config[event].length) return text(`Index out of range (0-${config[event].length - 1})`)
+      const removed = config[event].splice(idx, 1)[0]
+      saveHooksConfig(config)
+      return text(`Removed hook: [${event}] ${removed.matcher} → ${removed.command}`)
+    }
+
+    if (sub === 'clear') {
+      const event = parts[1]
+      if (!event) return text('Usage: /hooks clear <event>')
+      config[event] = []
+      saveHooksConfig(config)
+      return text(`Cleared hooks for ${event}`)
+    }
+
+    if (sub === 'test') {
+      const event = parts[1] ?? 'PreToolUse'
+      const toolName = parts[2] ?? 'Bash'
+      const hooks = config[event] ?? []
+      if (hooks.length === 0) return text(`No hooks configured for ${event}`)
+      const results = hooks.map(h => runHook(h, { event: event as 'PreToolUse', toolName, cwd: ctx.cwd }))
+      const out = results.map((r, i) => `[${i}] ${hooks[i].matcher} → ${r.success ? '✓' : '✗'} (${r.duration}ms)`).join('\n')
+      return text(out)
+    }
+
+    return text(formatHooksConfig(config))
+  },
+})
+
+// ── /diagnostics ────────────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'diagnostics',
+  aliases: ['diag', 'lint', 'typecheck'],
+  description: 'Run code diagnostics (tsc/ESLint/Biome/Ruff). Usage: /diagnostics [checker] [file <path>] [--clear]',
+  handler: (args, ctx) => {
+    const {
+      runDiagnostics, filterDiagnostics, formatDiagnosticsResult, clearCache,
+    } = require('../core/diagnostics.js') as typeof import('../core/diagnostics.js')
+
+    const parts = args.trim().split(/\s+/)
+    const clearFlag = parts.includes('--clear') || parts.includes('--fresh')
+    if (clearFlag) clearCache()
+
+    const validCheckers = ['auto', 'tsc', 'eslint', 'biome', 'ruff']
+    const checker = parts.find(p => validCheckers.includes(p)) ?? 'auto'
+    const fileIdx = parts.indexOf('file')
+    const filePath = fileIdx >= 0 ? parts[fileIdx + 1] : undefined
+
+    try {
+      const result = runDiagnostics(ctx.cwd, checker as 'auto' | 'tsc' | 'eslint' | 'biome' | 'ruff')
+
+      if (filePath) {
+        const filtered = filterDiagnostics(result, { filePath })
+        if (filtered.length === 0) return text(`✓ No diagnostics for "${filePath}"`)
+        const lines = filtered.map(d => `${d.filePath}:${d.line}:${d.column} [${d.severity}] ${d.message}`)
+        return text(lines.join('\n'))
+      }
+
+      return text(formatDiagnosticsResult(result))
+    } catch (err) {
+      return text(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  },
+})
+
+// ── /goal ───────────────────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'goal',
+  aliases: ['goals'],
+  description: 'Manage autonomous goals. Usage: /goal [list | create <objective> | show <id> | complete <id> | fail <id> <reason>]',
+  handler: (args, ctx) => {
+    const {
+      createGoal, getGoal, listGoals, startGoal, completeGoal, failGoal, pauseGoal, resumeGoal,
+      addSubtask, updateSubtask, getProgress, formatGoal, formatGoalList, deleteGoal,
+    } = require('../core/goals.js') as typeof import('../core/goals.js')
+
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+
+    if (sub === 'list' || sub === 'ls') {
+      return text(formatGoalList(listGoals()))
+    }
+
+    if (sub === 'create') {
+      const objective = parts.slice(1).join(' ')
+      if (!objective) return text('Usage: /goal create <objective>')
+      const goal = createGoal(objective)
+      return text(formatGoal(goal))
+    }
+
+    if (sub === 'show' || sub === 'get') {
+      const id = parts[1]
+      if (!id) return text('Usage: /goal show <id>')
+      const goal = getGoal(id)
+      if (!goal) return text('Goal not found')
+      return text(formatGoal(goal))
+    }
+
+    if (sub === 'start') {
+      const id = parts[1]
+      const goal = startGoal(id)
+      return text(goal ? formatGoal(goal) : 'Goal not found')
+    }
+
+    if (sub === 'complete') {
+      const id = parts[1]
+      const goal = completeGoal(id)
+      return text(goal ? `Completed: ${goal.objective}` : 'Goal not found')
+    }
+
+    if (sub === 'fail') {
+      const id = parts[1]
+      const reason = parts.slice(2).join(' ')
+      const goal = failGoal(id, reason)
+      return text(goal ? `Failed: ${goal.objective}` : 'Goal not found')
+    }
+
+    if (sub === 'pause') {
+      const id = parts[1]
+      const goal = pauseGoal(id)
+      return text(goal ? `Paused: ${goal.objective}` : 'Goal not found')
+    }
+
+    if (sub === 'resume') {
+      const id = parts[1]
+      const goal = resumeGoal(id)
+      return text(goal ? `Resumed: ${goal.objective}` : 'Goal not found')
+    }
+
+    if (sub === 'add-subtask') {
+      const id = parts[1]
+      const desc = parts.slice(2).join(' ')
+      const st = addSubtask(id, desc)
+      return text(st ? `Added: ${st.description}` : 'Goal not found')
+    }
+
+    if (sub === 'done') {
+      const goalId = parts[1]
+      const subtaskId = parts[2]
+      const st = updateSubtask(goalId, subtaskId, { status: 'done' })
+      return text(st ? `Done: ${st.description}` : 'Not found')
+    }
+
+    if (sub === 'delete') {
+      const id = parts[1]
+      return text(deleteGoal(id) ? `Deleted: ${id}` : 'Goal not found')
+    }
+
+    if (sub === 'progress') {
+      const id = parts[1]
+      const p = getProgress(id)
+      if (!p) return text('Goal not found')
+      return text(`Progress: ${p.done}/${p.total} (${p.percentage}%) - ${p.pending} pending, ${p.inProgress} in progress, ${p.failed} failed`)
+    }
+
+    return text(`Usage: /goal [list | create <objective> | show <id> | start <id> | complete <id> | fail <id> <reason> | pause <id> | resume <id> | add-subtask <id> <desc> | done <goalId> <subId> | progress <id> | delete <id>]`)
+  },
+})
+
+// ── /transcript ─────────────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'transcript',
+  aliases: ['export-session'],
+  description: 'Export session transcript. Usage: /transcript [markdown|json|text] [stats]',
+  handler: (args, ctx) => {
+    const transcriptModule = require('../core/sessionTranscript.js') as typeof import('../core/sessionTranscript.js')
+    const { buildTranscript, formatTranscript, exportTranscript, getTranscriptStats, formatStats } = transcriptModule
+
+    const parts = args.trim().split(/\s+/)
+    const formatArg = parts[0] ?? 'markdown'
+    const format = (['markdown', 'json', 'text'].includes(formatArg) ? formatArg : 'markdown') as 'markdown' | 'json' | 'text'
+
+    if (parts.includes('stats')) {
+      // Build a minimal transcript from context
+      const sessionId = ctx.sessionDir ?? 'current'
+      const transcript = buildTranscript({
+        sessionId,
+        startTime: new Date().toISOString(),
+      }, [])
+      return text(formatStats(getTranscriptStats(transcript)))
+    }
+
+    // Build transcript from session messages if available
+    const messages = (ctx as { messages?: Array<{ role: string; content: string }> }).messages ?? []
+    const transcript = buildTranscript({
+      sessionId: ctx.sessionDir ?? `session-${Date.now()}`,
+      startTime: new Date().toISOString(),
+      cwd: ctx.cwd,
+    }, messages.map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      timestamp: new Date().toISOString(),
+    })))
+
+    const path = exportTranscript(transcript, format)
+    return text(`Transcript exported to: ${path}\n\nStats:\n${formatStats(getTranscriptStats(transcript))}`)
+  },
+})
+
+// ── /effort ─────────────────────────────────────────────────────────────────
+
+registerCommand({
+  name: 'effort',
+  aliases: ['thinking'],
+  description: 'Set reasoning effort level. Usage: /effort [minimal|low|medium|high|maximum]',
+  handler: (args) => {
+    const {
+      setEffort, cycleEffort, getCurrentEffort, getEffortPrompt, formatEffort, formatEffortList,
+    } = require('../core/effort.js') as typeof import('../core/effort.js')
+
+    const parts = args.trim().split(/\s+/)
+    const level = parts[0]
+
+    if (!level || level === 'list') {
+      return text(formatEffortList())
+    }
+
+    if (level === 'cycle' || level === 'next') {
+      const next = cycleEffort()
+      return text(`Effort: ${formatEffort()}\n\nPrompt: ${getEffortPrompt()}`)
+    }
+
+    const validLevels = ['minimal', 'low', 'medium', 'high', 'maximum']
+    if (validLevels.includes(level)) {
+      setEffort(level as 'minimal' | 'low' | 'medium' | 'high' | 'maximum')
+      return text(`Effort set to: ${formatEffort()}\n\nPrompt: ${getEffortPrompt()}`)
+    }
+
+    return text(`Unknown level: ${level}\n${formatEffortList()}`)
+  },
+})
+
 function loadProfilesRaw(cwd: string) {
   return require('../core/profiles.js').loadProfiles(cwd)
 }
