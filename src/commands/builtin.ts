@@ -1048,6 +1048,62 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'keybindings',
+  aliases: ['keys', 'kb'],
+  description: 'Show or reset keyboard shortcuts. Usage: /keybindings [reset]',
+  handler: (args, ctx) => {
+    const trimmed = args.trim().toLowerCase()
+    // Lazy import to avoid circular dependency in UI layer
+    const { loadKeybindings, writeDefaultConfig, DEFAULT_BINDINGS, ACTION_DESCRIPTIONS, ALL_KEY_ACTIONS } =
+      require('../ui/keybindings.js') as typeof import('../ui/keybindings.js')
+
+    if (trimmed === 'reset' || trimmed === 'default') {
+      const path = writeDefaultConfig(ctx.cwd)
+      return text(`✓ Reset keybindings to defaults.\nWritten to: ${path}`)
+    }
+
+    const result = loadKeybindings(ctx.cwd)
+
+    const lines: string[] = ['Keyboard Shortcuts:', '']
+
+    // Show warnings for conflicts/errors first
+    if (result.errors.length > 0) {
+      lines.push('⚠ Config errors:')
+      for (const e of result.errors) lines.push(`  ${e}`)
+      lines.push('')
+    }
+    if (result.conflicts.length > 0) {
+      lines.push('⚠ Conflicting key combos (using defaults instead):')
+      for (const c of result.conflicts) {
+        lines.push(`  ${c.key} → ${c.actions.join(', ')}`)
+      }
+      lines.push('')
+    }
+
+    // Build a reverse map: action → combo (from resolved bindings)
+    const actionToCombo = new Map<string, string>()
+    for (const [combo, action] of result.bindings) {
+      actionToCombo.set(action, combo)
+    }
+
+    for (const action of ALL_KEY_ACTIONS) {
+      const combo = actionToCombo.get(action) ?? DEFAULT_BINDINGS[action]
+      const isUserOverride = result.hasUserConfig && combo !== DEFAULT_BINDINGS[action]
+      const marker = isUserOverride ? ' *' : '  '
+      const desc = ACTION_DESCRIPTIONS[action]
+      lines.push(`${marker} ${combo.padEnd(18)} ${action.padEnd(20)} ${desc}`)
+    }
+
+    lines.push('')
+    lines.push(result.hasUserConfig
+      ? '* = user override (from .ovolv999/keybindings.json)'
+      : 'Edit .ovolv999/keybindings.json to customize. Run /keybindings reset to create a template.')
+
+    return text(lines.join('\n'))
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'

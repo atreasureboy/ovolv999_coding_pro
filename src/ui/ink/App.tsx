@@ -15,7 +15,7 @@
  */
 
 import { Text, Box, useApp, useInput, useStdout } from 'ink'
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
 import { Banner } from './Banner.js'
 import { Spinner } from './Spinner.js'
@@ -32,6 +32,7 @@ import { expandAtMentions } from './expandAtMentions.js'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { loadInputHistory, saveInputHistory } from '../../utils/inputHistory.js'
 import { initTerminalTitle, updateTerminalTitle, restoreTerminalTitle } from '../../utils/terminalTitle.js'
+import { loadKeybindings, lookupAction } from '../keybindings.js'
 import type { OpenAIMessage } from '../../core/types.js'
 
 // ── Context calculation (lightweight — avoids importing full compact module) ──
@@ -183,31 +184,52 @@ export function App({
     store.addInfo('No assistant reply to copy')
   }, [history, store])
 
-  // ── Ctrl+C: exit (double-press) ───────────────────────────────────────────
+  // ── Keybindings (loaded once per cwd) ─────────────────────────────────────
+
+  const keybindings = useMemo(() => loadKeybindings(cwd), [cwd])
+
+  // Show config warnings on first load
+  useEffect(() => {
+    if (keybindings.errors.length > 0) {
+      store.addInfo(`⚠ Keybinding config errors (${keybindings.errors.length}). Run /keybindings to see details.`)
+    }
+    if (keybindings.conflicts.length > 0) {
+      store.addInfo(`⚠ ${keybindings.conflicts.length} keybinding conflict(s). Run /keybindings to see details.`)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Global key handler (Ctrl+C, Ctrl+L, Ctrl+O, ?, etc.) ──────────────────
 
   const sigintCount = useRef(0)
   useInput((input, key) => {
-    // `?` toggles help overlay (only when no overlay/turn is active)
-    if (input === '?' && !state.running && !store.hasOverlay()) {
+    const action = lookupAction(input, key, keybindings.bindings)
+
+    // Help overlay toggle (only when no overlay/turn is active)
+    if (action === 'toggle-help' && !state.running && !store.hasOverlay()) {
       setShowHelp((v) => !v)
       return
     }
-    if (key.ctrl && input === 'c') {
+
+    // Exit: double-press Ctrl+C
+    if (action === 'exit') {
       sigintCount.current++
       if (sigintCount.current >= 2) {
         exit()
       }
       setTimeout(() => { sigintCount.current = 0 }, 1500)
+      return
     }
 
-    // Ctrl+L: clear screen and redraw
-    if (input === '\x0c') {
+    // Clear screen and redraw
+    if (action === 'clear-screen') {
       stdout.write('\x1b[2J\x1b[3J\x1b[H')
+      return
     }
 
-    // Ctrl+O: toggle verbose/compact mode
-    if (input === '\x0f') {
+    // Toggle verbose/compact mode
+    if (action === 'toggle-verbose') {
       store.toggleVerbose()
+      return
     }
   })
 
