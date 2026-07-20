@@ -2170,6 +2170,92 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'snippet',
+  aliases: ['snip', 'code'],
+  description: 'Manage code snippets. Usage: /snippet [add|list|use|search|show|remove|fav|stats]',
+  handler: (args, ctx) => {
+    const {
+      addSnippet, removeSnippet, getSnippet, listSnippets,
+      useSnippet, toggleFavorite, searchSnippets,
+      getCategories, getSnippetStats,
+      formatSnippet, formatSnippetList, formatSnippetStats,
+    } = require('../core/snippets.js') as typeof import('../core/snippets.js')
+
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+
+    if (sub === 'add') {
+      const name = parts[1]
+      const language = parts[2] ?? 'text'
+      const body = parts.slice(3).join(' ')
+      if (!name || !body) {
+        return text('Usage: /snippet add <name> <language> <body...>\nVariables: {{varName}}')
+      }
+      const s = addSnippet(ctx.cwd, { name, language, body })
+      return text(`✓ Snippet saved: ${s.name} (${s.language})`)
+    }
+
+    if (sub === 'use') {
+      const name = parts[1]
+      if (!name) return text('Usage: /snippet use <name> [key=value ...]')
+      // Parse variables: key=value
+      const vars: Record<string, string> = {}
+      for (const part of parts.slice(2)) {
+        const [k, ...v] = part.split('=')
+        if (k && v.length) vars[k] = v.join('=')
+      }
+      const body = useSnippet(ctx.cwd, name, vars)
+      if (!body) return text('Snippet not found')
+      return text(body)
+    }
+
+    if (sub === 'remove' || sub === 'rm') {
+      const target = parts[1]
+      if (!target) return text('Usage: /snippet remove <name>')
+      return text(removeSnippet(ctx.cwd, target) ? '✓ Removed' : 'Not found')
+    }
+
+    if (sub === 'show') {
+      const target = parts[1]
+      if (!target) return text('Usage: /snippet show <name>')
+      const s = getSnippet(ctx.cwd, target)
+      if (!s) return text('Snippet not found')
+      return text(formatSnippet(s))
+    }
+
+    if (sub === 'search') {
+      const query = parts.slice(1).join(' ')
+      const results = searchSnippets(ctx.cwd, query)
+      return text(formatSnippetList(results))
+    }
+
+    if (sub === 'fav' || sub === 'favorite') {
+      const target = parts[1]
+      if (!target) return text('Usage: /snippet fav <name>')
+      const s = toggleFavorite(ctx.cwd, target)
+      return s ? text(`✓ ${s.name}: ${s.favorite ? '★ favorited' : 'unfavorited'}`) : text('Not found')
+    }
+
+    if (sub === 'stats') {
+      return text(formatSnippetStats(getSnippetStats(ctx.cwd)))
+    }
+
+    if (sub === 'categories') {
+      const cats = getCategories(ctx.cwd)
+      return text(cats.length > 0 ? `Categories: ${cats.join(', ')}` : 'No categories.')
+    }
+
+    if (sub === 'list' || !sub) {
+      const filter: any = {}
+      if (parts[1] === '--fav' || parts[1] === '-f') filter.favoriteOnly = true
+      return text(formatSnippetList(listSnippets(ctx.cwd, filter)))
+    }
+
+    return text(`Usage: /snippet [add|list|use|search|show|remove|fav|stats|categories]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
