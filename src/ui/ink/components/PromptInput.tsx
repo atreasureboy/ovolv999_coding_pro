@@ -355,6 +355,12 @@ export function PromptInput({
           onCancel={() => setSearchMode(false)}
         />
       ) : null}
+      {/* Token estimate for non-trivial inputs */}
+      {text.trim().length > 50 && !showMenu && !searchMode && !fileContext.active ? (
+        <Box>
+          <Text dimColor>  ~{Math.ceil(text.length / 4)} tokens · {text.length} chars</Text>
+        </Box>
+      ) : null}
     </Box>
   )
 }

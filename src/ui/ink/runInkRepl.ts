@@ -21,6 +21,7 @@ import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/i
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
 import { formatApiError } from '../../utils/apiError.js'
+import { saveSession } from '../../core/sessionManager.js'
 
 export interface InkReplOptions {
   store: UIStore
@@ -92,6 +93,10 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       // Update cost tracking after each turn
       const ct = engine.getCostTracker()
       store.setCost(ct.getTotalCost(), ct.getTotalAPICalls())
+      // Autosave session after each completed turn (best-effort)
+      if (opts.sessionDir && history.length > 0) {
+        try { saveSession(opts.sessionDir, history) } catch { /* best-effort */ }
+      }
       return { newHistory: result.newHistory, reason: result.result.reason }
     } catch (err: unknown) {
       const error = err as Error
@@ -206,7 +211,15 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   store.setBanner(opts.version, opts.model)
 
   // Register cleanup handlers for signals/crashes
-  const cleanup = registerCleanup({ onCleanup: () => instance.unmount() })
+  const cleanup = registerCleanup({
+    onCleanup: () => {
+      // Final session save on exit (best-effort)
+      if (opts.sessionDir && history.length > 0) {
+        try { saveSession(opts.sessionDir, history) } catch { /* best-effort */ }
+      }
+      instance.unmount()
+    },
+  })
 
   try {
     await instance.waitUntilExit()
