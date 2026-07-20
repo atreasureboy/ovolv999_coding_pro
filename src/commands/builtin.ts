@@ -684,17 +684,19 @@ registerCommand({
   description: 'Show all available commands',
   aliases: ['h', '?'],
   handler: (_args, _ctx) => {
-    // Build help text directly — list all registered commands
     const cmds = listCommands()
-    const lines = cmds.map(cmd =>
-      '  /' + cmd.name.padEnd(16) + ' ' + cmd.description
-    )
+    const lines = cmds.map(cmd => {
+      const aliases = cmd.aliases && cmd.aliases.length > 0
+        ? ` (${cmd.aliases.map(a => '/' + a).join(', ')})`
+        : ''
+      return '  /' + cmd.name.padEnd(16) + ' ' + cmd.description + aliases
+    })
     return text(
       'Available commands:\n' +
       lines.join('\n') +
       '\n\n  /plan <task>       Plan mode — analyze then confirm before execute\n' +
       '  /<skill_name>      Run a loaded skill\n\n' +
-      'Type / for quick command list. ESC to interrupt. Ctrl+D to exit.'
+      'Type / for autocomplete. ? for keyboard shortcuts. ESC to interrupt.'
     )
   },
 })
