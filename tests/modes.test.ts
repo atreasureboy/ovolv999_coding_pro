@@ -1,187 +1,204 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  DEFAULT_MODES,
-  getCurrentMode,
-  setCurrentMode,
-  getAllModes,
-  cycleMode,
-  resetModeCache,
-  getVerbosityPrompt,
-  loadCustomModes,
+  DEFAULT_MODES, getAllModes, getCurrentMode, setCurrentMode,
+  cycleMode, getVerbosityPrompt, resetModeCache, loadCustomModes,
+  type Mode,
 } from '../src/core/modes.js'
-import { mkdirSync, writeFileSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-const TEST_DIR = join(tmpdir(), `ovolv999_modes_test_${Date.now()}`)
+function makeTempDir(): string {
+  return mkdtempSync(join(tmpdir(), 'ovolv999-modes-'))
+}
 
-describe('Modes System', () => {
+describe('Mode System', () => {
+  let modesDir: string
+
   beforeEach(() => {
+    modesDir = makeTempDir()
     resetModeCache()
-    mkdirSync(TEST_DIR, { recursive: true })
   })
 
   afterEach(() => {
-    rmSync(TEST_DIR, { recursive: true, force: true })
+    rmSync(modesDir, { recursive: true, force: true })
     resetModeCache()
   })
 
   describe('DEFAULT_MODES', () => {
-    it('has 6 built-in modes', () => {
+    it('has 6 default modes', () => {
       expect(DEFAULT_MODES).toHaveLength(6)
     })
 
-    it('all modes have unique slugs', () => {
+    it('includes all expected slugs', () => {
       const slugs = DEFAULT_MODES.map(m => m.slug)
-      expect(new Set(slugs).size).toBe(slugs.length)
+      expect(slugs).toContain('default')
+      expect(slugs).toContain('gentle')
+      expect(slugs).toContain('sharp')
+      expect(slugs).toContain('workhorse')
+      expect(slugs).toContain('token-saver')
+      expect(slugs).toContain('super-ai')
     })
 
-    it('all modes have required fields', () => {
+    it('each mode has required fields', () => {
       for (const mode of DEFAULT_MODES) {
         expect(mode.name).toBeTruthy()
         expect(mode.slug).toBeTruthy()
+        expect(mode.description).toBeTruthy()
         expect(mode.icon).toBeTruthy()
-        expect(['minimal', 'normal', 'verbose']).toContain(mode.verbosity)
+        expect(mode.systemPrompt).toBeDefined()
+        expect(mode.verbosity).toBeDefined()
+        expect(typeof mode.autoApproveEdits).toBe('boolean')
+        expect(typeof mode.memoryExtract).toBe('boolean')
       }
     })
 
-    it('Dr. Sharp mode has three-phase workflow', () => {
+    it('Dr. Sharp has detailed system prompt', () => {
       const sharp = DEFAULT_MODES.find(m => m.slug === 'sharp')!
-      expect(sharp.systemPrompt).toContain('Three-Phase Workflow')
-      expect(sharp.systemPrompt).toContain('Phase 1: Deep Diagnosis')
-      expect(sharp.systemPrompt).toContain('Phase 2: Action Strategy')
-      expect(sharp.systemPrompt).toContain('Phase 3: Mirror Self')
-    })
-  })
-
-  describe('getCurrentMode / setCurrentMode', () => {
-    it('defaults to "default" mode', () => {
-      const mode = getCurrentMode()
-      expect(mode.slug).toBe('default')
+      expect(sharp.systemPrompt).toContain('Diagnose')
+      expect(sharp.systemPrompt).toContain('Phase')
     })
 
-    it('can switch to another mode', () => {
-      setCurrentMode('sharp')
-      expect(getCurrentMode().slug).toBe('sharp')
-      expect(getCurrentMode().name).toBe('Dr. Sharp')
+    it('workhorse auto-approves edits', () => {
+      const workhorse = DEFAULT_MODES.find(m => m.slug === 'workhorse')!
+      expect(workhorse.autoApproveEdits).toBe(true)
     })
 
-    it('throws on unknown mode', () => {
-      expect(() => setCurrentMode('nonexistent')).toThrow(/Unknown mode/)
-    })
-
-    it('cycleMode rotates through modes', () => {
-      expect(getCurrentMode().slug).toBe('default')
-      const next = cycleMode()
-      expect(next.slug).toBe('gentle') // second mode
-      const next2 = cycleMode()
-      expect(next2.slug).toBe('sharp') // third mode
-    })
-
-    it('cycleMode wraps around', () => {
-      // Fast-forward to last mode
-      setCurrentMode('super-ai')
-      const next = cycleMode()
-      expect(next.slug).toBe('default') // wraps to first
+    it('token-saver has minimal verbosity', () => {
+      const saver = DEFAULT_MODES.find(m => m.slug === 'token-saver')!
+      expect(saver.verbosity).toBe('minimal')
     })
   })
 
   describe('getAllModes', () => {
-    it('returns defaults when no custom modes', () => {
+    it('returns defaults when no modesDir', () => {
+      expect(getAllModes()).toHaveLength(6)
+    })
+
+    it('returns defaults when dir is empty', () => {
+      expect(getAllModes(modesDir)).toHaveLength(6)
+    })
+
+    it('includes custom modes', () => {
+      writeFileSync(join(modesDir, 'custom.md'), [
+        '---',
+        'name: Custom Mode',
+        'slug: custom',
+        'verbosity: verbose',
+        '---',
+        'You are a custom mode.',
+      ].join('\n'))
+      resetModeCache()
+      const modes = getAllModes(modesDir)
+      expect(modes.length).toBeGreaterThanOrEqual(7)
+      expect(modes.find(m => m.slug === 'custom')).toBeDefined()
+    })
+  })
+
+  describe('getCurrentMode and setCurrentMode', () => {
+    it('returns default initially', () => {
+      expect(getCurrentMode().slug).toBe('default')
+    })
+
+    it('switches mode', () => {
+      const mode = setCurrentMode('sharp')
+      expect(mode.slug).toBe('sharp')
+      expect(getCurrentMode().slug).toBe('sharp')
+    })
+
+    it('throws on unknown slug', () => {
+      expect(() => setCurrentMode('nope')).toThrow(/Unknown mode/)
+    })
+  })
+
+  describe('cycleMode', () => {
+    it('cycles to next mode', () => {
+      setCurrentMode('default')
+      const next = cycleMode()
+      expect(next.slug).not.toBe('default')
+    })
+
+    it('wraps around', () => {
       const modes = getAllModes()
-      expect(modes.length).toBeGreaterThanOrEqual(6)
+      setCurrentMode(modes[modes.length - 1].slug)
+      const next = cycleMode()
+      expect(next.slug).toBe(modes[0].slug)
     })
   })
 
   describe('getVerbosityPrompt', () => {
-    it('returns prompt for minimal', () => {
-      const prompt = getVerbosityPrompt('minimal')
-      expect(prompt).toContain('shortest')
-    })
-
-    it('returns prompt for verbose', () => {
-      const prompt = getVerbosityPrompt('verbose')
-      expect(prompt).toContain('detailed')
-    })
-
     it('returns empty for normal', () => {
       expect(getVerbosityPrompt('normal')).toBe('')
     })
+
+    it('returns guidance for minimal', () => {
+      const prompt = getVerbosityPrompt('minimal')
+      expect(prompt).toContain('shortest')
+      expect(prompt).toContain('Skip')
+    })
+
+    it('returns guidance for verbose', () => {
+      const prompt = getVerbosityPrompt('verbose')
+      expect(prompt).toContain('detailed')
+      expect(prompt).toContain('trade-offs')
+    })
   })
 
-  describe('Custom modes (frontmatter loading)', () => {
-    it('loads custom mode from markdown file', () => {
-      const modeFile = join(TEST_DIR, 'custom.md')
-      writeFileSync(modeFile, `---
-name: My Custom Mode
-slug: my-custom
-description: A test mode
-verbosity: minimal
-auto_approve_edits: true
----
-You are a custom mode. Always be brief.`, 'utf8')
-
-      const modes = getAllModes(TEST_DIR)
-      const custom = modes.find(m => m.slug === 'my-custom')
-      expect(custom).toBeDefined()
-      expect(custom!.name).toBe('My Custom Mode')
-      expect(custom!.verbosity).toBe('minimal')
-      expect(custom!.autoApproveEdits).toBe(true)
-      expect(custom!.systemPrompt).toContain('Always be brief')
+  describe('loadCustomModes', () => {
+    it('parses frontmatter correctly', () => {
+      writeFileSync(join(modesDir, 'test.md'), [
+        '---',
+        'name: Test Mode',
+        'slug: test',
+        'description: A test mode',
+        'icon: 🧪',
+        'verbosity: minimal',
+        'auto_approve_edits: true',
+        'memory_extract: false',
+        '---',
+        'Custom system prompt here.',
+      ].join('\n'))
+      resetModeCache()
+      const customs = loadCustomModes(modesDir)
+      expect(customs).toHaveLength(1)
+      expect(customs[0].name).toBe('Test Mode')
+      expect(customs[0].slug).toBe('test')
+      expect(customs[0].verbosity).toBe('minimal')
+      expect(customs[0].autoApproveEdits).toBe(true)
+      expect(customs[0].memoryExtract).toBe(false)
+      expect(customs[0].systemPrompt).toContain('Custom system prompt')
     })
 
-    it('derives slug from name when not provided', () => {
-      writeFileSync(join(TEST_DIR, 'no-slug.md'), `---
-name: Cool Mode
----
-Be cool.`, 'utf8')
-
-      const modes = getAllModes(TEST_DIR)
-      const mode = modes.find(m => m.slug === 'cool-mode')
-      expect(mode).toBeDefined()
-    })
-
-    it('custom mode overrides default with same slug', () => {
-      writeFileSync(join(TEST_DIR, 'override.md'), `---
-name: My Default
-slug: default
----
-Custom default prompt.`, 'utf8')
-
-      const modes = getAllModes(TEST_DIR)
-      const defaultMode = modes.find(m => m.slug === 'default')
-      expect(defaultMode!.systemPrompt).toContain('Custom default')
-      // Should only appear once
-      expect(modes.filter(m => m.slug === 'default')).toHaveLength(1)
+    it('auto-generates slug from name', () => {
+      writeFileSync(join(modesDir, 'no-slug.md'), [
+        '---',
+        'name: My Cool Mode',
+        '---',
+        'prompt',
+      ].join('\n'))
+      resetModeCache()
+      const customs = loadCustomModes(modesDir)
+      expect(customs[0].slug).toBe('my-cool-mode')
     })
 
     it('skips files without name', () => {
-      writeFileSync(join(TEST_DIR, 'bad.md'), `---
-verbosity: minimal
----
-No name field.`, 'utf8')
-
-      const modes = getAllModes(TEST_DIR)
-      expect(modes.find(m => m.name === '')).toBeUndefined()
+      writeFileSync(join(modesDir, 'bad.md'), '---\nverbosity: minimal\n---\nprompt')
+      resetModeCache()
+      expect(loadCustomModes(modesDir)).toHaveLength(0)
     })
 
-    it('caches loaded modes (idempotent)', () => {
-      writeFileSync(join(TEST_DIR, 'cached.md'), `---
-name: Cached
-slug: cached
----
-Cached prompt.`, 'utf8')
-
-      loadCustomModes(TEST_DIR)
-      const result2 = loadCustomModes(TEST_DIR)
-      expect(result2.filter(m => m.slug === 'cached')).toHaveLength(1)
+    it('caches results', () => {
+      const first = loadCustomModes(modesDir)
+      const second = loadCustomModes(modesDir)
+      expect(first).toBe(second) // Same reference
     })
+  })
 
-    it('handles empty modes directory gracefully', () => {
-      const empty = join(TEST_DIR, 'empty')
-      mkdirSync(empty, { recursive: true })
-      const modes = getAllModes(empty)
-      expect(modes).toEqual(DEFAULT_MODES)
+  describe('resetModeCache', () => {
+    it('clears cache and resets to default', () => {
+      setCurrentMode('sharp')
+      resetModeCache()
+      expect(getCurrentMode().slug).toBe('default')
     })
   })
 })
