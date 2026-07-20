@@ -98,4 +98,38 @@ describe('Markdown rendering', () => {
     // Should not crash, output may be empty
     expect(lastFrame()).toBeDefined()
   })
+
+  it('renders markdown tables', () => {
+    const md = [
+      '| Name | Type | Description |',
+      '|------|------|-------------|',
+      '| foo  | str  | A foo param |',
+      '| bar  | int  | A bar param |',
+    ].join('\n')
+    const { lastFrame } = render(<Markdown>{md}</Markdown>)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Name')
+    expect(frame).toContain('Type')
+    expect(frame).toContain('Description')
+    expect(frame).toContain('foo')
+    expect(frame).toContain('bar')
+    expect(frame).toContain('A foo param')
+    // Should have table separator
+    expect(frame).toContain('─')
+    expect(frame).toContain('│')
+  })
+
+  it('renders tables with alignment separators', () => {
+    const md = [
+      '| Left | Center | Right |',
+      '|:-----|:------:|------:|',
+      '| a    | b      | c     |',
+    ].join('\n')
+    const { lastFrame } = render(<Markdown>{md}</Markdown>)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Left')
+    expect(frame).toContain('Center')
+    expect(frame).toContain('Right')
+    expect(frame).toContain('a')
+  })
 })

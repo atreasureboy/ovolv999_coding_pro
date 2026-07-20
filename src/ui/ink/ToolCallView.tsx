@@ -88,6 +88,46 @@ function formatDuration(ms: number): string {
   return `${min}m${sec}s`
 }
 
+/**
+ * Compute a tool-specific result badge (e.g. exit code, match count).
+ * Returns null if no badge applies.
+ */
+function resultBadge(
+  name: string,
+  input: Record<string, unknown>,
+  result: string | undefined,
+  isError: boolean | undefined,
+): { text: string; color: string } | null {
+  if (result === undefined) return null
+
+  switch (name) {
+    case 'Bash': {
+      // Detect exit code from result (engine appends "Exit code: N")
+      const exitMatch = result.match(/Exit code: (\d+)/)
+      const code = exitMatch ? parseInt(exitMatch[1], 10) : (isError ? 1 : 0)
+      return code === 0
+        ? { text: '✓ exit 0', color: 'greenBright' }
+        : { text: `✗ exit ${code}`, color: 'redBright' }
+    }
+    case 'Read': {
+      const lines = result.split('\n').length
+      return { text: `${lines}L`, color: 'dim' }
+    }
+    case 'Grep': {
+      const matches = result.split('\n').filter((l) => l.trim() && !l.startsWith('Found')).length
+      return { text: `${matches} matches`, color: 'magentaBright' }
+    }
+    case 'Glob': {
+      const files = result.split('\n').filter((l) => l.trim()).length
+      return { text: `${files} file${files !== 1 ? 's' : ''}`, color: 'magentaBright' }
+    }
+    case 'WebFetch':
+      return { text: `${result.length} chars`, color: 'cyan' }
+    default:
+      return null
+  }
+}
+
 export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCallProps): React.ReactElement {
   const v = viz(name)
   const preview = previewTool(name, input)
@@ -104,6 +144,11 @@ export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCa
         <Text bold color={v.color}> {name}</Text>
         {preview ? <Text dimColor> {preview}</Text> : null}
         {elapsedMs !== undefined ? <Text dimColor> · {formatDuration(elapsedMs)}</Text> : null}
+        {(() => {
+          const badge = resultBadge(name, input, result, isError)
+          if (!badge) return null
+          return <Text color={badge.color}> · {badge.text}</Text>
+        })()}
       </Box>
       {showDiff ? (
         <Box marginLeft={4} flexDirection="column">

@@ -87,6 +87,7 @@ type Block =
   | { type: 'list'; ordered: boolean; items: string[] }
   | { type: 'quote'; content: string }
   | { type: 'hr' }
+  | { type: 'table'; headers: string[]; rows: string[][] }
   | { type: 'paragraph'; content: string }
 
 function parseBlocks(text: string): Block[] {
@@ -123,6 +124,21 @@ function parseBlocks(text: string): Block[] {
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       blocks.push({ type: 'hr' })
       i++
+      continue
+    }
+
+    // Table: header row | separator row | data rows
+    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s\-:|]+\|?\s*$/.test(lines[i + 1] ?? '') && (lines[i + 1] ?? '').includes('-')) {
+      const parseRow = (l: string): string[] =>
+        l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim())
+      const headers = parseRow(line)
+      i += 2 // skip header + separator
+      const rows: string[][] = []
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(parseRow(lines[i]))
+        i++
+      }
+      blocks.push({ type: 'table', headers, rows })
       continue
     }
 
@@ -175,7 +191,9 @@ function parseBlocks(text: string): Block[] {
       !/^\s*[-*]\s+/.test(lines[i]) &&
       !/^\s*\d+\.\s+/.test(lines[i]) &&
       !lines[i].trim().startsWith('>') &&
-      !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])
+      !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i]) &&
+      // Stop if next line looks like a table separator
+      !(lines[i].includes('|') && i + 1 < lines.length && /^\s*\|?[\s\-:|]+\|?\s*$/.test(lines[i + 1] ?? '') && (lines[i + 1] ?? '').includes('-'))
     ) {
       paraLines.push(lines[i])
       i++
@@ -260,6 +278,35 @@ function renderBlock(block: Block, key: number): ReactNode {
           <Text dimColor>{'─'.repeat(40)}</Text>
         </Box>
       )
+
+    case 'table': {
+      const { headers, rows } = block
+      // Calculate column widths
+      const colCount = headers.length
+      const widths: number[] = Array.from({ length: colCount }, () => 0)
+      for (let c = 0; c < colCount; c++) {
+        widths[c] = Math.max(headers[c].length, ...rows.map((r) => (r[c] ?? '').length))
+      }
+      const pad = (s: string, w: number): string => s + ' '.repeat(Math.max(0, w - s.length))
+      return (
+        <Box key={key} flexDirection="column" marginY={0}>
+          {/* Header row */}
+          <Box>
+            <Text bold color="cyan">{headers.map((h, c) => pad(h, widths[c])).join(' │ ')}</Text>
+          </Box>
+          {/* Separator */}
+          <Box>
+            <Text dimColor>{widths.map((w) => '─'.repeat(w)).join('─┼─')}</Text>
+          </Box>
+          {/* Data rows */}
+          {rows.map((row, ri) => (
+            <Box key={ri}>
+              <Text>{row.map((cell, ci) => pad(cell, widths[ci])).join(' │ ')}</Text>
+            </Box>
+          ))}
+        </Box>
+      )
+    }
 
     case 'paragraph':
       return (
