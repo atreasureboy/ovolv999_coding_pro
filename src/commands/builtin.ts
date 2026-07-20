@@ -1924,6 +1924,103 @@ registerCommand({
   },
 })
 
+registerCommand({
+  name: 'budget',
+  description: 'Manage token/cost budgets. Usage: /budget [set|list|remove|reset|check|preset <name>|record]',
+  handler: (args, ctx) => {
+    const {
+      setBudget, removeBudget, listBudgets, recordUsage, getUsage,
+      checkBudget, checkAllBudgets, resetUsage, getBudgetSnapshot,
+      formatBudgetUsage, formatBudgetSummary, formatBudgetSnapshot,
+      applyPreset, BUDGET_PRESETS,
+    } = require('../core/budget.js') as typeof import('../core/budget.js')
+
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'list'
+
+    // /budget set <name> <type> <period> <limit>
+    if (sub === 'set') {
+      const [name, type, period, limitStr] = parts.slice(1)
+      if (!name || !type || !period || !limitStr) {
+        return text('Usage: /budget set <name> <tokens|cost|requests> <session|daily|weekly|monthly> <limit>')
+      }
+      const limit = parseFloat(limitStr)
+      if (isNaN(limit)) return text('Invalid limit number')
+      const validTypes = ['tokens', 'cost', 'requests']
+      const validPeriods = ['session', 'daily', 'weekly', 'monthly']
+      if (!validTypes.includes(type)) return text(`Type must be one of: ${validTypes.join(', ')}`)
+      if (!validPeriods.includes(period)) return text(`Period must be one of: ${validPeriods.join(', ')}`)
+      const bm = setBudget(ctx.cwd, { name, type: type as any, period: period as any, limit })
+      return text(`✓ Budget set: ${bm.name} (${bm.type}/${bm.period}) limit=${bm.limit}`)
+    }
+
+    // /budget remove <name>
+    if (sub === 'remove' || sub === 'rm') {
+      const name = parts[1]
+      if (!name) return text('Usage: /budget remove <name>')
+      return text(removeBudget(ctx.cwd, name) ? `✓ Removed budget "${name}"` : 'Budget not found')
+    }
+
+    // /budget reset <name>
+    if (sub === 'reset') {
+      const name = parts[1]
+      if (!name) return text('Usage: /budget reset <name>')
+      return text(resetUsage(ctx.cwd, name) ? `✓ Reset usage for "${name}"` : 'Budget not found')
+    }
+
+    // /budget check [name]
+    if (sub === 'check') {
+      const name = parts[1]
+      if (name) {
+        const check = checkBudget(ctx.cwd, name)
+        return text(check.reason)
+      }
+      const { allAllowed, results } = checkAllBudgets(ctx.cwd)
+      const lines = results.map(r => `  ${r.config.name}: ${r.result.reason}`)
+      lines.push('')
+      lines.push(allAllowed ? 'All budgets OK' : '⚠ Some budgets exceeded!')
+      return text(lines.join('\n'))
+    }
+
+    // /budget record <name> <amount>
+    if (sub === 'record') {
+      const name = parts[1]
+      const amount = parseFloat(parts[2] ?? '')
+      if (!name || isNaN(amount)) return text('Usage: /budget record <name> <amount>')
+      const usage = recordUsage(ctx.cwd, name, amount)
+      if (!usage) return text('Budget not found or disabled')
+      const config = listBudgets(ctx.cwd).find(b => b.name === name)!
+      return text(formatBudgetUsage(config, usage))
+    }
+
+    // /budget preset <name>
+    if (sub === 'preset') {
+      const presetName = parts[1] as keyof typeof BUDGET_PRESETS
+      if (!presetName || !(presetName in BUDGET_PRESETS)) {
+        return text(`Available presets: ${Object.keys(BUDGET_PRESETS).join(', ')}`)
+      }
+      const budgets = applyPreset(ctx.cwd, presetName)
+      return text(`✓ Applied "${presetName}" preset:\n` + budgets.map(b => `  ${b.name}: ${b.type}/${b.period} = ${b.limit}`).join('\n'))
+    }
+
+    // /budget show <name>
+    if (sub === 'show') {
+      const name = parts[1]
+      if (!name) return text('Usage: /budget show <name>')
+      const snap = getBudgetSnapshot(ctx.cwd, name)
+      if (!snap) return text('Budget not found')
+      return text(formatBudgetSnapshot(snap))
+    }
+
+    // /budget list (default)
+    if (sub === 'list' || !sub) {
+      return text(formatBudgetSummary(ctx.cwd))
+    }
+
+    return text(`Usage: /budget [set|list|remove|reset|check|preset|record|show]`)
+  },
+})
+
 // ── Export for REPL ─────────────────────────────────────────────────────────
 
 export { registerCommand } from './index.js'
