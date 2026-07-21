@@ -64,8 +64,12 @@ describe('executeWorkflow with a registry walks the state machine', () => {
 
     expect(result.success).toBe(true)
     const runs = registry.list()
-    expect(runs).toHaveLength(1)
-    const run = runs[0]!
+    // P1-9: every step creates a child run linked to the workflow run.
+    // 1 workflow run + 2 shell step runs = 3 total.
+    expect(runs).toHaveLength(3)
+    const wfRuns = runs.filter((r) => r.kind === 'workflow')
+    expect(wfRuns).toHaveLength(1)
+    const run = wfRuns[0]!
     expect(run.kind).toBe('workflow')
     expect(run.goal).toBe('test workflow')
     expect(run.worker).toBe('test-wf')
@@ -75,6 +79,13 @@ describe('executeWorkflow with a registry walks the state machine', () => {
     expect(isTerminalRunStatus(run.status)).toBe(true)
     // phase reflects the last step transition before terminal
     expect(run.phase).toMatch(/step:|finalized/)
+
+    // P1-9: verify each step run is linked correctly.
+    const stepRuns = runs.filter((r) => r.kind === 'shell_task')
+    expect(stepRuns).toHaveLength(2)
+    expect(stepRuns.every((r) => r.parentRunId === run.runId)).toBe(true)
+    expect(stepRuns.map((r) => r.worker).sort()).toEqual(['first', 'second'])
+    expect(stepRuns.every((r) => r.status === 'succeeded')).toBe(true)
   })
 
   it('uses workflow.name as goal when description is missing', async () => {
@@ -106,7 +117,7 @@ describe('executeWorkflow failure path lands in failed', () => {
     expect(run.error).toMatch(/workflow steps failed/)
   })
 
-  it('transitions to succeeded when continueOnError keeps the workflow going', async () => {
+  it('transitions to succeeded (workflow run) when continueOnError keeps the workflow going, but P1-11 status is succeeded_with_warnings', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = shellWorkflow([
       { command: 'false', name: 'soft-fail', continueOnError: true },
@@ -117,7 +128,23 @@ describe('executeWorkflow failure path lands in failed', () => {
 
     // continueOnError means overall success is NOT flipped to false.
     expect(result.success).toBe(true)
-    expect(registry.list()[0]!.status).toBe('succeeded')
+    // P1-11: but workflow status distinguishes soft failures from clean success.
+    expect(result.status).toBe('succeeded_with_warnings')
+
+    // Registry maps succeeded_with_warnings → RunStatus='succeeded'
+    // (RunStatus has no warning variant); phase preserves the distinction.
+    const wfRuns = registry.list({ kind: 'workflow' })
+    expect(wfRuns).toHaveLength(1)
+    expect(wfRuns[0]!.status).toBe('succeeded')
+    expect(wfRuns[0]!.phase).toBe('completed-with-warnings')
+
+    // The soft-failing step run is itself in 'failed'.
+    const stepRuns = registry.list({ kind: 'shell_task' })
+    expect(stepRuns).toHaveLength(2)
+    const softFail = stepRuns.find((r) => r.worker === 'soft-fail')!
+    expect(softFail.status).toBe('failed')
+    const recovery = stepRuns.find((r) => r.worker === 'recovery')!
+    expect(recovery.status).toBe('succeeded')
   })
 })
 
@@ -162,8 +189,11 @@ describe('parallel workflows get independent runs', () => {
     ])
 
     const runs = registry.list()
-    expect(runs).toHaveLength(2)
-    expect(runs.map((r) => r.worker).sort()).toEqual(['wf-a', 'wf-b'])
-    expect(runs[0]!.runId).not.toBe(runs[1]!.runId)
+    // P1-9: 2 workflow runs + 2 shell step runs (1 per workflow) = 4.
+    expect(runs).toHaveLength(4)
+    const wfRuns = runs.filter((r) => r.kind === 'workflow')
+    expect(wfRuns).toHaveLength(2)
+    expect(wfRuns.map((r) => r.worker).sort()).toEqual(['wf-a', 'wf-b'])
+    expect(wfRuns[0]!.runId).not.toBe(wfRuns[1]!.runId)
   })
 })

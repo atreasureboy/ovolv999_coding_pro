@@ -23,8 +23,19 @@
 
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
 import { join, resolve, extname } from 'path'
-import { execSync } from 'child_process'
-import { ExecutionRunRegistry, type RunStatus } from './executionRun.js'
+import { spawn } from 'child_process'
+import { randomUUID } from 'crypto'
+import {
+  ExecutionRunRegistry,
+  type RunStatus,
+  type RunKind,
+  type ResourceClaim,
+  type ArtifactRef,
+} from './executionRun.js'
+import {
+  routeLargeOutput,
+  type StructuredToolResult,
+} from './structuredToolResult.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -85,14 +96,49 @@ export interface StepResult {
   error?: string
   /** User-provided value (prompt) */
   value?: string
+  /**
+   * P1-10: structured shell result for `type:'shell'` steps. Carries
+   * stdout/stderr/exitCode/status/artifacts separately from the
+   * flat `output` string (which remains for back-compat). Non-shell
+   * steps leave this undefined.
+   */
+  structured?: StructuredToolResult
+  /**
+   * P1-9: ExecutionRun id for this step when a registry was wired
+   * in. Undefined when no registry is supplied (legacy mode).
+   */
+  runId?: string
 }
+
+/**
+ * P1-11: workflow-level terminal status. The boolean `success` on
+ * WorkflowRunResult is retained for back-compat, but `status`
+ * distinguishes "all steps clean" from "completed with soft
+ * failures via continueOnError" — the two MUST NOT be equivalent
+ * per five_goal §十一 P1-11.
+ */
+export type WorkflowStatus =
+  | 'succeeded'
+  | 'succeeded_with_warnings'
+  | 'failed'
+  | 'blocked'
+  | 'cancelled'
 
 export interface WorkflowRunResult {
   workflowName: string
   success: boolean
+  /**
+   * P1-11: rich workflow status. `success` is `true` iff this is
+   * `'succeeded'` or `'succeeded_with_warnings'`. The two "ok-ish"
+   * states are distinguishable via `status` but collapse to
+   * `success=true` for legacy callers.
+   */
+  status: WorkflowStatus
   steps: StepResult[]
   /** Total duration in ms */
   durationMs: number
+  /** P1-9: ExecutionRun id for the workflow run, if a registry was supplied. */
+  runId?: string
 }
 
 // ── Context for execution ───────────────────────────────────────────────────
@@ -122,6 +168,14 @@ export interface WorkflowContext {
   runRegistry?: ExecutionRunRegistry
   /** Optional parent run id for linking into a call tree. */
   parentRunId?: string
+  /**
+   * P1-10: optional abort signal. When the caller aborts (e.g.
+   * Ctrl-C from the UI), every running shell step receives the
+   * signal and the workflow lands in `status:'cancelled'`.
+   * Non-shell steps are non-interruptible (they're fast user
+   * interactions like prompt/slash/echo).
+   */
+  signal?: AbortSignal
 }
 
 // ── Loader ──────────────────────────────────────────────────────────────────
@@ -234,6 +288,20 @@ export function validateStep(raw: unknown): WorkflowStep | null {
 /**
  * Execute a workflow step by step.
  * Returns the result of each step plus overall success.
+ *
+ * P1-9: when a registry is supplied, EVERY step creates its own
+ * child ExecutionRun linked to the workflow run. Each step run
+ * carries input snapshot (substituted command in `goal`), output
+ * Artifact (for large captures), duration, resource claims, and
+ * is cancellable via the workflow's AbortController.
+ *
+ * P1-10: shell steps run asynchronously via spawn() — never
+ * execSync. They honor AbortSignal, per-step timeout, stream
+ * stdout/stderr through a bounded head+tail buffer, and report
+ * results via StructuredToolResult fields.
+ *
+ * P1-11: `WorkflowRunResult.status` distinguishes clean success
+ * from `succeeded_with_warnings` (continueOnError soft failures).
  */
 export async function executeWorkflow(
   workflow: Workflow,
@@ -270,10 +338,35 @@ export async function executeWorkflow(
   const startTime = Date.now()
   const steps: StepResult[] = []
   let lastSuccess = true
-  let overallSuccess = true
+  let hardFailure = false
+  let softFailure = false
+  let cancelled = false
+
+  // P1-10: bind a local abort listener so the loop can break out
+  // cleanly when ctx.signal fires. We do NOT throw — we let the
+  // current step finish (its shell already receives the signal)
+  // and then stop dispatching further steps.
+  if (ctx.signal) {
+    if (ctx.signal.aborted) {
+      cancelled = true
+    } else {
+      ctx.signal.addEventListener('abort', () => { cancelled = true }, { once: true })
+    }
+  }
 
   for (const step of workflow.steps) {
     const name = step.name ?? step.type
+
+    if (cancelled) {
+      // Remaining steps are not dispatched — record a skipped marker
+      // so the step list still sums to workflow.steps.length.
+      steps.push({
+        name, type: step.type, success: false,
+        output: '[skipped: workflow cancelled]',
+        durationMs: 0,
+      })
+      continue
+    }
 
     // Check condition
     if (step.if && step.if !== 'always') {
@@ -293,103 +386,539 @@ export async function executeWorkflow(
       }
     }
 
-    const result = await executeStep(step, ctx, steps)
+    const result = await executeStep(step, ctx, steps, runId)
     steps.push(result)
     lastSuccess = result.success
-    // Update the run's phase so observers can see progress per step.
+    // Update the workflow run's phase so observers can see progress.
     transitionRun('running', { phase: `step:${name}` })
 
-    if (!result.success && !step.continueOnError) {
-      overallSuccess = false
-      break
+    if (!result.success) {
+      if (step.continueOnError) {
+        // P1-11: continueOnError soft-failures are tracked separately
+        // from hard failures. They do NOT flip overallSuccess=false
+        // (back-compat) but DO flip the new workflow status to
+        // 'succeeded_with_warnings'.
+        softFailure = true
+      } else {
+        hardFailure = true
+        break
+      }
     }
+  }
+
+  // P1-11: derive WorkflowStatus from the three flags. Precedence:
+  //   cancelled > hardFailure > softFailure > clean
+  let status: WorkflowStatus
+  if (cancelled) {
+    status = 'cancelled'
+  } else if (hardFailure) {
+    status = 'failed'
+  } else if (softFailure) {
+    status = 'succeeded_with_warnings'
+  } else {
+    status = 'succeeded'
   }
 
   const workflowResult: WorkflowRunResult = {
     workflowName: workflow.name,
-    success: overallSuccess,
+    // Back-compat: true iff the workflow reached a non-failed,
+    // non-cancelled terminal state. Soft failures count as success.
+    success: status === 'succeeded' || status === 'succeeded_with_warnings',
+    status,
     steps,
     durationMs: Date.now() - startTime,
+    runId,
   }
 
   // Terminal transition: succeeded on overall success, failed otherwise.
   // (No 'verifying' state for workflows — the per-step outcomes ARE the
   // verification. If a future step wants explicit verification, it can
   // be added as its own step type.)
-  transitionRun(overallSuccess ? 'succeeded' : 'failed', {
-    phase: 'finalized',
-    error: overallSuccess ? undefined : 'one or more workflow steps failed',
+  //
+  // P1-11: 'succeeded_with_warnings' has no equivalent in RunStatus.
+  // We map it to RunStatus='succeeded' but stamp `phase` so observers
+  // reading the registry can still distinguish ("completed-with-warnings"
+  // vs "finalized"). This keeps the run-state machine coherent while
+  // still surfacing the distinction at the workflow layer.
+  const terminalStatus: RunStatus =
+    status === 'cancelled' ? 'cancelled'
+    : status === 'failed' ? 'failed'
+    : 'succeeded'
+  const terminalPhase =
+    status === 'succeeded_with_warnings' ? 'completed-with-warnings'
+    : 'finalized'
+  transitionRun(terminalStatus, {
+    phase: terminalPhase,
+    error: status === 'failed' ? 'one or more workflow steps failed'
+      : status === 'cancelled' ? 'workflow cancelled before completion'
+      : undefined,
   })
 
   return workflowResult
+}
+
+/**
+ * Map a WorkflowStep type to the RunKind used for its child run.
+ * Shell → shell_task, agent → agent, others fall back to 'workflow'
+ * (the same kind as the parent — they're inline workflow actions
+ * that don't have a dedicated RunKind).
+ */
+function stepRunKind(stepType: StepType): RunKind {
+  if (stepType === 'shell') return 'shell_task'
+  if (stepType === 'agent') return 'agent'
+  return 'workflow'
+}
+
+/**
+ * P1-9: create, transition, and finalize a child ExecutionRun for
+ * a single step. The step run is linked to the workflow run via
+ * parentRunId and carries:
+ *   - input snapshot in `goal` (the substituted command/prompt text)
+ *   - workspace.cwd (step.cwd override honored)
+ *   - resource claims (shell steps claim directory R/W on cwd)
+ *   - output artifact (when stdout/stderr is large)
+ *   - duration (via timestamps)
+ *   - terminal status (succeeded / failed / cancelled)
+ *
+ * Returns the stepRunId so the caller can stamp it on StepResult.
+ * No-ops cleanly when registry or parent runId is absent.
+ */
+function withStepRun<T>(
+  step: WorkflowStep,
+  name: string,
+  ctx: WorkflowContext,
+  workflowRunId: string | undefined,
+  inputSnapshot: string,
+  fn: () => Promise<T>,
+  finalize: (result: T) => {
+    success: boolean
+    error?: string
+    artifacts?: ArtifactRef[]
+    phase?: string
+  },
+): { runId?: string; promise: Promise<T> } {
+  const registry = ctx.runRegistry
+  if (!registry || !workflowRunId) {
+    return { promise: fn() }
+  }
+  const cwd = step.cwd ? resolve(ctx.cwd, step.cwd) : ctx.cwd
+  const resources: ResourceClaim[] =
+    step.type === 'shell'
+      ? [
+          { type: 'directory', key: cwd, access: 'read' },
+          { type: 'directory', key: cwd, access: 'write' },
+        ]
+      : []
+  let stepRunId: string | undefined
+  try {
+    const run = registry.create({
+      kind: stepRunKind(step.type),
+      parentRunId: workflowRunId,
+      goal: inputSnapshot.slice(0, 4000),
+      workspace: { cwd },
+      worker: name,
+      resources,
+      status: 'preparing',
+      phase: 'step-starting',
+    })
+    stepRunId = run.runId
+    try { registry.transition(stepRunId, 'running', { phase: 'executing' }) } catch { /* best-effort */ }
+  } catch {
+    // registry create/transition failed — step still runs
+    return { promise: fn() }
+  }
+  const promise = fn().then(
+    (result) => {
+      const fin = finalize(result)
+      try {
+        registry.transition(
+          stepRunId!,
+          fin.success ? 'succeeded' : 'failed',
+          {
+            phase: fin.phase ?? 'finalized',
+            error: fin.error,
+            artifacts: fin.artifacts,
+          } as never,
+        )
+      } catch { /* best-effort */ }
+      return result
+    },
+    (err) => {
+      try {
+        registry.transition(stepRunId!, 'failed', {
+          phase: 'exception',
+          error: (err as Error).message?.slice(0, 1000) ?? 'step threw',
+        })
+      } catch { /* best-effort */ }
+      throw err
+    },
+  )
+  return { runId: stepRunId, promise }
 }
 
 async function executeStep(
   step: WorkflowStep,
   ctx: WorkflowContext,
   previousSteps: StepResult[],
+  workflowRunId?: string,
 ): Promise<StepResult> {
   const name = step.name ?? step.type
   const start = Date.now()
 
-  try {
-    switch (step.type) {
-      case 'shell':
-        return executeShellStep(step, name, ctx, start, previousSteps)
-      case 'slash':
-        return await executeSlashStep(step, name, ctx, start, previousSteps)
-      case 'prompt':
-        return await executePromptStep(step, name, ctx, start)
-      case 'echo':
-        return executeEchoStep(step, name, ctx, start, previousSteps)
-      case 'agent':
-        return await executeAgentStep(step, name, ctx, start, previousSteps)
-      default:
-        return {
-          name, type: step.type, success: false, output: '',
-          durationMs: Date.now() - start, error: `Unknown step type: ${step.type}`,
-        }
-    }
-  } catch (err) {
-    return {
-      name, type: step.type, success: false, output: '',
-      durationMs: Date.now() - start, error: (err as Error).message,
+  // P1-9: wrap EVERY step (not just shell) in a child ExecutionRun so
+  // each step has independent state, input snapshot, output artifact,
+  // duration, and is observable in the registry. The shell step does
+  // its own wrapping (it needs to stamp artifacts from the structured
+  // result); other types go through the generic wrapper here.
+  if (step.type === 'shell') {
+    try {
+      return await executeShellStep(step, name, ctx, start, previousSteps, workflowRunId)
+    } catch (err) {
+      return {
+        name, type: step.type, success: false, output: '',
+        durationMs: Date.now() - start, error: (err as Error).message,
+      }
     }
   }
+
+  // Build an input snapshot string for non-shell step types.
+  const inputSnapshot =
+    step.type === 'echo' ? step.text ?? ''
+    : step.type === 'prompt' ? step.message ?? ''
+    : step.type === 'slash' ? step.command ?? ''
+    : step.type === 'agent' ? step.prompt ?? ''
+    : ''
+
+  const { runId, promise } = withStepRun<StepResult>(
+    step,
+    name,
+    ctx,
+    workflowRunId,
+    inputSnapshot,
+    async () => {
+      try {
+        switch (step.type) {
+          case 'slash': return await executeSlashStep(step, name, ctx, start, previousSteps)
+          case 'prompt': return await executePromptStep(step, name, ctx, start)
+          case 'echo': return executeEchoStep(step, name, ctx, start, previousSteps)
+          case 'agent': return await executeAgentStep(step, name, ctx, start, previousSteps)
+          default:
+            return {
+              name, type: step.type, success: false, output: '',
+              durationMs: Date.now() - start, error: `Unknown step type: ${step.type}`,
+            }
+        }
+      } catch (err) {
+        return {
+          name, type: step.type, success: false, output: '',
+          durationMs: Date.now() - start, error: (err as Error).message,
+        }
+      }
+    },
+    (result) => ({
+      success: result.success,
+      error: result.error,
+      phase: result.success ? 'step-ok' : 'step-failed',
+    }),
+  )
+
+  const result = await promise
+  if (runId && !result.runId) {
+    result.runId = runId
+  }
+  return result
 }
 
-function executeShellStep(
-  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number, previousSteps: StepResult[],
-): StepResult {
+/**
+ * P1-10: asynchronous shell step. Replaces the historical execSync
+ * implementation with a streaming spawn() that honors AbortSignal,
+ * enforces per-step timeout, and returns a StructuredToolResult.
+ *
+ * The returned StepResult retains the flat `output`/`exitCode`/`error`
+ * fields for back-compat with existing readers (including variable
+ * substitution in subsequent steps); the richer structured shape is
+ * attached as `structured` for new callers.
+ *
+ * Large outputs (> DEFAULT_LARGE_OUTPUT_BYTES) are routed into an
+ * ArtifactRef and replaced with a head+tail preview in the structured
+ * result. The artifact is also attached to the step's child run when
+ * a registry is in play.
+ */
+async function executeShellStep(
+  step: WorkflowStep,
+  name: string,
+  ctx: WorkflowContext,
+  start: number,
+  previousSteps: StepResult[],
+  workflowRunId?: string,
+): Promise<StepResult> {
   if (!step.command) {
     return { name, type: 'shell', success: false, output: '', durationMs: 0, error: 'Missing "command"' }
   }
 
   const cmd = substituteVars(step.command, { steps: previousSteps, inputs: ctx.inputs })
   const cwd = step.cwd ? resolve(ctx.cwd, step.cwd) : ctx.cwd
-  const timeout = step.timeoutMs ?? 60_000
+  const timeoutMs = step.timeoutMs ?? 60_000
 
+  const { runId, promise } = withStepRun<StructuredToolResult>(
+    step,
+    name,
+    ctx,
+    workflowRunId,
+    cmd,
+    () => runShellAsync({ command: cmd, cwd, timeoutMs, signal: ctx.signal }),
+    (result) => ({
+      success: result.status === 'success',
+      error: result.status === 'failed'
+        ? (result.stderr && result.stderr.trim()) || result.summary
+        : undefined,
+      artifacts: result.artifacts,
+      phase: result.status === 'success' ? 'shell-ok' : 'shell-failed',
+    }),
+  )
+
+  let structured: StructuredToolResult
   try {
-    const output = execSync(cmd, {
-      cwd,
-      encoding: 'utf8',
-      timeout,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
-    return {
-      name, type: 'shell', success: true, output,
-      durationMs: Date.now() - start,
-    }
+    structured = await promise
   } catch (err) {
-    const e = err as Error & { status?: number; stdout?: string; stderr?: string }
     return {
-      name, type: 'shell', success: false,
-      output: (e.stdout ?? '').trim(),
-      exitCode: e.status,
+      name, type: 'shell', success: false, output: '',
       durationMs: Date.now() - start,
-      error: (e.stderr ?? e.message).trim().slice(0, 500),
+      error: (err as Error).message,
+      runId,
     }
   }
+
+  // Back-compat: flat fields derived from the structured result.
+  const output = (structured.stdout ?? '').trim()
+  return {
+    name,
+    type: 'shell',
+    success: structured.status === 'success',
+    output,
+    exitCode: structured.exitCode,
+    durationMs: Date.now() - start,
+    error: structured.status !== 'success'
+      ? ((structured.stderr && structured.stderr.trim())
+          || structured.summary).slice(0, 500) || undefined
+      : undefined,
+    structured,
+    runId,
+  }
+}
+
+/**
+ * P1-10: spawn a shell command asynchronously with abort + timeout
+ * + streaming capture. Returns a StructuredToolResult. Used by the
+ * workflow shell step; deliberately factored out so other callers
+ * (loopEngine, future slash commands) can share the same semantics.
+ *
+ * Behaviour:
+ *   - Already-aborted signal  → immediate 'cancelled' result, no spawn
+ *   - signal fires mid-flight → SIGTERM child, settle as 'cancelled'
+ *   - timeout fires           → SIGTERM child, settle as 'timed_out'
+ *   - non-zero exit           → 'failed' with exitCode/stderr
+ *   - exit 0                  → 'success'
+ *
+ * Output is collected in full (capped at a generous 1 MiB per stream
+ * to bound memory; workflow step output is not expected to approach
+ * that, but the cap prevents a runaway generator from OOMing). When
+ * a stream exceeds DEFAULT_LARGE_OUTPUT_BYTES it is routed to an
+ * ArtifactRef shape on the returned StructuredToolResult.
+ */
+export async function runShellAsync(opts: {
+  command: string
+  cwd: string
+  timeoutMs: number
+  signal?: AbortSignal
+}): Promise<StructuredToolResult> {
+  const { command, cwd, timeoutMs, signal } = opts
+
+  // Pre-abort short-circuit.
+  if (signal?.aborted) {
+    return {
+      status: 'cancelled',
+      summary: `Command cancelled before spawn: ${command.slice(0, 200)}`,
+      retryable: false,
+    }
+  }
+
+  return new Promise<StructuredToolResult>((resolve) => {
+    let settled = false
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null
+    let killTimer: ReturnType<typeof setTimeout> | null = null
+    let timedOut = false
+    let aborted = false
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
+    let stdoutBytes = 0
+    let stderrBytes = 0
+    const STREAM_CAP = 1024 * 1024 // 1 MiB per stream
+
+    const child = spawn(command, {
+      cwd,
+      env: process.env,
+      shell: true,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    const clearTimers = () => {
+      if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
+      if (killTimer) { clearTimeout(killTimer); killTimer = null }
+    }
+
+    const killTree = (sig: NodeJS.Signals) => {
+      const pid = child.pid
+      if (pid === undefined) return
+      try {
+        if (process.platform === 'win32') {
+          // best-effort: avoid importing execSync here — the workflow
+          // module is forbidden from using execSync per P1-10, and the
+          // Windows process-kill path is best handled by the runtime
+          // child.kill() which traverses the job object when shell:true.
+          child.kill(sig)
+        } else {
+          // Negative pid = process group (shell:true spawns a subshell
+          // that owns the actual command; killing the group reaches
+          // both).
+          process.kill(-pid, sig)
+        }
+      } catch { /* ESRCH if already gone */ }
+    }
+
+    const settle = (result: StructuredToolResult) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      if (abortListener && signal) {
+        signal.removeEventListener('abort', abortListener)
+      }
+      resolve(result)
+    }
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdoutBytes < STREAM_CAP) {
+        const room = STREAM_CAP - stdoutBytes
+        const slice = chunk.length > room ? chunk.subarray(0, room) : chunk
+        stdoutChunks.push(slice)
+        stdoutBytes += slice.length
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderrBytes < STREAM_CAP) {
+        const room = STREAM_CAP - stderrBytes
+        const slice = chunk.length > room ? chunk.subarray(0, room) : chunk
+        stderrChunks.push(slice)
+        stderrBytes += slice.length
+      }
+    })
+
+    timeoutTimer = setTimeout(() => {
+      if (settled) return
+      timedOut = true
+      killTree('SIGTERM')
+      killTimer = setTimeout(() => {
+        killTimer = null
+        killTree('SIGKILL')
+      }, 2000)
+      if (typeof killTimer.unref === 'function') killTimer.unref()
+    }, timeoutMs)
+    if (typeof timeoutTimer.unref === 'function') timeoutTimer.unref()
+
+    const onAbort = () => {
+      if (settled) return
+      aborted = true
+      killTree('SIGTERM')
+      killTimer = setTimeout(() => {
+        killTimer = null
+        killTree('SIGKILL')
+      }, 2000)
+      if (typeof killTimer.unref === 'function') killTimer.unref()
+      clearTimers()
+    }
+    let abortListener: (() => void) | null = onAbort
+    signal?.addEventListener('abort', abortListener, { once: true })
+
+    child.on('error', (err) => {
+      // Spawn failure (ENOENT, EACCES, etc.) — child never started.
+      settle({
+        status: 'failed',
+        summary: `Failed to spawn: ${err.message}`,
+        stderr: err.message,
+        retryable: false,
+      })
+    })
+
+    child.on('close', (code, sig) => {
+      if (settled) return
+      const stdoutRaw = Buffer.concat(stdoutChunks).toString('utf8')
+      const stderrRaw = Buffer.concat(stderrChunks).toString('utf8')
+
+      // Large-output routing: build artifacts and replace inline text
+      // with a head+tail preview so the model still gets a hint.
+      const artifacts: ArtifactRef[] = []
+      let stdoutFinal = stdoutRaw
+      let stderrFinal = stderrRaw
+      const outRoute = routeLargeOutput(stdoutRaw, `shell-stdout-${randomUUID()}`)
+      if (outRoute) {
+        artifacts.push(outRoute.artifact)
+        stdoutFinal = outRoute.preview
+      }
+      const errRoute = routeLargeOutput(stderrRaw, `shell-stderr-${randomUUID()}`)
+      if (errRoute) {
+        artifacts.push(errRoute.artifact)
+        stderrFinal = errRoute.preview
+      }
+
+      if (aborted) {
+        settle({
+          status: 'cancelled',
+          summary: `Command cancelled by abort signal: ${command.slice(0, 200)}`,
+          stdout: stdoutFinal,
+          stderr: stderrFinal,
+          exitCode: code ?? undefined,
+          artifacts: artifacts.length ? artifacts : undefined,
+          retryable: false,
+        })
+        return
+      }
+      if (timedOut) {
+        settle({
+          status: 'timed_out',
+          summary: `Command timed out after ${timeoutMs}ms: ${command.slice(0, 200)}`,
+          stdout: stdoutFinal,
+          stderr: stderrFinal,
+          exitCode: code ?? undefined,
+          artifacts: artifacts.length ? artifacts : undefined,
+          retryable: true,
+        })
+        return
+      }
+      const exitCode = code ?? 0
+      if (exitCode === 0) {
+        settle({
+          status: 'success',
+          summary: `Command succeeded: ${command.slice(0, 200)}`,
+          stdout: stdoutFinal,
+          stderr: stderrFinal,
+          exitCode: 0,
+          artifacts: artifacts.length ? artifacts : undefined,
+          retryable: false,
+        })
+        return
+      }
+      settle({
+        status: 'failed',
+        summary: `Command failed (exit ${exitCode}${sig ? `, signal ${sig}` : ''}): ${command.slice(0, 200)}`,
+        stdout: stdoutFinal,
+        stderr: stderrFinal,
+        exitCode,
+        artifacts: artifacts.length ? artifacts : undefined,
+        retryable: false,
+      })
+    })
+  })
 }
 
 async function executeSlashStep(
