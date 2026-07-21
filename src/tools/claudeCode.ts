@@ -1,6 +1,7 @@
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 import { str } from '../core/strings.js'
+import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
 
 function defaultSession(input: Record<string, unknown>): string {
   return str(input.session, 'ovogo-claude-worker')
@@ -20,7 +21,19 @@ export class ClaudeCodeTool implements Tool {
   name = 'ClaudeCode'
   metadata = { mutatesState: true, longRunning: true, concurrencySafe: false }
 
-  constructor(private readonly manager = new ClaudeCodeWorkerManager()) {}
+  constructor(
+    private readonly manager = new ClaudeCodeWorkerManager(),
+    /**
+     * Optional ExecutionRun registry (fi_goal.md §三 Phase 2 / Round 3).
+     * When supplied, the `run` action creates a child run with
+     * kind='external_worker' and walks it through the state machine so
+     * observers can track tmux-backed delegations uniformly. When
+     * omitted, the tool behaves exactly as before.
+     */
+    private readonly runRegistry?: ExecutionRunRegistry,
+    /** Optional parent run id for linking into a call tree. */
+    private readonly parentRunId?: string,
+  ) {}
 
   definition: ToolDefinition = {
     type: 'function',
@@ -138,46 +151,93 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     const task = str(input.task)
     if (!task) return { content: 'Error: task is required for run.', isError: true }
 
-    const result = await this.manager.runTask({
-      session: defaultSession(input),
-      cwd: ctx.cwd,
-      command: str(input.command, 'claude'),
-      task,
-      instructions: str(input.instructions),
-    })
-
-    if (input.wait === true) {
-      // P0-5: bind the wait to THIS run's taskId unless the caller
-      // supplied a custom pattern (custom pattern wins — explicit
-      // opt-out of the task-id matching protocol).
-      const customPattern = str(input.pattern) || undefined
-      const waited = await this.manager.waitFor({
-        session: result.session,
-        pattern: customPattern,
-        taskId: customPattern ? undefined : result.taskId,
-        timeoutMs: positiveNumber(input.timeoutMs, 120_000),
-        lines: nonNegativeNumber(input.lines, 120),
-        signal: ctx.signal,
+    // ── ExecutionRun lifecycle (Round 3) ────────────────────────────
+    // Create a child run with kind='external_worker' and walk it
+    // through queued → preparing → running → waiting → succeeded/
+    // failed. Best-effort: registry failures never break the run.
+    const registry = this.runRegistry
+    let runId: string | undefined
+    if (registry) {
+      const run = registry.create({
+        kind: 'external_worker',
+        parentRunId: this.parentRunId,
+        goal: task,
+        workspace: { cwd: ctx.cwd },
+        worker: defaultSession(input),
       })
+      runId = run.runId
+    }
+    const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
+      if (!registry || !runId) return
+      try { registry.transition(runId, to, patch as never) } catch { /* best-effort */ }
+    }
+
+    try {
+      transitionRun('preparing', { phase: 'starting-session' })
+      const result = await this.manager.runTask({
+        session: defaultSession(input),
+        cwd: ctx.cwd,
+        command: str(input.command, 'claude'),
+        task,
+        instructions: str(input.instructions),
+      })
+      // Stamp the taskId onto the run so observers can correlate with
+      // the [TASK_DONE <id>] sentinel in the pane output (P0-5).
+      transitionRun('running', { phase: 'task-sent', worker: result.session })
+
+      if (input.wait === true) {
+        // P0-5: bind the wait to THIS run's taskId unless the caller
+        // supplied a custom pattern (custom pattern wins — explicit
+        // opt-out of the task-id matching protocol).
+        const customPattern = str(input.pattern) || undefined
+        transitionRun('waiting', { phase: 'polling-completion' })
+        const waited = await this.manager.waitFor({
+          session: result.session,
+          pattern: customPattern,
+          taskId: customPattern ? undefined : result.taskId,
+          timeoutMs: positiveNumber(input.timeoutMs, 120_000),
+          lines: nonNegativeNumber(input.lines, 120),
+          signal: ctx.signal,
+        })
+        if (waited.aborted) {
+          transitionRun('cancelled', { phase: 'aborted', error: 'wait aborted via signal' })
+        } else if (waited.matched) {
+          // The [TASK_DONE <id>] match is the completion verification
+          // for an external worker — route through the canonical
+          // verifying → succeeded path.
+          transitionRun('verifying', { phase: 'completion-matched' })
+          transitionRun('succeeded', { phase: 'finalized' })
+        } else {
+          transitionRun('timed_out', { phase: 'wait-timeout', error: 'waitFor timed out' })
+        }
+        return {
+          content: [
+            `ClaudeCode worker: ${result.session}`,
+            result.created ? 'Status: started and task sent' : 'Status: reused and task sent',
+            waited.matched ? 'Completion: matched' : 'Completion: timed out',
+            '',
+            waited.output || '(no output)',
+          ].join('\n'),
+          isError: !waited.matched,
+        }
+      }
+
+      // No wait requested — the task was dispatched but completion is
+      // unverified. Treat as succeeded (the dispatch itself worked)
+      // so observers see a clean terminal state; the caller is
+      // responsible for following up with a `wait` or `capture`.
+      transitionRun('succeeded', { phase: 'dispatched-no-wait' })
       return {
         content: [
           `ClaudeCode worker: ${result.session}`,
           result.created ? 'Status: started and task sent' : 'Status: reused and task sent',
-          waited.matched ? 'Completion: matched' : 'Completion: timed out',
-          '',
-          waited.output || '(no output)',
+          'Use ClaudeCode({ action: "wait", session: "' + result.session + '" }) or capture to inspect progress.',
         ].join('\n'),
-        isError: !waited.matched,
+        isError: false,
       }
-    }
-
-    return {
-      content: [
-        `ClaudeCode worker: ${result.session}`,
-        result.created ? 'Status: started and task sent' : 'Status: reused and task sent',
-        'Use ClaudeCode({ action: "wait", session: "' + result.session + '" }) or capture to inspect progress.',
-      ].join('\n'),
-      isError: false,
+    } catch (err) {
+      transitionRun('failed', { phase: 'thrown', error: (err as Error).message })
+      throw err
     }
   }
 

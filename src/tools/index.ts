@@ -3,6 +3,7 @@
  */
 
 import type { Tool, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
+import type { ExecutionRunRegistry } from '../core/executionRun.js'
 import { BashTool } from './bash.js'
 import { FileReadTool } from './fileRead.js'
 import { FileWriteTool } from './fileWrite.js'
@@ -46,6 +47,15 @@ export interface AgentWiring {
   factory: AgentChildEngineFactory
   parentConfig: EngineConfig
   parentRenderer: unknown
+  /**
+   * Optional ExecutionRun registry (fi_goal.md §三). When supplied,
+   * AgentTool and ClaudeCodeTool create child runs for every
+   * delegation so observers can track them uniformly. When omitted,
+   * both tools behave exactly as before (no registry integration).
+   */
+  runRegistry?: ExecutionRunRegistry
+  /** Optional parent run id — links child runs into a call tree. */
+  parentRunId?: string
 }
 
 export function createTools(
@@ -57,6 +67,8 @@ export function createTools(
         factory: agentWiring.factory,
         parentConfig: agentWiring.parentConfig,
         parentRenderer: agentWiring.parentRenderer,
+        runRegistry: agentWiring.runRegistry,
+        parentRunId: agentWiring.parentRunId,
       })
     : new AgentTool()
 
@@ -85,7 +97,7 @@ export function createTools(
     new SleepTool(),
     new SnipTool(),
     new NotebookEditTool(),
-    new ClaudeCodeTool(),
+    new ClaudeCodeTool(undefined, agentWiring?.runRegistry, agentWiring?.parentRunId),
     new EnterWorktreeTool(),
     new ExitWorktreeTool(),
     new ListWorktreesTool(),
