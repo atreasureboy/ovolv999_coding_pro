@@ -34,6 +34,15 @@ import {
   effectiveInputBudget,
 } from '../compact.js'
 import { truncateToolResult, enforceAggregateToolResultBudget } from './toolResultBudget.js'
+import {
+  emptyWorkingState,
+  recordFileRead,
+  recordFileChange,
+  recordVerification,
+  resolveUnresolved,
+  serializeWorkingState,
+  type WorkingState,
+} from '../workingState.js'
 
 export interface ContextManagerDeps {
   client: OpenAI
@@ -55,6 +64,14 @@ export class ContextManager {
   private suppressCompactWarning = false
   private resolvedContextWindow: number | null = null
   private pendingSnipCount: number | null = null
+  /**
+   * P1-6 (five_goal §十): structured task state. Updated deterministically
+   * from tool events via applyToolEvent() and re-rendered into every
+   * system prompt via renderWorkingStateBlock(). Lives OUTSIDE the
+   * message log so compaction cannot silently drop constraints /
+   * facts / unresolved items (invariants INV-1..INV-5).
+   */
+  private workingState: WorkingState = emptyWorkingState()
 
   constructor(deps: ContextManagerDeps) {
     this.deps = deps
@@ -93,6 +110,93 @@ export class ContextManager {
     if (this.deps.model === model) return
     ;(this as unknown as { deps: ContextManagerDeps }).deps = { ...this.deps, model }
     this.resolvedContextWindow = null
+  }
+
+  // ── WorkingState (P1-6, P1-7 / five_goal §十) ────────────────────────
+  //
+  // The WorkingState is the structured long-term memory. It is:
+  //   - updated deterministically from tool events via applyToolEvent()
+  //   - rendered into every system prompt via renderWorkingStateBlock()
+  //   - preserved across compaction (invariants INV-1..INV-5)
+  //
+  // The model never gets to freely overwrite the whole state — only
+  // deterministic events from tool results mutate it. This avoids the
+  // failure mode where the model hallucinates "verification passed"
+  // in a free-text summary.
+
+  /** Replace the entire WorkingState. Use for tests + session restore. */
+  setWorkingState(state: WorkingState): void {
+    this.workingState = state
+  }
+
+  /** Read-only snapshot of the current WorkingState. */
+  getWorkingState(): Readonly<WorkingState> {
+    return this.workingState
+  }
+
+  /**
+   * Render the WorkingState as a text block for inclusion in the
+   * system prompt. Caller is responsible for actually concatenating
+   * it into the prompt — ContextManager does NOT mutate the prompt.
+   */
+  renderWorkingStateBlock(): string {
+    return serializeWorkingState(this.workingState)
+  }
+
+  /**
+   * P1-6 (five_goal §十): apply a deterministic state update from a
+   * completed tool call. Rules:
+   *
+   *   Read success     → filesRead += path
+   *   Edit/Write succ  → filesChanged += path
+   *   Bash exit=0      → verification.passed += command
+   *   Bash exit!=0     → verification.failed += command
+   *                      unresolved += "Bash failed: <cmd>"
+   *
+   * Unknown tools / errored calls are no-ops. The state is replaced
+   * immutably so any snapshots taken earlier remain stable.
+   */
+  applyToolEvent(params: {
+    toolName: string
+    input: Record<string, unknown>
+    result: { isError?: boolean; content?: string; exitCode?: number; status?: string }
+  }): void {
+    const { toolName, input, result } = params
+    let s = this.workingState
+
+    if (result.isError !== false && result.status !== 'success') {
+      // Most error paths leave the state untouched — failures don't
+      // mutate filesRead / filesChanged. Bash failures get recorded
+      // below as verification.failed.
+      if (!(toolName === 'Bash')) return
+    }
+
+    if (toolName === 'Read' && typeof input.file_path === 'string') {
+      s = recordFileRead(s, input.file_path)
+    } else if ((toolName === 'Edit' || toolName === 'Write') && typeof input.file_path === 'string') {
+      s = recordFileChange(s, input.file_path)
+    } else if (toolName === 'Bash' && typeof input.command === 'string') {
+      const cmd = input.command
+      const exitCode = result.exitCode
+      const passed = !result.isError && (exitCode === undefined || exitCode === 0)
+      s = recordVerification(s, cmd, passed)
+      if (!passed) {
+        // five_goal §十: 测试失败 → unresolved 添加失败摘要
+        s = { ...s, unresolved: [...s.unresolved, `Bash failed (exit ${exitCode ?? '?'}): ${cmd.slice(0, 120)}`] }
+      } else {
+        // Resolve any prior unresolved entries for THIS command (any
+        // exit code). The previous failure's summary had a different
+        // exit-code suffix, so we filter by command prefix instead
+        // of exact-string match.
+        const prefix = `: ${cmd.slice(0, 120)}`
+        s = {
+          ...s,
+          unresolved: s.unresolved.filter(u => !u.includes('Bash failed') || !u.endsWith(prefix)),
+        }
+      }
+    }
+
+    this.workingState = s
   }
 
   // ── Turn lifecycle ─────────────────────────────────────────────────────

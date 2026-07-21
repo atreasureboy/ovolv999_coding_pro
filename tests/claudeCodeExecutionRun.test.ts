@@ -105,7 +105,7 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
     expect(run.parentRunId).toBe('parent-99')
   })
 
-  it('lands in succeeded even when wait is omitted (dispatch succeeded)', async () => {
+  it('P0-6: lands in waiting (NOT succeeded) when wait is omitted — dispatch ≠ completion', async () => {
     const registry = new ExecutionRunRegistry()
     const tool = new ClaudeCodeTool(fakeManager(), registry)
 
@@ -114,7 +114,11 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
       context(),
     )
 
-    expect(registry.list()[0]!.status).toBe('succeeded')
+    // five_goal §六 P0-6: a dispatched-but-unverified task is NOT
+    // 'succeeded'. The run stays non-terminal in 'waiting' so the
+    // orchestrator can later wait/steer/cancel/collect with the
+    // same runId. Marking 'succeeded' here is explicitly forbidden.
+    expect(registry.list()[0]!.status).toBe('waiting')
   })
 })
 
