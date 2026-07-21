@@ -153,6 +153,7 @@ interface Args {
   ink: boolean
   pipe: boolean
   pipeFormat: 'text' | 'json'
+  bg: boolean
 }
 
 /**
@@ -365,6 +366,7 @@ function parseArgs(argv: string[]): Args {
   let ink = false
   let pipe = false
   let pipeFormat: 'text' | 'json' = 'text'
+  let bg = false
 
   try {
     for (let i = 0; i < args.length; i++) {
@@ -408,6 +410,7 @@ function parseArgs(argv: string[]): Args {
           break
         case '--ink': ink = true; break
         case '--pipe': pipe = true; break
+        case '--bg': bg = true; break
         case '--format':
           pipeFormat = requireValue(arg, args[++i]) as 'text' | 'json'
           if (pipeFormat !== 'text' && pipeFormat !== 'json') {
@@ -425,7 +428,7 @@ function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg }
 }
 
 interface ResolvedApiEnvironment {
@@ -1229,10 +1232,141 @@ async function runSingleTask(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Background session subcommand handler
+// ─────────────────────────────────────────────────────────────
+async function handleSessionSubcommand(cmd: string, args: string[]): Promise<void> {
+  const {
+    listSessions, getSession, readSessionLogs, attachToSession,
+    stopSession, removeSession, cleanStaleSessions,
+    formatSessionList, formatSessionDetail,
+  } = await import('../src/core/backgroundSession.js')
+
+  switch (cmd) {
+    case 'ps': {
+      const sessions = listSessions()
+      process.stdout.write(formatSessionList(sessions) + '\n')
+      process.exit(0)
+      break
+    }
+    case 'logs': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('Usage: ovolv999 logs <session-id> [--tail N]\n')
+        process.exit(1)
+      }
+      const tailIdx = args.indexOf('--tail')
+      const tail = tailIdx >= 0 ? parseInt(args[tailIdx + 1] ?? '50', 10) : undefined
+      const meta = getSession(id)
+      if (!meta) {
+        process.stderr.write(`Error: no session with id "${id}"\n`)
+        process.exit(1)
+      }
+      const logs = readSessionLogs(id, tail ? { tailLines: tail } : {})
+      process.stdout.write(logs)
+      if (!logs.endsWith('\n')) process.stdout.write('\n')
+      process.exit(0)
+      break
+    }
+    case 'attach': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('Usage: ovolv999 attach <session-id>\n')
+        process.exit(1)
+      }
+      const handle = attachToSession(id)
+      if (!handle) {
+        process.stderr.write(`Error: no session with id "${id}"\n`)
+        process.exit(1)
+      }
+      process.stdout.write(formatSessionDetail(handle.metadata) + '\n\n--- streaming logs (Ctrl-C to detach) ---\n')
+      for await (const line of handle.stream) {
+        process.stdout.write(line + '\n')
+      }
+      process.stdout.write('\n[session ended]\n')
+      process.exit(0)
+      break
+    }
+    case 'stop': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('Usage: ovolv999 stop <session-id>\n')
+        process.exit(1)
+      }
+      const ok = stopSession(id)
+      if (!ok) {
+        process.stderr.write(`Error: could not stop session "${id}"\n`)
+        process.exit(1)
+      }
+      process.stdout.write(`Stopped session ${id}\n`)
+      process.exit(0)
+      break
+    }
+    case 'rm': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('Usage: ovolv999 rm <session-id> [--force]\n')
+        process.exit(1)
+      }
+      const force = args.includes('--force')
+      const ok = removeSession(id, force)
+      if (!ok) {
+        process.stderr.write(`Error: could not remove session "${id}" (running? use --force)\n`)
+        process.exit(1)
+      }
+      process.stdout.write(`Removed session ${id}\n`)
+      process.exit(0)
+      break
+    }
+    case 'clean': {
+      const n = cleanStaleSessions()
+      process.stdout.write(`Cleaned ${n} stale session(s)\n`)
+      process.exit(0)
+      break
+    }
+    default:
+      process.stderr.write(`Unknown session subcommand: ${cmd}\n`)
+      process.exit(1)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat } = parseArgs(process.argv)
+  // ── Background session subcommands (ps / attach / logs / stop / rm) ──────
+  // Routed before parseArgs because bare subcommands would otherwise be
+  // swallowed as the task argument.
+  const sub = process.argv[2]
+  if (sub === 'ps' || sub === 'sessions') {
+    await handleSessionSubcommand('ps', process.argv.slice(3))
+    return
+  }
+  if (sub === 'attach') {
+    await handleSessionSubcommand('attach', process.argv.slice(3))
+    return
+  }
+  if (sub === 'logs') {
+    await handleSessionSubcommand('logs', process.argv.slice(3))
+    return
+  }
+  if (sub === 'stop') {
+    await handleSessionSubcommand('stop', process.argv.slice(3))
+    return
+  }
+  if (sub === 'rm' || sub === 'remove') {
+    await handleSessionSubcommand('rm', process.argv.slice(3))
+    return
+  }
+  if (sub === 'clean') {
+    await handleSessionSubcommand('clean', process.argv.slice(3))
+    return
+  }
+
+  // If we're a background-session child, redirect output to the log file.
+  const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
+  initChildLogCapture()
+
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
@@ -1318,6 +1452,24 @@ async function main(): Promise<void> {
         'Set OPENAI_API_KEY, or configure MiniMax through ANTHROPIC_AUTH_TOKEN.\n',
     )
     process.exit(1)
+  }
+
+  // ── Background mode: spawn a detached session and exit ───────────────────
+  if (bg) {
+    if (!task) {
+      process.stderr.write('Error: --bg requires a task to run in the background\n')
+      process.exit(1)
+    }
+    const { startBackgroundSession, formatSessionDetail, loadMetadata } = await import('../src/core/backgroundSession.js')
+    const result = startBackgroundSession({ task, cwd, model })
+    const meta = loadMetadata(result.sessionId)
+    if (meta) {
+      process.stdout.write(formatSessionDetail(meta) + '\n')
+      process.stdout.write(`\nSession ${result.sessionId} started in the background.\n`)
+      process.stdout.write(`Use 'ovolv999 logs ${result.sessionId}' to view output.\n`)
+      process.stdout.write(`Use 'ovolv999 ps' to list sessions.\n`)
+    }
+    process.exit(0)
   }
 
   const renderer = new Renderer()

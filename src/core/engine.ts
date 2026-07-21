@@ -1341,6 +1341,9 @@ export class ExecutionEngine {
           // it needs closure over the *local* `messages` reference.
           snipMessages: (keepRecent: number, reason?: string) =>
             this.applySnipToMessages(messages, keepRecent, reason),
+          // Snapshot accessor for introspection tools (Brief, CtxInspect).
+          // Returns a shallow copy so tools can't mutate the live array.
+          getMessages: () => messages.map(m => ({ ...m })),
         },
       )
 

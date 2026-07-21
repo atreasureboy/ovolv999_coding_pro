@@ -166,6 +166,13 @@ export interface ToolContext {
    * Absent in sub-agents / tests that don't model the live messages array.
    */
   snipMessages?: (keepRecent: number, reason?: string) => { removed: number; tokensFreed: number }
+  /**
+   * Snapshot accessor for the current conversation messages. Used by
+   * introspection tools (Brief, CtxInspect) that need to report on
+   * context size / composition without mutating it. Returns a copy so
+   * tools can't accidentally alter the live array.
+   */
+  getMessages?: () => OpenAIMessage[]
 }
 
 // ── AskUserQuestion types (shared between tool, context, and REPL) ──────────
