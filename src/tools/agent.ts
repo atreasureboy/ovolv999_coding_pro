@@ -27,6 +27,7 @@ import { execSync } from 'child_process'
 import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
 import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
+import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
 
 /** Hard cap on agent call chain depth (across nesting).
  * The depth is threaded through `EngineConfig.initialAgentDepth` so the
@@ -217,6 +218,21 @@ export interface AgentToolWiring {
   factory: AgentChildEngineFactory
   parentConfig: EngineConfig
   parentRenderer: unknown
+  /**
+   * Optional ExecutionRun registry (fi_goal.md §三 Phase 2). When
+   * supplied, every Agent invocation creates a child ExecutionRun,
+   * walks it through queued → preparing → running → verifying →
+   * succeeded/failed, and exposes it via the registry so UI / logs /
+   * queries can observe the run uniformly. When omitted, AgentTool
+   * behaves exactly as before (no registry integration).
+   */
+  runRegistry?: ExecutionRunRegistry
+  /**
+   * Optional parent run id. When supplied, child runs created by this
+   * AgentTool carry parentRunId so the registry can reconstruct the
+   * call tree. The host engine sets this when it knows its own runId.
+   */
+  parentRunId?: string
 }
 
 export class AgentTool implements Tool {
@@ -232,11 +248,15 @@ export class AgentTool implements Tool {
   private readonly factory: AgentChildEngineFactory | undefined
   private readonly parentConfig: EngineConfig | undefined
   private readonly parentRenderer: unknown
+  private readonly runRegistry: ExecutionRunRegistry | undefined
+  private readonly parentRunId: string | undefined
 
   constructor(wiring?: AgentToolWiring) {
     this.factory = wiring?.factory
     this.parentConfig = wiring?.parentConfig
     this.parentRenderer = wiring?.parentRenderer
+    this.runRegistry = wiring?.runRegistry
+    this.parentRunId = wiring?.parentRunId
   }
 
   definition: ToolDefinition = {
@@ -374,6 +394,39 @@ isolation, not the sub-agent — set the flag from the orchestrator.
     }
     mainRenderer.agentStart(description, agentLabel)
     const agentStartTime = Date.now()
+
+    // ── ExecutionRun lifecycle (fi_goal.md §三 Phase 2) ───────────────
+    // When a registry is wired in, this Agent invocation creates a
+    // child run and walks it through the canonical state machine so
+    // UI / logs / cancel / state queries can observe every sub-agent
+    // uniformly. The registry is OPTIONAL — without it AgentTool
+    // behaves exactly as before.
+    const registry = this.runRegistry
+    let runId: string | undefined
+    if (registry) {
+      const run = registry.create({
+        kind: 'agent',
+        parentRunId: this.parentRunId,
+        goal: description,
+        workspace: { cwd: context.cwd },
+        worker: agentLabel,
+        budget: {
+          maxIterations: agentConfig.maxIterations,
+        },
+      })
+      runId = run.runId
+    }
+    /** Best-effort transition — registry failures must never break the run. */
+    const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
+      if (!registry || !runId) return
+      try {
+        registry.transition(runId, to, patch as never)
+      } catch {
+        // best-effort — registry is observability, not control plane
+      }
+    }
+
+    transitionRun('preparing', { phase: 'spawning-child' })
 
     // P0-9: track this subtask in SharedRuntimeState so the runtime
     // surface reflects what's currently in flight. The id is unique
@@ -553,12 +606,14 @@ isolation, not the sub-agent — set the flag from the orchestrator.
           // caches) running indefinitely.
           mainRenderer.agentDone(description, false)
           if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+          transitionRun('cancelled', { phase: 'pre-aborted', error: 'parent task aborted before spawn' })
           return { content: `[${agentLabel}] Cancelled (parent task aborted)`, isError: true }
         }
         abortListener = () => childEngine.abort()
         context.signal.addEventListener('abort', abortListener, { once: true })
       }
 
+      transitionRun('running', { phase: 'child-turn' })
       const { result } = await childEngine.runTurn(delegatedPrompt, [])
       const durationMs = Date.now() - agentStartTime
 
@@ -574,6 +629,7 @@ isolation, not the sub-agent — set the flag from the orchestrator.
       let verifySection = ''
       let verificationFailed = false
       if (verify && result.reason !== 'error' && !agentConfig.identity.planMode) {
+        transitionRun('verifying', { phase: 'verify-commands' })
         const verifyResult = runVerification(effectiveCwd)
         if (verifyResult) {
           const icon = verifyResult.passed ? '✓' : '✗'
@@ -650,6 +706,26 @@ isolation, not the sub-agent — set the flag from the orchestrator.
       mainRenderer.agentDone(description, !failed)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
 
+      // ── ExecutionRun terminal transition ──────────────────────────
+      // Map the combined failure signal (engine error OR verify gate
+      // failure) onto the run state machine. verification_failed is
+      // surfaced as its own terminal state so observers can tell it
+      // apart from a crashed run.
+      if (failed) {
+        transitionRun(verificationFailed ? 'verification_failed' : 'failed', {
+          phase: 'finalized',
+          error: verificationFailed ? 'verification gate failed' : (result.reason || 'run failed'),
+          verification: verificationFailed ? {
+            passed: false,
+            commands: [],
+            startedAt: new Date(agentStartTime).toISOString(),
+            completedAt: new Date().toISOString(),
+          } : undefined,
+        })
+      } else {
+        transitionRun('succeeded', { phase: 'finalized' })
+      }
+
       context.eventLog?.append('invoke_completed', agentLabel, {
         description,
         success: !failed,
@@ -685,6 +761,7 @@ isolation, not the sub-agent — set the flag from the orchestrator.
     } catch (err: unknown) {
       mainRenderer.agentDone(description, false)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+      transitionRun('failed', { phase: 'thrown', error: (err as Error).message })
       // P0-4: a thrown error means the subtask failed mid-run — discard
       // the worktree without merging so a half-applied branch can't leak
       // into the parent's working tree.
