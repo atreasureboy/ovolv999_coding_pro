@@ -81,6 +81,15 @@ export interface BashInput {
   run_in_background?: boolean
   description?: string
   follow_mode?: boolean   // Stream output to user's tmux pane for spectator view
+  /**
+   * P1-5 (five_goal §九): Exit codes the caller explicitly considers
+   * successful. Default [0]. Use this when invoking commands that
+   * conventionally use non-zero exits for benign reasons
+   * (e.g. grep -l returning 1 when no match, or test scripts that
+   * signal "skipped" via 2). Code in this list does NOT mark the
+   * result as failed.
+   */
+  acceptable_exit_codes?: number[]
 }
 
 function truncateOutput(output: string, maxLen: number): string {
@@ -202,6 +211,11 @@ export class BashTool implements Tool {
             type: 'boolean',
             description: 'If true, stream output to a tmux pane for real-time user viewing (spectator mode). The LLM still receives the full output after completion.',
           },
+          acceptable_exit_codes: {
+            type: 'array',
+            items: { type: 'number' },
+            description: 'Exit codes the caller explicitly treats as success (default [0]). Use when invoking commands that conventionally use non-zero exits for benign reasons (e.g. grep -l returns 1 when no match). Listed codes do NOT mark the result as failed.',
+          },
         },
         required: ['command'],
       },
@@ -269,7 +283,7 @@ export class BashTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { command, timeout, run_in_background, description, follow_mode } = input as unknown as BashInput
+    const { command, timeout, run_in_background, description, follow_mode, acceptable_exit_codes } = input as unknown as BashInput
 
     if (!command || typeof command !== 'string') {
       return { content: 'Error: command is required and must be a string', isError: true }
@@ -279,6 +293,14 @@ export class BashTool implements Tool {
       typeof timeout === 'number' ? timeout : DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
     )
+
+    // P1-5 (five_goal §九): explicit allow-list of exit codes the
+    // caller treats as success. Default is just [0]. Validated to a
+    // finite integer array — malformed input falls back to [0].
+    const acceptableExitCodes: Set<number> = Array.isArray(acceptable_exit_codes)
+      ? new Set(acceptable_exit_codes.filter((c): c is number => Number.isFinite(c) && Number.isInteger(c)))
+      : new Set([0])
+    if (acceptableExitCodes.size === 0) acceptableExitCodes.add(0)
 
     // ── Background mode (fire-and-forget with auto log redirect) ─────────────
     if (run_in_background) {
@@ -387,7 +409,7 @@ export class BashTool implements Tool {
     }
 
     // ── Foreground mode with abort support ──────────────────────
-    return this.runForeground(command, timeoutMs, follow_mode, context)
+    return this.runForeground(command, timeoutMs, follow_mode, context, acceptableExitCodes)
   }
 
   /**
@@ -414,6 +436,7 @@ export class BashTool implements Tool {
     timeoutMs: number,
     followMode: boolean | undefined,
     context: ToolContext,
+    acceptableExitCodes: ReadonlySet<number> = new Set([0]),
   ): Promise<ToolResult> {
     // Pre-abort: if the signal is already aborted, refuse to spawn the
     // process at all. Returning a plain cancelled result here avoids the
@@ -770,11 +793,27 @@ export class BashTool implements Tool {
           return
         }
 
-        // Non-zero exit — return stdout+stderr so the LLM can diagnose.
-        // Spec §六: non-zero exit must NOT be reported as success. The
-        // structured status is 'failed' and isError reflects that.
+        // P1-5 (five_goal §九): non-zero exit. By default this is a
+        // failure (status='failed', isError=true). When the caller
+        // explicitly allow-listed the exit code via acceptable_exit_codes,
+        // treat it as success instead — e.g. `grep -l` returns 1 when
+        // no match, `npm test` may use 2 for "skipped". Without the
+        // allow-list the spec is strict: non-zero MUST NOT be success.
         const exitCode = code ?? 1
+        const isAcceptable = acceptableExitCodes.has(exitCode)
         const out = partialOut
+        if (isAcceptable) {
+          const combined = out || '(no output)'
+          settle({
+            content: truncateOutput(prefix + combined, MAX_OUTPUT_LENGTH),
+            isError: false,
+            status: 'success',
+            summary: combined.split('\n')[0]!.slice(0, 200) || `(exit ${exitCode} accepted)`,
+            stdout: out,
+            exitCode,
+          } as ToolResult & { status: 'success'; summary: string; stdout?: string; exitCode?: number })
+          return
+        }
         const hint = buildErrorHint(out)
         settle({
           content: truncateOutput(prefix + `Exit code: ${exitCode}\n${out}${hint}`, MAX_OUTPUT_LENGTH).trimEnd(),
