@@ -3,7 +3,16 @@ import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 import { str } from '../core/strings.js'
 import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
-import type { WorkerAdapter, SteerEventEmitter } from '../core/workerAdapter.js'
+import type {
+  WorkerAdapter,
+  SteerEventEmitter,
+  WorkerHandle,
+  WorkerStatus,
+  WorkerResult,
+  WorkerDescriptor,
+  WorkerTask,
+  DeliveryAck,
+} from '../core/workerAdapter.js'
 
 function defaultSession(input: Record<string, unknown>): string {
   return str(input.session, 'ovogo-claude-worker')
@@ -83,6 +92,192 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     return true
   }
 
+  // ── WorkerAdapter lifecycle (five_goal §六 P0-8) ──────────────────
+  //
+  // The ClaudeCode adapter is the first to grow the full lifecycle
+  // (start/status/cancel/collect/reattach) beyond just steer(). Each
+  // method is anchored on the same `runSessions` map populated by the
+  // `run` action so the runId-keyed API is the single source of truth
+  // — the orchestrator never has to switch to session names.
+
+  /**
+   * Launch a new ClaudeCode worker for `task`. Creates the tmux
+   * session, sends the task, registers the runId↔session mapping,
+   * and returns a WorkerHandle. The worker keeps running after this
+   * resolves — the run stays non-terminal until the host calls
+   * collect() / cancel() or the [TASK_DONE <id>] sentinel is seen.
+   */
+  async start(
+    task: WorkerTask,
+    context?: { cwd?: string; signal?: AbortSignal; parentRunId?: string },
+  ): Promise<WorkerHandle> {
+    const session = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const cwd = context?.cwd ?? process.cwd()
+    const registry = this.runRegistry
+    let runId: string
+    if (registry) {
+      const run = registry.create({
+        kind: 'external_worker',
+        parentRunId: context?.parentRunId,
+        goal: task.goal,
+        workspace: { cwd },
+        worker: this.workerKind,
+      })
+      runId = run.runId
+      try { registry.transition(runId, 'preparing', { phase: 'start-spawning' }) } catch { /* best-effort */ }
+    } else {
+      runId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    }
+    const result = await this.manager.runTask({
+      session,
+      cwd,
+      task: task.goal,
+      instructions: task.instructions,
+    })
+    this.runSessions.set(runId, result.session)
+    if (registry) {
+      try { registry.transition(runId, 'waiting', { phase: 'dispatched', worker: result.session }) } catch { /* best-effort */ }
+    }
+    return {
+      runId,
+      workerKind: this.workerKind,
+      workerInstanceId: result.taskId,
+      descriptor: { type: 'tmux', sessionId: result.session },
+    }
+  }
+
+  /**
+   * Query the live status of a worker. Prefers the transport signal
+   * (does the tmux session still exist?) over the cached registry
+   * state — a pane that disappeared between polls means the run is
+   * 'lost', not 'waiting'.
+   */
+  async status(runId: string): Promise<WorkerStatus> {
+    const session = this.runSessions.get(runId)
+    if (!session) return 'unknown'
+    // First check the registry — if it's already terminal we trust
+    // that state (cancellation, succeeded with [DONE], etc).
+    if (this.runRegistry) {
+      const run = this.runRegistry.get(runId)
+      if (run) {
+        if (run.status === 'succeeded') return 'succeeded'
+        if (run.status === 'failed') return 'failed'
+        if (run.status === 'cancelled') return 'cancelled'
+        if (run.status === 'timed_out') return 'failed'
+        if (run.status === 'verification_failed') return 'failed'
+      }
+    }
+    // Transport-level liveness check.
+    let exists: boolean
+    try {
+      exists = await this.manager.sessionExists(session)
+    } catch {
+      return 'unknown'
+    }
+    if (!exists) {
+      // Pane gone but registry still non-terminal → the worker died
+      // out-of-band. Distinct from 'failed' (which implies the run
+      // completed with an error signal); 'lost' means we don't know.
+      return 'lost'
+    }
+    // Pane exists — assume still running.
+    return 'running'
+  }
+
+  /**
+   * Abort a running worker. Kills the tmux session and transitions
+   * the underlying ExecutionRun to 'cancelled'. Idempotent — calling
+   * cancel() on an already-terminal run is a no-op.
+   */
+  async cancel(runId: string, reason?: string): Promise<void> {
+    const session = this.runSessions.get(runId)
+    if (!session) return
+    try {
+      await this.manager.stop(session)
+    } catch {
+      // best-effort — the session may already be gone.
+    }
+    if (this.runRegistry) {
+      try {
+        this.runRegistry.transition(runId, 'cancelled', {
+          phase: 'cancelled-by-caller',
+          error: reason ?? 'cancel() invoked',
+        })
+      } catch {
+        // Already terminal — nothing to transition.
+      }
+    }
+    this.runSessions.delete(runId)
+  }
+
+  /**
+   * Harvest the terminal result + artifacts from a worker. If the
+   * worker is still running, this returns immediately with status
+   * 'running' — the caller is expected to poll or call wait() first.
+   * Artifacts captured: pane output (as 'log'), and (future) git diff.
+   */
+  async collect(runId: string): Promise<WorkerResult> {
+    const session = this.runSessions.get(runId)
+    if (!session) {
+      return { runId, status: 'unknown' as WorkerStatus, error: 'unknown runId' }
+    }
+    const live = await this.status(runId)
+    if (live === 'running' || live === 'waiting') {
+      return { runId, status: 'running' }
+    }
+    // Capture whatever is left in the pane before it scrolls away.
+    let output = ''
+    try {
+      output = await this.manager.capture(session, 0)
+    } catch {
+      // best-effort — pane may already be gone.
+    }
+    const registryStatus = this.runRegistry?.get(runId)?.status
+    const terminal: WorkerStatus =
+      registryStatus === 'succeeded' ? 'succeeded'
+      : registryStatus === 'cancelled' ? 'cancelled'
+      : registryStatus === 'failed' || registryStatus === 'verification_failed' || registryStatus === 'timed_out' ? 'failed'
+      : live === 'lost' ? 'lost'
+      : 'failed'
+    return {
+      runId,
+      status: terminal,
+      output: output || undefined,
+      artifacts: output
+        ? [{ kind: 'log', content: output, contentType: 'text/plain' }]
+        : undefined,
+    }
+  }
+
+  /**
+   * OPTIONAL: reconnect to a worker after a host restart. Given only
+   * the serialisable descriptor (sessionId), reconstruct the runId↔
+   * session mapping and return a fresh handle. Returns null if the
+   * tmux pane is gone (run should be marked 'lost').
+   */
+  async reattach(descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
+    if (descriptor.type !== 'tmux' || !descriptor.sessionId) return null
+    let exists: boolean
+    try {
+      exists = await this.manager.sessionExists(descriptor.sessionId)
+    } catch {
+      return null
+    }
+    if (!exists) return null
+    // Synthesize a fresh runId — the original is lost across restart
+    // unless the host persisted it via the event store and reconciles
+    // separately. The host is responsible for stamping the original
+    // id back onto the run via registry.transition.
+    const runId = `claude-reattached-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    this.runSessions.set(runId, descriptor.sessionId)
+    return {
+      runId,
+      workerKind: this.workerKind,
+      workerInstanceId: descriptor.sessionId,
+      descriptor,
+    }
+  }
+
   definition: ToolDefinition = {
     type: 'function',
     function: {
@@ -158,7 +353,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     try {
       switch (String(input.action)) {
         case 'start':
-          return await this.start(input, ctx)
+          return await this.startAction(input, ctx)
         case 'run':
           return await this.run(input, ctx)
         case 'send':
@@ -179,7 +374,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     }
   }
 
-  private async start(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  private async startAction(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const result = await this.manager.start({
       session: defaultSession(input),
       cwd: ctx.cwd,
@@ -281,19 +476,33 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
         }
       }
 
-      // No wait requested — the task was dispatched but completion is
-      // unverified. Treat as succeeded (the dispatch itself worked)
-      // so observers see a clean terminal state; the caller is
-      // responsible for following up with a `wait` or `capture`.
-      transitionRun('succeeded', { phase: 'dispatched-no-wait' })
+      // P0-6 (five_goal §六): NO `succeeded` transition here. A dispatched-
+      // but-not-waited task is NOT complete — the worker is still running
+      // in the tmux pane. The Run stays in `waiting` (non-terminal) until
+      // the caller explicitly waits, captures, or cancels. The runId→
+      // session mapping is RETAINED so a later steer()/status()/collect()
+      // can resolve to this same run.
+      //
+      // The previous behavior (mark `succeeded` immediately on dispatch)
+      // violated five_goal §六 P0-6: '任务已发送 → succeeded → 删除
+      // runId/session 映射' is explicitly forbidden — it lied to the
+      // orchestrator about completion and broke later runId-keyed ops.
+      transitionRun('waiting', { phase: 'dispatched-no-wait', detached: true })
       return {
         content: [
           `ClaudeCode worker: ${result.session}`,
           result.created ? 'Status: started and task sent' : 'Status: reused and task sent',
+          `Run: ${runId ?? '(untracked)'} (detached — use wait/capture/steer/cancel with this runId)`,
           'Use ClaudeCode({ action: "wait", session: "' + result.session + '" }) or capture to inspect progress.',
         ].join('\n'),
         isError: false,
-      }
+        // Structured fields for programmatic callers (five_goal §六):
+        runId,
+        workerId: this.workerKind,
+        sessionId: result.session,
+        status: 'waiting',
+        detached: true,
+      } as ToolResult & { runId?: string; workerId: string; sessionId: string; status: string; detached: boolean }
     } catch (err) {
       transitionRun('failed', { phase: 'thrown', error: (err as Error).message })
       throw err

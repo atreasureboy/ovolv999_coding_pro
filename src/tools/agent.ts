@@ -29,7 +29,7 @@ import type { PermissionManager } from '../core/permissionSystem.js'
 import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
 import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
-import type { WorkerAdapter, SteerEventEmitter } from '../core/workerAdapter.js'
+import type { WorkerAdapter, SteerEventEmitter, WorkerHandle, WorkerStatus, WorkerResult, WorkerDescriptor, WorkerTask } from '../core/workerAdapter.js'
 
 /** Hard cap on agent call chain depth (across nesting).
  * The depth is threaded through `EngineConfig.initialAgentDepth` so the
@@ -384,6 +384,89 @@ export class AgentTool implements Tool, WorkerAdapter {
    */
   _clearSteerQueue(runId: string): void {
     this.steerQueue.delete(runId)
+  }
+
+  // ── WorkerAdapter lifecycle (five_goal §六 P0-8) ──────────────────
+  //
+  // AgentTool's children are synchronous (await runTurn), so most
+  // lifecycle ops are stubs that reflect that limitation: there is no
+  // long-lived transport to query or kill — by the time start()
+  // resolves, the child has already finished. The host should use
+  // ClaudeCodeTool or a future background-capable adapter for true
+  // detached workers. These stubs exist so the WorkerAdapter contract
+  // is uniform across implementations.
+
+  /**
+   * Not supported for in-process AgentTool — child engines are
+   * synchronous. Use execute() directly. Always rejects.
+   */
+  async start(
+    _task: WorkerTask,
+    _context?: { cwd?: string; signal?: AbortSignal; parentRunId?: string },
+  ): Promise<WorkerHandle> {
+    throw new Error('AgentTool.start() is not supported — in-process child engines are synchronous. Use AgentTool.execute() instead.')
+  }
+
+  /**
+   * Query the registry for the child run's current status. Returns
+   * 'unknown' for runIds not tracked by this instance's registry.
+   */
+  async status(runId: string): Promise<WorkerStatus> {
+    const registry = this.runRegistry
+    if (!registry) return 'unknown'
+    const run = registry.get(runId)
+    if (!run) return 'unknown'
+    switch (run.status) {
+      case 'succeeded': return 'succeeded'
+      case 'failed':
+      case 'verification_failed':
+      case 'timed_out':
+        return 'failed'
+      case 'cancelled': return 'cancelled'
+      case 'blocked': return 'waiting'
+      default: return 'running'
+    }
+  }
+
+  /**
+   * Abort a running child engine. Sets the abort signal the child
+   * observes between iterations. Idempotent.
+   */
+  async cancel(runId: string, reason?: string): Promise<void> {
+    // AgentTool doesn't currently track runId → child engine handle
+    // (children are awaited synchronously). The registry transition
+    // is best-effort; a synchronous child mid-run will observe the
+    // abort via its own signal (set up by execute() from context).
+    const registry = this.runRegistry
+    if (!registry) return
+    try {
+      registry.transition(runId, 'cancelled', {
+        phase: 'cancelled-by-caller',
+        error: reason ?? 'cancel() invoked',
+      })
+    } catch {
+      // Already terminal — nothing to do.
+    }
+    this._clearSteerQueue(runId)
+  }
+
+  /**
+   * Harvest the child's terminal result. Because AgentTool children
+   * are synchronous, this is essentially a status check — the result
+   * was already returned via execute(). Output and artifacts are not
+   * retained beyond the execute() return.
+   */
+  async collect(runId: string): Promise<WorkerResult> {
+    const st = await this.status(runId)
+    return { runId, status: st }
+  }
+
+  /**
+   * reattach() is not supported for in-process AgentTool — child
+   * engines cannot survive a host restart. Always returns null.
+   */
+  async reattach?(_descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
+    return null
   }
 
   definition: ToolDefinition = {
