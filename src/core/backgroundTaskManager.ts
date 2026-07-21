@@ -24,6 +24,7 @@ import { randomUUID } from 'crypto'
 import { writeFileSync, mkdirSync, appendFileSync, renameSync } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
+import { ExecutionRunRegistry, type RunStatus } from './executionRun.js'
 
 function getShellInvocation(command: string): { shell: string; args: string[] } {
   if (process.platform === 'win32') {
@@ -227,12 +228,28 @@ export interface BackgroundTaskManagerOptions {
   sigkillGraceMs?: number
   /** Per-task log file rotation cap. Default 10MB. */
   maxOutputFileBytes?: number
+  /**
+   * Optional ExecutionRun registry (fi_goal.md §三 Round 4). When
+   * supplied, every background task creates a child run with
+   * kind='shell_task' and walks it through queued → preparing →
+   * running → succeeded/failed/cancelled so observers can track
+   * long-running shell tasks uniformly alongside agent + worker runs.
+   * When omitted, the manager behaves exactly as before.
+   */
+  runRegistry?: ExecutionRunRegistry
+  /** Optional parent run id for linking tasks into a call tree. */
+  parentRunId?: string
 }
 
 export class BackgroundTaskManager {
   private tasks = new Map<string, InternalTask>()
   private readonly sigkillGraceMs: number
   private readonly maxOutputFileBytes: number
+  /** Round 4: ExecutionRun registry (optional — back-compat when absent). */
+  private readonly runRegistry?: ExecutionRunRegistry
+  private readonly parentRunId?: string
+  /** taskId → runId mapping so close/error/stop handlers can transition. */
+  private readonly runIds = new Map<string, string>()
 
   constructor(options: BackgroundTaskManagerOptions = {}) {
     // Validate sigkillGraceMs: must be a finite non-negative integer.
@@ -260,6 +277,25 @@ export class BackgroundTaskManager {
       this.maxOutputFileBytes = options.maxOutputFileBytes
     } else {
       this.maxOutputFileBytes = DEFAULT_MAX_OUTPUT_FILE_BYTES
+    }
+    this.runRegistry = options.runRegistry
+    this.parentRunId = options.parentRunId
+  }
+
+  /**
+   * Best-effort ExecutionRun transition. Swallows InvalidRunTransition /
+   * RunNotFound so registry observability can never break task dispatch
+   * or the close/error/stop handlers. Same philosophy as AgentTool:
+   * "registry is observability, not control plane".
+   */
+  private transitionTaskRun(taskId: string, to: RunStatus, patch?: Record<string, unknown>): void {
+    if (!this.runRegistry) return
+    const runId = this.runIds.get(taskId)
+    if (!runId) return
+    try {
+      this.runRegistry.transition(runId, to, patch as never)
+    } catch {
+      // best-effort — task lifecycle must proceed regardless
     }
   }
 
@@ -299,6 +335,26 @@ export class BackgroundTaskManager {
       durationMs: null,
       outputLength: 0,
       metadata: options?.metadata ?? {},
+    }
+
+    // Round 4: register an ExecutionRun for this task. The run enters
+    // as 'queued', immediately transitions through 'preparing' (about
+    // to spawn) and 'running' (spawn returned), and later lands in
+    // succeeded/failed/cancelled via the close/error/stop handlers.
+    if (this.runRegistry) {
+      try {
+        const run = this.runRegistry.create({
+          kind: 'shell_task',
+          parentRunId: this.parentRunId,
+          goal: info.description,
+          workspace: { cwd: options?.cwd ?? process.cwd() },
+          worker: command,
+        })
+        this.runIds.set(id, run.runId)
+        this.transitionTaskRun(id, 'preparing', { phase: 'spawning' })
+      } catch {
+        // registry create failed — task still runs without observability
+      }
     }
 
     // Optional: persist output to file for large outputs
@@ -483,6 +539,12 @@ export class BackgroundTaskManager {
       info.status = code === 0 ? 'completed' : 'failed'
       info.endTime = Date.now()
       info.durationMs = info.endTime - info.startTime
+      // Round 4: mirror the terminal transition onto the ExecutionRun.
+      // 'completed' → succeeded, non-zero exit → failed.
+      this.transitionTaskRun(id, code === 0 ? 'succeeded' : 'failed', {
+        phase: 'exited',
+        error: code === 0 ? undefined : `non-zero exit code ${code ?? 'null'}`,
+      })
     })
 
     proc.on('error', (err: Error & { code?: string }) => {
@@ -508,9 +570,17 @@ export class BackgroundTaskManager {
       info.status = 'failed'
       info.endTime = Date.now()
       info.durationMs = info.endTime - info.startTime
+      // Round 4: error path mirrors 'failed' on the ExecutionRun.
+      this.transitionTaskRun(id, 'failed', {
+        phase: 'process-error',
+        error: err.message,
+      })
     })
 
     this.tasks.set(id, task)
+    // Round 4: spawn succeeded — transition to running. (If the run
+    // was never created because no registry is wired, this is a no-op.)
+    this.transitionTaskRun(id, 'running', { phase: 'spawned' })
     return id
   }
 
@@ -561,7 +631,17 @@ export class BackgroundTaskManager {
   stopTask(id: string): boolean {
     const task = this.tasks.get(id)
     if (!task) return false
-    return stopInternal(task, this.sigkillGraceMs)
+    const wasRunning = task.info.status === 'running'
+    const stopped = stopInternal(task, this.sigkillGraceMs)
+    // Round 4: a real stop transitions the ExecutionRun to cancelled.
+    // We mirror the task.stopped flag (set by stopInternal) onto the
+    // run state machine so observers see a clean terminal state. Only
+    // fires when stopInternal actually signaled — duplicate calls or
+    // stops on already-finished tasks are no-ops on both sides.
+    if (stopped && wasRunning) {
+      this.transitionTaskRun(id, 'cancelled', { phase: 'stopped', error: 'stopTask() called' })
+    }
+    return stopped
   }
 
   /**
@@ -586,6 +666,7 @@ export class BackgroundTaskManager {
       }
     }
     this.tasks.clear()
+    this.runIds.clear()
   }
 
   /**
@@ -621,6 +702,7 @@ export class BackgroundTaskManager {
     for (const [id, task] of this.tasks) {
       if (task.info.status !== 'running') {
         this.tasks.delete(id)
+        this.runIds.delete(id)
         removed++
       }
     }

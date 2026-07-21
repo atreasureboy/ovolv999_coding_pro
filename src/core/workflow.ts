@@ -24,6 +24,7 @@
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
 import { join, resolve, extname } from 'path'
 import { execSync } from 'child_process'
+import { ExecutionRunRegistry, type RunStatus } from './executionRun.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -111,6 +112,16 @@ export interface WorkflowContext {
    * that don't read inputs don't need to supply this.
    */
   inputs?: Record<string, string>
+  /**
+   * Round 4: optional ExecutionRun registry. When supplied,
+   * executeWorkflow creates a child run with kind='workflow' and
+   * walks it through queued → preparing → running → succeeded/failed
+   * so workflows are observable alongside agents + workers + shell
+   * tasks. When omitted, executeWorkflow behaves exactly as before.
+   */
+  runRegistry?: ExecutionRunRegistry
+  /** Optional parent run id for linking into a call tree. */
+  parentRunId?: string
 }
 
 // ── Loader ──────────────────────────────────────────────────────────────────
@@ -228,6 +239,34 @@ export async function executeWorkflow(
   workflow: Workflow,
   ctx: WorkflowContext,
 ): Promise<WorkflowRunResult> {
+  // ── Round 4: ExecutionRun lifecycle ──────────────────────────────
+  // When a registry is supplied on the context, this workflow run is
+  // observable through the same state machine as agents + workers +
+  // shell tasks. Best-effort — registry failures never break the run.
+  const registry = ctx.runRegistry
+  let runId: string | undefined
+  if (registry) {
+    try {
+      const run = registry.create({
+        kind: 'workflow',
+        parentRunId: ctx.parentRunId,
+        goal: workflow.description ?? workflow.name,
+        workspace: { cwd: ctx.cwd },
+        worker: workflow.name,
+      })
+      runId = run.runId
+    } catch {
+      // registry create failed — workflow still runs
+    }
+  }
+  const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
+    if (!registry || !runId) return
+    try { registry.transition(runId, to, patch as never) } catch { /* best-effort */ }
+  }
+
+  transitionRun('preparing', { phase: 'workflow-starting' })
+  transitionRun('running', { phase: 'executing-steps' })
+
   const startTime = Date.now()
   const steps: StepResult[] = []
   let lastSuccess = true
@@ -257,6 +296,8 @@ export async function executeWorkflow(
     const result = await executeStep(step, ctx, steps)
     steps.push(result)
     lastSuccess = result.success
+    // Update the run's phase so observers can see progress per step.
+    transitionRun('running', { phase: `step:${name}` })
 
     if (!result.success && !step.continueOnError) {
       overallSuccess = false
@@ -264,12 +305,23 @@ export async function executeWorkflow(
     }
   }
 
-  return {
+  const workflowResult: WorkflowRunResult = {
     workflowName: workflow.name,
     success: overallSuccess,
     steps,
     durationMs: Date.now() - startTime,
   }
+
+  // Terminal transition: succeeded on overall success, failed otherwise.
+  // (No 'verifying' state for workflows — the per-step outcomes ARE the
+  // verification. If a future step wants explicit verification, it can
+  // be added as its own step type.)
+  transitionRun(overallSuccess ? 'succeeded' : 'failed', {
+    phase: 'finalized',
+    error: overallSuccess ? undefined : 'one or more workflow steps failed',
+  })
+
+  return workflowResult
 }
 
 async function executeStep(
