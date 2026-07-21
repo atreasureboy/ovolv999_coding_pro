@@ -376,7 +376,7 @@ describe('P0-7.B: ModuleManager.boot respects topological order', () => {
     }
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [dependent, base], renderer: r })
-    await mgr.boot({ cwd: '/tmp' })
+    await mgr.boot({ cwd: '/tmp', config: baseConfig() })
     expect(events).toEqual(['base-booted', 'dep-booted'])
   })
 })
@@ -390,7 +390,7 @@ describe('P0-7.C: ModuleManager.boot respects criticality', () => {
     }
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [critical], renderer: r })
-    await expect(mgr.boot({ cwd: '/tmp' })).rejects.toThrow(/critical-mod/)
+    await expect(mgr.boot({ cwd: '/tmp', config: baseConfig() })).rejects.toThrow(/critical-mod/)
   })
 
   it('best_effort boot failure is isolated; module is dropped from subsequent hooks', async () => {
@@ -407,7 +407,7 @@ describe('P0-7.C: ModuleManager.boot respects criticality', () => {
     }
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [bestEffort, healthy], renderer: r })
-    await expect(mgr.boot({ cwd: '/tmp' })).resolves.toBeDefined()
+    await expect(mgr.boot({ cwd: '/tmp', config: baseConfig() })).resolves.toBeDefined()
     // The best-effort module is dropped from the modules array — its
     // onComplete must NOT fire on runComplete.
     await mgr.runComplete({
@@ -431,6 +431,6 @@ describe('P0-7.C: ModuleManager.boot respects criticality', () => {
     }
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [legacy], renderer: r })
-    await expect(mgr.boot({ cwd: '/tmp' })).rejects.toThrow(/legacy-mod/)
+    await expect(mgr.boot({ cwd: '/tmp', config: baseConfig() })).rejects.toThrow(/legacy-mod/)
   })
 })

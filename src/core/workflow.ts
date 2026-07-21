@@ -105,6 +105,12 @@ export interface WorkflowContext {
   promptUser?: (message: string, defaultValue?: string) => Promise<string>
   /** Dispatch a sub-agent — returns the agent's summary */
   runAgent?: (prompt: string, preset: string, description: string) => Promise<string>
+  /**
+   * P0-6: input variables passed to the workflow at invocation time.
+   * Referenced as `${{ inputs.X }}` in steps. Optional — workflows
+   * that don't read inputs don't need to supply this.
+   */
+  inputs?: Record<string, string>
 }
 
 // ── Loader ──────────────────────────────────────────────────────────────────
@@ -277,15 +283,15 @@ async function executeStep(
   try {
     switch (step.type) {
       case 'shell':
-        return executeShellStep(step, name, ctx, start)
+        return executeShellStep(step, name, ctx, start, previousSteps)
       case 'slash':
-        return await executeSlashStep(step, name, ctx, start)
+        return await executeSlashStep(step, name, ctx, start, previousSteps)
       case 'prompt':
         return await executePromptStep(step, name, ctx, start)
       case 'echo':
-        return executeEchoStep(step, name, start)
+        return executeEchoStep(step, name, ctx, start, previousSteps)
       case 'agent':
-        return await executeAgentStep(step, name, ctx, start)
+        return await executeAgentStep(step, name, ctx, start, previousSteps)
       default:
         return {
           name, type: step.type, success: false, output: '',
@@ -301,13 +307,13 @@ async function executeStep(
 }
 
 function executeShellStep(
-  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number,
+  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number, previousSteps: StepResult[],
 ): StepResult {
   if (!step.command) {
     return { name, type: 'shell', success: false, output: '', durationMs: 0, error: 'Missing "command"' }
   }
 
-  const cmd = substituteVars(step.command)
+  const cmd = substituteVars(step.command, { steps: previousSteps, inputs: ctx.inputs })
   const cwd = step.cwd ? resolve(ctx.cwd, step.cwd) : ctx.cwd
   const timeout = step.timeoutMs ?? 60_000
 
@@ -335,7 +341,7 @@ function executeShellStep(
 }
 
 async function executeSlashStep(
-  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number,
+  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number, previousSteps: StepResult[],
 ): Promise<StepResult> {
   if (!step.command) {
     return { name, type: 'slash', success: false, output: '', durationMs: 0, error: 'Missing "command"' }
@@ -344,7 +350,7 @@ async function executeSlashStep(
     return { name, type: 'slash', success: false, output: '', durationMs: 0, error: 'No slash runner available' }
   }
   try {
-    const output = await ctx.runSlash(substituteVars(step.command))
+    const output = await ctx.runSlash(substituteVars(step.command, { steps: previousSteps, inputs: ctx.inputs }))
     return { name, type: 'slash', success: true, output, durationMs: Date.now() - start }
   } catch (err) {
     return { name, type: 'slash', success: false, output: '', durationMs: Date.now() - start, error: (err as Error).message }
@@ -368,16 +374,18 @@ async function executePromptStep(
   }
 }
 
-function executeEchoStep(step: WorkflowStep, name: string, start: number): StepResult {
+function executeEchoStep(
+  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number, previousSteps: StepResult[],
+): StepResult {
   return {
     name, type: 'echo', success: true,
-    output: substituteVars(step.text ?? ''),
+    output: substituteVars(step.text ?? '', { steps: previousSteps, inputs: ctx.inputs }),
     durationMs: Date.now() - start,
   }
 }
 
 async function executeAgentStep(
-  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number,
+  step: WorkflowStep, name: string, ctx: WorkflowContext, start: number, previousSteps: StepResult[],
 ): Promise<StepResult> {
   if (!step.prompt) {
     return { name, type: 'agent', success: false, output: '', durationMs: 0, error: 'Missing "prompt"' }
@@ -387,7 +395,7 @@ async function executeAgentStep(
   }
   try {
     const output = await ctx.runAgent(
-      substituteVars(step.prompt),
+      substituteVars(step.prompt, { steps: previousSteps, inputs: ctx.inputs }),
       step.preset ?? 'general-purpose',
       step.description ?? 'Workflow agent step',
     )
@@ -400,12 +408,96 @@ async function executeAgentStep(
 // ── Variable substitution ───────────────────────────────────────────────────
 
 /**
- * Substitute `${{ vars.X }}` and `${{ env.NAME }}` style references.
- * Very basic — only supports `vars.*` from accumulated step results.
+ * P0-6: real variable substitution for workflow steps.
+ *
+ * Supported syntax (GitHub-Actions-like `${{ }}` envelope so it cannot
+ * accidentally collide with shell `$VAR` expansion):
+ *
+ *   ${{ inputs.NAME }}              → ctx.inputs[NAME]
+ *   ${{ steps.STEP_NAME.output }}   → captured stdout of a prior step
+ *   ${{ steps.STEP_NAME.exitCode }} → numeric exit code of a prior step
+ *   ${{ steps.STEP_NAME.success }}  → "true" | "false"
+ *   ${{ steps.STEP_NAME.error }}    → captured error message
+ *
+ * Step-name lookup is case-sensitive and matches either the explicit
+ * `step.name` field or, if absent, the step's `type` (preserving the
+ * existing "name ?? type" fallback used everywhere else in this module).
+ *
+ * Missing variable → THROWS. This is the opposite of the pre-fix
+ * behavior (which silently preserved the literal `${{ vars.X }}`
+ * placeholder verbatim into the shell command, where it produced
+ * confusing shell errors or — worse — was interpreted as the empty
+ * string). Explicit failure lets the operator diagnose the typo
+ * immediately instead of debugging downstream shell behavior.
+ *
+ * The legacy `${{ vars.X }}` and `${{ env.NAME }}` namespaces are NOT
+ * supported (they were no-ops pre-fix and had no callers); references
+ * to them now throw like any other unknown namespace, surfacing the
+ * configuration mistake instead of swallowing it.
  */
-function substituteVars(text: string): string {
-  return text.replace(/\$\{\{\s*vars\.(\w+)\s*\}\}/g, (_match, name: string) => {
-    return `\${{ vars.${name} }}` // Placeholder — actual substitution happens at runtime
+export interface SubstitutionScope {
+  steps: StepResult[]
+  inputs?: Record<string, string>
+}
+
+export class WorkflowSubstitutionError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'WorkflowSubstitutionError'
+  }
+}
+
+export function substituteVars(text: string, scope: SubstitutionScope): string {
+  // Match ${{ <dotted.path> }} with optional internal whitespace.
+  // The path is restricted to [\w.]+ so callers cannot inject shell
+  // metacharacters via the substitution path itself; the resolved
+  // VALUE is still inserted verbatim (callers must escape as needed
+  // for their target language — same contract as GitHub Actions).
+  return text.replace(/\$\{\{\s*([\w.]+)\s*\}\}/g, (match, path: string) => {
+    const parts = path.split('.')
+    const ns = parts[0]
+
+    if (ns === 'inputs') {
+      const key = parts[1]
+      if (!key) throw new WorkflowSubstitutionError(`workflow: malformed input reference: ${path}`)
+      const inputs = scope.inputs ?? {}
+      if (!(key in inputs)) {
+        throw new WorkflowSubstitutionError(
+          `workflow: unknown input variable: inputs.${key}`,
+        )
+      }
+      return String(inputs[key] ?? '')
+    }
+
+    if (ns === 'steps') {
+      const stepName = parts[1]
+      const field = parts[2]
+      if (!stepName || !field) {
+        throw new WorkflowSubstitutionError(`workflow: malformed step reference: ${path}`)
+      }
+      const step = scope.steps.find(s => s.name === stepName)
+      if (!step) {
+        throw new WorkflowSubstitutionError(
+          `workflow: unknown step reference: steps.${stepName} (known: ${scope.steps.map(s => s.name).join(', ') || 'none'})`,
+        )
+      }
+      switch (field) {
+        case 'output': return step.output ?? ''
+        case 'exitCode': return step.exitCode === undefined ? '' : String(step.exitCode)
+        case 'success': return String(step.success)
+        case 'error': return step.error ?? ''
+        case 'value': return step.value ?? ''
+        case 'durationMs': return String(step.durationMs)
+        default:
+          throw new WorkflowSubstitutionError(
+            `workflow: unsupported step field: steps.${stepName}.${field} (supported: output, exitCode, success, error, value, durationMs)`,
+          )
+      }
+    }
+
+    throw new WorkflowSubstitutionError(
+      `workflow: unknown variable namespace: ${ns} (supported: inputs, steps)`,
+    )
   })
 }
 
