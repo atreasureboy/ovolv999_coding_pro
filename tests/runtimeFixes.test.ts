@@ -487,17 +487,13 @@ describe('RUNTIME-FIX priority-3: enforceAggregateToolResultBudget catches many-
    * the bug.
    */
   it('enforceAggregateToolResultBudget source uses continue-not-break on small items (regression guard)', async () => {
-    // Read the engine source and grep for the documented pattern.
     const fs = await import('fs')
     const src = fs.readFileSync(
-      new URL('../src/core/engine.ts', import.meta.url).pathname,
+      new URL('../src/core/context/toolResultBudget.ts', import.meta.url).pathname,
       'utf8',
     )
-    // Confirm the new "continue" semantics for medium items.
     expect(src).toMatch(/if \(item\.size <= itemTarget\) continue/)
-    // Confirm the head+tail truncation fallback exists.
     expect(src).toMatch(/chars truncated to fit aggregate budget/)
-    // Regression guard: confirm the legacy `break` pattern is GONE.
     expect(src).not.toMatch(/if \(item\.size <= MAX_TOOL_RESULT_LENGTH\) break/)
   })
 })
@@ -689,13 +685,11 @@ describe('RUNTIME-FIX priority-6: _suppressCompactWarning suppression is observe
       client as unknown as ConstructorParameters<typeof ExecutionEngine>[2],
     )
 
-    // Reach the private flag via a reflected accessor. Casting through
-    // a Record is sufficient because the engine is a plain class with
-    // an underscore-prefixed slot.
-    const engAsAny = engine as unknown as { _suppressCompactWarning: boolean }
+    // Access the suppressCompactWarning flag via the ContextManager
+    const engAsAny = engine as unknown as { contextManager: { suppressCompactWarning: boolean } }
 
     // Prime as if a previous turn's compact succeeded.
-    engAsAny._suppressCompactWarning = true
+    engAsAny.contextManager.suppressCompactWarning = true
 
     // Patch contextWarning so we can observe whether it was called.
     let warningCount = 0
@@ -716,7 +710,7 @@ describe('RUNTIME-FIX priority-6: _suppressCompactWarning suppression is observe
     client.rejectCall(0, 'cleanup')
     await t
 
-    expect(engAsAny._suppressCompactWarning).toBe(false)
+    expect(engAsAny.contextManager.suppressCompactWarning).toBe(false)
     expect(warningCount).toBe(0)
   })
 })

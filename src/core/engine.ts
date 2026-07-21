@@ -24,8 +24,6 @@
  */
 
 import OpenAI from 'openai'
-import { writeFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
 import type {
   EngineConfig,
   OpenAIMessage,
@@ -39,20 +37,6 @@ import type {
 import { createTools, findTool, getToolDefinitions } from '../tools/index.js'
 import { getPlanModePrefix } from '../prompts/system.js'
 import type { Renderer } from '../ui/renderer.js'
-import {
-  maybeCompact,
-  microCompact,
-  maybeTimeBasedMicroCompact,
-  estimateTokens,
-  estimateToolDefinitionTokens,
-  getCompressionStrategy,
-  CONTEXT_MICROCOMPACT_PCT,
-  CONTEXT_WARN_PCT,
-  CONTEXT_COMPACT_PCT,
-  resolveContextWindow,
-  clampMaxOutputTokens,
-  effectiveInputBudget,
-} from './compact.js'
 import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { applyAgentToConfig } from './agentPresets.js'
@@ -72,141 +56,7 @@ import { PermissionManager } from './permissionSystem.js'
 import { classifyCommandRisk } from './riskClassifier.js'
 import { normalizeCJKInput } from './strings.js'
 import { ModelGateway } from './model/modelGateway.js'
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const MAX_TOOL_RESULT_LENGTH = 20_000
-/** Aggregate budget for all tool results in a single LLM response.
- * When the total exceeds this, the largest results are persisted to disk
- * individually until the aggregate fits. Prevents parallel tool calls
- * (e.g. 10× Grep returning 15K each = 150K total) from blowing context.
- * Inspired by claude-code-best's enforceToolResultBudget.
- */
-const MAX_AGGREGATE_TOOL_RESULTS = 60_000
-
-/**
- * Truncate or persist a tool result to stay within context budget.
- * Claude Code approach: large results → save to disk, inject preview + file path.
- */
-function truncateToolResult(result: string, sessionDir?: string): string {
-  if (result.length <= MAX_TOOL_RESULT_LENGTH) return result
-
-  // Persist to disk if sessionDir available (saves context tokens)
-  if (sessionDir) {
-    try {
-      const dir = join(sessionDir, 'tool-results')
-      mkdirSync(dir, { recursive: true })
-      const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
-      const filePath = join(dir, fileName)
-      writeFileSync(filePath, result, 'utf8')
-      const preview = result.slice(0, 2000)
-      return `${preview}\n\n[... Full output (${result.length} chars) saved to: ${filePath} ...]`
-    } catch {
-      // Fall through to truncation
-    }
-  }
-
-  // Fallback: head + tail truncation
-  const half = MAX_TOOL_RESULT_LENGTH / 2
-  return (
-    result.slice(0, half) +
-    `\n\n[... ${result.length - MAX_TOOL_RESULT_LENGTH} chars truncated ...]\n\n` +
-    result.slice(result.length - half)
-  )
-}
-
-/**
- * Enforce an aggregate budget across all tool results in a single batch.
- * When the total character count exceeds MAX_AGGREGATE_TOOL_RESULTS,
- * the largest results are individually persisted to disk (replaced with
- * preview + file path) until the aggregate fits. Smaller-but-numerous
- * results that don't warrant disk persist are TRUNCATED in place to
- * head+tail — there is no fallback below MAX_TOOL_RESULT_LENGTH for the
- * disk path, so we must truncate medium-sized results in memory instead
- * of giving up.
- *
- * This solves BOTH:
- *   - "1 huge + 0 small" (one Grep returning 80K) — persist the giant
- *   - "10 medium each returning 15K = 150K total" — persists the biggest
- *     and truncates the rest so the aggregate actually fits.
- * Per-result truncation alone cannot catch the second case.
- *
- * Per-item cap: MAX_AGGREGATE_TOOL_RESULTS / item_count, floored at 1.
- * With this cap, once every item is at most itemTarget chars the
- * aggregate MUST fit (sum ≤ MAX_AGGREGATE_TOOL_RESULTS) — the loop's
- * exit predicate ("currentTotal ≤ MAX_AGGREGATE_TOOL_RESULTS") is then
- * guaranteed to fire, no matter how many items there are.
- *
- * Regression guard: the previous implementation had `break` when
- * finding a "small enough" item, exiting the loop on the FIRST medium
- * result and leaving the aggregate unchanged. Items with size between
- * (per-item budget) and MAX_TOOL_RESULT_LENGTH were not trimmed.
- *
- * Inspired by claude-code-best's enforceToolResultBudget.
- */
-function enforceAggregateToolResultBudget(
-  results: { content: string; tc: { id: string; name: string } }[],
-  sessionDir?: string,
-): void {
-  const totalChars = results.reduce((sum, r) => sum + r.content.length, 0)
-  if (totalChars <= MAX_AGGREGATE_TOOL_RESULTS) return
-  if (results.length === 0) return
-
-  // Per-item cap: distribute the aggregate budget evenly across the
-  // items. Once every item is at most `itemTarget` chars the aggregate
-  // MUST fit (and the break-on-budget predicate fires).
-  const itemTarget = Math.max(1, Math.floor(MAX_AGGREGATE_TOOL_RESULTS / results.length))
-
-  // Sort by size descending — work on the largest first so each shrink
-  // buys the most headroom.
-  const indexed = results.map((r, i) => ({ r, i, size: r.content.length }))
-  indexed.sort((a, b) => b.size - a.size)
-
-  let currentTotal = totalChars
-  for (const item of indexed) {
-    if (currentTotal <= MAX_AGGREGATE_TOOL_RESULTS) break
-
-    // Already small enough — leave alone. Regression guard: the legacy
-    // code `break`-ed here, which prevented the rest of the items from
-    // being shrunk. `continue` lets the loop proceed to trim the others.
-    if (item.size <= itemTarget) continue
-
-    // Persist large items to disk when available — biggest shrink
-    // (file body is replaced by a ~2KB preview + path). Falls through
-    // to head+tail truncation if no sessionDir OR if the write fails.
-    if (item.size > MAX_TOOL_RESULT_LENGTH && sessionDir) {
-      const original = item.r.content
-      try {
-        const dir = join(sessionDir, 'tool-results')
-        mkdirSync(dir, { recursive: true })
-        const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
-        const filePath = join(dir, fileName)
-        writeFileSync(filePath, original, 'utf8')
-        const preview = original.slice(0, 2000)
-        const replacement =
-          `${preview}\n\n[... Full output (${original.length} chars) saved to: ${filePath} ...]`
-        results[item.i].content = replacement
-        currentTotal += replacement.length - original.length
-        continue
-      } catch {
-        // Disk write failed — fall through to in-memory truncation.
-      }
-    }
-
-    // In-memory head+tail truncation. Shrinks this item to itemTarget
-    // so the aggregate fits when every item is processed.
-    const original = item.r.content
-    if (original.length === 0) continue
-    const headLen = Math.max(1, Math.floor(itemTarget / 2))
-    const tailLen = Math.max(1, itemTarget - headLen)
-    const truncated =
-      original.slice(0, headLen) +
-      `\n\n[... ${original.length - (headLen + tailLen)} chars truncated to fit aggregate budget ...]\n\n` +
-      original.slice(original.length - tailLen)
-    results[item.i].content = truncated
-    currentTotal += truncated.length - original.length
-  }
-}
+import { ContextManager } from './context/contextManager.js'
 
 const LEGACY_PLAN_MODE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ExitPlanMode'])
 const LEGACY_CONCURRENCY_SAFE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash', 'Agent', 'ShellSession', 'TmuxSession'])
@@ -286,8 +136,6 @@ export class ExecutionEngine {
   private modules: AgentModule[]
   /** Cached boot results (populated in runTurn) */
   private moduleBootResults: ModuleBootResult[] = []
-  /** Estimated system prompt tokens — set during boot, used in context budget */
-  private systemPromptTokens = 0
   /** All available tools — base + module-provided (populated in runTurn) */
   private allTools: Tool[]
   /** Cost tracker — accumulates real API token usage and USD cost */
@@ -302,12 +150,8 @@ export class ExecutionEngine {
   private permissionManager: PermissionManager
   /** Model gateway — owns LLM API calls, streaming, retry */
   private modelGateway: ModelGateway
-  /** Consecutive compact failure counter — stops retrying after 3 */
-  private _consecutiveCompactFailures = 0
-  /** Suppress compact warning after successful compaction (next turn only) */
-  private _suppressCompactWarning = false
-  /** Cached resolved context window for the current model — refreshed lazily */
-  private _resolvedContextWindow: number | null = null
+  /** Context manager — owns budget evaluation, compaction, snip */
+  private contextManager: ContextManager
   /**
    * Reentrancy guard for `runTurn`. Every ExecutionEngine is single-turn
    * per instance: the legacy design reused a singleton slot
@@ -320,50 +164,6 @@ export class ExecutionEngine {
    * branch of priority-1.
    */
   private _turnInFlight = false
-  /**
-   * Wall-clock timestamp (epoch ms) of the most recent assistant message
-   * the engine has seen. Used by {@link maybeTimeBasedMicroCompact} to
-   * decide when the prompt cache has gone cold — after the cache TTL,
-   * clearing old tool results is "free" because the next LLM call would
-   * reprocess the full prefix anyway. Updated in the `llm_call` state
-   * after the streamed response is parsed into an assistant message.
-   */
-  private lastAssistantTs: number | undefined = undefined
-  /**
-   * Queued "keep_recent" count for manual context pruning. Set by the
-   * `/snip [N]` slash command via {@link queueSnip}; consumed at the
-   * start of the next `runTurn`. `null` when nothing is queued.
-   *
-   * Zero-LLM-cost alternative to `microCompact`/`maybeCompact`: just drops
-   * old messages and inserts a boundary marker. Useful when the user
-   * wants an instant context reduction.
-   */
-  private pendingSnipCount: number | null = null
-
-  /**
-   * Resolve the model-aware context window (cached for the engine's
-   * lifetime). The override + lookup is stable since model/maxContextTokens
-   * are constructor-set, so we compute once and reuse.
-   */
-  private getModelContextWindow(): number {
-    if (this._resolvedContextWindow === null) {
-      this._resolvedContextWindow = resolveContextWindow(
-        this.config.model,
-        this.config.maxContextTokens,
-      )
-    }
-    return this._resolvedContextWindow
-  }
-
-  /**
-   * Single source of truth for the `max_tokens` value sent on every
-   * completion request (primary, no-stream-options fallback, post-compact
-   * retry). Goes through `clampMaxOutputTokens` so small-window models can
-   * never silently request more output than the window allows.
-   */
-  private getEffectiveMaxOutputTokens(): number {
-    return clampMaxOutputTokens(this.config.maxOutputTokens, this.getModelContextWindow())
-  }
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     // Merge agent config into effective config (overrides legacy fields)
@@ -393,6 +193,16 @@ export class ExecutionEngine {
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
     this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
+    this.contextManager = new ContextManager({
+      client: this.client,
+      model: this.config.model,
+      maxContextTokens: this.config.maxContextTokens,
+      maxOutputTokens: this.config.maxOutputTokens,
+      sessionDir: this.config.sessionDir,
+      renderer: this.renderer,
+      eventLog: this.eventLog,
+      hookRunner: this.config.hookRunner,
+    })
     this.backgroundTaskManager = new BackgroundTaskManager()
     this.planModeActive = config.planMode ?? false
     this.fileHistory = config.sessionDir ? new FileHistory(config.sessionDir) : null
@@ -548,137 +358,6 @@ export class ExecutionEngine {
     return defs
   }
 
-  // ── Context budget ──────────────────────────────────────────────────────
-
-  private async evaluateContextBudget(
-    messages: OpenAIMessage[],
-    toolDefs?: ReturnType<typeof getToolDefinitions>,
-    turnAbortSignal?: AbortSignal,
-  ): Promise<void> {
-    // Snapshot and reset the compact-warning suppression flag atomically.
-    // The previous implementation cleared this flag at the start of EVERY
-    // budget check, which meant the flag — set by a successful compact
-    // earlier in the same call — was never read in a meaningful state
-    // and the "next turn only" semantics described in the field's
-    // declaration never fired.
-    //
-    // Lifecycle now:
-    //   1. read + reset: snapshot into a local, reset the instance flag
-    //   2. emit warning if `shouldWarn && !suppressed` — uses the snapshot,
-    //      so a previous turn's compact suppresses THIS call's warning
-    //   3. on a fresh compact in step 4, set the flag again for the
-    //      NEXT call to read
-    const suppressCompactWarning = this._suppressCompactWarning
-    this._suppressCompactWarning = false
-
-    // Resolve the actual context window for the model. Use the cached getter
-    // so we don't recompute the lookup on every iteration.
-    const maxCtxTokens = this.getModelContextWindow()
-    // Count messages + system prompt + tool-definition cost.
-    // Without the tools term we systematically underestimated by
-    // ~50–200 tokens per tool — a real budget pressure on a 20-tool setup.
-    const messageTokens = estimateTokens(messages)
-    const toolDefTokens = estimateToolDefinitionTokens(toolDefs)
-    const totalTokens = messageTokens + this.systemPromptTokens + toolDefTokens
-    // Reserve room for the model's own output. Using the FULL window as the
-    // budget denominator would let warnings fire at thresholds that
-    // mathematically guarantee an API rejection on small-window models
-    // (e.g. 8k window + 8k default max → firing at 70% of 8k = 5.6k input
-    // would still leave 2.4k of free space, but the model would attempt
-    // 8k output and OVERFLOW). Using `window - reservedOutput` aligns the
-    // percentage with what the model can actually accept.
-    const inputBudget = effectiveInputBudget(maxCtxTokens, this.config.maxOutputTokens)
-    const pct = totalTokens / inputBudget
-    // Pull the pressure thresholds from the compact module so we have ONE
-    // source of truth — the previous inline 0.50/0.70/0.85 numeric copies
-    // could drift from CONTEXT_*_PCT in compact.ts.
-    const shouldMicroCompact = pct >= CONTEXT_MICROCOMPACT_PCT
-    const shouldWarn = pct >= CONTEXT_WARN_PCT
-    const shouldCompact = pct >= CONTEXT_COMPACT_PCT
-    const strategy = getCompressionStrategy(pct)
-
-    // ── Time-based microCompact: when the session has been idle past the
-    // prompt-cache TTL, the next LLM call will re-process the full
-    // prefix anyway — clearing old tool results NOW is "free" (no cache
-    // hit to forfeit). Uses the engine's tracked `lastAssistantTs` so
-    // the gate is wall-clock-based rather than a message-count proxy.
-    if (!shouldCompact) {
-      const tbResult = maybeTimeBasedMicroCompact(messages, this.lastAssistantTs)
-      if (tbResult.compacted) {
-        this.eventLog?.append('context_compact', 'engine', {
-          type: 'time_based_microcompact',
-          tokens_before: tbResult.tokensBefore,
-          tokens_after: tbResult.tokensAfter,
-          tools_cleared: tbResult.toolsCleared,
-        })
-      }
-    }
-
-    // ── Pressure-based microCompact: clear old tool results at 50% pressure ──
-    // Clear old tool results at 50% pressure, before resorting to full
-    // LLM-summarization compact at 85%.
-    if (shouldMicroCompact && !shouldCompact) {
-      const mcResult = microCompact(messages)
-      if (mcResult.compacted) {
-        this.eventLog?.append('context_compact', 'engine', {
-          type: 'microcompact',
-          tokens_before: mcResult.tokensBefore,
-          tokens_after: mcResult.tokensAfter,
-          tools_cleared: mcResult.toolsCleared,
-        })
-      }
-    }
-
-    if (this.config.sessionDir && shouldWarn && !suppressCompactWarning) {
-      this.renderer.contextWarning(totalTokens, maxCtxTokens, pct)
-    }
-
-    if (shouldCompact && this._consecutiveCompactFailures < 3) {
-      this.renderer.compactStart(totalTokens)
-      this.eventLog?.append('context_compact', 'engine', {
-        strategy,
-        tokens_before: totalTokens,
-        system_prompt_tokens: this.systemPromptTokens,
-        pct,
-      })
-
-      const compactResult = await maybeCompact(
-        this.client,
-        this.config.model,
-        messages,
-        turnAbortSignal,
-      )
-
-      if (compactResult.compacted) {
-        messages.length = 0
-        messages.push(...compactResult.messages)
-        this.renderer.compactDone(
-          compactResult.originalTokens,
-          compactResult.summaryTokens,
-        )
-        this.eventLog?.append('context_compact', 'engine', {
-          tokens_after: compactResult.summaryTokens,
-          reduction: compactResult.originalTokens - compactResult.summaryTokens,
-        })
-        this._consecutiveCompactFailures = 0  // reset on success
-        this._suppressCompactWarning = true   // suppress warning next turn
-        // Lifecycle hook: OnContextOverflow
-        this.config.hookRunner?.runOnContextOverflow?.(
-          compactResult.originalTokens,
-          compactResult.summaryTokens,
-        )
-      } else {
-        // Compaction failed — increment circuit breaker
-        this._consecutiveCompactFailures++
-        if (this._consecutiveCompactFailures >= 3) {
-          this.renderer.warn(
-            `Auto-compact failed ${this._consecutiveCompactFailures} consecutive times — skipping further attempts. Consider starting a new session.`,
-          )
-        }
-      }
-    }
-  }
-
   // ── LLM call ────────────────────────────────────────────────────────────
 
   private async callLLM(
@@ -699,21 +378,14 @@ export class ExecutionEngine {
         toolDefs,
         model: this.config.model,
         temperature: this.config.temperature,
-        maxOutputTokens: this.getEffectiveMaxOutputTokens(),
+        maxOutputTokens: this.contextManager.effectiveMaxOutputTokens(this.config.maxOutputTokens),
         abortSignal: turnAbortSignal,
         turnAbortController: this.currentTurnAbortController,
       },
       {
         onUsage: (usage, callStartMs) => this.recordUsage(usage, callStartMs),
         onContextOverflow: async (msgs, signal) => {
-          const compactResult = await maybeCompact(this.client, this.config.model, msgs, signal)
-          if (compactResult.compacted) {
-            msgs.length = 0
-            msgs.push(...compactResult.messages)
-            this.renderer.compactDone(compactResult.originalTokens, compactResult.summaryTokens)
-            return true
-          }
-          return false
+          return this.contextManager.reactiveCompact(msgs, signal)
         },
       },
     )
@@ -864,7 +536,7 @@ export class ExecutionEngine {
           content: results[i].content,
           tc: { id: call.tc.id, name: call.tc.name },
         }))
-        enforceAggregateToolResultBudget(aggregateResults, this.config.sessionDir)
+        this.contextManager.enforceAggregateBudget(aggregateResults)
         // Write back any persisted replacements
         for (let i = 0; i < results.length; i++) {
           results[i] = { ...results[i], content: aggregateResults[i].content }
@@ -894,7 +566,7 @@ export class ExecutionEngine {
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(safeContent, this.config.sessionDir),
+            content: this.contextManager.truncateToolResult(safeContent),
             name: tc.name,
           })
         }
@@ -935,7 +607,7 @@ export class ExecutionEngine {
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: truncateToolResult(serialSafeContent, this.config.sessionDir),
+            content: this.contextManager.truncateToolResult(serialSafeContent),
             name: tc.name,
           })
 
@@ -1078,7 +750,7 @@ export class ExecutionEngine {
       // Build system prompt (with module sections) and tool definitions
       const systemPrompt = this.buildSystemPrompt(planMode, moduleSections)
       // Estimate system prompt tokens for accurate context budget
-      this.systemPromptTokens = Math.ceil(systemPrompt.length / 3.5) + 20
+      this.contextManager.beginTurn(systemPrompt)
       const toolDefs = this.getToolDefinitions(planMode, moduleTools)
 
       // Per-turn AbortController
@@ -1097,14 +769,9 @@ export class ExecutionEngine {
       }
       const messages: OpenAIMessage[] = [...history, { role: 'user', content: userContent }]
 
-      // Apply a queued `/snip [N]` first, if any. See `queueSnip`. The
-      // boundary marker is inserted into `messages` here so the very
-      // first LLM call of this turn sees the truncated history.
-      if (this.pendingSnipCount !== null) {
-        const queuedKeep = this.pendingSnipCount
-        this.pendingSnipCount = null
-        this.applySnipToMessages(messages, queuedKeep, 'queued via /snip')
-      }
+      // Apply a queued `/snip [N]` first, if any. Consumed at turn start
+      // so the very first LLM call sees the truncated history.
+      this.contextManager.consumeQueuedSnip(messages)
 
       const toolContext = this.buildToolContext(
         turnAbortController.signal,
@@ -1115,7 +782,7 @@ export class ExecutionEngine {
           // this `runTurn`. Provided here (not via module patch) because
           // it needs closure over the *local* `messages` reference.
           snipMessages: (keepRecent: number, reason?: string) =>
-            this.applySnipToMessages(messages, keepRecent, reason),
+            this.contextManager.applySnip(messages, keepRecent, reason),
           // Snapshot accessor for introspection tools (Brief, CtxInspect).
           // Returns a shallow copy so tools can't mutate the live array.
           getMessages: () => messages.map(m => ({ ...m })),
@@ -1134,7 +801,7 @@ export class ExecutionEngine {
       // Continuation budget tracking (opt-in via config.enableContinuation)
       const enableContinuation = this.config.enableContinuation ?? false
       const turnTokenBudget =
-        this.config.turnTokenBudget ?? this.getEffectiveMaxOutputTokens() * 4
+        this.config.turnTokenBudget ?? this.contextManager.effectiveMaxOutputTokens(this.config.maxOutputTokens) * 4
       const budgetTracker = createBudgetTracker()
       let turnTokensProduced = 0
       let emptyResponseCount = 0
@@ -1162,7 +829,7 @@ export class ExecutionEngine {
           }
 
           case 'budget_check': {
-            await this.evaluateContextBudget(messages, toolDefs, turnAbortController.signal)
+            await this.contextManager.evaluateBudget({ messages, toolDefs, abortSignal: turnAbortController.signal })
             state = transitionQueryState(state, { type: 'continue' })
             break
           }
@@ -1226,7 +893,7 @@ export class ExecutionEngine {
             // next evaluateContextBudget pass can decide whether the prompt
             // cache has gone cold. Recorded AFTER the message is pushed
             // because the time-based compact gate uses this as its baseline.
-            this.lastAssistantTs = Date.now()
+            this.contextManager.stampAssistantMessage()
 
             // Detect empty response (no text AND no tool calls) — nudge the model
             if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
@@ -1517,58 +1184,7 @@ export class ExecutionEngine {
    * a stable reference outside it.
    */
   queueSnip(keepRecent: number): void {
-    if (typeof keepRecent === 'number' && keepRecent >= 0) {
-      this.pendingSnipCount = Math.floor(keepRecent)
-    }
-  }
-
-  /**
-   * Mutate `messages` in place: drop all but the last `keepRecent`
-   * entries, prepend a `[snip]` boundary marker, log the event, and
-   * return `{ removed, tokensFreed }`. Shared by the `Snip` tool
-   * (mid-turn) and the queued-from-slash-command path (pre-turn).
-   *
-   * `removed` reflects how many messages were actually dropped — when
-   * the conversation is already shorter than `keepRecent`, nothing
-   * happens and `removed === 0`.
-   */
-  private applySnipToMessages(
-    messages: OpenAIMessage[],
-    keepRecent: number,
-    reason: string | undefined,
-  ): { removed: number; tokensFreed: number } {
-    const total = messages.length
-    const removeCount = Math.max(0, total - keepRecent)
-    if (removeCount === 0) {
-      return { removed: 0, tokensFreed: 0 }
-    }
-
-    const tokensBefore = estimateTokens(messages)
-    const kept = messages.slice(-keepRecent)
-    const boundary: OpenAIMessage = {
-      role: 'user',
-      content:
-        `[snip] ${removeCount} older messages were removed to free context space` +
-        (reason ? ` (${reason})` : '') +
-        '. Continue working from the current context — earlier details are no longer available.',
-    }
-
-    // Mutate in place — same pattern as `microCompact` / `maybeCompact`
-    messages.length = 0
-    messages.push(boundary, ...kept)
-
-    const tokensAfter = estimateTokens(messages)
-
-    this.eventLog?.append('context_compact', 'snip', {
-      type: 'manual_snip',
-      removed: removeCount,
-      tokens_before: tokensBefore,
-      tokens_after: tokensAfter,
-      tokens_freed: tokensBefore - tokensAfter,
-      reason: reason ?? null,
-    })
-
-    return { removed: removeCount, tokensFreed: tokensBefore - tokensAfter }
+    this.contextManager.queueSnip(keepRecent)
   }
 
   /** Get the file history tracker (null if no sessionDir) */
