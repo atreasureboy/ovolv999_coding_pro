@@ -8,6 +8,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { relative } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { GREP_DESCRIPTION } from '../prompts/tools.js'
 
 const execFileAsync = promisify(execFile)
@@ -24,7 +25,21 @@ export interface GrepInput {
 
 export class GrepTool implements Tool {
   name = 'Grep'
-  metadata = { readOnly: true, concurrencySafe: true }
+  metadata = {
+    readOnly: true,
+    concurrencySafe: true,
+    // GAP-D: read claim on the search root so concurrent writes to
+    // that directory tree serialize against us. When no path is
+    // supplied we make no claim (effectively the whole cwd — too
+    // coarse to be useful, and historically the scheduler falls
+    // back to the tool's static concurrencySafe flag).
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = input.path
+      return typeof p === 'string' && p
+        ? [{ type: 'directory', key: p, access: 'read' }]
+        : []
+    },
+  }
 
   definition: ToolDefinition = {
     type: 'function',

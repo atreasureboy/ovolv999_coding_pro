@@ -6,6 +6,7 @@
 import { glob } from 'glob'
 import { stat } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { GLOB_DESCRIPTION } from '../prompts/tools.js'
 
 export interface GlobInput {
@@ -15,7 +16,17 @@ export interface GlobInput {
 
 export class GlobTool implements Tool {
   name = 'Glob'
-  metadata = { readOnly: true, concurrencySafe: true }
+  metadata = {
+    readOnly: true,
+    concurrencySafe: true,
+    // GAP-D: read claim on the search root.
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = input.path
+      return typeof p === 'string' && p
+        ? [{ type: 'directory', key: p, access: 'read' }]
+        : []
+    },
+  }
 
   definition: ToolDefinition = {
     type: 'function',

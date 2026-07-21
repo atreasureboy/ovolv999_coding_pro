@@ -164,29 +164,13 @@ export class ExecutionEngine {
       claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
     })
 
-    this.coordinator = new RuntimeCoordinator({
-      config: this.config,
-      renderer: this.renderer,
-      eventLog: this.eventLog,
-      costTracker: this.costTracker,
-      backgroundTaskManager: this.backgroundTaskManager,
-      permissionManager: this.permissionManager,
-      fileHistory: this.fileHistory,
-      modelGateway: this.modelGateway,
-      contextManager: this.contextManager,
-      toolScheduler: this.toolScheduler,
-      toolPolicy: this.toolPolicy,
-      toolRegistry: this.toolRegistry,
-      moduleManager: this.moduleManager,
-      baseTools: this.tools,
-      sharedState: this.sharedState,
-      eventEmitter: this.eventEmitter,
-    })
-
     // ── ExecutionRun registry + event bus (fi_goal §四 Phase 3) ───────
     // When the caller wires `executionRunLogDir`, the engine recovers
     // any in-flight runs from the JSONL log on startup, then attaches
     // a bus that persists every transition for future recovery.
+    //
+    // Set up BEFORE the coordinator so the latter can be wired with
+    // the registry handle (GAP-C: turn-level run tracking).
     if (config.executionRunLogDir) {
       const store = new JsonlEventStore(config.executionRunLogDir)
       const recovered = recoverRegistryFromStore(store)
@@ -213,6 +197,26 @@ export class ExecutionEngine {
         }
       }
     }
+
+    this.coordinator = new RuntimeCoordinator({
+      config: this.config,
+      renderer: this.renderer,
+      eventLog: this.eventLog,
+      costTracker: this.costTracker,
+      backgroundTaskManager: this.backgroundTaskManager,
+      permissionManager: this.permissionManager,
+      fileHistory: this.fileHistory,
+      modelGateway: this.modelGateway,
+      contextManager: this.contextManager,
+      toolScheduler: this.toolScheduler,
+      toolPolicy: this.toolPolicy,
+      toolRegistry: this.toolRegistry,
+      moduleManager: this.moduleManager,
+      baseTools: this.tools,
+      sharedState: this.sharedState,
+      eventEmitter: this.eventEmitter,
+      runRegistry: this.runRegistry,
+    })
   }
 
   private tools: Tool[]

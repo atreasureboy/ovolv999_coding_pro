@@ -5,6 +5,7 @@ import type { SemanticMemory } from './semanticMemory.js'
 import type { EpisodicMemory } from './episodicMemory.js'
 import type { AgentConfig } from './agentPresets.js'
 import type { BackgroundTaskManager } from './backgroundTaskManager.js'
+import type { ResourceClaim } from './executionRun.js'
 import type { FileHistory } from './fileHistory.js'
 import type { PermissionManager } from './permissionSystem.js'
 import type { McpServerConfig } from './mcpClient.js'
@@ -96,6 +97,20 @@ export interface ToolMetadata {
   longRunning?: boolean
   /** Tool may access network resources. */
   requiresNetwork?: boolean
+  /**
+   * GAP-D: Per-input resource claims (fi_goal §五). When provided,
+   * the engine can route the tool's execution through the
+   * ResourceScheduler so two tools that touch the same file or git
+   * ref serialize rather than race. The builder takes the same
+   * `input` object passed to `execute()` and returns the claims
+   * that should be held for the duration of the call.
+   *
+   * Returning an empty array (or omitting the function) means the
+   * tool makes no claim and is unscheduled. Tools that already
+   * declare `concurrencySafe: true` typically also omit this since
+   * their reads are idempotent and don't need serialization.
+   */
+  claims?: (input: Record<string, unknown>) => ResourceClaim[]
 }
 
 export interface Tool {

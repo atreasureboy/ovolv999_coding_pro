@@ -5,6 +5,7 @@
 
 import { readFile, stat } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { READ_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { markFileRead, hasFileChanged, hasFileBeenRead } from '../core/fileState.js'
 
@@ -19,7 +20,19 @@ const MAX_FILE_SIZE_BYTES = 25_000_000 // 25MB — refuse larger, point to offse
 
 export class FileReadTool implements Tool {
   name = 'Read'
-  metadata = { readOnly: true, concurrencySafe: true }
+  metadata = {
+    readOnly: true,
+    concurrencySafe: true,
+    // GAP-D: per-input claim. Read tools take a 'read' lease on the
+    // target file so they serialize against 'write'/'exclusive'
+    // holders (Edit, Write, Bash touching the same path).
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = input.file_path
+      return typeof p === 'string' && p
+        ? [{ type: 'file', key: p, access: 'read' }]
+        : []
+    },
+  }
 
   definition: ToolDefinition = {
     type: 'function',

@@ -53,6 +53,8 @@ import type { ToolRegistry } from '../toolRuntime/toolRegistry.js'
 import type { ModuleManager } from '../moduleRuntime/moduleManager.js'
 import type { SharedRuntimeState } from './sharedState.js'
 import type { RunEventEmitter } from './events.js'
+import { isTerminalRunStatus } from '../executionRun.js'
+import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { checkTermination } from './terminationPolicy.js'
 import { boot } from './boot.js'
 
@@ -82,6 +84,19 @@ export interface CoordinatorDeps {
 
   sharedState: SharedRuntimeState
   eventEmitter: RunEventEmitter
+
+  /**
+   * Optional ExecutionRun registry (fi_goal §三/§四). When set, the
+   * coordinator mints a `kind='turn'` run for each call to `.run()`
+   * and walks it through queued → preparing → running → succeeded/failed.
+   * Absent = back-compat (no run tracked).
+   */
+  runRegistry?: ExecutionRunRegistry
+  /**
+   * Parent run id (e.g. a `kind='loop'` run from runLoop). When set,
+   * the per-turn run records it as parentRunId for hierarchical queries.
+   */
+  parentRunId?: string
 }
 
 export class RuntimeCoordinator {
@@ -100,24 +115,59 @@ export class RuntimeCoordinator {
 
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
+    // ── ExecutionRun tracking (GAP-C) ──
+    // If a registry is wired in, mint a `kind='turn'` run that
+    // reflects this turn's lifecycle. The registry is optional so
+    // existing call sites (and tests) that don't supply one keep
+    // working byte-for-byte. All registry calls are best-effort: a
+    // registry bug must NEVER break the actual turn.
+    const registry = this.deps.runRegistry
+    const runId = registry
+      ? registry.create({
+          kind: 'turn',
+          goal: userMessage.slice(0, 200),
+          workspace: { cwd: config.cwd },
+          parentRunId: this.deps.parentRunId,
+        }).runId
+      : undefined
+    if (runId && registry) {
+      try {
+        registry.transition(runId, 'preparing', { phase: 'boot' })
+      } catch { /* best-effort */ }
+    }
+
     // ── Boot Sequence ──
-    const bootResult = await boot({
-      userMessage,
-      history,
-      images,
-      config,
-      baseTools: this.deps.baseTools,
-      sharedState,
-      moduleManager: this.deps.moduleManager,
-      contextManager: this.deps.contextManager,
-      toolPolicy: this.deps.toolPolicy,
-      toolRegistry: this.deps.toolRegistry,
-      permissionManager: this.deps.permissionManager,
-      backgroundTaskManager: this.deps.backgroundTaskManager,
-      fileHistory: this.deps.fileHistory,
-      eventLog,
-      eventEmitter,
-    })
+    let bootResult
+    try {
+      bootResult = await boot({
+        userMessage,
+        history,
+        images,
+        config,
+        baseTools: this.deps.baseTools,
+        sharedState,
+        moduleManager: this.deps.moduleManager,
+        contextManager: this.deps.contextManager,
+        toolPolicy: this.deps.toolPolicy,
+        toolRegistry: this.deps.toolRegistry,
+        permissionManager: this.deps.permissionManager,
+        backgroundTaskManager: this.deps.backgroundTaskManager,
+        fileHistory: this.deps.fileHistory,
+        eventLog,
+        eventEmitter,
+      })
+    } catch (bootErr) {
+      const msg = (bootErr as Error).message || String(bootErr)
+      if (runId && registry) {
+        try { registry.transition(runId, 'failed', { phase: 'boot', error: msg }) } catch { /* best-effort */ }
+      }
+      throw bootErr
+    }
+    if (runId && registry) {
+      try {
+        registry.transition(runId, 'running', { phase: 'llm' })
+      } catch { /* best-effort */ }
+    }
 
     const { systemPrompt, toolDefs, toolContext, messages, turnAbortController } = bootResult
     const planMode = sharedState.planModeActive
@@ -387,6 +437,24 @@ export class RuntimeCoordinator {
     }
 
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
+
+    // ── ExecutionRun terminal transition (GAP-C) ──
+    if (runId && registry) {
+      const targetStatus: RunStatus =
+        result.reason === 'stop_sequence' ? 'succeeded'
+        : result.reason === 'interrupted' ? 'cancelled'
+        : result.reason === 'max_iterations' ? 'succeeded'
+        : 'failed'
+      try {
+        const run = registry.get(runId)
+        if (run && !isTerminalRunStatus(run.status)) {
+          registry.transition(runId, targetStatus, {
+            phase: 'completed',
+            error: targetStatus === 'failed' ? (result.output || 'turn failed') : undefined,
+          })
+        }
+      } catch { /* best-effort: never break the turn result */ }
+    }
 
     // ── Module onComplete hooks ──
     await this.deps.moduleManager.runComplete({

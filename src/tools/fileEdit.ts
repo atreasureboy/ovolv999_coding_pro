@@ -11,6 +11,7 @@ import { existsSync } from 'fs'
 import { dirname } from 'path'
 import { execFileSync } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { EDIT_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite, statSafely } from '../core/atomicWrite.js'
@@ -24,7 +25,18 @@ export interface EditFileInput {
 
 export class FileEditTool implements Tool {
   name = 'Edit'
-  metadata = { mutatesState: true, concurrencySafe: false }
+  metadata = {
+    mutatesState: true,
+    concurrencySafe: false,
+    // GAP-D: per-input claim. Edits mutate the file in place — must
+    // hold an exclusive lease so concurrent Edit/Write/Read serialize.
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = input.file_path
+      return typeof p === 'string' && p
+        ? [{ type: 'file', key: p, access: 'write' }]
+        : []
+    },
+  }
 
   /**
    * Hard upper bound on file size Edit will attempt. Files larger than

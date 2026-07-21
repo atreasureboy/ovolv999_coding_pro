@@ -30,6 +30,7 @@
 import { spawn, execSync } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { BASH_DESCRIPTION } from '../prompts/tools.js'
 import { mkdirSync, accessSync, constants } from 'fs'
 import { join } from 'path'
@@ -145,6 +146,25 @@ export class BashTool implements Tool {
     concurrencySafe: false,
     longRunning: true,
     mutatesState: true,
+    // GAP-D: per-input claim.
+    //  - git commands → exclusive 'git' claim (the scheduler forces
+    //    git→exclusive in normalizeClaim, so git ops never overlap).
+    //  - other commands → 'process' claim keyed by command hash. We
+    //    don't try to parse file arguments from arbitrary shell, so
+    //    two identical-command runs serialize (e.g. two `npm install`
+    //    invocations) but two commands touching the same file don't.
+    //    This is a deliberate trade-off — exact file extraction from
+    //    shell is unreliable and worse than no claim.
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const cmd = typeof input.command === 'string' ? input.command.trim() : ''
+      if (!cmd) return []
+      const firstToken = cmd.split(/\s+/)[0] ?? ''
+      const basename = firstToken.split('/').pop() ?? firstToken
+      if (basename === 'git') {
+        return [{ type: 'git', key: 'HEAD', access: 'exclusive' }]
+      }
+      return [{ type: 'process', key: cmd.slice(0, 200), access: 'write' }]
+    },
   }
 
   /** Wall-clock delay between SIGTERM and SIGKILL escalation. */

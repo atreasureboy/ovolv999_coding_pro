@@ -21,6 +21,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import type { ExecutionEngine } from './engine.js'
 import type { Renderer } from '../ui/renderer.js'
+import { isTerminalRunStatus } from './executionRun.js'
 
 const MAX_ITERS = 12
 
@@ -117,14 +118,45 @@ export async function runLoop(
 
   renderer.info(`Loop mode: ${maxIters} max iterations · ${acceptanceItems.length} acceptance checks`)
 
+  // ── ExecutionRun tracking (GAP-C: kind='loop') ──
+  // When the engine exposes a registry (i.e. `executionRunLogDir`
+  // was set), the entire loop is wrapped in a `kind='loop'` run
+  // whose goal is the GOAL.md headline. Per-iteration turns are
+  // recorded as child `kind='turn'` runs via the coordinator wiring.
+  const registry = engine.getRunRegistry?.()
+  // Start in 'running' directly — the loop IS the worker. We never
+  // queue; runLoop begins executing synchronously on entry. (Going
+  // through queued → preparing → running would be ceremony for no
+  // observable benefit since this is the top-level orchestrator.)
+  const loopRunId = registry
+    ? registry.create({
+        kind: 'loop',
+        goal: goal.split('\n').find((l) => l.trim())?.slice(0, 200) || 'autonomous loop',
+        workspace: { cwd },
+        status: 'running',
+        phase: 'loop_start',
+      }).runId
+    : undefined
+  const finishLoopRun = (status: 'succeeded' | 'failed' | 'cancelled', err?: string) => {
+    if (!loopRunId || !registry) return
+    try {
+      const r = registry.get(loopRunId)
+      if (r && !isTerminalRunStatus(r.status)) {
+        registry.transition(loopRunId, status, { phase: 'completed', error: err })
+      }
+    } catch { /* best-effort */ }
+  }
+
   for (let iter = 1; iter <= maxIters; iter++) {
     // Check for DONE/PARKED flags
     if (existsSync(join(loopDir, 'DONE.flag'))) {
       renderer.success('DONE flag detected — loop completed successfully')
+      finishLoopRun('succeeded')
       return
     }
     if (existsSync(join(loopDir, 'PARKED.flag'))) {
       renderer.warn('PARKED flag detected — loop paused')
+      finishLoopRun('cancelled')
       return
     }
 
@@ -202,6 +234,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     if (allPassed && gates.passed) {
       renderer.success('\n✓ All acceptance checks passed + quality gates green — DONE!')
       writeFileSync(join(loopDir, 'DONE.flag'), `completed at iteration ${iter}\n`, 'utf8')
+      finishLoopRun('succeeded')
       return
     }
 
@@ -209,4 +242,5 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
   }
 
   renderer.warn(`\nMax iterations (${maxIters}) reached. Check .loop/STATE.md for status.`)
+  finishLoopRun('failed', `max iterations (${maxIters}) reached`)
 }

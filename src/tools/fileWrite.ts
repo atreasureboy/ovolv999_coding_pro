@@ -6,6 +6,7 @@
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite } from '../core/atomicWrite.js'
@@ -17,7 +18,18 @@ export interface WriteFileInput {
 
 export class FileWriteTool implements Tool {
   name = 'Write'
-  metadata = { mutatesState: true, concurrencySafe: false }
+  metadata = {
+    mutatesState: true,
+    concurrencySafe: false,
+    // GAP-D: per-input claim. Writes need an exclusive lease on the
+    // target file to prevent concurrent Read/Edit/Write from racing.
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = input.file_path
+      return typeof p === 'string' && p
+        ? [{ type: 'file', key: p, access: 'write' }]
+        : []
+    },
+  }
 
   definition: ToolDefinition = {
     type: 'function',
