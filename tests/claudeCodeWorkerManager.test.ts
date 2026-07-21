@@ -28,12 +28,19 @@ describe('ClaudeCodeWorkerManager', () => {
   })
 
   it('builds a worker prompt with completion protocol', () => {
-    const prompt = buildClaudeWorkerPrompt('Refactor settings loader', 'Only edit src/config/settings.ts')
-    expect(prompt).toContain('[OVOGO WORKER TASK]')
+    const prompt = buildClaudeWorkerPrompt('Refactor settings loader', 'Only edit src/config/settings.ts', 'fixed-id')
+    // P0-5: prompt is now task-id-bound. The header sentinel is
+    // [TASK_START <id>] and the completion sentinel is [TASK_DONE <id>],
+    // so a reused tmux session cannot satisfy waitFor() with a stale
+    // [DONE] from a previous run.
+    expect(prompt).toContain('[TASK_START fixed-id]')
     expect(prompt).toContain('Refactor settings loader')
     expect(prompt).toContain('Only edit src/config/settings.ts')
-    expect(prompt).toContain('[DONE]')
+    expect(prompt).toContain('[TASK_DONE fixed-id]')
     expect(prompt).toContain('Do not commit')
+    // Legacy [DONE] sentinel must NOT appear (would re-introduce the
+    // false-positive-on-reuse bug).
+    expect(prompt).not.toMatch(/^\[DONE\]$/m)
   })
 
   it('syncs only present Claude environment variables', async () => {
@@ -107,7 +114,7 @@ describe('ClaudeCodeWorkerManager', () => {
     })
     const manager = new ClaudeCodeWorkerManager(runner)
 
-    await manager.runTask({
+    const result = await manager.runTask({
       session: 'worker-1',
       cwd: '/repo',
       task: 'Add tests',
@@ -116,7 +123,29 @@ describe('ClaudeCodeWorkerManager', () => {
 
     const bufferCall = calls.find((args) => args[0] === 'set-buffer')
     expect(bufferCall?.join('\n')).toContain('Add tests')
-    expect(bufferCall?.join('\n')).toContain('[DONE]')
+    // P0-5: the prompt now contains [TASK_DONE <id>] (not bare [DONE])
+    // and runTask returns the taskId so waitFor() can bind to it.
+    expect(bufferCall?.join('\n')).toMatch(/\[TASK_DONE [0-9a-f-]+\]/)
+    expect(result.taskId).toMatch(/^[0-9a-f-]+$/)
+  })
+
+  it('P0-5: runTask uses caller-provided taskId verbatim', async () => {
+    const { calls, runner } = fakeRunner((args) => {
+      if (args[0] === 'has-session') throw new Error('missing')
+    })
+    const manager = new ClaudeCodeWorkerManager(runner)
+
+    const result = await manager.runTask({
+      session: 'worker-stable',
+      cwd: '/repo',
+      task: 'stable task',
+      taskId: 'stable-id-123',
+    })
+
+    expect(result.taskId).toBe('stable-id-123')
+    const bufferCall = calls.find((args) => args[0] === 'set-buffer')
+    expect(bufferCall?.join('\n')).toContain('[TASK_START stable-id-123]')
+    expect(bufferCall?.join('\n')).toContain('[TASK_DONE stable-id-123]')
   })
 
   it('captures pane output with bounded history', async () => {
@@ -235,5 +264,80 @@ describe('ClaudeCodeWorkerManager', () => {
     // Trimming-only input collapses to a single dash that gets stripped
     const stripped = claudeWorkerSessionName('!!!')
     expect(stripped).toMatch(/^ovogo-claude-\d+$/)
+  })
+
+  // ─────────────────────────────────────────────────────────────────
+  // P0-5 regression: task-id-bound completion prevents stale [DONE]
+  // ─────────────────────────────────────────────────────────────────
+
+  it('P0-5: waitFor(taskId) does NOT match a stale [TASK_DONE] from a different task', async () => {
+    // Simulate a reused tmux pane whose history still contains the
+    // PREVIOUS task's completion sentinel. Pre-fix, this caused
+    // waitFor()'s first poll iteration to match immediately and
+    // report a success that had never happened.
+    const { runner } = fakeRunner(() => ({
+      stdout: '[TASK_START old-task-id]\n...work...\n[TASK_DONE old-task-id]\n',
+    }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+    await expect(manager.waitFor({
+      session: 'worker-1',
+      taskId: 'new-task-id',
+      timeoutMs: 10,
+      intervalMs: 5,
+    })).resolves.toMatchObject({ matched: false })
+  })
+
+  it('P0-5: waitFor(taskId) DOES match the [TASK_DONE <id>] line for THIS task', async () => {
+    const { runner } = fakeRunner(() => ({
+      stdout: 'progress...\n[TASK_DONE my-fresh-id]\nSummary: ok\n',
+    }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+    await expect(manager.waitFor({
+      session: 'worker-1',
+      taskId: 'my-fresh-id',
+      timeoutMs: 50,
+      intervalMs: 5,
+    })).resolves.toMatchObject({ matched: true })
+  })
+
+  it('P0-5: waitFor(taskId) ignores inline substrings (anchored match)', async () => {
+    // The summary prose mentions "[TASK_DONE my-id]" mid-line. The
+    // anchored ^...$ pattern must NOT match.
+    const { runner } = fakeRunner(() => ({
+      stdout: 'I will print [TASK_DONE my-id] when done.\nstill working\n',
+    }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+    await expect(manager.waitFor({
+      session: 'worker-1',
+      taskId: 'my-id',
+      timeoutMs: 10,
+      intervalMs: 5,
+    })).resolves.toMatchObject({ matched: false })
+  })
+
+  it('P0-5: legacy callers passing pattern (no taskId) still work as before', async () => {
+    // Backwards-compat: callers that haven't migrated to taskId get
+    // the pre-fix behavior verbatim (matches DEFAULT_DONE_PATTERN).
+    const { runner } = fakeRunner(() => ({ stdout: 'irrelevant\n[DONE]\n' }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+    await expect(manager.waitFor({
+      session: 'worker-1',
+      timeoutMs: 50,
+      intervalMs: 5,
+    })).resolves.toMatchObject({ matched: true })
+  })
+
+  it('P0-5: caller-supplied pattern still wins over taskId', async () => {
+    // Documented precedence: pattern > taskId > DEFAULT_DONE_PATTERN.
+    // A caller that supplies BOTH explicitly wants the custom pattern.
+    const { runner } = fakeRunner(() => ({ stdout: 'CUSTOM_MARKER_X\n' }))
+    const manager = new ClaudeCodeWorkerManager(runner)
+    await expect(manager.waitFor({
+      session: 'worker-1',
+      taskId: 'never-appears',
+      pattern: '^CUSTOM_MARKER_X$',
+      timeoutMs: 50,
+      intervalMs: 5,
+    })).resolves.toMatchObject({ matched: true })
   })
 })

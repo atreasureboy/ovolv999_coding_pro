@@ -147,9 +147,14 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     })
 
     if (input.wait === true) {
+      // P0-5: bind the wait to THIS run's taskId unless the caller
+      // supplied a custom pattern (custom pattern wins — explicit
+      // opt-out of the task-id matching protocol).
+      const customPattern = str(input.pattern) || undefined
       const waited = await this.manager.waitFor({
         session: result.session,
-        pattern: str(input.pattern) || undefined,
+        pattern: customPattern,
+        taskId: customPattern ? undefined : result.taskId,
         timeoutMs: positiveNumber(input.timeoutMs, 120_000),
         lines: nonNegativeNumber(input.lines, 120),
         signal: ctx.signal,
