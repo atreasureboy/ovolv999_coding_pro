@@ -15,12 +15,11 @@
  * Architecture:
  *   runTurn() orchestrates the high-level loop, delegating to:
  *     - buildSystemPrompt()        → compose system prompt
- *     - evaluateContextBudget()    → check token usage, compact if needed
- *     - maybeRunCritic()           → inject correction every N iterations
- *     - callLLM()                  → streaming LLM invocation
- *     - consumeStream()            → parse streamed response
- *     - scheduleToolCalls()        → partition + execute tool calls
- *     - executeToolCall()          → single tool execution
+ *     - contextManager             → budget evaluation + compaction
+ *     - moduleManager              → module lifecycle hooks
+ *     - modelGateway               → streaming LLM invocation
+ *     - toolScheduler              → partition + execute tool calls
+ *     - toolExecutor               → single tool execution
  */
 
 import OpenAI from 'openai'
@@ -34,13 +33,12 @@ import type {
   TurnResult,
   ToolDefinition,
 } from './types.js'
-import { createTools, findTool, getToolDefinitions } from '../tools/index.js'
+import { createTools } from '../tools/index.js'
 import { getPlanModePrefix } from '../prompts/system.js'
 import type { Renderer } from '../ui/renderer.js'
 import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { applyAgentToConfig } from './agentPresets.js'
-import { filterToolsForSubAgent } from './agentToolFilter.js'
 import { clearFileState } from './fileState.js'
 import {
   transitionQueryState,
@@ -53,13 +51,12 @@ import { CostTracker, type TokenUsage } from './costTracker.js'
 import { BackgroundTaskManager } from './backgroundTaskManager.js'
 import { FileHistory } from './fileHistory.js'
 import { PermissionManager } from './permissionSystem.js'
-import { classifyCommandRisk } from './riskClassifier.js'
 import { normalizeCJKInput } from './strings.js'
 import { ModelGateway } from './model/modelGateway.js'
 import { ContextManager } from './context/contextManager.js'
-
-const LEGACY_PLAN_MODE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ExitPlanMode'])
-const LEGACY_CONCURRENCY_SAFE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash', 'Agent', 'ShellSession', 'TmuxSession'])
+import { ToolPolicy } from './toolRuntime/toolPolicy.js'
+import { ToolExecutor } from './toolRuntime/toolExecutor.js'
+import { ToolScheduler, partitionToolCalls, type ParsedToolCall } from './toolRuntime/toolScheduler.js'
 
 // ── Internal types ───────────────────────────────────────────────────────────
 
@@ -68,47 +65,6 @@ interface StreamingToolCall {
   id: string
   name: string
   arguments: string
-}
-
-interface ParsedToolCall {
-  tc: StreamingToolCall
-  input: Record<string, unknown>
-}
-
-interface ToolBatch {
-  safe: boolean
-  calls: ParsedToolCall[]
-}
-
-// ── Pure helper functions ────────────────────────────────────────────────────
-
-/**
- * Partition tool calls into scheduling batches:
- * - All safe tools → merged into one parallel batch (Promise.all)
- * - Stateful tools (Write, Edit, etc.) → each gets its own serial batch
- *
- * Uses per-input isConcurrencySafe(input) when available (Claude Code pattern),
- * falls back to static CONCURRENCY_SAFE_TOOLS set.
- */
-function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): ToolBatch[] {
-  const batches: ToolBatch[] = []
-
-  for (const call of calls) {
-    // Per-input check: if the tool implements isConcurrencySafe, use it
-    const tool = tools?.find(t => t.name === call.tc.name)
-    const safe = tool?.isConcurrencySafe
-      ? tool.isConcurrencySafe(call.input)
-      : (tool?.metadata?.concurrencySafe ?? LEGACY_CONCURRENCY_SAFE_TOOLS.has(call.tc.name))
-    const last = batches[batches.length - 1]
-
-    if (last && last.safe && safe) {
-      last.calls.push(call) // extend existing parallel batch
-    } else {
-      batches.push({ safe, calls: [call] }) // new batch
-    }
-  }
-
-  return batches
 }
 
 // ── Engine class ─────────────────────────────────────────────────────────────
@@ -152,6 +108,12 @@ export class ExecutionEngine {
   private modelGateway: ModelGateway
   /** Context manager — owns budget evaluation, compaction, snip */
   private contextManager: ContextManager
+  /** Tool policy — unified exposure + execution policy */
+  private toolPolicy: ToolPolicy
+  /** Tool executor — single tool call with policy + permission checks */
+  private toolExecutor: ToolExecutor
+  /** Tool scheduler — partition + parallel/serial batch execution */
+  private toolScheduler: ToolScheduler
   /**
    * Reentrancy guard for `runTurn`. Every ExecutionEngine is single-turn
    * per instance: the legacy design reused a singleton slot
@@ -192,17 +154,6 @@ export class ExecutionEngine {
     this.allTools = this.tools  // will be updated with module tools in runTurn
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
-    this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
-    this.contextManager = new ContextManager({
-      client: this.client,
-      model: this.config.model,
-      maxContextTokens: this.config.maxContextTokens,
-      maxOutputTokens: this.config.maxOutputTokens,
-      sessionDir: this.config.sessionDir,
-      renderer: this.renderer,
-      eventLog: this.eventLog,
-      hookRunner: this.config.hookRunner,
-    })
     this.backgroundTaskManager = new BackgroundTaskManager()
     this.planModeActive = config.planMode ?? false
     this.fileHistory = config.sessionDir ? new FileHistory(config.sessionDir) : null
@@ -222,6 +173,35 @@ export class ExecutionEngine {
           config,
         })
       : []
+
+    this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
+    this.contextManager = new ContextManager({
+      client: this.client,
+      model: this.config.model,
+      maxContextTokens: this.config.maxContextTokens,
+      maxOutputTokens: this.config.maxOutputTokens,
+      sessionDir: this.config.sessionDir,
+      renderer: this.renderer,
+      eventLog: this.eventLog,
+      hookRunner: this.config.hookRunner,
+    })
+    this.toolPolicy = new ToolPolicy({ agent: this.config.agent })
+    this.toolExecutor = new ToolExecutor({
+      toolPolicy: this.toolPolicy,
+      permissionManager: this.permissionManager,
+      requestPermission: this.config.requestPermission,
+      modules: this.modules,
+      renderer: this.renderer,
+    })
+    this.toolScheduler = new ToolScheduler({
+      executor: this.toolExecutor,
+      renderer: this.renderer,
+      eventLog: this.eventLog,
+      hookRunner: this.config.hookRunner,
+      contextManager: this.contextManager,
+      allTools: () => this.allTools,
+      claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
+    })
   }
 
   /**
@@ -323,47 +303,12 @@ export class ExecutionEngine {
     return sections
   }
 
-  // ── Tool definitions ────────────────────────────────────────────────────
-
-  private getToolDefinitions(planMode: boolean, moduleTools: Tool[] = []): ToolDefinition[] {
-    // Merge base tools + module-provided tools
-    const allTools = [...this.tools, ...moduleTools]
-    let defs = getToolDefinitions(allTools)
-    // Filter by agent tool list when a sub-agent config is in play.
-    //
-    // Two shapes of filtering here:
-    //   1. Sub-agent (config.agent set): delegate to filterToolsForSubAgent
-    //      so the global denylist (Agent, EnterPlanMode, …) is enforced in
-    //      addition to the per-agent allow/deny lists.
-    //   2. Main thread with an explicit `agent.tools` (rare — agent.tools on
-    //      the main thread is an unusual override path) — just apply the
-    //      allowlist, no global denylist.
-    if (this.config.agent) {
-      const allNames = defs.map(t => t.function.name)
-      const filtered = filterToolsForSubAgent(
-        allNames,
-        this.config.agent.tools,
-        this.config.agent.disallowedTools,
-      )
-      const allowedSet = new Set(filtered)
-      defs = defs.filter(t => allowedSet.has(t.function.name))
-    }
-    // Filter by plan mode (read-only tools only)
-    if (planMode) {
-      defs = defs.filter((t) => {
-        const tool = allTools.find(candidate => candidate.name === t.function.name)
-        return tool?.metadata?.readOnly === true || LEGACY_PLAN_MODE_TOOLS.has(t.function.name)
-      })
-    }
-    return defs
-  }
-
   // ── LLM call ────────────────────────────────────────────────────────────
 
   private async callLLM(
     systemPrompt: string,
     messages: OpenAIMessage[],
-    toolDefs: ReturnType<typeof getToolDefinitions>,
+    toolDefs: ToolDefinition[],
     turnAbortSignal: AbortSignal,
   ): Promise<{
     assistantText: string
@@ -403,230 +348,6 @@ export class ExecutionEngine {
         duration_ms: durationMs,
       })
     }
-  }
-
-  // ── Tool execution ──────────────────────────────────────────────────────
-
-  private async executeToolCall(
-    toolName: string,
-    input: Record<string, unknown>,
-    context: ToolContext,
-    planMode: boolean,
-    turnNumber: number,
-  ): Promise<ToolResult> {
-    const tool = findTool(this.allTools, toolName)
-    if (!tool) {
-      return { content: `Unknown tool: ${toolName}`, isError: true }
-    }
-
-    // In plan mode, block write tools (defence in depth)
-    if (planMode && !(tool.metadata?.readOnly === true || LEGACY_PLAN_MODE_TOOLS.has(toolName))) {
-      return {
-        content: `Tool "${toolName}" is not available in plan mode. Only read-only tools are allowed. Output your plan as text.`,
-        isError: true,
-      }
-    }
-
-    // Enforce agent tool list (defence in depth — LLM shouldn't see tools
-    // it hasn't been granted, AND we re-check the global sub-agent
-    // denylist at call time so a model that guesses a tool name can't
-    // reach it via a parallel call that slipped past `getToolDefinitions`).
-    // The locals below sidestep a TS narrowing quirk where `else if
-    // (this.config.agent?.tools)` collapses to `never` after the outer
-    // `if (this.config.agent)` narrows the property to non-undefined.
-    const agent = this.config.agent
-    const agentToolsFallback = agent?.tools
-    if (agent) {
-      const allNames = this.allTools.map(t => t.name)
-      const filtered = filterToolsForSubAgent(
-        allNames,
-        agent.tools,
-        agent.disallowedTools,
-      )
-      if (!filtered.includes(toolName)) {
-        return {
-          content: `Tool "${toolName}" is not available to this agent.`,
-          isError: true,
-        }
-      }
-    } else if (agentToolsFallback && !agentToolsFallback.includes(toolName)) {
-      return {
-        content: `Tool "${toolName}" is not available to this agent.`,
-        isError: true,
-      }
-    }
-
-    const isDangerous =
-      toolName === 'Bash' && typeof input.command === 'string'
-        ? classifyCommandRisk(input.command) === 'dangerous'
-        : false
-    const permission = this.permissionManager.check(toolName, input, isDangerous)
-    if (permission === 'deny') {
-      return {
-        content: `Permission denied for ${toolName}. Current mode: ${this.permissionManager.formatMode()}`,
-        isError: true,
-      }
-    }
-    if (permission === 'ask') {
-      if (this.config.requestPermission) {
-        const riskLevel = isDangerous ? 'dangerous' : 'needs-approval'
-        const permResult = await this.config.requestPermission(toolName, input, riskLevel)
-        if (!permResult.approved) {
-          const feedback = permResult.feedback?.trim()
-          return {
-            content: feedback
-              ? `Permission denied by user for ${toolName}. Feedback: ${feedback}`
-              : `Permission denied by user for ${toolName}.`,
-            isError: true,
-          }
-        }
-      } else {
-        this.renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
-      }
-    }
-
-    const result = await tool.execute(input, context)
-
-    // Notify modules of tool execution (e.g. episodic memory write)
-    for (const module of this.modules) {
-      module.onToolCall?.(toolName, input, result, turnNumber)
-    }
-
-    return result
-  }
-
-  // ── Tool scheduling ─────────────────────────────────────────────────────
-
-  /**
-   * Schedule tool calls: parallel batches for safe tools, serial for
-   * state-mutating ones. Returns true if a soft abort was requested
-   * during execution.
-   */
-  private async scheduleToolCalls(
-    parsedCalls: ParsedToolCall[],
-    toolContext: ToolContext,
-    planMode: boolean,
-    turnAbortController: AbortController,
-    messages: OpenAIMessage[],
-    turnNumber: number,
-  ): Promise<{ aborted: boolean }> {
-    const turnAbortSignal = turnAbortController.signal
-    const batches = partitionToolCalls(parsedCalls, this.allTools)
-
-    for (const batch of batches) {
-      if (turnAbortSignal.aborted) return { aborted: true }
-
-      if (batch.safe && batch.calls.length > 1) {
-        // ── Parallel batch ───────────────────────────────────
-        for (const { tc, input } of batch.calls) {
-          this.renderer.toolStart(tc.name, input)
-          this.config.hookRunner?.runPreToolCall(tc.name, input)
-          this.eventLog?.append('tool_call', tc.name, { input }, [tc.name])
-        }
-
-        const results = await Promise.all(
-          batch.calls.map(({ tc, input }) =>
-            this.executeToolCall(tc.name, input, toolContext, planMode, turnNumber),
-          ),
-        )
-
-        // Enforce aggregate budget: if the total of all parallel results
-        // exceeds the limit, persist the largest to disk before pushing
-        const aggregateResults = batch.calls.map((call, i) => ({
-          content: results[i].content,
-          tc: { id: call.tc.id, name: call.tc.name },
-        }))
-        this.contextManager.enforceAggregateBudget(aggregateResults)
-        // Write back any persisted replacements
-        for (let i = 0; i < results.length; i++) {
-          results[i] = { ...results[i], content: aggregateResults[i].content }
-        }
-
-        for (let i = 0; i < batch.calls.length; i++) {
-          const { tc } = batch.calls[i]
-          const result = results[i]
-          this.config.hookRunner?.runPostToolCall(
-            tc.name,
-            result.content,
-            result.isError,
-          )
-          this.renderer.toolResult(tc.name, result.content, result.isError)
-          this.eventLog?.append(
-            'tool_result',
-            tc.name,
-            {
-              content: result.content.slice(0, 500),
-              isError: result.isError,
-            },
-            [tc.name, result.isError ? 'error' : 'success'],
-          )
-          // Prevent empty tool-result content — some models emit stop sequence
-          // and end their turn with zero output when tool_result is empty
-          const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
-          messages.push({
-            role: 'tool',
-            tool_call_id: tc.id,
-            content: this.contextManager.truncateToolResult(safeContent),
-            name: tc.name,
-          })
-        }
-      } else {
-        // ── Serial batch ─────────────────────────────────────
-        for (const { tc, input } of batch.calls) {
-          if (turnAbortSignal.aborted) return { aborted: true }
-
-          this.renderer.toolStart(tc.name, input)
-          this.config.hookRunner?.runPreToolCall(tc.name, input)
-          this.eventLog?.append('tool_call', tc.name, { input }, [tc.name])
-
-          const result = await this.executeToolCall(
-            tc.name,
-            input,
-            toolContext,
-            planMode,
-            turnNumber,
-          )
-
-          this.config.hookRunner?.runPostToolCall(
-            tc.name,
-            result.content,
-            result.isError,
-          )
-          this.renderer.toolResult(tc.name, result.content, result.isError)
-          this.eventLog?.append(
-            'tool_result',
-            tc.name,
-            {
-              content: result.content.slice(0, 500),
-              isError: result.isError,
-            },
-            [tc.name, result.isError ? 'error' : 'success'],
-          )
-
-          const serialSafeContent = result.content.trim() || `(${tc.name} completed with no output)`
-          messages.push({
-            role: 'tool',
-            tool_call_id: tc.id,
-            content: this.contextManager.truncateToolResult(serialSafeContent),
-            name: tc.name,
-          })
-
-          // Soft-interrupt check after each serial tool — ownership-aware:
-          // a sibling turn's soft-abort request must NOT be consumed here.
-          if (this.claimSoftAbort(turnAbortController)) {
-            return { aborted: true }
-          }
-        }
-      }
-
-      // Soft-interrupt check after each batch (parallel too) — same
-      // ownership check as the serial path.
-      if (this.claimSoftAbort(turnAbortController)) {
-        return { aborted: true }
-      }
-    }
-
-    return { aborted: false }
   }
 
   // ── Build tool context ──────────────────────────────────────────────────
@@ -751,7 +472,7 @@ export class ExecutionEngine {
       const systemPrompt = this.buildSystemPrompt(planMode, moduleSections)
       // Estimate system prompt tokens for accurate context budget
       this.contextManager.beginTurn(systemPrompt)
-      const toolDefs = this.getToolDefinitions(planMode, moduleTools)
+      const toolDefs = this.toolPolicy.getExposedDefinitions(this.allTools, planMode)
 
       // Per-turn AbortController
       const turnAbortController = new AbortController()
@@ -1023,7 +744,7 @@ export class ExecutionEngine {
           }
 
           case 'tool_execution': {
-            const { aborted } = await this.scheduleToolCalls(
+            const { aborted } = await this.toolScheduler.schedule(
               pendingParsedCalls,
               toolContext,
               planMode,
