@@ -1,14 +1,14 @@
-# ovolv999 — 超级个人编码工具
+# ovolv999 — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
-**统一 Harness · 模块化能力 · 流式引擎 · 并发调度 · 三层记忆 · 32 工具 · 83 命令**
+**统一 Harness · 执行 Run 状态机 · 结构化事件持久化 · 资源调度 · Worker Steering · 三层记忆 · 故障恢复**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-3339%20passed-brightgreen)]()
-[![Test Files](https://img.shields.io/badge/Test%20Files-139-blue)]()
+[![Tests](https://img.shields.io/badge/Tests-3727%20passed-brightgreen)]()
+[![Test Files](https://img.shields.io/badge/Test%20Files-161-blue)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -16,11 +16,41 @@
 
 ## 简介
 
-ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code 架构，核心设计为"超级个人编码工具"。
+ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走同一套可观测的执行 Run 状态机，状态变更通过结构化事件持久化，工具并发由资源冲突调度，子任务通过 Worker Steering 实时干预，故障后可从 JSONL 日志恢复。
 
-所有 Agent 共享同一套运行时（Harness），通过启用/禁用模块获得差异化能力。不存在 `agent_type` 枚举——角色是 `AgentConfig`（identity + modules + tools）的组合配置。
+> 项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**（见 `fi_goal.md` §十四）
 
-### 核心特性
+### Runtime 能力矩阵（fi_goal §十四 验收对照）
+
+| § | 验收要点 | 实现位置 | 测试 |
+|---|---------|---------|------|
+| 1 | 所有执行行为都有统一 Run ID | `src/core/executionRun.ts` + `coordinator.ts:run()` 每轮 mint `kind='turn'` | `tests/gapCCoordinatorRunWiring.test.ts` |
+| 2 | 所有子任务都有父子关系 | `AgentTool` / `ClaudeCodeTool` / `BackgroundTaskManager` 创建子 run 时携带 `parentRunId` | `tests/agentExecutionRun.test.ts` |
+| 3 | 所有状态变化都有结构化事件 | `ExecutionRunEventBus` 持久化优先 + 关键/尽力两类订阅者 | `tests/executionRunEvents.test.ts` |
+| 4 | 修改型 Agent 自动使用独立 worktree | `AgentTool` 检测 `modifies_state=true` → worktree + 自动合并 | `tests/agentWorktreeIsolation.test.ts` |
+| 5 | 子 Agent 可以查询、steer、cancel 和 collect | `WorkerAdapter.steer(runId, instruction)`（ClaudeCodeTool + AgentTool） | `tests/gapKWorkerSteer.test.ts` |
+| 6 | 任务完成必须通过 Verification Gate | `AgentTool` verify flag → `verifyPlanExecution` 工具 | `tests/agentFalseSuccess.test.ts` |
+| 7 | 验证失败绝不标记成功 | `StructuredToolResult.status='failed'` → `isError=true`（Bash 非零 exit 同样） | `tests/structuredToolResult.test.ts` |
+| 8 | Worker 崩溃或主进程重启后可恢复状态 | `JsonlEventStore` + `recoverRegistryFromStore` + 引擎启动时标记 in-flight → failed | `tests/gapGEngineRecovery.test.ts` |
+| 9 | 工具并发由资源冲突决定 | `ResourceScheduler`（R/W/X 矩阵）+ 工具 `metadata.claims` 声明 | `tests/gapDToolClaims.test.ts`, `tests/resourceScheduler.test.ts` |
+| 10 | 上下文压缩不丢失关键工作状态 | `WorkingState` + INV-1..INV-5 不变量 + `maybeCompactWithInvariants` | `tests/workingState.test.ts` |
+| 11 | 长期记忆绑定来源和 commit | `LongTermMemory` R1-R6 闸门（验证 / 来源标记 / commit 绑定 / 过期 / 冲突合并） | `tests/longTermMemory.test.ts` |
+| 12 | Provider 差异不泄漏到主 Runtime | `ModelCapabilities` + `ProviderAdapter` 注册表 + `toProviderRequest` / `fromProviderStreamChunk` | `tests/modelCapabilities.test.ts` |
+| 13 | README 展示 Runtime 能力（非工具数量） | 本节 | — |
+
+### 故障注入覆盖（§十二）
+
+`tests/gapLFaultInjection.test.ts` 强制触发 9 类失败场景，验证系统优雅降级：
+
+- JSONL 半写 / 损坏行 → readAll 跳过、recover 重建
+- Provider 流缺 `choices` / 中途抛错 → reason='error'、不泄漏 in-flight 标记
+- ResourceScheduler 超时 / abort → 干净清理等待队列
+- Compaction 不变量违反 → 抛 `CompactionInvariantError`，不静默丢失
+- Registry 非法 transition → 抛 `InvalidRunTransition`，状态保持规范
+- AgentTool.steer() 终态 run → 拒绝排队
+- JsonlEventStore.append() 磁盘满 → 抛错（写侧非 best-effort）
+
+### 其它特性
 
 - **统一 Harness** — 所有 Agent 走同一套 Boot Sequence，按模块配置差异化执行
 - **模块化能力** — memory / critic / workspace / reflection 四个可组合模块
