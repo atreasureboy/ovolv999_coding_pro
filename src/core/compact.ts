@@ -735,6 +735,42 @@ export async function maybeCompact(
   }
 }
 
+// ── WorkingState compaction invariants (fi_goal §七 Phase 6) ───────────────
+
+import type { WorkingState } from './workingState.js'
+import { assertCompactionInvariants } from './workingState.js'
+
+/**
+ * Wrap `maybeCompact` with the §七 compaction invariants:
+ * constraints / confirmedFacts / filesChanged / verification.failed /
+ * unresolved must NOT shrink across the compaction cycle.
+ *
+ * The caller supplies the WorkingState BEFORE compaction; this helper
+ * runs the compaction, then asks the caller to produce the post-
+ * compaction state (typically by re-deriving from the compacted
+ * messages). If the post-state lost any protected field, the helper
+ * throws `CompactionInvariantError` so the engine can refuse to
+ * commit the compaction.
+ *
+ * If `maybeCompact` returns `compacted:false` (no work done), this
+ * helper is a no-op.
+ */
+export async function maybeCompactWithInvariants(
+  client: OpenAI,
+  model: string,
+  messages: OpenAIMessage[],
+  beforeState: WorkingState | undefined,
+  deriveAfterState: (compactedMessages: OpenAIMessage[]) => WorkingState | undefined,
+  signal?: AbortSignal,
+): Promise<CompactResult> {
+  const result = await maybeCompact(client, model, messages, signal)
+  if (!result.compacted || !beforeState) return result
+  const afterState = deriveAfterState(result.messages)
+  if (!afterState) return result
+  assertCompactionInvariants(beforeState, afterState)
+  return result
+}
+
 // ── microCompact ────────────────────────────────────────────────────────────
 
 export interface MicroCompactResult {

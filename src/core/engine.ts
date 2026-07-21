@@ -47,6 +47,12 @@ import { ToolRegistry } from './toolRuntime/toolRegistry.js'
 import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
 import { RunEventEmitter } from './runtime/events.js'
+import { ExecutionRunRegistry } from './executionRun.js'
+import {
+  ExecutionRunEventBus,
+  JsonlEventStore,
+  recoverRegistryFromStore,
+} from './executionRunEvents.js'
 
 export class ExecutionEngine {
   private client: OpenAI
@@ -67,6 +73,16 @@ export class ExecutionEngine {
   private sharedState: SharedRuntimeState
   private eventEmitter: RunEventEmitter
   private _turnInFlight = false
+  /**
+   * Optional persistent ExecutionRun registry + event bus. Populated
+   * only when `config.executionRunLogDir` is set. The registry is
+   * RECOVERED from the JSONL log on startup so in-flight runs from
+   * a previous (crashed) process are visible. The bus then persists
+   * every subsequent transition for future recovery.
+   */
+  private readonly runRegistry?: ExecutionRunRegistry
+  private readonly runEventBus?: ExecutionRunEventBus
+  private readonly runStore?: JsonlEventStore
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     this.config = applyAgentToConfig(config)
@@ -166,6 +182,37 @@ export class ExecutionEngine {
       sharedState: this.sharedState,
       eventEmitter: this.eventEmitter,
     })
+
+    // ── ExecutionRun registry + event bus (fi_goal §四 Phase 3) ───────
+    // When the caller wires `executionRunLogDir`, the engine recovers
+    // any in-flight runs from the JSONL log on startup, then attaches
+    // a bus that persists every transition for future recovery.
+    if (config.executionRunLogDir) {
+      const store = new JsonlEventStore(config.executionRunLogDir)
+      const recovered = recoverRegistryFromStore(store)
+      this.runStore = store
+      this.runRegistry = recovered
+      this.runEventBus = new ExecutionRunEventBus(recovered, store)
+      // Mark any run that was 'running'/'preparing'/'verifying' at
+      // crash time as 'failed' — there's no worker to pick it back up.
+      for (const run of recovered.list()) {
+        if (
+          run.status === 'preparing' ||
+          run.status === 'running' ||
+          run.status === 'verifying' ||
+          run.status === 'waiting'
+        ) {
+          try {
+            recovered.transition(run.runId, 'failed', {
+              phase: 'recovery-marked-failed',
+              error: 'process restarted mid-run',
+            })
+          } catch {
+            // transition may fail if already terminal; best-effort.
+          }
+        }
+      }
+    }
   }
 
   private tools: Tool[]
@@ -349,6 +396,23 @@ export class ExecutionEngine {
 
   getConfig(): EngineConfig {
     return this.config
+  }
+
+  /**
+   * The persistent ExecutionRun registry (fi_goal §三/§四). Returns
+   * undefined when `executionRunLogDir` was not set on the config.
+   */
+  getRunRegistry(): ExecutionRunRegistry | undefined {
+    return this.runRegistry
+  }
+
+  /**
+   * The ExecutionRun event bus (fi_goal §四 Phase 3). Subscribers
+   * receive every run/tool/artifact/verification event with
+   * persist-first ordering. Returns undefined when persistence is off.
+   */
+  getRunEventBus(): ExecutionRunEventBus | undefined {
+    return this.runEventBus
   }
 
   exitPlanMode(): void {

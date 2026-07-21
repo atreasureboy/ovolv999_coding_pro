@@ -373,12 +373,12 @@ export class BashTool implements Tool {
   /**
    * Run a foreground command, returning once it exits or is cancelled.
    *
-   * Contract (unchanged from the previous `exec()`-based implementation):
-   *  - exit code 0          → isError=false, content = stdout/stderr
-   *  - non-zero exit code   → isError=false, content = "Exit code: N\n..."
-   *  - internal timeout     → isError=true, content = "Command timed out..."
-   *  - abort signal         → isError=true, content = "Command cancelled..."
-   *  - pre-abort            → isError=true, content = "Command cancelled (pre-abort)."
+   * Contract (fi_goal.md §六 Phase 5 — non-zero exit must NOT be success):
+   *  - exit code 0          → isError=false, status='success', content = stdout/stderr
+   *  - non-zero exit code   → isError=true,  status='failed',  content = "Exit code: N\n..."
+   *  - internal timeout     → isError=true,  status='timed_out', content = "Command timed out..."
+   *  - abort signal         → isError=true,  content = "Command cancelled..."
+   *  - pre-abort            → isError=true,  content = "Command cancelled (pre-abort)."
    *
    * New guarantees:
    *  - pre-abort short-circuits before spawning
@@ -713,7 +713,10 @@ export class BashTool implements Tool {
           settle({
             content: `Command timed out after ${timeoutMs / 1000}s.${partial}\n\nHint: for long-running commands, use run_in_background:true and check results with TaskGet, or raise the timeout argument.`,
             isError: true,
-          })
+            status: 'timed_out',
+            summary: `Command timed out after ${timeoutMs / 1000}s`,
+            stdout: partialOut,
+          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string })
           return
         }
 
@@ -722,7 +725,14 @@ export class BashTool implements Tool {
           settle({
             content: truncateOutput(prefix + combined, MAX_OUTPUT_LENGTH),
             isError: false,
-          })
+            // Structured fields (fi_goal §六 Phase 5). The legacy
+            // isError:false is preserved for backward-compat; downstream
+            // consumers that opt into the structured shape read .status.
+            status: 'success',
+            summary: combined.split('\n')[0]!.slice(0, 200) || '(success)',
+            stdout: partialOut,
+            exitCode: 0,
+          } as ToolResult & { status: 'success'; summary: string; stdout?: string; exitCode?: number })
           return
         }
 
@@ -733,18 +743,27 @@ export class BashTool implements Tool {
           settle({
             content: `Command timed out.${partial}\n\nHint: for long-running commands, use run_in_background:true and check results with TaskGet, or raise the timeout argument.`,
             isError: true,
-          })
+            status: 'timed_out',
+            summary: 'Command timed out',
+            stdout: partialOut,
+          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string })
           return
         }
 
-        // Non-zero exit — return stdout+stderr so the LLM can diagnose
+        // Non-zero exit — return stdout+stderr so the LLM can diagnose.
+        // Spec §六: non-zero exit must NOT be reported as success. The
+        // structured status is 'failed' and isError reflects that.
         const exitCode = code ?? 1
         const out = partialOut
         const hint = buildErrorHint(out)
         settle({
           content: truncateOutput(prefix + `Exit code: ${exitCode}\n${out}${hint}`, MAX_OUTPUT_LENGTH).trimEnd(),
-          isError: false,
-        })
+          isError: true,
+          status: 'failed',
+          summary: `Exit code ${exitCode}`,
+          stdout: out,
+          exitCode,
+        } as ToolResult & { status: 'failed'; summary: string; stdout?: string; exitCode?: number })
       })
     })
   }

@@ -267,6 +267,17 @@ export interface EngineConfig {
   hookRunner?: IHookRunner
   /** Session output directory — injected into sub-agent prompts */
   sessionDir?: string
+  /**
+   * Optional ExecutionRun event log path. When set, the engine:
+   *   - constructs a JsonlEventStore at this path
+   *   - on startup, replays the log via recoverRegistryFromStore
+   *     so in-flight runs from a previous (crashed) process are
+   *     visible in the new registry
+   *   - wires an ExecutionRunEventBus that persists every transition
+   *     for future recovery (fi_goal.md §四 Phase 3)
+   * When unset, ExecutionRun registry stays in-memory only.
+   */
+  executionRunLogDir?: string
   /** Maximum context window in tokens for the selected model.
    * Defaults to 200_000 (claude-sonnet-4-x).  Used to compute percentage-based
    * compact/warn thresholds instead of a flat token count.

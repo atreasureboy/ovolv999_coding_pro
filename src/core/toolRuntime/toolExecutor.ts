@@ -25,6 +25,7 @@ import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { RunEventEmitter } from '../runtime/events.js'
+import { toLegacy, type AnyToolResult } from '../structuredToolResult.js'
 
 export type NotifyToolCall = (
   toolName: string,
@@ -122,7 +123,12 @@ export class ToolExecutor {
 
     let result: ToolResult
     try {
-      result = await tool.execute(input, context)
+      // Tools may return either the legacy {content, isError} shape or
+      // the structured shape (status/summary/exitCode/stdout/stderr/...).
+      // Normalize at the boundary so downstream consumers (scheduler, UI,
+      // model API) keep working with the legacy shape unchanged.
+      const raw: AnyToolResult = await tool.execute(input, context) as AnyToolResult
+      result = toLegacy(raw)
     } catch (err) {
       result = {
         content: `Tool execution error: ${(err as Error).message || String(err)}`,

@@ -71,9 +71,25 @@ export type CoreRunEventType =
   | 'run.started'
   | 'run.progress'
   | 'run.blocked'
+  | 'run.steered'
   | 'run.cancelled'
   | 'run.completed'
   | 'run.failed'
+
+/**
+ * Subsystem-emitted event types (fi_goal.md §四). These are not
+ * fired by the registry; subsystems call the bus's emit helpers
+ * (emitToolRequested, emitArtifactCreated, etc.).
+ */
+export type SubsystemEventType =
+  | 'tool.requested'
+  | 'tool.started'
+  | 'tool.completed'
+  | 'tool.failed'
+  | 'artifact.created'
+  | 'verification.started'
+  | 'verification.completed'
+  | 'verification.failed'
 
 /**
  * Map of core event type → payload shape. Used by the typed
@@ -84,6 +100,7 @@ export interface CoreRunEventPayloads {
   'run.started':   { from: RunStatus; run: ExecutionRun }
   'run.progress':  { from: RunStatus; phase: string; run: ExecutionRun }
   'run.blocked':   { from: RunStatus; reason?: string; run: ExecutionRun }
+  'run.steered':   { runId: string; instruction: string; run: ExecutionRun }
   'run.cancelled': { from: RunStatus; run: ExecutionRun }
   'run.completed': { from: RunStatus; run: ExecutionRun }
   'run.failed':    { from: RunStatus; error?: string; run: ExecutionRun }
@@ -279,6 +296,98 @@ export class ExecutionRunEventBus {
     return this.store ? this.store.readAll() : []
   }
 
+  // ── Subsystem emitters (fi_goal.md §四) ─────────────────────────────
+  //
+  // The registry only emits run.* events for state transitions.
+  // Subsystems that need to publish tool / artifact / verification
+  // events call these helpers, which:
+  //   1. assign the next per-run sequence
+  //   2. decorate with eventId / timestamp / runId / parentRunId
+  //   3. persist BEFORE fanning out to subscribers (same guarantee
+  //      as registry-emitted events)
+  //
+  // The runId MUST exist in the registry; orphan events are rejected.
+
+  /** Emit a non-registry event with the same persist-first + sequence guarantees. */
+  emit(type: string, runId: string, payload: unknown): void {
+    const run = this.registry.get(runId)
+    if (!run) {
+      // Orphan event — silently skip (subsystem raced with run removal).
+      return
+    }
+    this.dispatchExplicit(type, run, payload)
+  }
+
+  /** Record a steering instruction targeted at a run (P0-5 long-term / §十). */
+  emitSteered(runId: string, instruction: string): void {
+    this.emit('run.steered', runId, { runId, instruction })
+  }
+
+  /** Tool was requested by the model (just parsed, not yet dispatched). */
+  emitToolRequested(runId: string, tool: {
+    toolCallId: string
+    toolName: string
+    input: unknown
+  }): void {
+    this.emit('tool.requested', runId, tool)
+  }
+
+  /** Tool started executing. */
+  emitToolStarted(runId: string, tool: {
+    toolCallId: string
+    toolName: string
+  }): void {
+    this.emit('tool.started', runId, tool)
+  }
+
+  /** Tool completed successfully. */
+  emitToolCompleted(runId: string, tool: {
+    toolCallId: string
+    toolName: string
+    status: 'success' | 'failed' | 'cancelled' | 'timed_out'
+    summary: string
+    exitCode?: number
+  }): void {
+    this.emit('tool.completed', runId, tool)
+  }
+
+  /** Tool failed (exception, permission denied, etc.). */
+  emitToolFailed(runId: string, tool: {
+    toolCallId: string
+    toolName: string
+    error: string
+  }): void {
+    this.emit('tool.failed', runId, tool)
+  }
+
+  /** A new artifact was produced (log, diff, test report, patch). */
+  emitArtifactCreated(runId: string, artifact: {
+    artifactId: string
+    kind: string
+    path?: string
+    sizeBytes?: number
+  }): void {
+    this.emit('artifact.created', runId, artifact)
+  }
+
+  /** Verification gate started running acceptance commands. */
+  emitVerificationStarted(runId: string, info: { commands: string[] }): void {
+    this.emit('verification.started', runId, info)
+  }
+
+  /** Verification gate completed (all commands ran). */
+  emitVerificationCompleted(runId: string, result: {
+    passed: boolean
+    commands: Array<{ command: string; passed: boolean; exitCode?: number }>
+  }): void {
+    this.emit('verification.completed', runId, result)
+  }
+
+  /** Verification gate itself failed to run (timeout, crash). */
+  emitVerificationFailed(runId: string, error: { error: string }): void {
+    this.emit('verification.failed', runId, error)
+  }
+
   // ── Internal ──────────────────────────────────────────────────────────────
 
   private dispatch(raw: Parameters<RegistryEmitHook>[0]): void {
@@ -363,6 +472,61 @@ export class ExecutionRunEventBus {
 
   /** Optional sink for best-effort subscriber errors. */
   onError?: (event: RunEventEnvelope, error: Error) => void
+
+  /**
+   * Dispatch a subsystem-emitted event (tool.*, artifact.*, verification.*,
+   * run.steered). Same persist-first + fan-out contract as registry events,
+   * but the type/payload come straight from the caller.
+   */
+  private dispatchExplicit(type: string, run: ExecutionRun, payload: unknown): void {
+    const runId = run.runId
+    if (this.emitting.has(runId)) {
+      // Re-entrant call (a subscriber itself triggered an explicit emit).
+      // Persistence still happens; subscriber fan-out is skipped to avoid
+      // recursion. The next non-re-entrant emit will pick up new subscribers.
+      const seq = (this.sequences.get(runId) ?? 0) + 1
+      this.sequences.set(runId, seq)
+      const envelope: RunEventEnvelope = {
+        eventId: randomUUID(),
+        runId,
+        parentRunId: run.parentRunId,
+        sequence: seq,
+        timestamp: new Date().toISOString(),
+        type,
+        payload,
+      }
+      if (this.store) this.store.append(envelope)
+      return
+    }
+    const seq = (this.sequences.get(runId) ?? 0) + 1
+    this.sequences.set(runId, seq)
+    const envelope: RunEventEnvelope = {
+      eventId: randomUUID(),
+      runId,
+      parentRunId: run.parentRunId,
+      sequence: seq,
+      timestamp: new Date().toISOString(),
+      type,
+      payload,
+    }
+    if (this.store) this.store.append(envelope)
+    this.emitting.add(runId)
+    try {
+      for (const sub of [...this.subscribers]) {
+        try {
+          sub.handler(envelope)
+        } catch (err) {
+          if (sub.criticality === 'critical') {
+            this.onError?.(envelope, err as Error)
+          } else {
+            this.onError?.(envelope, err as Error)
+          }
+        }
+      }
+    } finally {
+      this.emitting.delete(runId)
+    }
+  }
 }
 
 class CriticalSubscriberError extends Error {

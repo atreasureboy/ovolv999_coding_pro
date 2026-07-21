@@ -81,9 +81,10 @@ describe('BashTool — abort signal + process-group cleanup', () => {
     expect(result.content).toContain('world')
   })
 
-  it('preserves the non-zero-exit contract with diagnostic hint', async () => {
+  it('preserves the non-zero-exit contract with diagnostic hint (fi_goal §六: non-zero = failed)', async () => {
     const result = await tool.execute({ command: 'cat /no/such/path/that/definitely/does/not/exist' }, makeCtx())
-    expect(result.isError).toBe(false)  // non-zero exit is not necessarily fatal
+    // Spec §六: non-zero exit must NOT be reported as success.
+    expect(result.isError).toBe(true)
     expect(result.content).toMatch(/Exit code: \d+/)
     expect(result.content).toMatch(/no such file/i)
   })
