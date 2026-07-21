@@ -2,12 +2,12 @@
 
 <div align="center">
 
-**统一 Harness · 模块化能力 · 流式引擎 · 并发调度 · 三层记忆 · 37 工具 · 83 命令**
+**统一 Harness · 模块化能力 · 流式引擎 · 并发调度 · 三层记忆 · 32 工具 · 83 命令**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-3424%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-3329%20passed-brightgreen)]()
 [![Test Files](https://img.shields.io/badge/Test%20Files-139-blue)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
@@ -63,7 +63,7 @@ ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code 架构，核心�
 ```
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                   ovolv999 — 统一 Harness + 模块化 Agent 基座               ║
-║              139 test files · 3424 tests · 37 tools · 83 commands          ║
+║              136 test files · 3329 tests · 32 tools · 83 commands          ║
 ║              Runtime: openai · glob · zod · ink · react                     ║
 ╠═══════════════════════════════════════════════════════════════════════════╣
 ║                                                                           ║
@@ -73,57 +73,59 @@ ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code 架构，核心�
 ║  └────────────────────────────────────────────────────────────────────┘   ║
 ║                                  │                                        ║
 ║  ┌───────────────────────────────▼────────────────────────────────────┐   ║
-║  │                    ExecutionEngine (统一 Harness)                    │   ║
+║  │              ExecutionEngine (thin facade + assembly root)          │   ║
+║  │  wires subsystems → delegates runTurn() to RuntimeCoordinator       │   ║
+║  │  public API: abort/softAbort/dispose/planMode/getters               │   ║
+║  └───────────────────────────────┬────────────────────────────────────┘   ║
+║                                  │                                        ║
+║  ┌───────────────────────────────▼────────────────────────────────────┐   ║
+║  │                    RuntimeCoordinator (loop driver)                 │   ║
 ║  │                                                                     │   ║
-║  │  ┌─ Boot Sequence (7 steps) ────────────────────────────────────┐  │   ║
-║  │  │ 1. applyAgentToConfig  →  合并 agent 配置                      │  │   ║
-║  │  │ 2. deriveEnabledModules → 自动推导或显式指定                   │  │   ║
-║  │  │ 3. modules.boot()      → 并行启动，收集 prompt/tools/context   │  │   ║
-║  │  │ 4. buildSystemPrompt   → 组装 identity + module sections       │  │   ║
-║  │  │ 5. getToolDefinitions  → 白名单 + planMode 双重过滤            │  │   ║
-║  │  │ 6. buildToolContext    → 基础 + module patches + toolNames     │  │   ║
-║  │  │ 7. boot_context 轨迹   → EventLog 记录启动摘要                 │  │   ║
-║  │  └────────────────────────────────────────────────────────────────┘  │   ║
+║  │  ┌─ Boot ───────────────────────────────────────────────────────┐  │   ║
+║  │  │ moduleManager.boot() → prompt sections + tools + patches     │  │   ║
+║  │  │ buildSystemPrompt()  → identity + module sections            │  │   ║
+║  │  │ toolPolicy.getExposedDefinitions() → planMode + agent filter │  │   ║
+║  │  │ buildToolContext()   → base + module patches                 │  │   ║
+║  │  └──────────────────────────────────────────────────────────────┘  │   ║
 ║  │                                                                     │   ║
-║  │  ┌─ Engine Loop ─────────────────────────────────────────────────┐  │   ║
-║  │  │  modules.onIteration()   ← CriticModule 每 N 轮纠错            │  │   ║
-║  │  │  autoClassifier()        ← 自动分类请求类型 + effort            │  │   ║
-║  │  │  evaluateContextBudget() ← 统一 70%/85% (含系统提示词)         │  │   ║
-║  │  │    ├─ 50%: snipCompact   ← 手术式裁剪大 tool result            │  │   ║
-║  │  │    ├─ 70%: warn          ← 提醒用户                            │  │   ║
-║  │  │    └─ 85%: autoCompact   ← LLM 摘要压缩                        │  │   ║
-║  │  │  callLLM() → streaming → consumeStream()                       │  │   ║
-║  │  │  partitionToolCalls() → parallel(safe) / serial(stateful)      │  │   ║
-║  │  │  executeToolCall() → 白名单 + planMode + sandbox 执行          │  │   ║
-║  │  │  modules.onToolCall()   ← MemoryModule 写 episodic             │  │   ║
-║  │  │  hooks: PreToolCall / PostToolCall                             │  │   ║
-║  │  └────────────────────────────────────────────────────────────────┘  │   ║
+║  │  ┌─ State Machine Loop (queryStateMachine.ts) ─────────────────┐   │   ║
+║  │  │ check_abort → TerminationPolicy (hard/soft/maxIter/continue) │   │   ║
+║  │  │ budget_check → ContextManager.evaluateBudget                 │   │   ║
+║  │  │   ├─ 50%: snipCompact  ├─ 70%: warn  ├─ 85%: autoCompact     │   │   ║
+║  │  │ module_iteration → moduleManager.runIteration (critic loop)   │   │   ║
+║  │  │ llm_call → ModelGateway.call → StreamConsumer                 │   │   ║
+║  │  │   └─ reactive compact on context_overflow                     │   │   ║
+║  │  │ parse_response → JSON validation + malformed-args handling    │   │   ║
+║  │  │ tool_execution → ToolScheduler                                │   │   ║
+║  │  │   ├─ partitionToolCalls → parallel(safe) / serial(stateful)   │   │   ║
+║  │  │   ├─ ToolExecutor → policy + permission + execute + notify    │   │   ║
+║  │  │   └─ enforceAggregateBudget (truncate oversized results)      │   │   ║
+║  │  └──────────────────────────────────────────────────────────────┘   │   ║
 ║  │                                                                     │   ║
 ║  │  ┌─ Post-Run ────────────────────────────────────────────────────┐  │   ║
-║  │  │  modules.onComplete()  ← ReflectionModule LLM 知识提取         │  │   ║
-║  │  │  hooks: OnComplete / OnError / OnContextOverflow               │  │   ║
-║  │  │  consolidateSession() ← episodic → SemanticMemory              │  │   ║
+║  │  │ moduleManager.runComplete() ← ReflectionModule LLM 知识提取    │  │   ║
+║  │  │ hooks: OnComplete / OnError                                    │  │   ║
 ║  │  └────────────────────────────────────────────────────────────────┘  │   ║
 ║  │                                                                     │   ║
+║  │  Shared state: SharedRuntimeState (planMode, abort, allTools)       │   ║
 ║  │  Abort: softAbort(ESC) / hardAbort(Ctrl+C)                         │   ║
 ║  └─────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                           ║
-║  ┌─ Modules (4) ──┐  ┌─ Tools (37) ────────┐  ┌─ Memory (3 层) ──────┐  ║
+║  ┌─ Modules (4) ──┐  ┌─ Tools (32) ────────┐  ┌─ Memory (3 层) ──────┐  ║
 ║  │ memory         │  │ Bash/Read/Write/Edit │  │ Semantic: 关键词检索  │  ║
 ║  │ critic         │  │ Glob/Grep/Todo       │  │ Episodic: 工具轨迹    │  ║
 ║  │ workspace      │  │ Web* /Agent/Skill    │  │ KnowledgeBase: 结构化 │  ║
 ║  │ reflection     │  │ Plan/Sleep/Snip      │  └──────────────────────┘  ║
 ║  └────────────────┘  │ Worktree/Goal        │                             ║
-║                      │ Brief/CtxInspect     │  ┌─ Integration ─────────┐  ║
-║  ┌─ MCP Client ───┐  │ TerminalCapture      │  │ LSP (in-process)      │  ║
-║  │ stdio + HTTP   │  │ WebBrowser           │  │ SSH Remote            │  ║
-║  │ OAuth2 PKCE    │  │ PushNotification     │  │ Sandbox (3 levels)    │  ║
-║  │ Resources      │  │ Task*(5)/Notebook    │  │ Background Sessions   │  ║
-║  └────────────────┘  │ ClaudeCode/Diag      │  │ MagicDocs             │  ║
-║                      │ MCP Resources(2)     │  │ Telemetry             │  ║
-║  ┌─ Commands ────┐  └──────────────────────┘  │ Settings Sync         │  ║
-║  │ 83 built-in   │                            └──────────────────────┘  ║
-║  └───────────────┘                                                      ║
+║                      │ Task*(5)/Notebook    │  ┌─ Integration ─────────┐  ║
+║  ┌─ MCP Client ───┐  │ ClaudeCode/Diag      │  │ LSP (in-process)      │  ║
+║  │ stdio + HTTP   │  │ MCP Resources(2)     │  │ SSH Remote            │  ║
+║  │ OAuth2 PKCE    │  │ Tmux/Shell Session   │  │ Sandbox (3 levels)    │  ║
+║  │ Resources      │  └──────────────────────┘  │ Background Sessions   │  ║
+║  └────────────────┘                            │ MagicDocs             │  ║
+║  ┌─ Commands ────┐                            │ Telemetry             │  ║
+║  │ 83 built-in   │                            │ Settings Sync         │  ║
+║  └───────────────┘                            └──────────────────────┘  ║
 ║                                                                           ║
 ║  输出: sessions/session_TIMESTAMP/ → 会话产物、EventLog、agent-logs       ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -215,22 +217,21 @@ tool_calls [A, B, C, D, E, F]
            → Promise.all([E, F]) → 同时执行
 ```
 
-## 工具参考（37 个）
+## 工具参考（32 个）
 
 | 类别 | 工具 | 说明 |
 |------|------|------|
 | **文件** | Read, Write, Edit, NotebookEdit | 文件读写编辑 + Jupyter notebook |
 | **搜索** | Glob, Grep | 文件名匹配 + 内容正则搜索 |
 | **执行** | Bash, ShellSession, TmuxSession | 跨平台 shell + 持久会话 |
-| **Web** | WebFetch, WebSearch, WebBrowser | URL 抓取 + 搜索 + 结构化 HTML 解析 |
+| **Web** | WebFetch, WebSearch | URL 抓取 + 搜索 |
 | **Agent** | Agent, ClaudeCode | 子 agent 调用 + 外部 Claude Code worker |
 | **Plan** | EnterPlanMode, ExitPlanMode, VerifyPlanExecution | 计划模式闭环 |
 | **Task** | TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop | 后台任务生命周期 |
 | **Memory** | memory_write, memory_search, memory_recall | 三原语（MemoryModule 提供） |
 | **Worktree** | EnterWorktree, ExitWorktree, ListWorktrees | Git worktree 管理 |
 | **Skill** | load_skill, Snip | 技能懒加载 + 上下文裁剪 |
-| **诊断** | Diagnostics, Goal, Brief, CtxInspect | LSP 诊断 + 目标 + 会话快照 + token 分析 |
-| **通知** | PushNotification, TerminalCapture, Sleep | 系统通知 + tmux 截屏 + 延时 |
+| **诊断** | Diagnostics, Goal, Sleep | LSP 诊断 + 目标 + 延时 |
 | **MCP** | ListMcpResources, ReadMcpResource | MCP 资源读取 |
 | **其他** | AskUser, TodoWrite | 用户交互 + 任务清单 |
 
@@ -428,8 +429,8 @@ ovolv999/
 ├── bin/
 │   └── ovogogogo.ts                # CLI 入口 + REPL + session subcommands + --bg
 ├── src/
-│   ├── core/                        # 引擎核心 (75 模块)
-│   │   ├── engine.ts                # 统一 Harness — Boot Sequence + Module 集成
+│   ├── core/                        # 引擎核心
+│   │   ├── engine.ts                # 薄门面 — 组装子系统 + 委托 coordinator
 │   │   ├── types.ts                 # EngineConfig / Tool metadata / ToolContext
 │   │   ├── module.ts                # AgentModule 接口 (4 生命周期钩子)
 │   │   ├── moduleRegistry.ts        # 工厂注册 + 依赖解析 + 环检测
@@ -437,7 +438,6 @@ ovolv999/
 │   │   ├── agentToolFilter.ts       # Agent 工具白名单过滤
 │   │   ├── compact.ts               # microCompact + strategy + tool_call 对保护
 │   │   ├── snipCompact.ts           # 手术式裁剪 (head/tail 截断)
-│   │   ├── autoCompact.ts           # 自动触发压缩
 │   │   ├── semanticMemory.ts        # 语义记忆 + 来源优先级 + hash 去重
 │   │   ├── episodicMemory.ts        # 过程记忆 (成功+失败轨迹)
 │   │   ├── knowledgeBase.ts         # 结构化知识库
@@ -497,24 +497,39 @@ ovolv999/
 │   │   ├── providers.ts             # LLM provider 管理
 │   │   ├── codeMetrics.ts           # 代码度量
 │   │   ├── claudeCodeWorkerManager.ts # tmux Claude Code worker 管理
-│   │   ├── queryStateMachine.ts     # 查询状态机
+│   │   ├── queryStateMachine.ts     # 查询状态机 (loop reducer)
+│   │   ├── runtime/                 # 运行时协调层
+│   │   │   ├── coordinator.ts       # RuntimeCoordinator (主循环驱动)
+│   │   │   ├── sharedState.ts       # SharedRuntimeState (跨 turn 状态)
+│   │   │   └── terminationPolicy.ts # 终止决策 (纯函数)
+│   │   ├── model/                   # 模型调用层
+│   │   │   ├── modelGateway.ts      # LLM API 调用 + stream_options 兼容
+│   │   │   └── streamConsumer.ts    # 流解析 + thinking + tool_call 累积
+│   │   ├── context/                 # 上下文管理层
+│   │   │   ├── contextManager.ts    # budget 评估 + compaction + snip
+│   │   │   └── toolResultBudget.ts  # truncate + aggregate budget
+│   │   ├── toolRuntime/             # 工具运行时层
+│   │   │   ├── toolPolicy.ts        # 统一 exposure + execution policy
+│   │   │   ├── toolExecutor.ts      # 单次 tool 执行
+│   │   │   └── toolScheduler.ts     # partitionToolCalls + batch 调度
+│   │   ├── moduleRuntime/           # 模块运行时层
+│   │   │   └── moduleManager.ts     # 模块生命周期 (boot/iter/complete/dispose)
 │   │   ├── taskTimer.ts             # 任务计时
 │   │   ├── workspace.ts             # 工作区管理
 │   │   └── strings.ts               # str() 安全转换 helper
-│   ├── tools/                       # 工具层 (37 工具)
+│   ├── tools/                       # 工具层 (32 工具)
 │   │   ├── bash.ts                  # 跨平台 shell + 后台任务
 │   │   ├── fileRead.ts / fileWrite.ts / fileEdit.ts
 │   │   ├── glob.ts / grep.ts
 │   │   ├── todo.ts / notebookEdit.ts
-│   │   ├── webFetch.ts / webSearch.ts / webBrowser.ts
+│   │   ├── webFetch.ts / webSearch.ts
 │   │   ├── agent.ts                 # AgentConfig 驱动 + 验证闸门
 │   │   ├── claudeCode.ts            # 外部 Claude Code worker
 │   │   ├── enterPlanMode.ts / exitPlanMode.ts / verifyPlanExecution.ts
 │   │   ├── tasks.ts                 # TaskCreate/Get/List/Update/Stop (5 工具)
 │   │   ├── worktree.ts              # Git worktree (3 工具)
 │   │   ├── mcpResources.ts          # MCP 资源 (2 工具)
-│   │   ├── brief.ts / ctxInspect.ts / terminalCapture.ts
-│   │   ├── pushNotification.ts / sleep.ts / snip.ts
+│   │   ├── sleep.ts / snip.ts
 │   │   ├── diagnostics.ts / goal.ts / askUser.ts
 │   │   ├── loadSkill.ts / shellSession.ts / tmuxSession.ts
 │   │   ├── mcpToolAdapter.ts
@@ -558,7 +573,7 @@ ovolv999/
 │   └── integrations/                # 外部协议集成
 │       ├── acp.ts                   # Agent Communication Protocol server
 │       └── pipeMode.ts              # 管道模式
-├── tests/                           # 139 test files · 3424 tests
+├── tests/                           # 136 test files · 3329 tests
 └── package.json                     # runtime: openai/glob/zod/ink/react
 ```
 
@@ -598,7 +613,7 @@ ovolv999/
 | 运行时 | Node.js ≥ 20 |
 | LLM API | OpenAI SDK (兼容 Claude/GPT/本地端点) |
 | 终端 UI | Ink + React（可选 `--ink`）/ readline REPL（默认） |
-| 测试 | Vitest (3424 tests · 139 files) |
+| 测试 | Vitest (3329 tests · 136 files) |
 | Lint | ESLint (typescript-eslint recommendedTypeChecked) |
 | 运行时依赖 | openai · glob · zod · ink · react (5 个) |
 
