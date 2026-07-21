@@ -127,11 +127,26 @@ export class ToolScheduler {
     }
     eventEmitter?.emit({ type: 'TOOL_BATCH_STARTED', count: batch.calls.length, parallel: true })
 
-    const results = await Promise.all(
-      batch.calls.map(({ tc, input }) =>
-        executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber),
-      ),
-    )
+    // P0-9: wrap executor + instrumentation in try/finally so any
+    // throw between set() and delete() (e.g. renderer.toolResult or
+    // eventLog.append throwing on bad input) does not leak entries
+    // in activeToolCalls for the rest of the process lifetime.
+    let results: Awaited<ReturnType<typeof executor.execute>>[]
+    try {
+      results = await Promise.all(
+        batch.calls.map(({ tc, input }) =>
+          executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber),
+        ),
+      )
+    } finally {
+      // Clear ALL entries this batch created, even on throw — the
+      // caller (coordinator) converts thrown tool errors into a
+      // terminal transition; surviving entries would be invisible
+      // to the user but track as "in-flight" forever.
+      for (const { tc } of batch.calls) {
+        sharedState.activeToolCalls.delete(tc.id)
+      }
+    }
 
     // Aggregate budget enforcement — can only be done at scheduler level
     const aggregateResults = batch.calls.map((call, i) => ({
@@ -146,12 +161,17 @@ export class ToolScheduler {
     for (let i = 0; i < batch.calls.length; i++) {
       const { tc } = batch.calls[i]
       const result = results[i]
-      renderer.toolResult(tc.name, result.content, result.isError)
-      eventLog?.append('tool_result', tc.name, {
-        content: result.content.slice(0, 500),
-        isError: result.isError,
-      }, [tc.name, result.isError ? 'error' : 'success'])
-      sharedState.activeToolCalls.delete(tc.id)
+      try {
+        renderer.toolResult(tc.name, result.content, result.isError)
+        eventLog?.append('tool_result', tc.name, {
+          content: result.content.slice(0, 500),
+          isError: result.isError,
+        }, [tc.name, result.isError ? 'error' : 'success'])
+      } catch {
+        // instrumentation failures must not propagate into the LLM
+        // message stream — the tool itself succeeded, the result is
+        // already in hand.
+      }
       const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
       messages.push({
         role: 'tool',
@@ -182,14 +202,28 @@ export class ToolScheduler {
       eventLog?.append('tool_call', tc.name, { input }, [tc.name])
       sharedState.activeToolCalls.set(tc.id, { callId: tc.id, toolName: tc.name, startedAt: Date.now() })
 
-      const result = await executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber)
+      // P0-9: wrap executor + instrumentation in try/finally so a
+      // throw between set() and delete() cannot leak entries in
+      // activeToolCalls. The executor itself has internal try/catch
+      // (toolExecutor.ts) but the surrounding instrumentation does
+      // not — previously a throwing renderer.toolResult or
+      // eventLog.append would wedge the Map entry forever.
+      let result: Awaited<ReturnType<typeof executor.execute>>
+      try {
+        result = await executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber)
+      } finally {
+        sharedState.activeToolCalls.delete(tc.id)
+      }
 
-      renderer.toolResult(tc.name, result.content, result.isError)
-      eventLog?.append('tool_result', tc.name, {
-        content: result.content.slice(0, 500),
-        isError: result.isError,
-      }, [tc.name, result.isError ? 'error' : 'success'])
-      sharedState.activeToolCalls.delete(tc.id)
+      try {
+        renderer.toolResult(tc.name, result.content, result.isError)
+        eventLog?.append('tool_result', tc.name, {
+          content: result.content.slice(0, 500),
+          isError: result.isError,
+        }, [tc.name, result.isError ? 'error' : 'success'])
+      } catch {
+        // instrumentation failures must not propagate
+      }
 
       const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
       messages.push({

@@ -278,4 +278,27 @@ export class ModuleManager {
       }
     }
   }
+
+  /**
+   * P0-9: async dispose that awaits each module's disposer in turn.
+   * Sync `dispose()` is fire-and-forget (kept for SIGTERM / fast-path
+   * shutdown where we can't block); `disposeAsync()` is for graceful
+   * shutdown where the caller can wait for MCP child processes, file
+   * handles, and other async resources to be fully reaped before the
+   * process exits.
+   *
+   * Failure isolation matches `dispose()`: a throwing disposer is
+   * logged but does not abort subsequent modules.
+   */
+  async disposeAsync(): Promise<void> {
+    for (const module of this.modules) {
+      const dispose = (module as { dispose?: () => void | Promise<void> }).dispose
+      if (typeof dispose !== 'function') continue
+      try {
+        await Promise.resolve(dispose.call(module))
+      } catch {
+        // module dispose failures must never break engine disposal
+      }
+    }
+  }
 }

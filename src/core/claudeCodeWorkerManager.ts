@@ -129,6 +129,17 @@ async function defaultTmuxRunner(args: string[]): Promise<TmuxResult> {
 }
 
 export class ClaudeCodeWorkerManager {
+  /**
+   * P0-9: sessions created by THIS manager instance. Used by
+   * dispose() to reclaim tmux sessions on engine shutdown — without
+   * this, calling Claude Code via tmux leaks a session per task
+   * until the host process exits (or the user notices and kills
+   * them by hand). Sessions created externally (by other processes,
+   * or pre-existing on the host) are NOT tracked here — we only
+   * reclaim what we created.
+   */
+  private readonly createdSessions = new Set<string>()
+
   constructor(private readonly runner: TmuxRunner = defaultTmuxRunner) {}
 
   async syncClaudeEnvironment(session: string, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
@@ -154,6 +165,9 @@ export class ClaudeCodeWorkerManager {
     const syncedEnv = envEntries.map(([key]) => key)
     if (await this.sessionExists(session)) {
       await this.syncClaudeEnvironment(session)
+      // P0-9: track this session even when reused so dispose()
+      // reclaims it on shutdown (the host created/reused it).
+      this.createdSessions.add(session)
       return { session, created: false, syncedEnv }
     }
 
@@ -167,6 +181,8 @@ export class ClaudeCodeWorkerManager {
       ...envEntries.flatMap(([key, value]) => ['-e', `${key}=${value}`]),
       options.command ?? DEFAULT_CLAUDE_COMMAND,
     ])
+    // P0-9: track the session we just created.
+    this.createdSessions.add(session)
     return { session, created: true, syncedEnv }
   }
 
@@ -248,6 +264,38 @@ export class ClaudeCodeWorkerManager {
   async stop(session: string): Promise<{ stopped: boolean }> {
     if (!await this.sessionExists(session)) return { stopped: false }
     await this.runner(['kill-session', '-t', session])
+    // P0-9: drop from tracked set so dispose() doesn't try to kill it again.
+    this.createdSessions.delete(session)
     return { stopped: true }
+  }
+
+  /**
+   * P0-9: stop every session this manager instance created (or reused).
+   * Called by engine.dispose() so tmux worker sessions do not outlive
+   * the runtime. Best-effort: individual failures are swallowed so a
+   * single dead session doesn't prevent the rest from being cleaned
+   * up. Returns the count of successfully-stopped sessions so callers
+   * can log the result.
+   *
+   * NOTE: sessions created by other host processes (or pre-existing
+   * on the machine) are NOT touched — we only reclaim what this
+   * manager started.
+   */
+  async dispose(): Promise<{ stopped: number; failed: number }> {
+    const sessions = Array.from(this.createdSessions)
+    this.createdSessions.clear()
+    let stopped = 0
+    let failed = 0
+    for (const session of sessions) {
+      try {
+        if (await this.sessionExists(session)) {
+          await this.runner(['kill-session', '-t', session])
+        }
+        stopped++
+      } catch {
+        failed++
+      }
+    }
+    return { stopped, failed }
   }
 }

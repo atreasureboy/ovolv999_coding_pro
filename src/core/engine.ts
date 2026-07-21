@@ -196,6 +196,18 @@ export class ExecutionEngine {
    * Tear down engine-owned side effects. Delegates to the
    * BackgroundTaskManager and ModuleManager so resources spawned during
    * the engine's lifetime do not outlive it.
+   *
+   * P0-9: also tears down the global tmuxLayout singleton (kills the
+   * agent monitor tmux session unless a user is currently attached)
+   * and clears SharedRuntimeState.activeToolCalls defensively in case
+   * a ToolScheduler exit path left entries behind (e.g. mid-batch
+   * hard abort).
+   *
+   * This is the SYNC dispose — best-effort, fire-and-forget. The
+   * async disposer (disposeAsync) awaits ModuleManager.disposeAsync
+   * so MCP child processes / async resources are fully reaped before
+   * the host process exits. Callers that can await should prefer
+   * disposeAsync().
    */
   dispose(): void {
     try {
@@ -204,6 +216,46 @@ export class ExecutionEngine {
       // disposal must not throw
     }
     this.moduleManager.dispose()
+    // Clear any straggler active-tool-call entries. (ToolScheduler
+    // already does this per-call in finally, but a hard abort between
+    // batches can leave entries; clearing here is defense-in-depth.)
+    try {
+      this.sharedState.activeToolCalls.clear()
+    } catch {
+      // best-effort
+    }
+    // P0-9: kill the monitor tmux session. tmuxLayout.destroy() is
+    // best-effort and skips killing when a user is attached (so we
+    // don't yank the monitor out from under someone watching it).
+    try {
+      // Lazy require to avoid importing tmux at module load on hosts
+      // that never enter the multi-pane path.
+      const { tmuxLayout } = require('../../ui/tmuxLayout.js') as {
+        tmuxLayout: { destroy: () => void }
+      }
+      tmuxLayout.destroy()
+    } catch {
+      // tmuxLayout is best-effort; never throw out of dispose
+    }
+  }
+
+  /**
+   * P0-9: async dispose — awaits ModuleManager.disposeAsync so MCP
+   * child processes, file handles, and other async resources are
+   * fully reaped before the host exits. Then runs the sync dispose
+   * for everything else.
+   *
+   * Callers that can await (e.g. CLI graceful shutdown) should prefer
+   * this over `dispose()`. The SIGTERM / crash path should still
+   * call `dispose()` so we don't block exit on slow MCP servers.
+   */
+  async disposeAsync(): Promise<void> {
+    try {
+      await this.moduleManager.disposeAsync()
+    } catch {
+      // disposal must not throw
+    }
+    this.dispose()
   }
 
   /** Soft interrupt — pause after current tool, preserve history */

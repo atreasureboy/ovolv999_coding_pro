@@ -322,6 +322,19 @@ Failed verification includes error details so you can fix immediately.
     mainRenderer.agentStart(description, agentLabel)
     const agentStartTime = Date.now()
 
+    // P0-9: track this subtask in SharedRuntimeState so the runtime
+    // surface reflects what's currently in flight. The id is unique
+    // per invocation (depth + timestamp + counter) and is removed
+    // unconditionally in the finally block below — same pattern as
+    // ToolScheduler's activeToolCalls tracking.
+    const subtaskId = `${description.slice(0, 40)}|d${nextDepth}|t${agentStartTime}`
+    const sharedRuntimeState = (context as unknown as {
+      sharedState?: { activeSubtasks: Map<string, { description: string; agentLabel: string; startedAt: number }> }
+    }).sharedState
+    if (sharedRuntimeState?.activeSubtasks) {
+      sharedRuntimeState.activeSubtasks.set(subtaskId, { description, agentLabel, startedAt: agentStartTime })
+    }
+
     // Structured communication event: INVOKE_SENT (with call depth)
     context.eventLog?.append('invoke_sent', agentLabel, {
       description,
@@ -560,6 +573,11 @@ Failed verification includes error details so you can fix immediately.
         childEngine.dispose?.()
       } catch {
         // best-effort teardown; never throw out of the host's finally
+      }
+      // P0-9: remove the subtask from activeSubtasks on EVERY exit
+      // path so the runtime surface cannot accumulate stale entries.
+      if (sharedRuntimeState?.activeSubtasks) {
+        sharedRuntimeState.activeSubtasks.delete(subtaskId)
       }
     }
   }
