@@ -235,14 +235,14 @@ describe('P0-9.2: ClaudeCodeWorkerManager.dispose reaps created sessions', () =>
 describe('P0-9.3: ModuleManager.disposeAsync awaits async disposers', () => {
   it('awaits an async dispose() before returning', async () => {
     let disposed = false
-    const asyncModule: AgentModule = {
+    const asyncModule = {
       name: 'async',
       boot: () => ({}),
       dispose: async () => {
         await Promise.resolve()
         disposed = true
       },
-    }
+    } as AgentModule
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [asyncModule], renderer: r })
     await mgr.disposeAsync()
@@ -251,16 +251,16 @@ describe('P0-9.3: ModuleManager.disposeAsync awaits async disposers', () => {
 
   it('isolates a throwing async disposer (subsequent modules still run)', async () => {
     let goodDisposed = false
-    const bad: AgentModule = {
+    const bad = {
       name: 'bad',
       boot: () => ({}),
       dispose: async () => { throw new Error('dispose boom') },
-    }
-    const good: AgentModule = {
+    } as AgentModule
+    const good = {
       name: 'good',
       boot: () => ({}),
       dispose: async () => { goodDisposed = true },
-    }
+    } as AgentModule
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [bad, good], renderer: r })
     await expect(mgr.disposeAsync()).resolves.toBeUndefined()
@@ -269,7 +269,7 @@ describe('P0-9.3: ModuleManager.disposeAsync awaits async disposers', () => {
 
   it('fire-and-forget dispose() does NOT block on async disposers (matches prior contract)', async () => {
     let disposed = false
-    const asyncModule: AgentModule = {
+    const asyncModule = {
       name: 'async',
       boot: () => ({}),
       dispose: async () => {
@@ -277,7 +277,7 @@ describe('P0-9.3: ModuleManager.disposeAsync awaits async disposers', () => {
         await new Promise<void>(r => setTimeout(r, 20))
         disposed = true
       },
-    }
+    } as AgentModule
     const r = fakeRenderer()
     const mgr = new ModuleManager({ modules: [asyncModule], renderer: r })
     mgr.dispose() // sync — returns immediately

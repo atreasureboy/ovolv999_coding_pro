@@ -469,16 +469,20 @@ Failed verification includes error details so you can fix immediately.
       const { result } = await childEngine.runTurn(delegatedPrompt, [])
       const durationMs = Date.now() - agentStartTime
 
-      mainRenderer.agentDone(description, result.reason !== 'error')
-      if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
-
       // ── Verification Gate (AgentOS "No Tuple, No Merge") ──
+      // P0-3: a sub-agent that finishes "successfully" (reason !== 'error')
+      // but leaves the workspace with failing typecheck/lint/test MUST
+      // propagate as isError to the parent — otherwise the parent has
+      // no structured signal and must parse natural language to
+      // discover the verification failure.
       let verifySection = ''
+      let verificationFailed = false
       if (verify && result.reason !== 'error' && !agentConfig.identity.planMode) {
         const verifyResult = runVerification(context.cwd)
         if (verifyResult) {
           const icon = verifyResult.passed ? '✓' : '✗'
           verifySection = `\n\n---\n[Verify Gate] ${icon}\n${verifyResult.output}`
+          verificationFailed = !verifyResult.passed
           context.eventLog?.append('invoke_completed', agentLabel, {
             description,
             verified: true,
@@ -487,19 +491,27 @@ Failed verification includes error details so you can fix immediately.
         }
       }
 
+      // P0-3: combined failure signal — engine error OR verify gate
+      // failure. Either way the parent must see isError:true so it
+      // can branch without parsing the natural-language report.
+      const failed = result.reason === 'error' || verificationFailed
+      mainRenderer.agentDone(description, !failed)
+      if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+
       context.eventLog?.append('invoke_completed', agentLabel, {
         description,
-        success: result.reason !== 'error',
+        success: !failed,
         reason: result.reason,
+        verification_failed: verificationFailed || undefined,
         duration_ms: durationMs,
         call_depth: nextDepth,
         output_preview: result.output.slice(0, 500),
-      }, [agentLabel, 'invoke', result.reason !== 'error' ? 'success' : 'error'])
+      }, [agentLabel, 'invoke', !failed ? 'success' : 'error'])
 
       if (!result.output) {
         return {
           content: `[${agentLabel}] "${description}" done (${result.reason}), no text output.${verifySection}`,
-          isError: false,
+          isError: failed,
         }
       }
 
@@ -515,7 +527,7 @@ Failed verification includes error details so you can fix immediately.
 
       return {
         content: `[${agentLabel}] "${description}":\n\n${result.output}${verifySection}`,
-        isError: false,
+        isError: failed,
       }
     } catch (err: unknown) {
       mainRenderer.agentDone(description, false)
