@@ -24,10 +24,8 @@
  */
 
 import OpenAI from 'openai'
-import { ThinkingTagFilter } from './thinkingTagFilter.js'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { randomUUID } from 'crypto'
 import type {
   EngineConfig,
   OpenAIMessage,
@@ -73,6 +71,7 @@ import { FileHistory } from './fileHistory.js'
 import { PermissionManager } from './permissionSystem.js'
 import { classifyCommandRisk } from './riskClassifier.js'
 import { normalizeCJKInput } from './strings.js'
+import { ModelGateway } from './model/modelGateway.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -301,8 +300,8 @@ export class ExecutionEngine {
   private fileHistory: FileHistory | null
   /** Unified permission manager — checked before every tool execution */
   private permissionManager: PermissionManager
-  /** Whether the endpoint supports stream_options.include_usage (most do) */
-  private _streamUsageSupported = true
+  /** Model gateway — owns LLM API calls, streaming, retry */
+  private modelGateway: ModelGateway
   /** Consecutive compact failure counter — stops retrying after 3 */
   private _consecutiveCompactFailures = 0
   /** Suppress compact warning after successful compaction (next turn only) */
@@ -393,6 +392,7 @@ export class ExecutionEngine {
     this.allTools = this.tools  // will be updated with module tools in runTurn
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
+    this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
     this.backgroundTaskManager = new BackgroundTaskManager()
     this.planModeActive = config.planMode ?? false
     this.fileHistory = config.sessionDir ? new FileHistory(config.sessionDir) : null
@@ -692,107 +692,31 @@ export class ExecutionEngine {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    this.renderer.startSpinner()
-
-    const callStartMs = Date.now()
-
-    let stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>
-    try {
-      stream = await this.client.chat.completions.create(
-        {
-          model: this.config.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-          ],
-          tools: toolDefs.length > 0 ? toolDefs : undefined,
-          tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
-          temperature: this.config.temperature ?? 0,
-          max_tokens: this.getEffectiveMaxOutputTokens(),
-          stream: true,
-          ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
+    const result = await this.modelGateway.call(
+      {
+        systemPrompt,
+        messages,
+        toolDefs,
+        model: this.config.model,
+        temperature: this.config.temperature,
+        maxOutputTokens: this.getEffectiveMaxOutputTokens(),
+        abortSignal: turnAbortSignal,
+        turnAbortController: this.currentTurnAbortController,
+      },
+      {
+        onUsage: (usage, callStartMs) => this.recordUsage(usage, callStartMs),
+        onContextOverflow: async (msgs, signal) => {
+          const compactResult = await maybeCompact(this.client, this.config.model, msgs, signal)
+          if (compactResult.compacted) {
+            msgs.length = 0
+            msgs.push(...compactResult.messages)
+            this.renderer.compactDone(compactResult.originalTokens, compactResult.summaryTokens)
+            return true
+          }
+          return false
         },
-        { signal: turnAbortSignal },
-      )
-    } catch (err: unknown) {
-      this.renderer.stopSpinner()
-
-      const errMsg = (err as Error).message || ''
-
-      // Fallback: some endpoints reject stream_options with 400 — retry without it
-      if (errMsg.includes('stream_options') || errMsg.includes('stream_options is not supported')) {
-        this._streamUsageSupported = false
-        stream = await this.client.chat.completions.create(
-          {
-            model: this.config.model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-            ],
-            tools: toolDefs,
-            tool_choice: 'auto',
-            temperature: this.config.temperature ?? 0,
-            max_tokens: this.getEffectiveMaxOutputTokens(),
-            stream: true,
-          },
-          { signal: turnAbortSignal },
-        )
-        const result = await this.consumeStream(stream, turnAbortSignal)
-        this.recordUsage(result.usage, callStartMs)
-        return result
-      }
-
-      // Reactive compact: if API rejected due to context length, auto-compact and retry once.
-      //
-      // Match logic:
-      //   - `context_length_exceeded` (OpenAI) — explicit code
-      //   - `maximum context length` (Anthropic / generic) — explicit phrase
-      //   - bare `too long` is NOT included — too many user-facing error
-      //     strings contain "too long" without referring to context
-      //     (e.g. "request body was too long"). For `too long` to count,
-      //     a nearby context-token synonym must appear in a 80-char
-      //     window: this limits false positives to messages that actually
-      //     describe a context overflow.
-      const compactErrMsg = (err as Error).message || ''
-      const isContextOverflowError =
-        compactErrMsg.includes('context_length_exceeded') ||
-        compactErrMsg.includes('maximum context length') ||
-        /context[\s_-]{0,80}(?:is\s+)?too\s+long/i.test(compactErrMsg) ||
-        /too\s+long[\s_-]{0,80}(?:context|tokens?|input|window|limit)/i.test(compactErrMsg)
-      if (isContextOverflowError) {
-        this.renderer.warn('Context too long — auto-compacting and retrying...')
-        const compactResult = await maybeCompact(this.client, this.config.model, messages, turnAbortSignal)
-        if (compactResult.compacted) {
-          messages.length = 0
-          messages.push(...compactResult.messages)
-          this.renderer.compactDone(compactResult.originalTokens, compactResult.summaryTokens)
-          // Retry the call with compacted messages
-          stream = await this.client.chat.completions.create(
-            {
-              model: this.config.model,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-              ],
-              tools: toolDefs.length > 0 ? toolDefs : undefined,
-              tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
-              temperature: this.config.temperature ?? 0,
-          max_tokens: this.getEffectiveMaxOutputTokens(),  // post-compact retry uses same default as primary path
-              stream: true,
-              ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
-            },
-            { signal: turnAbortSignal },
-          )
-          const result = await this.consumeStream(stream, turnAbortSignal)
-          this.recordUsage(result.usage, callStartMs)
-          return result
-        }
-      }
-      throw err
-    }
-
-    const result = await this.consumeStream(stream, turnAbortSignal)
-    this.recordUsage(result.usage, callStartMs)
+      },
+    )
     return result
   }
 
@@ -807,155 +731,6 @@ export class ExecutionEngine {
         duration_ms: durationMs,
       })
     }
-  }
-
-  /** Consume the streaming response, accumulating text and tool calls */
-  private async consumeStream(
-    stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>,
-    turnAbortSignal: AbortSignal,
-  ): Promise<{
-    assistantText: string
-    finishReason: string | null
-    rawToolCalls: StreamingToolCall[]
-    usage: TokenUsage | null
-  }> {
-    let assistantText = ''
-    let finishReason: string | null = null
-    let usage: TokenUsage | null = null
-    const toolCallsMap = new Map<number, StreamingToolCall>()
-    const thinkingTagFilter = new ThinkingTagFilter()
-    let firstToken = true
-
-    // Stream-level timeout — if no chunk arrives for 120s, abort (prevents API hang)
-    const STREAM_TIMEOUT_MS = 120_000
-    let lastChunkTime = Date.now()
-    const turnController = this.currentTurnAbortController
-
-    // Watchdog: checks every 10s if stream has stalled
-    const watchdog = setInterval(() => {
-      if (Date.now() - lastChunkTime > STREAM_TIMEOUT_MS) {
-        // Force-abort the AbortController (not just dispatch event)
-        if (turnController) {
-          turnController.abort('stream_timeout')
-        }
-      }
-    }, 10_000)
-
-    try {
-      for await (const chunk of stream) {
-        if (turnAbortSignal.aborted) break
-
-        lastChunkTime = Date.now()  // reset watchdog on each chunk
-
-        // Capture usage from the final chunk (stream_options.include_usage)
-        // The usage chunk often has an empty choices array, so check before delta.
-        if (chunk.usage) {
-          usage = {
-            inputTokens: chunk.usage.prompt_tokens,
-            outputTokens: chunk.usage.completion_tokens,
-          }
-        }
-
-        const delta = chunk.choices[0]?.delta
-        if (!delta) continue
-
-        if (delta.content) {
-          const visibleContent = thinkingTagFilter.push(delta.content)
-          // Route reasoning content to renderer (if supported)
-          const thinkingContent = thinkingTagFilter.drainThinking()
-          if (thinkingContent) {
-            this.renderer.streamReasoning?.(thinkingContent)
-          }
-          if (visibleContent) {
-            if (firstToken) {
-              this.renderer.stopSpinner()
-              this.renderer.beginAssistantText()
-              firstToken = false
-            }
-            this.renderer.streamToken(visibleContent)
-            assistantText += visibleContent
-          }
-        }
-
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index
-            if (!toolCallsMap.has(idx)) {
-              toolCallsMap.set(idx, {
-                index: idx,
-                id: '',
-                name: '',
-                arguments: '',
-              })
-            }
-            const acc = toolCallsMap.get(idx)!
-            if (tc.id) acc.id = tc.id
-            if (tc.function?.name) acc.name += tc.function.name
-            if (tc.function?.arguments) acc.arguments += tc.function.arguments
-          }
-        }
-
-        if (chunk.choices[0]?.finish_reason) {
-          finishReason = chunk.choices[0].finish_reason
-        }
-      }
-
-      const trailingContent = thinkingTagFilter.finish()
-      const trailingThinking = thinkingTagFilter.drainThinking()
-      if (trailingThinking) {
-        this.renderer.streamReasoning?.(trailingThinking)
-      }
-      if (trailingContent) {
-        if (firstToken) {
-          this.renderer.stopSpinner()
-          this.renderer.beginAssistantText()
-          firstToken = false
-        }
-        this.renderer.streamToken(trailingContent)
-        assistantText += trailingContent
-      }
-    } catch (err: unknown) {
-      clearInterval(watchdog)
-      this.renderer.stopSpinner()
-      throw err
-    }
-
-    clearInterval(watchdog)
-    this.renderer.stopSpinner()
-
-    // Stream-timeout watchdog: if the stream was aborted due to stall,
-    // throw so the engine's error path fires (instead of looking like
-    // success). The watchdog sets the abort reason to 'stream_timeout'
-    // (see the setInterval above) — we MUST gate on that reason so that
-    // engine.abort() (reason='user_cancelled') does NOT get misreported
-    // as a stream timeout. Without this gate, any user-initiated cancel
-    // during an active stream would surface as a "Stream timed out —
-    // no data received for 120s" error in the renderer, which is wrong
-    // (the user cancelled, the stream didn't stall) and confusing.
-    if (
-      turnAbortSignal.aborted &&
-      !finishReason &&
-      turnAbortSignal.reason === 'stream_timeout'
-    ) {
-      throw new Error('Stream timed out — no data received for 120s')
-    }
-
-    if (assistantText) {
-      this.renderer.endAssistantText()
-    }
-
-    const rawToolCalls = Array.from(toolCallsMap.values()).sort(
-      (a, b) => a.index - b.index,
-    ).map((tc) => {
-      // Some providers (vLLM, LM Studio, Ollama) omit tool_call id;
-      // synthesize one to prevent "tool_call_id does not match" on next turn
-      if (!tc.id) {
-        tc.id = `call_${randomUUID()}`
-      }
-      return tc
-    })
-
-    return { assistantText, finishReason, rawToolCalls, usage }
   }
 
   // ── Tool execution ──────────────────────────────────────────────────────
