@@ -43,8 +43,10 @@ import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
 import { ToolScheduler } from './toolRuntime/toolScheduler.js'
+import { ToolRegistry } from './toolRuntime/toolRegistry.js'
 import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
+import { RunEventEmitter } from './runtime/events.js'
 
 export class ExecutionEngine {
   private client: OpenAI
@@ -59,9 +61,11 @@ export class ExecutionEngine {
   private modelGateway: ModelGateway
   private contextManager: ContextManager
   private toolPolicy: ToolPolicy
+  private toolRegistry: ToolRegistry
   private toolScheduler: ToolScheduler
   private coordinator: RuntimeCoordinator
   private sharedState: SharedRuntimeState
+  private eventEmitter: RunEventEmitter
   private _turnInFlight = false
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
@@ -118,21 +122,29 @@ export class ExecutionEngine {
       hookRunner: this.config.hookRunner,
     })
     this.toolPolicy = new ToolPolicy({ agent: this.config.agent })
+    this.toolRegistry = new ToolRegistry(this.renderer)
+    this.eventEmitter = new RunEventEmitter()
     const toolExecutor = new ToolExecutor({
+      toolRegistry: this.toolRegistry,
       toolPolicy: this.toolPolicy,
       permissionManager: this.permissionManager,
+      contextManager: this.contextManager,
       requestPermission: this.config.requestPermission,
       notifyToolCall: (toolName, input, result, turnNumber) =>
         this.moduleManager.notifyToolCall(toolName, input, result, turnNumber),
+      hookRunner: this.config.hookRunner,
+      eventEmitter: this.eventEmitter,
       renderer: this.renderer,
     })
     this.toolScheduler = new ToolScheduler({
       executor: toolExecutor,
+      toolRegistry: this.toolRegistry,
       renderer: this.renderer,
       eventLog: this.eventLog,
       hookRunner: this.config.hookRunner,
       contextManager: this.contextManager,
-      allTools: () => this.sharedState.allTools,
+      sharedState: this.sharedState,
+      eventEmitter: this.eventEmitter,
       claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
     })
 
@@ -148,9 +160,11 @@ export class ExecutionEngine {
       contextManager: this.contextManager,
       toolScheduler: this.toolScheduler,
       toolPolicy: this.toolPolicy,
+      toolRegistry: this.toolRegistry,
       moduleManager: this.moduleManager,
       baseTools: this.tools,
       sharedState: this.sharedState,
+      eventEmitter: this.eventEmitter,
     })
   }
 
@@ -269,5 +283,17 @@ export class ExecutionEngine {
 
   getFileHistory(): FileHistory | null {
     return this.fileHistory
+  }
+
+  getToolRegistry(): ToolRegistry {
+    return this.toolRegistry
+  }
+
+  getEventEmitter(): RunEventEmitter {
+    return this.eventEmitter
+  }
+
+  getSharedState(): SharedRuntimeState {
+    return this.sharedState
   }
 }

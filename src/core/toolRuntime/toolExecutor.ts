@@ -1,23 +1,30 @@
 /**
  * ToolExecutor — executes a single tool call with all policy checks,
- * permission enforcement, and module notification.
+ * permission enforcement, hooks, result truncation, and module notification.
  *
- * Responsibilities:
- * - Find tool in registry
- * - Execution-time policy check (defense-in-depth: plan mode + agent allowlist)
- * - Permission check (PermissionManager)
- * - Execute the tool
- * - Notify modules (onToolCall)
+ * Responsibilities (from replan.md §5.8):
+ *   - Find tool in registry
+ *   - Execution-time policy check (defense-in-depth: plan mode + agent allowlist)
+ *   - Permission check (PermissionManager)
+ *   - Pre/post hooks (PreToolCall, PostToolCall)
+ *   - AbortSignal传递 (via ToolContext.signal)
+ *   - Execute the tool
+ *   - Error standardization
+ *   - Tool Result truncation (individual, via ContextManager)
+ *   - Module onToolCall notification
  *
- * Does NOT handle: hooks (scheduler's job), message pushing (scheduler's job),
- * or result truncation (scheduler's job).
+ * Does NOT handle: batch scheduling (scheduler's job), aggregate budget
+ * across parallel results (scheduler's job), or message pushing (scheduler's job).
  */
 
-import type { Tool, ToolContext, ToolResult } from '../types.js'
+import type { ToolContext, ToolResult, IHookRunner } from '../types.js'
 import type { PermissionManager } from '../permissionSystem.js'
 import { classifyCommandRisk } from '../riskClassifier.js'
 import type { Renderer } from '../../ui/renderer.js'
 import type { ToolPolicy } from './toolPolicy.js'
+import type { ToolRegistry } from './toolRegistry.js'
+import type { ContextManager } from '../context/contextManager.js'
+import type { RunEventEmitter } from '../runtime/events.js'
 
 export type NotifyToolCall = (
   toolName: string,
@@ -27,14 +34,18 @@ export type NotifyToolCall = (
 ) => void
 
 export interface ToolExecutorDeps {
+  toolRegistry: ToolRegistry
   toolPolicy: ToolPolicy
   permissionManager: PermissionManager
+  contextManager: ContextManager
   requestPermission?: (
     toolName: string,
     input: Record<string, unknown>,
     riskLevel: 'safe' | 'needs-approval' | 'dangerous',
   ) => Promise<{ approved: boolean; feedback?: string }>
   notifyToolCall: NotifyToolCall
+  hookRunner?: IHookRunner
+  eventEmitter?: RunEventEmitter
   renderer: Renderer
 }
 
@@ -46,22 +57,29 @@ export class ToolExecutor {
   }
 
   async execute(
-    allTools: Tool[],
+    callId: string,
     toolName: string,
     input: Record<string, unknown>,
     context: ToolContext,
     planMode: boolean,
     turnNumber: number,
   ): Promise<ToolResult> {
-    const tool = allTools.find(t => t.name === toolName)
+    const { toolRegistry, toolPolicy, permissionManager, renderer, eventEmitter } = this.deps
+    const allTools = toolRegistry.getAll()
+
+    const tool = toolRegistry.get(toolName)
     if (!tool) {
-      return { content: `Unknown tool: ${toolName}`, isError: true }
+      const result: ToolResult = { content: `Unknown tool: ${toolName}`, isError: true }
+      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+      return result
     }
 
     // Execution-time policy check (defense in depth)
-    const policyError = this.deps.toolPolicy.checkExecutionAllowed(allTools, toolName, planMode)
+    const policyError = toolPolicy.checkExecutionAllowed(allTools, toolName, planMode)
     if (policyError) {
-      return { content: policyError, isError: true }
+      const result: ToolResult = { content: policyError, isError: true }
+      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+      return result
     }
 
     // Permission check
@@ -69,12 +87,14 @@ export class ToolExecutor {
       toolName === 'Bash' && typeof input.command === 'string'
         ? classifyCommandRisk(input.command) === 'dangerous'
         : false
-    const permission = this.deps.permissionManager.check(toolName, input, isDangerous)
+    const permission = permissionManager.check(toolName, input, isDangerous)
     if (permission === 'deny') {
-      return {
-        content: `Permission denied for ${toolName}. Current mode: ${this.deps.permissionManager.formatMode()}`,
+      const result: ToolResult = {
+        content: `Permission denied for ${toolName}. Current mode: ${permissionManager.formatMode()}`,
         isError: true,
       }
+      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+      return result
     }
     if (permission === 'ask') {
       if (this.deps.requestPermission) {
@@ -82,19 +102,40 @@ export class ToolExecutor {
         const permResult = await this.deps.requestPermission(toolName, input, riskLevel)
         if (!permResult.approved) {
           const feedback = permResult.feedback?.trim()
-          return {
+          const result: ToolResult = {
             content: feedback
               ? `Permission denied by user for ${toolName}. Feedback: ${feedback}`
               : `Permission denied by user for ${toolName}.`,
             isError: true,
           }
+          eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+          return result
         }
       } else {
-        this.deps.renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
+        renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
       }
     }
 
-    const result = await tool.execute(input, context)
+    // Pre-tool hook
+    this.deps.hookRunner?.runPreToolCall(toolName, input)
+    eventEmitter?.emit({ type: 'TOOL_STARTED', callId, toolName, input })
+
+    let result: ToolResult
+    try {
+      result = await tool.execute(input, context)
+    } catch (err) {
+      result = {
+        content: `Tool execution error: ${(err as Error).message || String(err)}`,
+        isError: true,
+      }
+    }
+
+    // Individual tool result truncation (aggregate budget is scheduler's job)
+    result = { ...result, content: this.deps.contextManager.truncateToolResult(result.content) }
+
+    // Post-tool hook
+    this.deps.hookRunner?.runPostToolCall(toolName, result.content, result.isError)
+    eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
 

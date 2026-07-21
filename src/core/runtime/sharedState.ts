@@ -14,10 +14,25 @@
  * - currentTurnAbortController: set during runTurn setup, cleared in finally
  * - softAbortRequested/Owner: set by softAbort(), claimed/cleared by
  *   the Coordinator's check_abort handler
- * - allTools: base + module tools, rebuilt each turn during boot
+ * - activeToolCalls: Map of callId → ActiveToolCall, maintained by
+ *   ToolScheduler during tool execution, visible for debugging/introspection
+ * - activeSubtasks: Map of subtask ID → ActiveSubtask, maintained by
+ *   AgentTool when spawning sub-agents
  */
 
 import type { Tool } from '../types.js'
+
+export interface ActiveToolCall {
+  callId: string
+  toolName: string
+  startedAt: number
+}
+
+export interface ActiveSubtask {
+  subtaskId: string
+  description: string
+  startedAt: number
+}
 
 export class SharedRuntimeState {
   planModeActive: boolean
@@ -25,6 +40,10 @@ export class SharedRuntimeState {
   softAbortRequested = false
   softAbortOwner: AbortController | null = null
   allTools: Tool[] = []
+  /** Currently executing tool calls — maintained by ToolScheduler */
+  readonly activeToolCalls = new Map<string, ActiveToolCall>()
+  /** Currently running sub-agent tasks — maintained by AgentTool */
+  readonly activeSubtasks = new Map<string, ActiveSubtask>()
 
   constructor(planModeActive: boolean) {
     this.planModeActive = planModeActive

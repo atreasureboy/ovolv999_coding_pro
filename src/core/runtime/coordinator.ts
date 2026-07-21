@@ -2,7 +2,7 @@
  * RuntimeCoordinator — owns the Think → Act → Observe main loop.
  *
  * Responsibilities (from replan.md §5.1):
- *   - Boot the runtime for a turn (modules, system prompt, tool defs)
+ *   - Boot the runtime for a turn (delegated to boot.ts)
  *   - Drive the state-machine loop (boot → check_abort → budget_check →
  *     module_iteration → llm_call → continuation_check → parse_response →
  *     tool_execution → check_abort …)
@@ -11,6 +11,8 @@
  *       ContextManager → budget + compaction
  *       ToolScheduler  → partition + execute tool calls
  *       ModuleManager  → lifecycle hooks
+ *       ToolRegistry   → tool registration + lookup
+ *   - Emit RunEvents at every state transition
  *   - Decide termination via TerminationPolicy
  *   - Clean up in finally (abort controller, soft-abort ownership)
  *
@@ -19,22 +21,15 @@
  *   - Execute tools directly (ToolExecutor's job)
  *   - Compact context directly (ContextManager's job)
  *   - Check permissions directly (ToolExecutor's job)
- *
- * State ownership:
- * - Per-turn loop variables (finalOutput, pendingToolCalls, retry counters)
- *   are local to `run()` — created fresh each turn.
- * - Cross-turn state (abort controllers, plan mode, allTools) lives in
- *   SharedRuntimeState, shared with the Engine facade.
+ *   - Register tools directly (ToolRegistry's job, via boot.ts)
  */
 
 import type {
   EngineConfig,
   OpenAIMessage,
-  ContentPart,
-  Tool,
-  ToolContext,
-  ToolDefinition,
   TurnResult,
+  Tool,
+  ToolDefinition,
 } from '../types.js'
 import type { TokenUsage } from '../costTracker.js'
 import type { CostTracker } from '../costTracker.js'
@@ -43,10 +38,6 @@ import type { FileHistory } from '../fileHistory.js'
 import type { PermissionManager } from '../permissionSystem.js'
 import type { Renderer } from '../../ui/renderer.js'
 import type { EventLog } from '../eventLog.js'
-import type { ModuleBootContext } from '../module.js'
-import { getPlanModePrefix } from '../../prompts/system.js'
-import { normalizeCJKInput } from '../strings.js'
-import { clearFileState } from '../fileState.js'
 import {
   transitionQueryState,
   isTerminal,
@@ -58,9 +49,12 @@ import type { ModelGateway } from '../model/modelGateway.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
+import type { ToolRegistry } from '../toolRuntime/toolRegistry.js'
 import type { ModuleManager } from '../moduleRuntime/moduleManager.js'
 import type { SharedRuntimeState } from './sharedState.js'
+import type { RunEventEmitter } from './events.js'
 import { checkTermination } from './terminationPolicy.js'
+import { boot } from './boot.js'
 
 interface StreamingToolCall {
   index: number
@@ -82,10 +76,12 @@ export interface CoordinatorDeps {
   contextManager: ContextManager
   toolScheduler: ToolScheduler
   toolPolicy: ToolPolicy
+  toolRegistry: ToolRegistry
   moduleManager: ModuleManager
   baseTools: Tool[]
 
   sharedState: SharedRuntimeState
+  eventEmitter: RunEventEmitter
 }
 
 export class RuntimeCoordinator {
@@ -100,62 +96,31 @@ export class RuntimeCoordinator {
     history: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
-    const { config, renderer, eventLog, sharedState } = this.deps
-    const planMode = sharedState.planModeActive
+    const { config, renderer, eventLog, sharedState, eventEmitter } = this.deps
 
-    clearFileState()
+    eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
     // ── Boot Sequence ──
-    const bootCtx: ModuleBootContext = {
-      cwd: config.cwd,
-      sessionDir: config.sessionDir,
-      config,
+    const bootResult = await boot({
       userMessage,
-    }
-    const bootOutput = await this.deps.moduleManager.boot(bootCtx)
-    const { systemPromptSections: moduleSections, toolContextPatch, tools: moduleTools } = bootOutput
-    sharedState.allTools = [...this.deps.baseTools, ...moduleTools]
-
-    eventLog?.append('boot_context', 'engine', {
-      trajectory: 'boot_context',
-      modules: this.deps.moduleManager.moduleNames,
-      module_sections: moduleSections.length,
-      module_tools: moduleTools.length,
-      user_message_length: userMessage.length,
+      history,
+      images,
+      config,
+      baseTools: this.deps.baseTools,
+      sharedState,
+      moduleManager: this.deps.moduleManager,
+      contextManager: this.deps.contextManager,
+      toolPolicy: this.deps.toolPolicy,
+      toolRegistry: this.deps.toolRegistry,
+      permissionManager: this.deps.permissionManager,
+      backgroundTaskManager: this.deps.backgroundTaskManager,
+      fileHistory: this.deps.fileHistory,
+      eventLog,
+      eventEmitter,
     })
 
-    const systemPrompt = this.buildSystemPrompt(planMode, moduleSections)
-    this.deps.contextManager.beginTurn(systemPrompt)
-    const toolDefs = this.deps.toolPolicy.getExposedDefinitions(sharedState.allTools, planMode)
-
-    const turnAbortController = new AbortController()
-    sharedState.currentTurnAbortController = turnAbortController
-
-    // Build initial messages
-    let userContent: string | ContentPart[]
-    if (images && images.length > 0) {
-      userContent = [
-        { type: 'text', text: normalizeCJKInput(userMessage) },
-        ...images.map((img) => ({ type: 'image_url' as const, image_url: { url: img.dataUrl } })),
-      ]
-    } else {
-      userContent = normalizeCJKInput(userMessage)
-    }
-    const messages: OpenAIMessage[] = [...history, { role: 'user', content: userContent }]
-
-    this.deps.contextManager.consumeQueuedSnip(messages)
-
-    const toolContext = this.buildToolContext(
-      turnAbortController.signal,
-      {
-        ...toolContextPatch,
-        availableToolNames: toolDefs.map(t => t.function.name),
-        snipMessages: (keepRecent: number, reason?: string) =>
-          this.deps.contextManager.applySnip(messages, keepRecent, reason),
-        getMessages: () => messages.map(m => ({ ...m })),
-      },
-      sharedState,
-    )
+    const { systemPrompt, toolDefs, toolContext, messages, turnAbortController } = bootResult
+    const planMode = sharedState.planModeActive
 
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
@@ -187,13 +152,17 @@ export class RuntimeCoordinator {
               maxIterations: config.maxIterations,
             })
             if (decision.kind === 'hard_abort') {
+              eventEmitter.emit({ type: 'ABORT_REQUESTED', kind: 'hard', reason: 'user_cancelled' })
               state = transitionQueryState(state, { type: 'hard_abort', output: finalOutput })
             } else if (decision.kind === 'soft_abort') {
+              eventEmitter.emit({ type: 'ABORT_REQUESTED', kind: 'soft', reason: 'user_interrupt' })
               state = transitionQueryState(state, { type: 'soft_abort', output: finalOutput })
             } else if (decision.kind === 'max_iterations') {
+              eventEmitter.emit({ type: 'MAX_ITERATIONS_REACHED', maxIterations: decision.maxIterations })
               renderer.warn(`Max iterations (${decision.maxIterations}) reached`)
               state = transitionQueryState(state, { type: 'max_iterations', output: finalOutput })
             } else {
+              eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })
               state = transitionQueryState(state, { type: 'continue' })
             }
             break
@@ -238,6 +207,13 @@ export class RuntimeCoordinator {
             }
             messages.push(assistantMsg)
             this.deps.contextManager.stampAssistantMessage()
+
+            eventEmitter.emit({
+              type: 'MODEL_COMPLETED',
+              assistantText,
+              finishReason,
+              toolCallCount: rawToolCalls.length,
+            })
 
             if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
               emptyResponseCount++
@@ -385,6 +361,7 @@ export class RuntimeCoordinator {
         lastToolName,
       })
       renderer.error(`Engine error: ${errMsg}`)
+      eventEmitter.emit({ type: 'RUN_FAILED', error: errMsg, output: finalOutput })
       result = { stopped: true, reason: 'error', output: finalOutput || `[Error: ${errMsg}]` }
     } finally {
       if (sharedState.currentTurnAbortController === turnAbortController) {
@@ -395,6 +372,8 @@ export class RuntimeCoordinator {
         sharedState.softAbortOwner = null
       }
     }
+
+    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
     // ── Module onComplete hooks ──
     await this.deps.moduleManager.runComplete({
@@ -410,18 +389,7 @@ export class RuntimeCoordinator {
     return { result, newHistory: messages }
   }
 
-  // ── Helpers (moved from engine) ──────────────────────────────────────────
-
-  private buildSystemPrompt(planMode: boolean, moduleSections: string[] = []): string {
-    const baseSystemPrompt = this.deps.config.systemPrompt ?? ''
-    const sections = moduleSections.length > 0
-      ? baseSystemPrompt + '\n\n---\n\n' + moduleSections.join('\n\n---\n\n')
-      : baseSystemPrompt
-    if (planMode) {
-      return getPlanModePrefix() + sections
-    }
-    return sections
-  }
+  // ── Helpers ──────────────────────────────────────────────────────────────
 
   private async callLLM(
     systemPrompt: string,
@@ -434,6 +402,7 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
+    this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: this.deps.config.model })
     const result = await this.deps.modelGateway.call(
       {
         systemPrompt,
@@ -464,36 +433,6 @@ export class RuntimeCoordinator {
         output_tokens: usage.outputTokens,
         duration_ms: durationMs,
       })
-    }
-  }
-
-  private buildToolContext(
-    turnAbortSignal: AbortSignal,
-    modulePatches: Partial<ToolContext>,
-    sharedState: SharedRuntimeState,
-  ): ToolContext {
-    const { config, permissionManager, eventLog, backgroundTaskManager, fileHistory } = this.deps
-    return {
-      cwd: config.cwd,
-      permissionMode: config.permissionMode,
-      permissionManager,
-      signal: turnAbortSignal,
-      apiConfig: {
-        apiKey: config.apiKey,
-        baseURL: config.baseURL,
-        model: config.model,
-      },
-      eventLog,
-      backgroundTaskManager,
-      askUserQuestion: config.askUserQuestion,
-      exitPlanMode: async (plan: string): Promise<boolean> => {
-        const approved = await config.exitPlanMode?.(plan) ?? true
-        if (approved) sharedState.planModeActive = false
-        return approved
-      },
-      enterPlanMode: () => { sharedState.planModeActive = true },
-      fileHistory: fileHistory ?? undefined,
-      ...modulePatches,
     }
   }
 

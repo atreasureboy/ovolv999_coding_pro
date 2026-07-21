@@ -20,7 +20,7 @@
  */
 
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../module.js'
-import type { OpenAIMessage, ToolContext, ToolResult, TurnResult } from '../types.js'
+import type { OpenAIMessage, Tool, ToolContext, ToolResult, TurnResult } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
 
@@ -32,7 +32,7 @@ export interface ModuleManagerDeps {
 
 export interface ModuleBootOutput {
   systemPromptSections: string[]
-  tools: import('../types.js').Tool[]
+  tools: Tool[]
   toolContextPatch: Partial<ToolContext>
 }
 

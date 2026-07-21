@@ -2,26 +2,30 @@
  * ToolScheduler — partitions tool calls into batches and executes them
  * with correct concurrency semantics.
  *
- * Responsibilities:
- * - Partition tool calls into safe (parallel) and stateful (serial) batches
- * - Execute parallel batches via Promise.all
- * - Execute serial batches one at a time
- * - Pre/post hooks (PreToolCall, PostToolCall)
- * - Renderer output (toolStart, toolResult)
- * - EventLog entries
- * - Push tool result messages
- * - Enforce aggregate tool result budget (parallel batches)
- * - Check soft abort between batches
+ * Responsibilities (from replan.md §5.7):
+ *   - Partition tool calls into safe (parallel) and stateful (serial) batches
+ *   - Execute parallel batches via Promise.all
+ *   - Execute serial batches one at a time
+ *   - Renderer output (toolStart, toolResult)
+ *   - EventLog entries
+ *   - Push tool result messages
+ *   - Enforce aggregate tool result budget (parallel batches)
+ *   - Track active tool calls in SharedRuntimeState
+ *   - Check soft abort between batches
  *
  * Does NOT handle: permission checks (executor's job), policy checks
- * (executor's job), or tool registration (engine's job).
+ * (executor's job), hooks (executor's job), individual result truncation
+ * (executor's job), or tool registration (ToolRegistry's job).
  */
 
-import type { OpenAIMessage, Tool, ToolContext, ToolResult, IHookRunner } from '../types.js'
+import type { OpenAIMessage, Tool, ToolContext, IHookRunner } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolExecutor } from './toolExecutor.js'
+import type { ToolRegistry } from './toolRegistry.js'
+import type { SharedRuntimeState } from '../runtime/sharedState.js'
+import type { RunEventEmitter } from '../runtime/events.js'
 
 export interface ParsedToolCall {
   tc: { id: string; name: string; arguments: string }
@@ -59,11 +63,13 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): Too
 
 export interface ToolSchedulerDeps {
   executor: ToolExecutor
+  toolRegistry: ToolRegistry
   renderer: Renderer
   eventLog?: EventLog
   hookRunner?: IHookRunner
   contextManager: ContextManager
-  allTools: () => Tool[]
+  sharedState: SharedRuntimeState
+  eventEmitter?: RunEventEmitter
   claimSoftAbort: (controller: AbortController) => boolean
 }
 
@@ -83,7 +89,7 @@ export class ToolScheduler {
     turnNumber: number,
   ): Promise<{ aborted: boolean }> {
     const turnAbortSignal = turnAbortController.signal
-    const batches = partitionToolCalls(parsedCalls, this.deps.allTools())
+    const batches = partitionToolCalls(parsedCalls, this.deps.toolRegistry.getAll())
 
     for (const batch of batches) {
       if (turnAbortSignal.aborted) return { aborted: true }
@@ -112,21 +118,22 @@ export class ToolScheduler {
     turnNumber: number,
     messages: OpenAIMessage[],
   ): Promise<void> {
-    const { executor, renderer, eventLog, hookRunner, contextManager } = this.deps
-    const allTools = this.deps.allTools()
+    const { executor, renderer, eventLog, contextManager, sharedState, eventEmitter } = this.deps
 
     for (const { tc, input } of batch.calls) {
       renderer.toolStart(tc.name, input)
-      hookRunner?.runPreToolCall(tc.name, input)
       eventLog?.append('tool_call', tc.name, { input }, [tc.name])
+      sharedState.activeToolCalls.set(tc.id, { callId: tc.id, toolName: tc.name, startedAt: Date.now() })
     }
+    eventEmitter?.emit({ type: 'TOOL_BATCH_STARTED', count: batch.calls.length, parallel: true })
 
     const results = await Promise.all(
       batch.calls.map(({ tc, input }) =>
-        executor.execute(allTools, tc.name, input, toolContext, planMode, turnNumber),
+        executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber),
       ),
     )
 
+    // Aggregate budget enforcement — can only be done at scheduler level
     const aggregateResults = batch.calls.map((call, i) => ({
       content: results[i].content,
       tc: { id: call.tc.id, name: call.tc.name },
@@ -139,17 +146,17 @@ export class ToolScheduler {
     for (let i = 0; i < batch.calls.length; i++) {
       const { tc } = batch.calls[i]
       const result = results[i]
-      hookRunner?.runPostToolCall(tc.name, result.content, result.isError)
       renderer.toolResult(tc.name, result.content, result.isError)
       eventLog?.append('tool_result', tc.name, {
         content: result.content.slice(0, 500),
         isError: result.isError,
       }, [tc.name, result.isError ? 'error' : 'success'])
+      sharedState.activeToolCalls.delete(tc.id)
       const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content: contextManager.truncateToolResult(safeContent),
+        content: safeContent,
         name: tc.name,
       })
     }
@@ -164,30 +171,31 @@ export class ToolScheduler {
     turnAbortSignal: AbortSignal,
     turnAbortController: AbortController,
   ): Promise<boolean> {
-    const { executor, renderer, eventLog, hookRunner, contextManager } = this.deps
-    const allTools = this.deps.allTools()
+    const { executor, renderer, eventLog, sharedState, eventEmitter } = this.deps
+
+    eventEmitter?.emit({ type: 'TOOL_BATCH_STARTED', count: batch.calls.length, parallel: false })
 
     for (const { tc, input } of batch.calls) {
       if (turnAbortSignal.aborted) return true
 
       renderer.toolStart(tc.name, input)
-      hookRunner?.runPreToolCall(tc.name, input)
       eventLog?.append('tool_call', tc.name, { input }, [tc.name])
+      sharedState.activeToolCalls.set(tc.id, { callId: tc.id, toolName: tc.name, startedAt: Date.now() })
 
-      const result = await executor.execute(allTools, tc.name, input, toolContext, planMode, turnNumber)
+      const result = await executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber)
 
-      hookRunner?.runPostToolCall(tc.name, result.content, result.isError)
       renderer.toolResult(tc.name, result.content, result.isError)
       eventLog?.append('tool_result', tc.name, {
         content: result.content.slice(0, 500),
         isError: result.isError,
       }, [tc.name, result.isError ? 'error' : 'success'])
+      sharedState.activeToolCalls.delete(tc.id)
 
-      const serialSafeContent = result.content.trim() || `(${tc.name} completed with no output)`
+      const safeContent = result.content.trim() || `(${tc.name} completed with no output)`
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content: contextManager.truncateToolResult(serialSafeContent),
+        content: safeContent,
         name: tc.name,
       })
 
