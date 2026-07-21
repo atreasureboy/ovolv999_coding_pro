@@ -26,6 +26,8 @@ import type { ToolExecutor } from './toolExecutor.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { SharedRuntimeState } from '../runtime/sharedState.js'
 import type { RunEventEmitter } from '../runtime/events.js'
+import type { ResourceScheduler, ResourceLease } from '../resourceScheduler.js'
+import type { ResourceClaim } from '../executionRun.js'
 
 export interface ParsedToolCall {
   tc: { id: string; name: string; arguments: string }
@@ -71,6 +73,13 @@ export interface ToolSchedulerDeps {
   sharedState: SharedRuntimeState
   eventEmitter?: RunEventEmitter
   claimSoftAbort: (controller: AbortController) => boolean
+  /**
+   * P1-1 (five_goal §八): ResourceScheduler for per-input resource
+   * claims. When supplied, each tool execution is wrapped in
+   * acquire/release so two tools touching the same file or git ref
+   * serialize rather than race. Omit to disable (legacy behavior).
+   */
+  resourceScheduler?: ResourceScheduler
 }
 
 export class ToolScheduler {
@@ -111,6 +120,73 @@ export class ToolScheduler {
     return { aborted: false }
   }
 
+  /**
+   * P1-1/P1-2 (five_goal §八): acquire resource claims for a single
+   * tool call before execution, release them in finally. Returns the
+   * lease (or null if the scheduler is disabled or the tool makes no
+   * claim) plus the wrapped execute call.
+   *
+   * P1-3 deadlock avoidance: the underlying ResourceScheduler does
+   * atomic all-or-nothing acquire — this method never holds partial
+   * locks, so two parallel tools asking for file1+file2 and file2+file1
+   * in either order cannot deadlock. One will fully acquire; the other
+   * waits or fails with ResourceConflictError.
+   *
+   * Failures here are surfaced as tool errors (isError:true) rather
+   * than thrown — the scheduler's job is to gate execution, not crash
+   * the turn. The caller sees a structured "blocked" result and can
+   * retry.
+   */
+  private async executeWithClaims(
+    callId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    toolContext: ToolContext,
+    planMode: boolean,
+    turnNumber: number,
+    runId: string | undefined,
+  ): Promise<{ result: Awaited<ReturnType<ToolExecutor['execute']>>; lease: ResourceLease | null }> {
+    const scheduler = this.deps.resourceScheduler
+    const tool = this.deps.toolRegistry.getAll().find(t => t.name === toolName)
+    const claims = tool?.metadata?.claims ? tool.metadata.claims(input) : []
+    let lease: ResourceLease | null = null
+    if (scheduler && claims.length > 0) {
+      const acquireId = runId ?? `toolcall_${callId}`
+      try {
+        lease = await scheduler.acquire(acquireId, claims as ResourceClaim[], {
+          signal: toolContext.signal,
+        })
+      } catch (err) {
+        // Acquire failed (conflict, timeout, or abort). Surface as a
+        // structured tool error — do NOT execute the tool. The lease
+        // is null so the finally below is a no-op.
+        return {
+          result: {
+            content: `[${toolName}] blocked: resource unavailable — ${(err as Error).message}`,
+            isError: true,
+          },
+          lease: null,
+        }
+      }
+    }
+    try {
+      const result = await this.deps.executor.execute(callId, toolName, input, toolContext, planMode, turnNumber)
+      return { result, lease }
+    } finally {
+      // Always release — even on throw, abort, or timeout. The
+      // ResourceScheduler guarantees no partial-lock leak.
+      if (lease) lease.release()
+    }
+  }
+
+  /**
+   * Resolve the runId to use for resource claims. Falls back to the
+   * callId-derived id when no ExecutionContext is wired (legacy path).
+   */
+  private resolveClaimRunId(toolContext: ToolContext, callId: string): string | undefined {
+    return toolContext.execution?.runId ?? `toolcall_${callId}`
+  }
+
   private async executeParallelBatch(
     batch: ToolBatch,
     toolContext: ToolContext,
@@ -131,11 +207,19 @@ export class ToolScheduler {
     // throw between set() and delete() (e.g. renderer.toolResult or
     // eventLog.append throwing on bad input) does not leak entries
     // in activeToolCalls for the rest of the process lifetime.
-    let results: Awaited<ReturnType<typeof executor.execute>>[]
+    //
+    // P1-1/P1-2 (five_goal §八): each tool call is now wrapped in
+    // acquire/release of its declared ResourceClaims. Atomic acquire
+    // guarantees no partial-lock leak; release runs in finally inside
+    // executeWithClaims even on throw.
+    let results: Awaited<ReturnType<ToolExecutor['execute']>>[]
     try {
       results = await Promise.all(
         batch.calls.map(({ tc, input }) =>
-          executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber),
+          this.executeWithClaims(
+            tc.id, tc.name, input, toolContext, planMode, turnNumber,
+            this.resolveClaimRunId(toolContext, tc.id),
+          ).then(r => r.result),
         ),
       )
     } finally {
@@ -208,9 +292,15 @@ export class ToolScheduler {
       // (toolExecutor.ts) but the surrounding instrumentation does
       // not — previously a throwing renderer.toolResult or
       // eventLog.append would wedge the Map entry forever.
-      let result: Awaited<ReturnType<typeof executor.execute>>
+      //
+      // P1-1/P1-2: claims acquired + released via executeWithClaims.
+      let result: Awaited<ReturnType<ToolExecutor['execute']>>
       try {
-        result = await executor.execute(tc.id, tc.name, input, toolContext, planMode, turnNumber)
+        const wrapped = await this.executeWithClaims(
+          tc.id, tc.name, input, toolContext, planMode, turnNumber,
+          this.resolveClaimRunId(toolContext, tc.id),
+        )
+        result = wrapped.result
       } finally {
         sharedState.activeToolCalls.delete(tc.id)
       }

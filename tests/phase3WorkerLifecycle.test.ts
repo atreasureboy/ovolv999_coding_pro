@@ -100,7 +100,7 @@ describe('P0-6: wait:false keeps the run non-terminal', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     const run = registry.get(out.runId!)
     expect(run!.status).not.toBe('succeeded')
@@ -116,7 +116,7 @@ describe('P0-6: wait:false keeps the run non-terminal', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     // The mapping was retained — steer() on the same runId works.
     const ok = await t.steer(out.runId!, 'follow-up')
@@ -136,7 +136,7 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     expect(await t.status(out.runId!)).toBe('running')
   })
@@ -148,7 +148,7 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     // Kill the pane out-of-band — registry still says 'waiting'.
     calls.stopped.add('s1')
@@ -168,7 +168,7 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     await t.cancel(out.runId!, 'test reason')
 
@@ -186,7 +186,7 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     const result = await t.collect(out.runId!)
     expect(result.status).toBe('running')
@@ -199,7 +199,7 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     const out = await t.execute(
       { action: 'run', task: 'X' },
       { cwd: '/r' } as never,
-    ) as typeof ToolResult & { runId?: string }
+    ) as ToolResultLike & { runId?: string }
 
     // Manually transition through verifying→succeeded to simulate completion.
     registry.transition(out.runId!, 'verifying')
@@ -250,10 +250,16 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
 // P0-8: AgentTool provides best-effort WorkerAdapter stubs
 // ─────────────────────────────────────────────────────────────────────
 describe('P0-8: AgentTool provides WorkerAdapter stubs', () => {
+  // Helper: build an AgentTool without full wiring — we only exercise
+  // the WorkerAdapter stubs (status/cancel/etc.) which never touch
+  // the wiring fields.
+  function makeStubAgent(): AgentTool {
+    return new AgentTool(undefined)
+  }
+
   it('status() reflects registry state', async () => {
     const registry = new ExecutionRunRegistry()
-    const t = new AgentTool({})
-    // Wire registry via the public setter (or test via private field).
+    const t = makeStubAgent()
     ;(t as unknown as { runRegistry: ExecutionRunRegistry }).runRegistry = registry
     const run = registry.create({
       kind: 'agent', goal: 'g', workspace: { cwd: '/r' },
@@ -266,23 +272,23 @@ describe('P0-8: AgentTool provides WorkerAdapter stubs', () => {
   })
 
   it('status() returns "unknown" when no registry wired', async () => {
-    const t = new AgentTool({})
+    const t = makeStubAgent()
     expect(await t.status('whatever')).toBe('unknown')
   })
 
   it('start() rejects — synchronous children only', async () => {
-    const t = new AgentTool({})
+    const t = makeStubAgent()
     await expect(t.start({ goal: 'x' })).rejects.toThrow(/not supported/)
   })
 
   it('reattach() always returns null — children do not survive restart', async () => {
-    const t = new AgentTool({})
+    const t = makeStubAgent()
     expect(await t.reattach!({ type: 'internal' })).toBeNull()
   })
 
   it('cancel() transitions the registry and clears steer queue', async () => {
     const registry = new ExecutionRunRegistry()
-    const t = new AgentTool({})
+    const t = makeStubAgent()
     ;(t as unknown as { runRegistry: ExecutionRunRegistry }).runRegistry = registry
     const run = registry.create({
       kind: 'agent', goal: 'g', workspace: { cwd: '/r' },
@@ -296,4 +302,4 @@ describe('P0-8: AgentTool provides WorkerAdapter stubs', () => {
 })
 
 // Helper re-export to satisfy the local ToolResult typing above.
-type ToolResult = { content: string; isError?: boolean }
+type ToolResultLike = { content: string; isError?: boolean; runId?: string; workerId?: string; sessionId?: string; status?: string; detached?: boolean }
