@@ -28,6 +28,8 @@ import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
 import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
 import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
+import { isTerminalRunStatus } from '../core/executionRun.js'
+import type { WorkerAdapter, SteerEventEmitter } from '../core/workerAdapter.js'
 
 /** Hard cap on agent call chain depth (across nesting).
  * The depth is threaded through `EngineConfig.initialAgentDepth` so the
@@ -233,11 +235,32 @@ export interface AgentToolWiring {
    * call tree. The host engine sets this when it knows its own runId.
    */
   parentRunId?: string
+  /**
+   * GAP-K: optional steer-event emitter (host wires to
+   * ExecutionRunEventBus.emitSteered). Recorded on a successful
+   * steer() so the bus persists + fans out the `run.steered` event.
+   */
+  onSteered?: SteerEventEmitter
 }
 
-export class AgentTool implements Tool {
+export class AgentTool implements Tool, WorkerAdapter {
   name = 'Agent'
   metadata = { concurrencySafe: true, longRunning: true }
+  readonly workerKind = 'agent'
+
+  /**
+   * GAP-K: runId → queued steer instructions. AgentTool runs its
+   * child engine synchronously (runAgentTask awaits childEngine.
+   * runTurn()), so there's no live tmux pane to write to. Instead,
+   * steer() records the instruction here and runAgentTask picks it
+   * up between iterations via the child engine's `injectUserText`
+   * hook (when present). This is best-effort: if the child engine
+   * doesn't expose the hook, the instruction is dropped.
+   *
+   * Entries are removed when the run reaches a terminal state.
+   */
+  private readonly steerQueue = new Map<string, string[]>()
+  private readonly onSteeredHook?: SteerEventEmitter
 
   /** Immutable per-instance wiring — captured once in the constructor and
    * shared by every parallel Agent call dispatched from this tool. May
@@ -257,6 +280,52 @@ export class AgentTool implements Tool {
     this.parentRenderer = wiring?.parentRenderer
     this.runRegistry = wiring?.runRegistry
     this.parentRunId = wiring?.parentRunId
+    this.onSteeredHook = wiring?.onSteered
+  }
+
+  /**
+   * GAP-K: queue a follow-up instruction for the child sub-agent
+   * running the given ExecutionRun. Returns true iff the runId is
+   * currently active (registered as 'running' or 'waiting') AND the
+   * instruction was queued. Returns false if the run is unknown,
+   * terminal, or wasn't tracked by this AgentTool instance.
+   *
+   * Note: delivery to the child engine's next iteration is
+   * best-effort and depends on runAgentTask polling this queue.
+   */
+  async steer(runId: string, instruction: string): Promise<boolean> {
+    const registry = this.runRegistry
+    if (registry) {
+      const run = registry.get(runId)
+      if (!run || isTerminalRunStatus(run.status)) return false
+      // Only accept steer for runs we own and that are mid-flight.
+      if (run.status !== 'running' && run.status !== 'waiting' && run.status !== 'preparing') return false
+    }
+    if (!this.steerQueue.has(runId)) this.steerQueue.set(runId, [])
+    this.steerQueue.get(runId)!.push(instruction)
+    this.onSteeredHook?.(runId, instruction)
+    return true
+  }
+
+  /**
+   * GAP-K internal: drain queued steer instructions for a run.
+   * Called by runAgentTask between iterations. Returns the
+   * instructions concatenated (or undefined if none queued).
+   * @internal
+   */
+  _drainSteerQueue(runId: string): string | undefined {
+    const q = this.steerQueue.get(runId)
+    if (!q || q.length === 0) return undefined
+    this.steerQueue.set(runId, [])
+    return q.join('\n')
+  }
+
+  /**
+   * GAP-K internal: drop the queue for a terminal run.
+   * @internal
+   */
+  _clearSteerQueue(runId: string): void {
+    this.steerQueue.delete(runId)
   }
 
   definition: ToolDefinition = {
@@ -423,6 +492,11 @@ isolation, not the sub-agent — set the flag from the orchestrator.
         registry.transition(runId, to, patch as never)
       } catch {
         // best-effort — registry is observability, not control plane
+      }
+      // GAP-K: drop the steer queue when the run reaches a terminal
+      // state so future steer() calls for this runId return false.
+      if (runId && isTerminalRunStatus(to)) {
+        this._clearSteerQueue(runId)
       }
     }
 
