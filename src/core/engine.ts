@@ -74,14 +74,19 @@ export class ExecutionEngine {
   private eventEmitter: RunEventEmitter
   private _turnInFlight = false
   /**
-   * Optional persistent ExecutionRun registry + event bus. Populated
-   * only when `config.executionRunLogDir` is set. The registry is
-   * RECOVERED from the JSONL log on startup so in-flight runs from
-   * a previous (crashed) process are visible. The bus then persists
-   * every subsequent transition for future recovery.
+   * five_goal P0-1: the ExecutionRun registry is ALWAYS present.
+   * Previously this was optional and only created when
+   * `executionRunLogDir` was set, which violated the spec
+   * ("不得将'是否开启持久化'与'是否拥有 ExecutionRun'绑定").
+   * Persistence is governed by `runStore` being set; the registry
+   * itself is mandatory runtime state.
    */
-  private readonly runRegistry?: ExecutionRunRegistry
-  private readonly runEventBus?: ExecutionRunEventBus
+  private readonly runRegistry: ExecutionRunRegistry
+  /**
+   * The ExecutionRunEventBus is always present too — persistence is
+   * optional (via EventStore) but event fan-out is core.
+   */
+  private readonly runEventBus: ExecutionRunEventBus
   private readonly runStore?: JsonlEventStore
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
@@ -164,21 +169,30 @@ export class ExecutionEngine {
       claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
     })
 
-    // ── ExecutionRun registry + event bus (fi_goal §四 Phase 3) ───────
-    // When the caller wires `executionRunLogDir`, the engine recovers
-    // any in-flight runs from the JSONL log on startup, then attaches
-    // a bus that persists every transition for future recovery.
+    // ── ExecutionRun registry + event bus (five_goal P0-1) ───────────
+    // Registry and bus ALWAYS exist — the spec forbids tying "has a
+    // Run registry" to "has persistence configured". Only the
+    // EventStore (JSONL backing) is optional; the in-memory registry
+    // and bus are core runtime state.
     //
-    // Set up BEFORE the coordinator so the latter can be wired with
-    // the registry handle (GAP-C: turn-level run tracking).
+    // Set up BEFORE the coordinator and tools so they can be wired
+    // with the registry handle (GAP-C: turn-level run tracking).
+    const registry = new ExecutionRunRegistry()
+    let bus: ExecutionRunEventBus
     if (config.executionRunLogDir) {
       const store = new JsonlEventStore(config.executionRunLogDir)
       const recovered = recoverRegistryFromStore(store)
+      // Splice recovered runs into the fresh registry by replacing
+      // the registry entirely. (recoverRegistryFromStore returns a
+      // registry instance already populated with prior runs.)
       this.runStore = store
+      // Re-use the recovered registry as our authoritative one.
       this.runRegistry = recovered
-      this.runEventBus = new ExecutionRunEventBus(recovered, store)
+      bus = new ExecutionRunEventBus(recovered, store)
       // Mark any run that was 'running'/'preparing'/'verifying' at
       // crash time as 'failed' — there's no worker to pick it back up.
+      // (five_goal P2-6: this is "state identification", not auto
+      // recovery — that requires reattach(), see WorkerAdapter.)
       for (const run of recovered.list()) {
         if (
           run.status === 'preparing' ||
@@ -196,7 +210,14 @@ export class ExecutionEngine {
           }
         }
       }
+    } else {
+      // No persistence configured — registry + bus still exist so
+      // every turn still gets a RunId, every tool can still spawn
+      // child runs, and observers can still subscribe to events.
+      this.runRegistry = registry
+      bus = new ExecutionRunEventBus(registry)
     }
+    this.runEventBus = bus
 
     this.coordinator = new RuntimeCoordinator({
       config: this.config,
@@ -403,19 +424,21 @@ export class ExecutionEngine {
   }
 
   /**
-   * The persistent ExecutionRun registry (fi_goal §三/§四). Returns
-   * undefined when `executionRunLogDir` was not set on the config.
+   * five_goal P0-1: the ExecutionRun registry is ALWAYS present.
+   * (Previously returned undefined when persistence was off — that
+   * broke any caller that wanted to mint child runs without
+   * configuring a log directory.)
    */
-  getRunRegistry(): ExecutionRunRegistry | undefined {
+  getRunRegistry(): ExecutionRunRegistry {
     return this.runRegistry
   }
 
   /**
-   * The ExecutionRun event bus (fi_goal §四 Phase 3). Subscribers
-   * receive every run/tool/artifact/verification event with
-   * persist-first ordering. Returns undefined when persistence is off.
+   * The ExecutionRun event bus. Always present; subscribers receive
+   * every run/tool/artifact/verification event with persist-first
+   * ordering (when an EventStore is wired in).
    */
-  getRunEventBus(): ExecutionRunEventBus | undefined {
+  getRunEventBus(): ExecutionRunEventBus {
     return this.runEventBus
   }
 

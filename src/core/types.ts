@@ -6,6 +6,7 @@ import type { EpisodicMemory } from './episodicMemory.js'
 import type { AgentConfig } from './agentPresets.js'
 import type { BackgroundTaskManager } from './backgroundTaskManager.js'
 import type { ResourceClaim } from './executionRun.js'
+import type { ExecutionContext } from './executionContext.js'
 import type { FileHistory } from './fileHistory.js'
 import type { PermissionManager } from './permissionSystem.js'
 import type { McpServerConfig } from './mcpClient.js'
@@ -134,6 +135,14 @@ export interface ToolContext {
   permissionManager?: PermissionManager
   /** AbortSignal — tools should honour this to support Ctrl+C cancellation */
   signal?: AbortSignal
+  /**
+   * five_goal P0-2: per-turn execution context. Carries the current
+   * RunId, parent RunId, workspace id, and resolved model info. Tools
+   * that spawn child runs (AgentTool, ClaudeCodeTool) MUST read
+   * `context.execution.runId` as the parentRunId rather than caching
+   * a value at construction time.
+   */
+  execution?: ExecutionContext
   /** Progress update function for long-running tools */
   updateProgress?: (progress: number, recoveryData?: Record<string, unknown>) => void
   /**

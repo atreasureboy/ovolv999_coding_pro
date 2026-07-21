@@ -473,9 +473,14 @@ isolation, not the sub-agent — set the flag from the orchestrator.
     const registry = this.runRegistry
     let runId: string | undefined
     if (registry) {
+      // five_goal P0-2: prefer the per-turn ExecutionContext.runId
+      // (dynamic — different every turn) over the static constructor
+      // parentRunId (a deprecated back-compat fallback). Tools MUST
+      // NOT cache parentRunId across calls.
+      const dynamicParent = context.execution?.runId ?? this.parentRunId
       const run = registry.create({
         kind: 'agent',
-        parentRunId: this.parentRunId,
+        parentRunId: dynamicParent,
         goal: description,
         workspace: { cwd: context.cwd },
         worker: agentLabel,

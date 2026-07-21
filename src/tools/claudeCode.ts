@@ -206,9 +206,12 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     const registry = this.runRegistry
     let runId: string | undefined
     if (registry) {
+      // five_goal P0-2: prefer the per-turn ExecutionContext.runId
+      // over the static constructor parentRunId.
+      const dynamicParent = ctx.execution?.runId ?? this.parentRunId
       const run = registry.create({
         kind: 'external_worker',
-        parentRunId: this.parentRunId,
+        parentRunId: dynamicParent,
         goal: task,
         workspace: { cwd: ctx.cwd },
         worker: defaultSession(input),

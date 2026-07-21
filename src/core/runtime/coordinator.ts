@@ -55,6 +55,7 @@ import type { SharedRuntimeState } from './sharedState.js'
 import type { RunEventEmitter } from './events.js'
 import { isTerminalRunStatus } from '../executionRun.js'
 import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
+import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { boot } from './boot.js'
 
@@ -171,6 +172,21 @@ export class RuntimeCoordinator {
 
     const { systemPrompt, toolDefs, toolContext, messages, turnAbortController } = bootResult
     const planMode = sharedState.planModeActive
+
+    // five_goal P0-2: propagate the per-turn ExecutionContext through
+    // ToolContext so tools (AgentTool, ClaudeCodeTool, Workflow, ...)
+    // can read the current runId + parentRunId dynamically. The old
+    // pattern of caching parentRunId in a Tool's constructor broke
+    // for multi-turn reuse because every turn had a different RunId.
+    if (runId) {
+      toolContext.execution = buildExecutionContext({
+        runId,
+        parentRunId: this.deps.parentRunId,
+        cwd: config.cwd,
+        signal: turnAbortController.signal,
+        model: config.model,
+      })
+    }
 
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })

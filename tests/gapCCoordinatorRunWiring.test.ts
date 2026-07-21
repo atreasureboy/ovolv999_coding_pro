@@ -129,13 +129,16 @@ describe('GAP-C.1: successful turn records run lifecycle', () => {
 // ─────────────────────────────────────────────────────────────────────
 // GAP-C.2: no registry when executionRunLogDir is unset → back-compat
 // ─────────────────────────────────────────────────────────────────────
-describe('GAP-C.2: backward-compat when executionRunLogDir is unset', () => {
-  it('does not expose a registry and still runs the turn', async () => {
+describe('GAP-C.2: registry always present (five_goal P0-1)', () => {
+  it('exposes a registry even without executionRunLogDir and runs the turn', async () => {
     const { c, e } = makeEngine()
     c.push(stopStream('hi'))
     const result = await e.runTurn('hello', [])
     expect(result.result.reason).toBe('stop_sequence')
-    expect(e.getRunRegistry()).toBeUndefined()
+    // five_goal P0-1: registry is ALWAYS present; only the EventStore
+    // (persistence) is optional.
+    expect(e.getRunRegistry()).toBeDefined()
+    expect(e.getRunEventBus()).toBeDefined()
   })
 })
 
