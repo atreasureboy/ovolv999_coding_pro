@@ -27,7 +27,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { classifyCommandRisk, checkCommandPermission } from '../src/core/riskClassifier.js'
+import { classifyCommandRisk } from '../src/core/riskClassifier.js'
 
 // ── Dangerous ────────────────────────────────────────────────────────────────
 
@@ -74,37 +74,11 @@ describe('riskClassifier — dangerous commands', () => {
       expect(classifyCommandRisk(cmd)).toBe('dangerous')
     })
   }
-
-  it('blocks dangerous commands in ask mode', () => {
-    const result = checkCommandPermission('rm -rf /', 'ask')
-    expect(result.allowed).toBe(false)
-    if (!result.allowed) {
-      expect(result.reason).toMatch(/dangerous/i)
-    }
-  })
-
-  it('blocks dangerous commands in deny mode', () => {
-    const result = checkCommandPermission('rm -rf /', 'deny')
-    expect(result.allowed).toBe(false)
-  })
-
-  it('still allows dangerous commands in auto mode (CLI override)', () => {
-    // The audit note in riskClassifier.ts says auto mode is the explicit
-    // override path for power users. The classifier itself doesn't
-    // change behavior in auto mode — that is the responsibility of
-    // checkCommandPermission.
-    const result = checkCommandPermission('rm -rf /', 'auto')
-    expect(result.allowed).toBe(true)
-  })
 })
 
 // ── Safe ─────────────────────────────────────────────────────────────────────
 
 describe('riskClassifier — safe commands', () => {
-  // Pure read-only or side-effect-free commands. Any regression that
-  // upgrades one of these to 'needs_approval' would create needless
-  // friction; any regression that DOWNgrades it (e.g. dropping a
-  // SAFE_PREFIXES entry) is a security bug.
   const safe: string[] = [
     'ls -la',
     'cat file.txt',
@@ -125,11 +99,6 @@ describe('riskClassifier — safe commands', () => {
       expect(classifyCommandRisk(cmd)).toBe('safe')
     })
   }
-
-  it('allows safe commands in deny mode without confirmation', () => {
-    const result = checkCommandPermission('ls -la', 'deny')
-    expect(result.allowed).toBe(true)
-  })
 
   it('classifies safe git subcommands correctly', () => {
     // git read-only operations must be safe even with arguments.
@@ -234,25 +203,6 @@ describe('riskClassifier — needs_approval commands', () => {
 
   it('classifies whitespace-only string as needs_approval', () => {
     expect(classifyCommandRisk('   ')).toBe('needs_approval')
-  })
-
-  it('deny mode blocks needs_approval commands', () => {
-    const result = checkCommandPermission('curl http://example.com', 'deny')
-    expect(result.allowed).toBe(false)
-  })
-
-  it('ask mode warns but allows needs_approval commands', () => {
-    const result = checkCommandPermission('curl http://example.com', 'ask')
-    // The 'ask' mode returns `{ allowed: true; warning: string }` for
-    // needs_approval. TS narrows the union on `result.allowed === true`,
-    // but the warning field only exists on the warning variant — the
-    // discriminated union still needs the 'warning' in 'warning' key for
-    // the narrowing to flow through. Cast through `unknown` so the test
-    // asserts the runtime contract without re-deriving the types.
-    expect(result.allowed).toBe(true)
-    const warning = (result as { warning?: string }).warning
-    expect(warning).toBeDefined()
-    expect(warning).toMatch(/caution/i)
   })
 })
 

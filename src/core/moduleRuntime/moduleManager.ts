@@ -11,8 +11,8 @@
  *   6. Disposal (dispose?.() duck-typed on each module)
  *
  * State ownership:
- * - modules: AgentModule[] (resolved in constructor, immutable)
- * - moduleBootResults: ModuleBootResult[] (per-turn, from boot)
+ * - modules: AgentModule[] (resolved in constructor, settable for testing)
+ * - bootResults: ModuleBootResult[] (per-turn, from boot)
  *
  * The engine delegates all module iteration to this manager, ensuring
  * consistent error handling (boot = throw, iteration = throw, complete

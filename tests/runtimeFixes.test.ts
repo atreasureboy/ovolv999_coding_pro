@@ -466,7 +466,7 @@ describe('RUNTIME-FIX priority-3: enforceAggregateToolResultBudget catches many-
       execute: async (input) => Promise.resolve({ content: 'x'.repeat(15_000) + `[item-${(input as { idx: number }).idx}]`, isError: false }),
       isConcurrencySafe: () => true,
     }
-    const { partitionToolCalls } = await import('../src/core/engine.js')
+    const { partitionToolCalls } = await import('../src/core/toolRuntime/toolScheduler.js')
     const batches = partitionToolCalls(items, [bigTool])
     // Ten parallel-safe items → ONE batch (the precondition for budget
     // enforcement; without this batching the aggregate check is moot).

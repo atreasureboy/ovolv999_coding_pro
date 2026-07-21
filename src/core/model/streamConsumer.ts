@@ -19,7 +19,25 @@ import type OpenAI from 'openai'
 import { randomUUID } from 'crypto'
 import { ThinkingTagFilter } from '../thinkingTagFilter.js'
 import type { Renderer } from '../../ui/renderer.js'
-import type { StreamResult } from '../runtime/types.js'
+
+/**
+ * StreamResult — the normalized output of consuming a streaming LLM
+ * response. Produced by StreamConsumer, consumed by ModelGateway.
+ */
+export interface StreamResult {
+  assistantText: string
+  finishReason: string | null
+  rawToolCalls: Array<{
+    index: number
+    id: string
+    name: string
+    arguments: string
+  }>
+  usage: {
+    inputTokens: number
+    outputTokens: number
+  } | null
+}
 
 const STREAM_TIMEOUT_MS = 120_000
 

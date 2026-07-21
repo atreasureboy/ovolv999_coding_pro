@@ -42,7 +42,7 @@ import { ModelGateway } from './model/modelGateway.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
-import { ToolScheduler, partitionToolCalls } from './toolRuntime/toolScheduler.js'
+import { ToolScheduler } from './toolRuntime/toolScheduler.js'
 import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
 
@@ -271,5 +271,3 @@ export class ExecutionEngine {
     return this.fileHistory
   }
 }
-
-export { partitionToolCalls }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { partitionToolCalls } from '../src/core/engine.js'
+import { partitionToolCalls } from '../src/core/toolRuntime/toolScheduler.js'
 import {
   calculateContextState,
   estimateTokens,

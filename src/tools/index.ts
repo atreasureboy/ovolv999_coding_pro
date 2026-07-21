@@ -34,11 +34,6 @@ import { EnterWorktreeTool, ExitWorktreeTool, ListWorktreesTool } from './worktr
 import { DiagnosticsTool } from './diagnostics.js'
 import { ListMcpResourcesTool, ReadMcpResourceTool } from './mcpResources.js'
 import { GoalTool } from './goal.js'
-import { BriefTool } from './brief.js'
-import { CtxInspectTool } from './ctxInspect.js'
-import { TerminalCaptureTool } from './terminalCapture.js'
-import { WebBrowserTool } from './webBrowser.js'
-import { PushNotificationTool } from './pushNotification.js'
 
 /**
  * Wiring for the per-engine AgentTool instance. All fields are REQUIRED
@@ -143,9 +138,4 @@ export {
   ListMcpResourcesTool,
   ReadMcpResourceTool,
   GoalTool,
-  BriefTool,
-  CtxInspectTool,
-  TerminalCaptureTool,
-  WebBrowserTool,
-  PushNotificationTool,
 }
