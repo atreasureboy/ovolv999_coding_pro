@@ -430,16 +430,22 @@ describe('P0-4.D: parallel modifying tasks get distinct worktrees', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// P0-4.E: graceful fallback when worktree creation is impossible
+// P0-3 (five_goal §四): worktree creation MUST be fail-closed.
+// Previously the test asserted a "graceful fallback to parent cwd"
+// behavior — that is now EXPLICITLY FORBIDDEN. A modify task whose
+// worktree cannot be created must NOT start the sub-agent and must
+// surface as 'blocked' so the orchestrator can choose a real fallback
+// (temporary_copy, retry, or downgrade to read_only) — never a silent
+// cwd fallback that lets parallel modify agents trample each other.
 // ─────────────────────────────────────────────────────────────────────
-describe('P0-4.E: graceful fallback when worktree creation fails', () => {
-  it('falls back to parent cwd when the workspace is not a git repo', async () => {
+describe('P0-3: fail-closed when worktree creation is impossible', () => {
+  it('blocks the run when the workspace is not a git repo (no parent-cwd fallback)', async () => {
     // tmpRoot is a plain dir — no .git
     const plain = join(tmpRoot, 'no-git')
     mkdirSync(plain, { recursive: true })
     _resetWorktreeManagersForTest()
 
-    const child = recordingChildEngine('no-git-edit.txt', 'still works')
+    const child = recordingChildEngine('no-git-edit.txt', 'should not run')
     const tool = new AgentTool({
       factory: child.factory,
       parentConfig: baseConfig({ cwd: plain }),
@@ -451,10 +457,38 @@ describe('P0-4.E: graceful fallback when worktree creation fails', () => {
       { cwd: plain, permissionMode: 'auto' },
     )
 
-    // Task still runs (in parent cwd) rather than crashing.
-    expect(out.isError).toBe(false)
-    expect(child.constructedCwds).toEqual([plain])
-    expect(existsSync(join(plain, 'no-git-edit.txt'))).toBe(true)
+    // Sub-agent must NOT have been spawned.
+    expect(out.isError).toBe(true)
+    expect(child.constructedCwds).toEqual([])
+    expect(existsSync(join(plain, 'no-git-edit.txt'))).toBe(false)
+    // Structured shape — status:'blocked', retryable:true, diagnostic.
+    const structured = out as typeof out & { status?: string; retryable?: boolean; diagnostics?: { code: string; message: string }[] }
+    expect(structured.status).toBe('blocked')
+    expect(structured.retryable).toBe(true)
+    expect(structured.diagnostics?.[0]?.code).toBe('WORKTREE_CREATION_FAILED')
+  })
+
+  it('blocks the run when task_mode:"modify" cannot create a worktree', async () => {
+    const plain = join(tmpRoot, 'no-git-2')
+    mkdirSync(plain, { recursive: true })
+    _resetWorktreeManagersForTest()
+
+    const child = recordingChildEngine('no-git-edit.txt', 'should not run')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: plain }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    const out = await tool.execute(
+      { description: 'modify via task_mode', prompt: 'edit', task_mode: 'modify' },
+      { cwd: plain, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(true)
+    expect(child.constructedCwds).toEqual([])
+    const structured = out as typeof out & { status?: string }
+    expect(structured.status).toBe('blocked')
   })
 
   it('plan-mode agents skip worktree creation (read-only by definition)', async () => {
@@ -577,5 +611,178 @@ describe('P0-4.G: merge artifacts are observable', () => {
     // The worktree manager's tracking metadata is empty.
     const mgr = getWorktreeManager(gitRoot)
     expect(mgr.listWorktrees()).toEqual([])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// P0-4 (five_goal §四): task_mode enum replaces modifies_state boolean.
+// LLMs forgetting to set modifies_state:true would silently bypass
+// isolation. An explicit task_mode:'modify' value (and a default
+// verify gate) closes the loophole.
+// ─────────────────────────────────────────────────────────────────────
+describe('P0-4: task_mode:"modify" enforces isolation + verify default', () => {
+  it('task_mode:"modify" creates a worktree even without modifies_state flag', async () => {
+    const child = recordingChildEngine('task-mode.txt', 'via task_mode')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    const out = await tool.execute(
+      { description: 'modify via task_mode', prompt: 'edit', task_mode: 'modify' },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(false)
+    expect(child.constructedCwds[0]).not.toBe(gitRoot)
+    expect(child.constructedCwds[0]).toContain('.ovolv999/worktrees/')
+  })
+
+  it('task_mode:"read_only" never creates a worktree', async () => {
+    const child = recordingChildEngine('ro.txt', 'read only')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    await tool.execute(
+      { description: 'explicit ro', prompt: 'look', task_mode: 'read_only' },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(child.constructedCwds[0]).toBe(gitRoot)
+  })
+
+  it('task_mode:"modify" forces verify gate ON by default (cannot be silently bypassed)', async () => {
+    // Install a FAILING verify package.json. If the gate were off
+    // (default-on-via-modify-mode), the run would succeed; instead we
+    // expect verification_failed.
+    writeFailingPackageJson(gitRoot)
+
+    const child = recordingChildEngine('would-merge.txt', 'edit')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    const out = await tool.execute(
+      { description: 'no verify flag set', prompt: 'edit', task_mode: 'modify' },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(true)
+    const structured = out as typeof out & { status?: string }
+    expect(structured.status).toBe('verification_failed')
+    expect(String(out.content)).toMatch(/Verify Gate\] ✗/)
+  })
+
+  it('explicit verify:false overrides default for read_only tasks', async () => {
+    // read_only should not force-verify. Explicit verify:false on a
+    // read_only task means no verify gate runs at all.
+    const child = recordingChildEngine('ro-no-verify.txt', 'hi')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    const out = await tool.execute(
+      { description: 'ro explicit', prompt: 'look', task_mode: 'read_only', verify: false },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(false)
+    expect(String(out.content)).not.toMatch(/Verify Gate/)
+  })
+
+  it('modifies_state:true is treated as an alias for task_mode:"modify" (back-compat)', async () => {
+    const child = recordingChildEngine('alias.txt', 'via modifies_state')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    // No verify gate will run because the test repo has no package.json
+    // — so the default-on-verify is a no-op and we just check isolation.
+    const out = await tool.execute(
+      { description: 'alias', prompt: 'edit', modifies_state: true, verify: false },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(false)
+    expect(child.constructedCwds[0]).toContain('.ovolv999/worktrees/')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// P0-5 (five_goal §五): merge conflict → 'blocked' (NOT 'failed').
+// The sub-agent's work was sound; only the merge against a moved base
+// failed. The worktree + branch must be PRESERVED so a parent agent
+// (or human) can resolve the conflicts.
+// ─────────────────────────────────────────────────────────────────────
+describe('P0-5: delivery conflict → blocked + worktree preserved', () => {
+  it('marks the run as blocked and surfaces conflict list on merge conflict', async () => {
+    // Strategy: have the sub-agent write to a file that the parent
+    // ALSO modifies after worktree creation but before merge — the
+    // 3-way merge will then conflict.
+    writeFileSync(join(gitRoot, 'shared.txt'), 'base\n', 'utf8')
+    execSync('git add -A && git commit -m base-shared', { cwd: gitRoot, stdio: 'pipe' })
+
+    // Child writes a non-conflicting change to shared.txt — actually
+    // we want a CONFLICT, so we also move the base after worktree
+    // creation. We can't easily inject that timing through the public
+    // API, so instead the child writes the OPPOSITE line than what we
+    // then commit to main before the merge.
+    const child = recordingChildEngine('shared.txt', 'child-change\n')
+    const tool = new AgentTool({
+      factory: child.factory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    // Wrap the factory so we can move the base between worktree-creation
+    // and merge — that's the standard way to produce a real conflict.
+    const wrappedFactory = (config: EngineConfig) => {
+      const engine = child.factory(config)
+      const origRunTurn = engine.runTurn.bind(engine)
+      engine.runTurn = async () => {
+        const r = await origRunTurn()
+        // Sub-agent has committed "child-change" to shared.txt in the
+        // worktree (via the recordingChildEngine's writeFileSync +
+        // commitPendingChangesInWorktree). Now move the BASE so the
+        // merge conflicts.
+        writeFileSync(join(gitRoot, 'shared.txt'), 'parent-change\n', 'utf8')
+        execSync('git add -A && git commit -m parent-move', { cwd: gitRoot, stdio: 'pipe' })
+        return r
+      }
+      return engine
+    }
+
+    const tool2 = new AgentTool({
+      factory: wrappedFactory,
+      parentConfig: baseConfig({ cwd: gitRoot }),
+      parentRenderer: fakeRenderer(),
+    })
+
+    const out = await tool2.execute(
+      { description: 'conflicting edit', prompt: 'edit shared', task_mode: 'modify', verify: false },
+      { cwd: gitRoot, permissionMode: 'auto' },
+    )
+
+    expect(out.isError).toBe(true)
+    const structured = out as typeof out & {
+      status?: string
+      summary?: string
+      conflicts?: string[]
+      retryable?: boolean
+    }
+    expect(structured.status).toBe('blocked')
+    expect(structured.summary).toMatch(/delivery blocked/)
+    expect(structured.conflicts).toContain('shared.txt')
+    expect(structured.retryable).toBe(true)
   })
 })
