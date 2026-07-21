@@ -26,6 +26,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
+import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
 
 /** Hard cap on agent call chain depth (across nesting).
  * The depth is threaded through `EngineConfig.initialAgentDepth` so the
@@ -155,6 +156,39 @@ function appendAgentEvent(config: EngineConfig, event: Record<string, unknown>):
 // ── PermissionManager clone helper ──────────────────────────────────────────
 
 /**
+ * Commit any pending (unstaged or staged) changes inside a worktree
+ * before merging its branch back to base. Sub-agents often edit files
+ * via Write/Edit/Bash tools without explicitly running `git commit` —
+ * without this auto-commit, those edits would be lost when
+ * `git worktree remove --force` wipes the working directory, and the
+ * merge would bring back an empty branch.
+ *
+ * Best-effort: if there's nothing to commit (clean tree), the commit
+ * step is skipped silently. Commit failures are swallowed because the
+ * orchestrator may have intentionally left the worktree in a
+ * half-applied state (e.g. for review); the merge attempt below will
+ * surface a more useful error in that case.
+ */
+function commitPendingChangesInWorktree(wtPath: string, message: string): void {
+  try {
+    execSync('git add -A', { cwd: wtPath, stdio: 'pipe' })
+    // `git diff --cached --quiet` exits 0 when there's nothing staged.
+    // If anything is staged, run a commit on the sub-agent's behalf.
+    try {
+      execSync('git diff --cached --quiet', { cwd: wtPath, stdio: 'pipe' })
+    } catch {
+      // Non-zero exit means there IS something staged — commit it.
+      execSync(`git commit -m ${JSON.stringify(message)} --no-verify`, {
+        cwd: wtPath,
+        stdio: 'pipe',
+      })
+    }
+  } catch {
+    // best-effort — don't crash the finalize path on commit failure
+  }
+}
+
+/**
  * Make an independent copy of a PermissionManager so the child engine's
  * permission rules and mode never bleed back into (or get clobbered by)
  * the parent. Wrapped as a small helper to keep the call-site readable
@@ -221,6 +255,16 @@ Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterati
 Set verify: true to auto-run tsc --noEmit after the sub-agent completes code changes.
 Failed verification includes error details so you can fix immediately.
 
+## Worktree Isolation (P0-4)
+
+Set modifies_state: true for any task that edits files. The Runtime auto-creates an
+isolated git worktree on a dedicated branch, spawns the sub-agent there, and:
+  - On success + verify pass: merges the branch back to base (unless merge_on_success:false)
+  - On failure (engine error or verify fail): discards the worktree without merging
+
+Read-only tasks (default) run in the parent cwd with no worktree. The Runtime decides
+isolation, not the sub-agent — set the flag from the orchestrator.
+
 ## Rules
 - prompt must be fully self-contained (sub-agent has no parent context)
 - Sub-agent cannot call Agent (no recursion, max depth 5)
@@ -234,6 +278,8 @@ Failed verification includes error details so you can fix immediately.
           agent_config: { type: 'object', description: 'Custom config (overrides subagent_type)' },
           max_iterations: { type: 'number', description: 'Max iterations (overrides preset default)' },
           verify: { type: 'boolean', description: 'Verification gate: auto-run tsc --noEmit after completion (default false)' },
+          modifies_state: { type: 'boolean', description: 'Task edits files — Runtime auto-creates an isolated git worktree and merges on success (P0-4, default false)' },
+          merge_on_success: { type: 'boolean', description: 'When modifies_state:true, merge the worktree branch back on success (default true). Set false to keep the worktree for manual review.' },
         },
         required: ['description', 'prompt'],
       },
@@ -256,6 +302,11 @@ Failed verification includes error details so you can fix immediately.
     const description = str(input.description, 'subtask')
     const prompt      = str(input.prompt, '')
     const verify      = input.verify === true
+    // P0-4: Runtime-driven worktree isolation. The orchestrator
+    // declares whether this task mutates state; the Runtime (not
+    // the sub-agent) decides whether to spin up an isolated worktree.
+    const modifiesState  = input.modifies_state === true
+    const mergeOnSuccess = input.merge_on_success !== false
 
     if (!prompt.trim()) {
       return { content: 'Error: prompt cannot be empty', isError: true }
@@ -277,7 +328,7 @@ Failed verification includes error details so you can fix immediately.
       agentConfig.maxIterations = Math.min(input.max_iterations, 200)
     }
 
-    return this.runAgentTask(description, prompt, agentConfig, agentLabel, verify, context)
+    return this.runAgentTask(description, prompt, agentConfig, agentLabel, verify, modifiesState, mergeOnSuccess, context)
   }
 
   // ── runAgentTask — depth is derived, not mutated ─────────────────────────
@@ -296,6 +347,8 @@ Failed verification includes error details so you can fix immediately.
     agentConfig: AgentConfig,
     agentLabel: string,
     verify: boolean,
+    modifiesState: boolean,
+    mergeOnSuccess: boolean,
     context: ToolContext,
   ): Promise<ToolResult> {
     // The execute() entry point already validated the wiring is present,
@@ -351,10 +404,50 @@ Failed verification includes error details so you can fix immediately.
       ? Renderer.forFile(paneSlot.logFile)
       : (parentRenderer as Renderer)
 
+    // ── P0-4: Auto worktree isolation for state-modifying tasks ───────
+    // The Runtime (not the sub-agent) decides isolation based on the
+    // orchestrator-declared `modifies_state` flag. When set, we spawn
+    // the child in a fresh git worktree on a dedicated branch so
+    // parallel modifying agents cannot trample each other's working
+    // files. Read-only tasks (the default) skip this and run in the
+    // parent cwd — same as before.
+    //
+    // `wtInfo` is null when: (a) the task is read-only, (b) the parent
+    // cwd isn't a git repo, or (c) worktree creation failed (we fall
+    // back to running in the parent cwd with a warning rather than
+    // hard-failing — the task can still make progress). The lifecycle
+    // finalize (merge-on-success / discard-on-failure) runs in the
+    // finally block below and is a no-op when wtInfo is null.
+    let wtInfo: WorktreeInfo | null = null
+    if (modifiesState && !agentConfig.identity.planMode) {
+      const safeDesc = description.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 24) || 'task'
+      const wtName = `agent-d${nextDepth}-${agentStartTime}-${safeDesc}`
+      try {
+        const mgr = getWorktreeManager(context.cwd)
+        wtInfo = mgr.createWorktree(wtName)
+      } catch (err) {
+        // Not a git repo, or worktree add failed (path clash, disk
+        // full, etc). Surface the warning in the event log and run in
+        // the parent cwd — better than crashing the subtask.
+        appendAgentEvent(parentConfig, {
+          event: 'worktree.create_failed',
+          agent_label: agentLabel,
+          description,
+          error: (err as Error).message,
+        })
+        wtInfo = null
+      }
+    }
+    const effectiveCwd = wtInfo?.path ?? context.cwd
+
     const childConfig: EngineConfig = {
       ...parentConfig,
       agent: agentConfig,
-      cwd: context.cwd,
+      // P0-4: when a worktree was created, the child runs INSIDE it.
+      // All child tool calls (Bash/Read/Write/Edit) resolve paths
+      // against this cwd, so modifications land on the isolated
+      // branch, not the parent's working tree.
+      cwd: effectiveCwd,
       hookRunner: undefined,
       sessionDir: undefined,
       // Thread depth so the child engine's AgentTool derives the SAME
@@ -475,10 +568,13 @@ Failed verification includes error details so you can fix immediately.
       // propagate as isError to the parent — otherwise the parent has
       // no structured signal and must parse natural language to
       // discover the verification failure.
+      // P0-4: verify runs in the EFFECTIVE cwd — the worktree path when
+      // one was created — so the gate measures the isolated branch's
+      // state, not the parent's working tree.
       let verifySection = ''
       let verificationFailed = false
       if (verify && result.reason !== 'error' && !agentConfig.identity.planMode) {
-        const verifyResult = runVerification(context.cwd)
+        const verifyResult = runVerification(effectiveCwd)
         if (verifyResult) {
           const icon = verifyResult.passed ? '✓' : '✗'
           verifySection = `\n\n---\n[Verify Gate] ${icon}\n${verifyResult.output}`
@@ -492,9 +588,65 @@ Failed verification includes error details so you can fix immediately.
       }
 
       // P0-3: combined failure signal — engine error OR verify gate
-      // failure. Either way the parent must see isError:true so it
-      // can branch without parsing the natural-language report.
+      // failure. Either way the parent must see isError:true so it can
+      // branch without parsing the natural-language report.
       const failed = result.reason === 'error' || verificationFailed
+
+      // ── P0-4: worktree lifecycle finalize ──────────────────────────
+      // Success + verify pass → merge branch back to base (unless the
+      // orchestrator asked to keep the worktree for manual review).
+      // Failure → discard without merging so a broken branch can't
+      // pollute the parent's working tree. Merge conflicts surface as
+      // isError:true with the conflict message; the worktree is
+      // removed either way so we don't leak directories.
+      let worktreeSection = ''
+      let worktreeOutcome: { branch: string; merged: boolean } | undefined
+      if (wtInfo) {
+        const capturedBranch = wtInfo.branch
+        const capturedName = wtInfo.name
+        const capturedPath = wtInfo.path
+        const mgr = getWorktreeManager(context.cwd)
+        const shouldMerge = !failed && mergeOnSuccess
+        // "Keep for review" path: orchestrator asked to defer the
+        // merge. Leave the worktree + branch intact so the parent
+        // can inspect / merge / discard later via the worktree tools.
+        const keepForReview = !failed && !mergeOnSuccess
+        try {
+          if (shouldMerge) {
+            // P0-4: auto-commit any uncommitted edits the sub-agent
+            // left in the worktree BEFORE merging. Without this, an
+            // agent that wrote files via Write/Edit but never ran
+            // `git commit` would have its work silently dropped by
+            // `git worktree remove --force`.
+            commitPendingChangesInWorktree(capturedPath, `agent: ${description}`)
+            mgr.removeWorktree(capturedName, { merge: true, deleteBranch: true })
+            worktreeSection = `\n\n---\n[Worktree] merged ${capturedBranch} → ${wtInfo.baseBranch}`
+            worktreeOutcome = { branch: capturedBranch, merged: true }
+          } else if (keepForReview) {
+            // Don't call removeWorktree — that would wipe the dir.
+            worktreeSection = `\n\n---\n[Worktree] kept ${capturedBranch} at ${capturedPath} (merge_on_success:false)`
+            worktreeOutcome = { branch: capturedBranch, merged: false }
+          } else {
+            // Failure path: discard without merging.
+            mgr.removeWorktree(capturedName, { merge: false, deleteBranch: true })
+            worktreeSection = `\n\n---\n[Worktree] discarded ${capturedBranch} (task failed)`
+            worktreeOutcome = { branch: capturedBranch, merged: false }
+          }
+        } catch (err) {
+          // Merge conflict or worktree removal failure. Surface as an
+          // error extension but do NOT mask the original result — the
+          // parent already knows the task failed via `failed`.
+          worktreeSection = `\n\n---\n[Worktree] finalize failed: ${(err as Error).message}`
+          worktreeOutcome = { branch: capturedBranch, merged: false }
+        }
+        // wtInfo is consumed — null it so the catch/finally paths
+        // below don't double-finalize. NOTE: in the keep-for-review
+        // path the worktree + branch are intentionally left alive,
+        // but we still null wtInfo so the finally safety-net doesn't
+        // force-discard them.
+        wtInfo = null
+      }
+
       mainRenderer.agentDone(description, !failed)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
 
@@ -503,6 +655,7 @@ Failed verification includes error details so you can fix immediately.
         success: !failed,
         reason: result.reason,
         verification_failed: verificationFailed || undefined,
+        worktree: worktreeOutcome,
         duration_ms: durationMs,
         call_depth: nextDepth,
         output_preview: result.output.slice(0, 500),
@@ -510,7 +663,7 @@ Failed verification includes error details so you can fix immediately.
 
       if (!result.output) {
         return {
-          content: `[${agentLabel}] "${description}" done (${result.reason}), no text output.${verifySection}`,
+          content: `[${agentLabel}] "${description}" done (${result.reason}), no text output.${verifySection}${worktreeSection}`,
           isError: failed,
         }
       }
@@ -526,12 +679,23 @@ Failed verification includes error details so you can fix immediately.
       }
 
       return {
-        content: `[${agentLabel}] "${description}":\n\n${result.output}${verifySection}`,
+        content: `[${agentLabel}] "${description}":\n\n${result.output}${verifySection}${worktreeSection}`,
         isError: failed,
       }
     } catch (err: unknown) {
       mainRenderer.agentDone(description, false)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+      // P0-4: a thrown error means the subtask failed mid-run — discard
+      // the worktree without merging so a half-applied branch can't leak
+      // into the parent's working tree.
+      if (wtInfo) {
+        try {
+          getWorktreeManager(context.cwd).removeWorktree(wtInfo.name, { deleteBranch: true })
+        } catch {
+          // best-effort cleanup; the error return below takes priority
+        }
+        wtInfo = null
+      }
       appendAgentEvent(parentConfig, {
         event: 'delegation.error',
         agent_label: agentLabel,
@@ -585,6 +749,19 @@ Failed verification includes error details so you can fix immediately.
         childEngine.dispose?.()
       } catch {
         // best-effort teardown; never throw out of the host's finally
+      }
+      // P0-4 safety net: if we exit through the pre-aborted early
+      // return (or any path that nulls `this.factory` mid-flight), the
+      // success/catch finalize above never ran. Discard the worktree
+      // here too so we never leak an isolated branch. The success path
+      // already nulls wtInfo after merging, so this only fires when
+      // finalize was skipped.
+      if (wtInfo) {
+        try {
+          getWorktreeManager(context.cwd).removeWorktree(wtInfo.name, { deleteBranch: true })
+        } catch {
+          // best-effort; finally must not throw
+        }
       }
       // P0-9: remove the subtask from activeSubtasks on EVERY exit
       // path so the runtime surface cannot accumulate stale entries.
