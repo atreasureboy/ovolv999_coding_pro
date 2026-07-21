@@ -352,7 +352,7 @@ export const plugin: Plugin = {
 ### 安装
 
 ```bash
-git clone https://github.com/atreasureboy/ovolv999_coding.git
+git clone https://github.com/atreasureboy/ovolv999_coding_pro.git
 cd ovolv999_coding
 pnpm install
 ```
