@@ -236,7 +236,26 @@ export type CreateRunInput =
     ExecutionRun,
     | 'status' | 'phase' | 'acceptance' | 'budget' | 'resources'
     | 'artifacts' | 'worker' | 'verification' | 'error' | 'parentRunId'
+    | 'createdAt' | 'updatedAt'
   >>
+  // Optional runId is only used by crash-recovery replay — callers
+  // normally leave this unset and let the registry mint a fresh UUID.
+  & { runId?: string }
+
+/**
+ * Internal shape emitted to an optional EventBus (Phase 3). The
+ * registry itself doesn't import the event module — it just calls
+ * `onEmit?.(raw)` on every create/transition/update. The bus (in
+ * executionRunEvents.ts) decorates this into a typed envelope,
+ * persists, and fans out. Setting `onEmit = undefined` silences
+ * emission (used during crash-recovery replay).
+ */
+export type RegistryEmitHook = (raw: {
+  kind: 'create' | 'transition' | 'update'
+  run: ExecutionRun
+  from?: RunStatus
+  to?: RunStatus
+}) => void
 
 /**
  * In-memory ExecutionRun registry. Round 5 will add a persistent
@@ -248,14 +267,24 @@ export type CreateRunInput =
  * ExecutionRun object's status field directly. (The objects are
  * frozen on return to enforce this at runtime; structural updates go
  * through `update()` / `transition()`.)
+ *
+ * Round 5: an optional `onEmit` hook lets an ExecutionRunEventBus
+ * observe every create/transition/update without the registry knowing
+ * about JSONL or subscribers. The hook is set externally by the bus.
  */
 export class ExecutionRunRegistry {
   private readonly runs = new Map<string, ExecutionRun>()
+  /**
+   * Event hook (Phase 3). Set by ExecutionRunEventBus to receive
+   * every create/transition/update. Undefined = silent (recovery
+   * replay uses this to avoid re-emitting historical events).
+   */
+  onEmit?: RegistryEmitHook
 
   /** Create and register a new run. Initial status defaults to `queued`. */
   create(input: CreateRunInput): ExecutionRun {
     const now = new Date().toISOString()
-    const runId = randomUUID()
+    const runId = input.runId ?? randomUUID()
     if (this.runs.has(runId)) {
       throw new Error(`ExecutionRun already exists: ${runId}`)
     }
@@ -274,11 +303,13 @@ export class ExecutionRunRegistry {
       artifacts: input.artifacts ?? [],
       verification: input.verification,
       error: input.error,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now,
     }
     this.runs.set(runId, run)
-    return this.freeze(run)
+    const frozen = this.freeze(run)
+    this.onEmit?.({ kind: 'create', run: frozen })
+    return frozen
   }
 
   /** Get a run by id. Returns undefined when not found. */
@@ -322,6 +353,7 @@ export class ExecutionRunRegistry {
     if (!canTransition(run.status, to)) {
       throw new InvalidRunTransition(runId, run.status, to)
     }
+    const from = run.status
     const updated: ExecutionRun = {
       ...run,
       ...patch,
@@ -329,7 +361,9 @@ export class ExecutionRunRegistry {
       updatedAt: new Date().toISOString(),
     }
     this.runs.set(runId, updated)
-    return this.freeze(updated)
+    const frozen = this.freeze(updated)
+    this.onEmit?.({ kind: 'transition', run: frozen, from, to })
+    return frozen
   }
 
   /**
@@ -350,7 +384,9 @@ export class ExecutionRunRegistry {
       updatedAt: new Date().toISOString(),
     }
     this.runs.set(runId, updated)
-    return this.freeze(updated)
+    const frozen = this.freeze(updated)
+    this.onEmit?.({ kind: 'update', run: frozen })
+    return frozen
   }
 
   /** Remove a run from the registry (administrative/test use only). */
