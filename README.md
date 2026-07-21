@@ -1,13 +1,14 @@
-# ovolv999 — Agent 基座
+# ovolv999 — 超级个人编码工具
 
 <div align="center">
 
-**统一 Harness · 模块化能力 · 流式引擎 · 并发调度 · 配置驱动角色**
+**统一 Harness · 模块化能力 · 流式引擎 · 并发调度 · 三层记忆 · 37 工具 · 83 命令**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-974%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-3424%20passed-brightgreen)]()
+[![Test Files](https://img.shields.io/badge/Test%20Files-139-blue)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -15,99 +16,117 @@
 
 ## 简介
 
-ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code，核心设计参考 AgentOS 架构。
+ovolv999 是一个**纯 Agent 基座框架**，仿 Claude Code 架构，核心设计为"超级个人编码工具"。
 
-**所有 Agent 共享同一套运行时（Harness），通过启用/禁用模块获得差异化能力。** 不存在 `agent_type` 枚举——角色是 `AgentConfig`（identity + modules + tools）的组合配置。
+所有 Agent 共享同一套运行时（Harness），通过启用/禁用模块获得差异化能力。不存在 `agent_type` 枚举——角色是 `AgentConfig`（identity + modules + tools）的组合配置。
+
+### 核心特性
 
 - **统一 Harness** — 所有 Agent 走同一套 Boot Sequence，按模块配置差异化执行
 - **模块化能力** — memory / critic / workspace / reflection 四个可组合模块
 - **配置驱动角色** — 探索者、规划者、审查者 = 不同 AgentConfig 配置实例，零代码新增角色
-- **Memory 三原语** — `memory_write` / `memory_search` / `memory_recall`，Agent 主动操作长时记忆
+- **三层记忆系统** — Semantic（语义知识）+ Episodic（过程轨迹）+ KnowledgeBase（结构化知识库）
 - **来源归因 + 冲突解决** — `user_stated > agent_inferred > tool_observed` 优先级链
 - **验证闸门** — 子 agent 完成代码修改后自动按项目 scripts / 语言工具验证（No Tuple, No Merge）
-- **Session 整合** — REPL 退出时自动总结 episodic 经验写入 SemanticMemory（关闭学习闭环）
-- **调用链追踪** — 子 agent spawn 深度追踪（max 5），防递归 + 审计
-- **Skill 懒加载** — Boot 时注入技能索引，LLM 按需通过 `load_skill` 加载
-- **外部 Worker** — `ClaudeCode` 工具和 `/workers` 命令通过 tmux 指挥本机 Claude Code CLI 执行窄任务
-- **生命周期 Hooks** — 6 种：PreToolCall / PostToolCall / OnError / OnComplete / OnContextOverflow / UserPromptSubmit
-- **工具元信息** — Tool 自声明 readOnly / concurrencySafe / mutatesState / longRunning / requiresNetwork，运行时据此过滤与调度
-- **统一权限管理** — PermissionManager 接入 Engine 执行路径，`/permissions` 可查看、切换模式、添加 allow/deny 规则并持久化到 `.ovogo/settings.json`
-- **并发调度** — 只读/安全工具并行 (Promise.all)，状态工具串行，支持 per-input `isConcurrencySafe`
-- **后台任务生命周期** — Bash 后台任务统一进入 TaskCreate/TaskGet/TaskList/TaskStop 管理
+- **并发调度** — 只读/安全工具并行 (Promise.all)，状态工具串行
 - **流式引擎** — Streaming LLM API，tool_call 解析 → 分区调度 → 结果注入 → 循环
-- **上下文预算** — 统一百分比阈值 (70% warn / 85% compact)，**含系统提示词 token**，tool_call 对保护
-- **API 重试** — SDK 指数退避 5 次重试 (429/5xx/ECONNRESET)，120s 超时
-- **Poor/Budget 模式** — `/poor on` 跳过 critic 自纠错与 reflection 知识提取等非必要 LLM 调用，显著降低 token 消耗（token 受限场景）
-- **Plan 工具闭环** — `EnterPlanMode`（主动进入只读分析）/ `ExitPlanMode`（提交计划待批准）/ `VerifyPlanExecution`（实现后自检 build/lint/test）
-- **MCP 客户端（stdio）** — 经 `.ovogo/settings.json` 的 `mcp.servers` 连接任意 stdio MCP server，工具以 `mcp__<server>__<tool>` 命名空间动态注入（零新依赖）
+- **Plan 模式** — `EnterPlanMode` / `ExitPlanMode` / `VerifyPlanExecution` 闭环
+- **MCP 客户端** — stdio + HTTP transport，OAuth2 PKCE 授权，工具以 `mcp__<server>__<tool>` 注入
+- **沙箱执行** — 3 级安全策略（permissive/standard/strict），macOS sandbox-exec + Linux bubblewrap
+- **进程内 LSP** — tsserver / pylsp / rust-analyzer / gopls，JSON-RPC 2.0，诊断 + 符号搜索
+- **SSH 远程** — SshProfile 管理，rsync 同步，远程 agent 执行
+- **后台会话** — `--bg` 启动 detached 会话，`ps/attach/logs/stop/rm/clean` CLI 管理
+- **上下文管理** — microCompact + snipCompact + autoCompact 三级策略，含系统提示词 token
+- **Budget + Effort** — token 预算控制 + 自动 effort 分级
+- **Auto-Classifier** — 自动将用户请求分类为 code/search/debug/general，选择最优 effort
+- **Auto-Dream** — 空闲时后台知识整理与经验巩固
+- **MagicDocs** — 自动从代码提取项目文档（7 种提取器：overview/api/models/config/decisions/patterns/dependencies）
+- **遥测** — opt-in 本地分析，14 种事件类型，聚合统计
+- **设置同步** — AES-256-GCM 加密，git/file 传输，跨机器配置同步
+- **系统健康检查** — 13 项环境检测（Node/API/磁盘/Git/权限等）
+- **自动更新** — semver 比较，npm dist-tag 检查，ignore-list
+- **缓存统计** — prompt-cache hit/miss 追踪，per-model 分解，成本节约
+- **IDE 检测** — 9 种编辑器检测（VSCode/IntelliJ/Vim/Emacs/...），路径转换，扩展推荐
+- **生命周期 Hooks** — 6 种：PreToolCall / PostToolCall / OnError / OnComplete / OnContextOverflow / UserPromptSubmit
+- **Skill 系统** — frontmatter 解析 + 懒加载 + 语义搜索 + auto-suggestion
+- **Plugin 系统** — 动态加载 npm 包/本地路径插件
+- **Permission 系统** — allow/deny 规则 + glob 匹配 + 持久化
+- **命令历史 + 书签** — 跨 session 命令历史 + 位置书签
+- **文件历史 / Rewind** — 每次编辑快照，可回滚
+- **ACP 协议** — Agent Communication Protocol server
+- **Vim 模式** — normal/insert/visual 模式，keybinding 可定制
+- **Ink/React UI** — 可选的 `--ink` 富终端 UI
 - **零领域绑定** — 核心是 Agent 基础设施，业务逻辑通过 Module + Tool 插件注入
 
 ## 架构全景
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                        ovolv999 — 统一 Harness + 模块化 Agent 基座             ║
-║               build OK · eslint OK · 28 test files · 637 tests passed        ║
-║               Runtime deps: openai · glob · zod (仅 3 个)                     ║
-║               API retry: 5x exponential backoff · 120s timeout                ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  ┌─ AgentConfig ─────────────────────────────────────────────────────────┐   ║
-║  │  identity(SOUL) + modules[] + tools[] + skills[] + limits             │   ║
-║  │  ↓ preset (explore/plan/code-reviewer/general-purpose) 或 custom      │   ║
-║  └───────────────────────────────────────────────────────────────────────┘   ║
-║                                  │                                           ║
-║  ┌───────────────────────────────▼───────────────────────────────────────┐   ║
-║  │                    ExecutionEngine (统一 Harness)                       │   ║
-║  │                                                                        │   ║
-║  │  ┌─ Boot Sequence (7 steps) ───────────────────────────────────────┐  │   ║
-║  │  │ 1. applyAgentToConfig  →  合并 agent 配置                         │  │   ║
-║  │  │ 2. deriveEnabledModules → 自动推导或显式指定                      │  │   ║
-║  │  │ 3. modules.boot()      → 并行启动，收集 prompt/tools/context      │  │   ║
-║  │  │ 4. buildSystemPrompt   → 组装 identity + module sections          │  │   ║
-║  │  │ 5. getToolDefinitions  → 白名单 + planMode 双重过滤               │  │   ║
-║  │  │ 6. buildToolContext    → 基础 + module patches + toolNames        │  │   ║
-║  │  │ 7. boot_context 轨迹   → EventLog 记录启动摘要                    │  │   ║
-║  │  └──────────────────────────────────────────────────────────────────┘  │   ║
-║  │                                                                        │   ║
-║  │  ┌─ Engine Loop ────────────────────────────────────────────────────┐  │   ║
-║  │  │  modules.onIteration()  ← CriticModule 每 N 轮纠错                │  │   ║
-║  │  │  evaluateContextBudget() ← 统一百分比阈值 (70%/85%)               │  │   ║
-║  │  │  callLLM() → streaming → consumeStream()                          │  │   ║
-║  │  │  partitionToolCalls() → parallel(safe) / serial(stateful)         │  │   ║
-║  │  │  executeToolCall() → 白名单硬执行 + planMode 硬执行                │  │   ║
-║  │  │  modules.onToolCall()  ← MemoryModule 写 episodic (成功+失败)     │  │   ║
-║  │  │  hooks: PreToolCall / PostToolCall                                │  │   ║
-║  │  └──────────────────────────────────────────────────────────────────┘  │   ║
-║  │                                                                        │   ║
-║  │  ┌─ Post-Run ───────────────────────────────────────────────────────┐  │   ║
-║  │  │  modules.onComplete()  ← ReflectionModule LLM 知识提取            │  │   ║
-║  │  │  hooks: OnComplete / OnError / OnContextOverflow                  │  │   ║
-║  │  └──────────────────────────────────────────────────────────────────┘  │   ║
-║  │                                                                        │   ║
-║  │  Abort: softAbort(ESC) / hardAbort(Ctrl+C)                            │   ║
-║  └────────────────────────────────────────────────────────────────────────┘   ║
-║                                                                              ║
-║  ┌─ Modules (4) ──────┐  ┌─ Tools (28 + MCP) ──┐  ┌─ Memory ───────────┐    ║
-║  │ memory             │  │ Bash / file tools     │  │ Semantic:          │    ║
-║  │  ├ boot: 相关性检索│  │ Web / Agent / Skill   │  │  关键词去重 +       │    ║
-║  │  ├ tools: write/   │  │ Task lifecycle tools  │  │  来源优先级冲突解决  │    ║
-║  │  │   search/recall │  │ AskUser / Plan / Sleep│  │ Episodic:          │    ║
-║  │  └ onToolCall:     │  │ Notebook/Tmux/Claude │  │  成功+失败工具轨迹  │    ║
-║  │     episodic 写入  │  │ 3 Memory tools        │  │ Boot: 相关性 top-10│    ║
-║  │ critic             │  │ metadata-driven       │  │ Exit: session 整合  │    ║
-║  │  └ onIteration:    │  │ scheduling/filtering  │  └────────────────────┘    ║
-║  │     每 N 轮纠错    │  │                       │                             ║
-║  │ workspace          │  └──────────────────────┘  ┌─ Communication ─────┐   ║
-║  │  └ boot: sessionDir│                              │ Agent (invoke):     │   ║
-║  │ reflection         │  ┌─ Verification Gate ───┐   │  AgentConfig 驱动   │   ║
-║  │  ├ dep: memory     │  │ verify:true           │   │  callDepth max 5   │   ║
-║  │  └ onComplete:     │  │  → scripts/语言检查    │   │  verify 闸门       │   ║
-║  │     LLM 知识提取   │  │  → 结果附带验证状态    │   │  EventLog 审计     │   ║
-║  └────────────────────┘  └───────────────────────┘  └─────────────────────┘   ║
-║                                                                              ║
-║  输出: sessions/session_TIMESTAMP/ → 会话产物、EventLog、agent-logs          ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                   ovolv999 — 统一 Harness + 模块化 Agent 基座               ║
+║              139 test files · 3424 tests · 37 tools · 83 commands          ║
+║              Runtime: openai · glob · zod · ink · react                     ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║                                                                           ║
+║  ┌─ AgentConfig ──────────────────────────────────────────────────────┐   ║
+║  │  identity(SOUL) + modules[] + tools[] + skills[] + limits           │   ║
+║  │  ↓ preset (explore/plan/code-reviewer/general-purpose) 或 custom     │   ║
+║  └────────────────────────────────────────────────────────────────────┘   ║
+║                                  │                                        ║
+║  ┌───────────────────────────────▼────────────────────────────────────┐   ║
+║  │                    ExecutionEngine (统一 Harness)                    │   ║
+║  │                                                                     │   ║
+║  │  ┌─ Boot Sequence (7 steps) ────────────────────────────────────┐  │   ║
+║  │  │ 1. applyAgentToConfig  →  合并 agent 配置                      │  │   ║
+║  │  │ 2. deriveEnabledModules → 自动推导或显式指定                   │  │   ║
+║  │  │ 3. modules.boot()      → 并行启动，收集 prompt/tools/context   │  │   ║
+║  │  │ 4. buildSystemPrompt   → 组装 identity + module sections       │  │   ║
+║  │  │ 5. getToolDefinitions  → 白名单 + planMode 双重过滤            │  │   ║
+║  │  │ 6. buildToolContext    → 基础 + module patches + toolNames     │  │   ║
+║  │  │ 7. boot_context 轨迹   → EventLog 记录启动摘要                 │  │   ║
+║  │  └────────────────────────────────────────────────────────────────┘  │   ║
+║  │                                                                     │   ║
+║  │  ┌─ Engine Loop ─────────────────────────────────────────────────┐  │   ║
+║  │  │  modules.onIteration()   ← CriticModule 每 N 轮纠错            │  │   ║
+║  │  │  autoClassifier()        ← 自动分类请求类型 + effort            │  │   ║
+║  │  │  evaluateContextBudget() ← 统一 70%/85% (含系统提示词)         │  │   ║
+║  │  │    ├─ 50%: snipCompact   ← 手术式裁剪大 tool result            │  │   ║
+║  │  │    ├─ 70%: warn          ← 提醒用户                            │  │   ║
+║  │  │    └─ 85%: autoCompact   ← LLM 摘要压缩                        │  │   ║
+║  │  │  callLLM() → streaming → consumeStream()                       │  │   ║
+║  │  │  partitionToolCalls() → parallel(safe) / serial(stateful)      │  │   ║
+║  │  │  executeToolCall() → 白名单 + planMode + sandbox 执行          │  │   ║
+║  │  │  modules.onToolCall()   ← MemoryModule 写 episodic             │  │   ║
+║  │  │  hooks: PreToolCall / PostToolCall                             │  │   ║
+║  │  └────────────────────────────────────────────────────────────────┘  │   ║
+║  │                                                                     │   ║
+║  │  ┌─ Post-Run ────────────────────────────────────────────────────┐  │   ║
+║  │  │  modules.onComplete()  ← ReflectionModule LLM 知识提取         │  │   ║
+║  │  │  hooks: OnComplete / OnError / OnContextOverflow               │  │   ║
+║  │  │  consolidateSession() ← episodic → SemanticMemory              │  │   ║
+║  │  └────────────────────────────────────────────────────────────────┘  │   ║
+║  │                                                                     │   ║
+║  │  Abort: softAbort(ESC) / hardAbort(Ctrl+C)                         │   ║
+║  └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                           ║
+║  ┌─ Modules (4) ──┐  ┌─ Tools (37) ────────┐  ┌─ Memory (3 层) ──────┐  ║
+║  │ memory         │  │ Bash/Read/Write/Edit │  │ Semantic: 关键词检索  │  ║
+║  │ critic         │  │ Glob/Grep/Todo       │  │ Episodic: 工具轨迹    │  ║
+║  │ workspace      │  │ Web* /Agent/Skill    │  │ KnowledgeBase: 结构化 │  ║
+║  │ reflection     │  │ Plan/Sleep/Snip      │  └──────────────────────┘  ║
+║  └────────────────┘  │ Worktree/Goal        │                             ║
+║                      │ Brief/CtxInspect     │  ┌─ Integration ─────────┐  ║
+║  ┌─ MCP Client ───┐  │ TerminalCapture      │  │ LSP (in-process)      │  ║
+║  │ stdio + HTTP   │  │ WebBrowser           │  │ SSH Remote            │  ║
+║  │ OAuth2 PKCE    │  │ PushNotification     │  │ Sandbox (3 levels)    │  ║
+║  │ Resources      │  │ Task*(5)/Notebook    │  │ Background Sessions   │  ║
+║  └────────────────┘  │ ClaudeCode/Diag      │  │ MagicDocs             │  ║
+║                      │ MCP Resources(2)     │  │ Telemetry             │  ║
+║  ┌─ Commands ────┐  └──────────────────────┘  │ Settings Sync         │  ║
+║  │ 83 built-in   │                            └──────────────────────┘  ║
+║  └───────────────┘                                                      ║
+║                                                                           ║
+║  输出: sessions/session_TIMESTAMP/ → 会话产物、EventLog、agent-logs       ║
+╚═══════════════════════════════════════════════════════════════════════════╝
 ```
 
 ## 核心概念
@@ -149,7 +168,7 @@ const agentConfig: AgentConfig = {
 | `general-purpose` | `{memory,workspace}` | 全工具（排除 Agent 防递归） | 通用子任务 |
 | 自定义 | 任意组合 | 任意子集 | 零代码新增角色 |
 
-### Memory System — 来源归因 + 冲突解决 + 整合闭环
+### Memory System — 三层记忆 + 来源归因 + 整合闭环
 
 ```
 写入 (memory_write):
@@ -169,34 +188,17 @@ Session 整合 (REPL 退出):
 ### Verification Gate — 验证闸门 (No Tuple, No Merge)
 
 ```typescript
-// 主 agent 派子 agent 实现代码后自动验证
 Agent({
   description: "实现登录功能",
   prompt: "...",
   subagent_type: "general-purpose",
   verify: true   // ← 完成后自动跑 package scripts 或语言检查
 })
-// 结果包含:
-// [验证闸门] ✓ build/lint/test — passed
-// 或
-// [验证闸门] ✗ lint — FAILED + 错误详情
 ```
 
 验证命令优先读取 `package.json` scripts：`typecheck` 或 `build`、`lint`、`test`。没有 scripts 时按项目类型回退到 `npx tsc --noEmit`、`go vet ./...`、`cargo check` 或 `python -m compileall -q .`。
 
-### Agent Communication — 调用链追踪
-
-```
-主 agent (depth=0)
-  └─ spawn general-purpose (depth=1)
-       └─ EventLog: invoke_sent {call_depth: 1}
-       └─ 子 agent 执行...
-       └─ EventLog: invoke_completed {call_depth: 1, duration_ms, output_preview}
-
-调用深度 max 5 → 超限拒绝 (防递归)
-```
-
-## 并发分区调度
+### 并发分区调度
 
 ```
 tool_calls [A, B, C, D, E, F]
@@ -212,6 +214,41 @@ tool_calls [A, B, C, D, E, F]
      └─ Batch 3 (并行): [E=Bash, F=Agent]
            → Promise.all([E, F]) → 同时执行
 ```
+
+## 工具参考（37 个）
+
+| 类别 | 工具 | 说明 |
+|------|------|------|
+| **文件** | Read, Write, Edit, NotebookEdit | 文件读写编辑 + Jupyter notebook |
+| **搜索** | Glob, Grep | 文件名匹配 + 内容正则搜索 |
+| **执行** | Bash, ShellSession, TmuxSession | 跨平台 shell + 持久会话 |
+| **Web** | WebFetch, WebSearch, WebBrowser | URL 抓取 + 搜索 + 结构化 HTML 解析 |
+| **Agent** | Agent, ClaudeCode | 子 agent 调用 + 外部 Claude Code worker |
+| **Plan** | EnterPlanMode, ExitPlanMode, VerifyPlanExecution | 计划模式闭环 |
+| **Task** | TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop | 后台任务生命周期 |
+| **Memory** | memory_write, memory_search, memory_recall | 三原语（MemoryModule 提供） |
+| **Worktree** | EnterWorktree, ExitWorktree, ListWorktrees | Git worktree 管理 |
+| **Skill** | load_skill, Snip | 技能懒加载 + 上下文裁剪 |
+| **诊断** | Diagnostics, Goal, Brief, CtxInspect | LSP 诊断 + 目标 + 会话快照 + token 分析 |
+| **通知** | PushNotification, TerminalCapture, Sleep | 系统通知 + tmux 截屏 + 延时 |
+| **MCP** | ListMcpResources, ReadMcpResource | MCP 资源读取 |
+| **其他** | AskUser, TodoWrite | 用户交互 + 任务清单 |
+
+## 斜杠命令（83 个）
+
+| 类别 | 命令 |
+|------|------|
+| **会话** | `/exit` `/clear` `/reset` `/resume` `/sessions` `/status` `/context` `/cost` |
+| **上下文** | `/compact` `/snip` `/rewind` `/undo` `/retry` `/export` `/audit` `/snapshot` |
+| **模式** | `/mode` `/poor` `/vim` `/style` `/effort` `/budget` `/model` `/models` |
+| **工具/权限** | `/permissions` `/config` `/files` `/cwd` `/tasks` `/workers` `/plugins` |
+| **搜索/知识** | `/search` `/knowledge` `/skill-save` `/skills` `/suggest` `/cmd-history` `/bookmark` `/snippet` |
+| **代码/Git** | `/diff` `/commit` `/git` `/branch` `/metrics` `/diff-browser` `/review` `/security-review` |
+| **诊断** | `/doctor` `/health` `/diagnostics` `/hooks` `/goal` `/transcript` `/scan` `/debug-tool-call` |
+| **安全/沙箱** | `/sandbox` `/vault` `/permissions` |
+| **远程/同步** | `/sync` `/ssh` `/lsp` `/update` `/cache` `/ide` |
+| **团队/记忆** | `/team-memory` `/dream` `/messages` `/telemetry` `/magic-docs` |
+| **系统** | `/init` `/version` `/copy` `/help` `/history` `/keybindings` `/workflow` `/onboard` `/daemon` `/schedule` `/timer` `/profile` `/notify` `/share` |
 
 ## 如何扩展
 
@@ -280,7 +317,7 @@ Agent({ description: '审计认证模块', prompt: '...', agent_config: config }
 
 ### 方式 4: 添加自定义 Skill
 
-在 `.ovogo/skills/` 下创建 Markdown 文件:
+在 `.opencode/skills/` 下创建 Markdown 文件:
 
 ```markdown
 ---
@@ -291,7 +328,24 @@ tools: Bash, Read
 检查 staging 环境，确认测试通过后部署到生产...
 ```
 
-LLM 可通过 `load_skill("deploy")` 按需加载。
+LLM 可通过 `load_skill("deploy")` 按需加载。支持语义搜索匹配最相关技能。
+
+### 方式 5: 编写 Plugin
+
+```typescript
+// my-plugin/index.ts
+import type { Plugin } from '../core/plugins.js'
+
+export const plugin: Plugin = {
+  name: 'my-plugin',
+  version: '1.0.0',
+  tools: [myCustomTool],
+  modules: [myModule],
+  setup(ctx) { /* 初始化 */ },
+}
+```
+
+通过 `.ovogo/settings.json` 的 `plugins` 字段或 `/plugins` 命令注册。
 
 ## 快速开始
 
@@ -322,6 +376,49 @@ npx tsx bin/ovogogogo.ts "修复 src/core 的类型错误"
 
 # 指定模型和工作目录
 npx tsx bin/ovogogogo.ts -m claude-sonnet-4-6 --cwd /my/project
+
+# 后台会话模式
+npx tsx bin/ovogogogo.ts "长任务" --bg
+
+# 后台会话管理
+ovolv999 ps           # 列出所有后台会话
+ovolv999 attach <id>  # 附加到后台会话
+ovolv999 logs <id>    # 查看日志
+ovolv999 stop <id>    # 停止会话
+ovolv999 clean        # 清理已终止会话
+
+# 构建后使用全局命令
+npm run build
+npm link
+ovolv999 "任务描述"
+```
+
+### 配置文件
+
+ovolv999 读取多级配置（优先级从高到低）：
+
+1. **`.opencode/opencode.json`** — 项目级配置
+2. **`~/.config/opencode/opencode.json`** — 用户级配置
+3. **环境变量** — `OPENAI_API_KEY` / `OVOGO_MODEL` / `OPENAI_BASE_URL`
+
+```jsonc
+// .opencode/opencode.json 示例
+{
+  "model": "claude-sonnet-4-6-20250514",
+  "effort": "high",
+  "permissions": {
+    "mode": "default",
+    "allow": ["Read", "Glob", "Grep"],
+    "deny": []
+  },
+  "mcp": {
+    "servers": {
+      "my-server": { "command": "npx", "args": ["my-mcp-server"] }
+    }
+  },
+  "sandbox": { "level": "standard" },
+  "telemetry": { "enabled": false }
+}
 ```
 
 ## 项目结构
@@ -329,61 +426,140 @@ npx tsx bin/ovogogogo.ts -m claude-sonnet-4-6 --cwd /my/project
 ```
 ovolv999/
 ├── bin/
-│   └── ovogogogo.ts           # CLI + REPL + 模块注册 + session 整合
+│   └── ovogogogo.ts                # CLI 入口 + REPL + session subcommands + --bg
 ├── src/
-│   ├── core/                           # 引擎核心
-│   │   ├── engine.ts                   # 统一 Harness — Boot Sequence + Module 集成
-│   │   ├── types.ts                    # EngineConfig / Tool metadata / IHookRunner
-│   │   ├── module.ts                   # AgentModule 接口 (4 生命周期钩子)
-│   │   ├── moduleRegistry.ts           # 工厂注册 + 依赖解析 + 环检测
-│   │   ├── agentPresets.ts             # 4 preset + resolveAgentConfig + applyAgentToConfig
-│   │   ├── compact.ts                  # 上下文压缩 + strategy + tool_call 对保护
-│   │   ├── semanticMemory.ts           # 语义记忆 + 来源优先级 + hash 去重
-│   │   ├── episodicMemory.ts           # 过程记忆 (成功+失败轨迹)
-│   │   ├── permissionSystem.ts         # 权限模式 + allow/deny 规则
-│   │   ├── claudeCodeWorkerManager.ts  # tmux 外部 Claude Code worker 管理
-│   │   ├── backgroundTaskManager.ts    # 后台任务生命周期
-│   │   ├── fileHistory.ts              # 文件编辑历史 / rewind
-│   │   ├── queryStateMachine.ts        # 显式查询状态机
-│   │   ├── costTracker.ts              # token/cost 统计
-│   │   ├── eventLog.ts                 # 不可变审计流
-│   │   └── strings.ts                  # str() 安全转换 helper
-│   ├── modules/                        # 内置能力模块
-│   │   ├── memory.ts                   # 相关性检索 + 3 memory tools + episodic 写入
-│   │   ├── critic.ts                   # 每 N 轮 LLM 纠错
-│   │   ├── workspace.ts                # sessionDir 注入
-│   │   └── reflection.ts               # per-turn 知识提取 + session-level 整合
-│   ├── tools/                          # 工具层
-│   │   ├── agent.ts                    # AgentConfig 驱动 + 验证闸门 + 调用链追踪
-│   │   ├── claudeCode.ts               # 外部 Claude Code worker 工具
-│   │   ├── loadSkill.ts                # 技能懒加载 + 权限检查
-│   │   ├── bash.ts                     # 跨平台 shell + 后台任务接入
-│   │   ├── tasks.ts                    # TaskCreate/Get/List/Update/Stop
-│   │   └── ...                         # Read/Write/Edit/Glob/Grep/Todo/Web/Session/Notebook
-│   ├── prompts/                        # 提示词 (3 files)
-│   │   ├── system.ts                   # 系统提示词组装 + skill 索引注入
-│   │   ├── tools.ts                    # 工具描述常量
-│   │   └── critic.ts                   # Critic 纠错提示词
-│   ├── config/                         # 配置 (3 files)
-│   │   ├── hooks.ts                    # 6 种 Hook + HookRunner + NoopHookRunner
-│   │   ├── settings.ts                 # JSON 解析 + TaskContext + 权限持久化
-│   │   └── ovogomd.ts                  # OVOGO.md 多级加载
-│   ├── ui/                             # 终端 UI (3 files)
-│   │   ├── renderer.ts                 # 流式输出 + 工具卡片 + spinner
-│   │   ├── input.ts                    # readline + stdin pipe
-│   │   └── tmuxLayout.ts               # 子 agent tmux 窗口管理
-│   ├── skills/                         # 技能系统
-│   │   └── loader.ts                   # frontmatter 解析 + formatSkillIndex
-│   └── memory/                         # 记忆桥接
-│       └── index.ts                    # SemanticMemory → 系统提示词注入
-├── tests/                              # 28 test files · 637 tests
-│   ├── engine.test.ts                  # partitionToolCalls + compact + critic
-│   ├── presets.test.ts                 # AgentConfig + preset 解析 + applyAgent
-│   ├── modules.test.ts                 # SemanticMemory + EpisodicMemory + ModuleRegistry
-│   ├── permissionSystem.test.ts        # 权限模式 + 规则匹配
-│   ├── backgroundTaskManager.test.ts   # 后台任务生命周期
-│   └── ...                             # modes / cost / fileHistory / query state / tools
-└── package.json                        # 3 runtime deps: openai / glob / zod
+│   ├── core/                        # 引擎核心 (75 模块)
+│   │   ├── engine.ts                # 统一 Harness — Boot Sequence + Module 集成
+│   │   ├── types.ts                 # EngineConfig / Tool metadata / ToolContext
+│   │   ├── module.ts                # AgentModule 接口 (4 生命周期钩子)
+│   │   ├── moduleRegistry.ts        # 工厂注册 + 依赖解析 + 环检测
+│   │   ├── agentPresets.ts          # 4 preset + resolveAgentConfig
+│   │   ├── agentToolFilter.ts       # Agent 工具白名单过滤
+│   │   ├── compact.ts               # microCompact + strategy + tool_call 对保护
+│   │   ├── snipCompact.ts           # 手术式裁剪 (head/tail 截断)
+│   │   ├── autoCompact.ts           # 自动触发压缩
+│   │   ├── semanticMemory.ts        # 语义记忆 + 来源优先级 + hash 去重
+│   │   ├── episodicMemory.ts        # 过程记忆 (成功+失败轨迹)
+│   │   ├── knowledgeBase.ts         # 结构化知识库
+│   │   ├── permissionSystem.ts      # 权限模式 + allow/deny 规则
+│   │   ├── permissionRules.ts       # glob 规则匹配
+│   │   ├── pathSecurity.ts          # 路径安全检查
+│   │   ├── sandbox.ts               # 3 级沙箱 (macOS/Linux)
+│   │   ├── lspClient.ts             # 进程内 LSP 客户端
+│   │   ├── sshRemote.ts             # SSH 远程会话
+│   │   ├── backgroundSession.ts     # detached 会话管理
+│   │   ├── backgroundTaskManager.ts # 后台任务生命周期
+│   │   ├── oauth.ts                 # MCP OAuth2 PKCE
+│   │   ├── mcpClient.ts             # MCP 客户端 (stdio + HTTP)
+│   │   ├── magicDocs.ts             # 自动文档提取 (7 种提取器)
+│   │   ├── telemetry.ts             # opt-in 本地遥测
+│   │   ├── settingsSync.ts          # 加密设置同步
+│   │   ├── autoClassifier.ts        # 请求自动分类
+│   │   ├── autoDream.ts             # 空闲知识整理
+│   │   ├── effort.ts                # effort 分级系统
+│   │   ├── budget.ts                # token 预算控制
+│   │   ├── modes.ts                 # 模式系统
+│   │   ├── outputStyles.ts          # 输出风格
+│   │   ├── hooks.ts                 # 6 种 Hook + HookRunner
+│   │   ├── goals.ts                 # 目标管理
+│   │   ├── diagnostics.ts           # LSP 诊断集成
+│   │   ├── sessionManager.ts        # 会话管理
+│   │   ├── sessionTranscript.ts     # 会话转录
+│   │   ├── sessionStats.ts          # 会话统计
+│   │   ├── profiles.ts              # 配置 profile
+│   │   ├── snippets.ts              # 代码片段管理
+│   │   ├── bookmarks.ts             # 位置书签
+│   │   ├── commandHistory.ts        # 命令历史
+│   │   ├── fileHistory.ts           # 文件编辑历史 / rewind
+│   │   ├── fileDetection.ts         # 文件类型检测
+│   │   ├── fileState.ts             # 文件状态追踪
+│   │   ├── atomicWrite.ts           # 原子写入
+│   │   ├── costTracker.ts           # token/cost 统计
+│   │   ├── eventLog.ts              # 不可变审计流
+│   │   ├── messageBus.ts            # 内部消息总线
+│   │   ├── pluginManager.ts         # 插件管理
+│   │   ├── plugins.ts               # 插件接口
+│   │   ├── builtinPlugins.ts        # 内置插件
+│   │   ├── daemon.ts                # 后台守护进程
+│   │   ├── cron.ts                  # 定时任务
+│   │   ├── workflow.ts              # 工作流
+│   │   ├── loopEngine.ts            # 循环引擎
+│   │   ├── teamMemory.ts            # 团队记忆共享
+│   │   ├── skillSearch.ts           # 技能语义搜索
+│   │   ├── riskClassifier.ts        # 风险分类
+│   │   ├── thinkingTagFilter.ts     # thinking 标签过滤
+│   │   ├── promptSuggestions.ts     # 提示建议
+│   │   ├── suggestions.ts           # 自动建议
+│   │   ├── onboarding.ts            # 首次引导
+│   │   ├── migrations.ts            # 配置迁移
+│   │   ├── systemPrompt.ts          # 系统提示词组装
+│   │   ├── config.ts                # 配置管理
+│   │   ├── providers.ts             # LLM provider 管理
+│   │   ├── codeMetrics.ts           # 代码度量
+│   │   ├── claudeCodeWorkerManager.ts # tmux Claude Code worker 管理
+│   │   ├── queryStateMachine.ts     # 查询状态机
+│   │   ├── taskTimer.ts             # 任务计时
+│   │   ├── workspace.ts             # 工作区管理
+│   │   └── strings.ts               # str() 安全转换 helper
+│   ├── tools/                       # 工具层 (37 工具)
+│   │   ├── bash.ts                  # 跨平台 shell + 后台任务
+│   │   ├── fileRead.ts / fileWrite.ts / fileEdit.ts
+│   │   ├── glob.ts / grep.ts
+│   │   ├── todo.ts / notebookEdit.ts
+│   │   ├── webFetch.ts / webSearch.ts / webBrowser.ts
+│   │   ├── agent.ts                 # AgentConfig 驱动 + 验证闸门
+│   │   ├── claudeCode.ts            # 外部 Claude Code worker
+│   │   ├── enterPlanMode.ts / exitPlanMode.ts / verifyPlanExecution.ts
+│   │   ├── tasks.ts                 # TaskCreate/Get/List/Update/Stop (5 工具)
+│   │   ├── worktree.ts              # Git worktree (3 工具)
+│   │   ├── mcpResources.ts          # MCP 资源 (2 工具)
+│   │   ├── brief.ts / ctxInspect.ts / terminalCapture.ts
+│   │   ├── pushNotification.ts / sleep.ts / snip.ts
+│   │   ├── diagnostics.ts / goal.ts / askUser.ts
+│   │   ├── loadSkill.ts / shellSession.ts / tmuxSession.ts
+│   │   ├── mcpToolAdapter.ts
+│   │   └── index.ts                 # 工具注册
+│   ├── commands/                    # 斜杠命令 (83 个)
+│   │   ├── builtin.ts               # 全部命令注册
+│   │   ├── index.ts / mod.ts
+│   ├── modules/                     # 内置能力模块
+│   │   ├── memory.ts                # 相关性检索 + 3 memory tools + episodic
+│   │   ├── critic.ts                # 每 N 轮 LLM 纠错
+│   │   ├── workspace.ts             # sessionDir 注入
+│   │   └── reflection.ts            # 知识提取 + session 整合
+│   ├── prompts/                     # 提示词
+│   │   ├── system.ts / tools.ts / critic.ts
+│   ├── ui/                          # 终端 UI (15 文件)
+│   │   ├── renderer.ts              # 流式输出 + 工具卡片 + spinner
+│   │   ├── input.ts                 # readline + stdin pipe
+│   │   ├── vim.ts                   # vim 模式 (normal/insert/visual)
+│   │   ├── keybindings.ts           # 可定制键绑定
+│   │   ├── theme.ts / markdown.ts / ansi.ts
+│   │   ├── statusLine.ts / statusLineCustom.ts
+│   │   ├── tmuxLayout.ts            # tmux 窗口管理
+│   │   ├── slashSuggest.ts / thinkingDisplay.ts
+│   │   ├── diffBrowser.ts / historyTrimmer.ts
+│   │   └── turnDeadline.ts
+│   ├── skills/                      # 技能系统
+│   │   ├── loader.ts                # frontmatter 解析 + formatSkillIndex
+│   │   └── extractor.ts             # 技能提取
+│   ├── utils/                       # 工具函数 (19 文件)
+│   │   ├── ide.ts                   # IDE 检测 (9 种编辑器)
+│   │   ├── autoUpdater.ts           # 自动更新检查
+│   │   ├── cacheStats.ts            # prompt cache 统计
+│   │   ├── systemHealth.ts          # 13 项系统健康检查
+│   │   ├── apiError.ts / cleanup.ts / clipboard.ts
+│   │   ├── doctor.ts / editor.ts / globMatch.ts
+│   │   ├── imageInput.ts / inputHistory.ts
+│   │   ├── keychain.ts / notifier.ts
+│   │   ├── secretScanner.ts / sessionExport.ts
+│   │   ├── terminalTitle.ts / vcr.ts
+│   │   └── ansi.ts
+│   └── integrations/                # 外部协议集成
+│       ├── acp.ts                   # Agent Communication Protocol server
+│       └── pipeMode.ts              # 管道模式
+├── tests/                           # 139 test files · 3424 tests
+└── package.json                     # runtime: openai/glob/zod/ink/react
 ```
 
 ## AgentOS 概念对照
@@ -394,31 +570,47 @@ ovolv999/
 | 模块组合驱动 | `ModuleRegistry` + memory/critic/workspace/reflection |
 | Boot Sequence | 7 步：identity → modules → boot → prompt → tools → context → trajectory |
 | 来源归因 + 冲突解决 | `user_stated(3) > agent_inferred(2) > tool_observed(1)` |
-| Memory Tool 三原语 | `memory_write` / `memory_search` / `memory_recall` |
+| Memory 三原语 | `memory_write` / `memory_search` / `memory_recall` |
+| 三层记忆 | Semantic + Episodic + KnowledgeBase |
 | Boot 时相关性检索 | `extractKeywords` + `scoreRelevance` → top-10 |
 | Memory 整合 | `consolidateSession` — REPL 退出时 LLM 总结 |
-| Skill 懒加载 | `load_skill` + `formatSkillIndex` + 权限检查 |
+| Skill 系统 | frontmatter 解析 + 懒加载 + 语义搜索 + auto-suggest |
 | 验证闸门 (No Tuple No Merge) | `verify:true` → 自动 package scripts / 语言检查 |
 | 调用链追踪 + 循环检测 | `_callDepth` max 5 + EventLog |
 | 生命周期 Hooks | 6 种 Hook 类型 |
-| Trajectory 捕获 | `boot_context` + `invoke_sent/completed` + EventLog |
-| Context 压缩 + 策略 | 统一 70%/85% + **含系统提示词 token** + tool_call 对保护 |
+| Context 压缩 + 策略 | microCompact + snipCompact + autoCompact（含系统提示词 token） |
 | Tool metadata | `readOnly` / `concurrencySafe` / `mutatesState` / `longRunning` / `requiresNetwork` |
-| 权限系统 | `PermissionManager` 接入 Engine + `/permissions` 持久化规则 |
-| 后台任务 | `TaskCreate/Get/List/Update/Stop` + Bash background 统一接入 |
-| API 重试 | SDK maxRetries=5 指数退避 (429/5xx/ECONNRESET) + 120s timeout |
-| Module-driven Tools | MemoryModule 通过 `boot().tools` 提供 3 个工具 |
+| 权限系统 | `PermissionManager` + glob 规则 + `/permissions` 持久化 |
+| 沙箱执行 | 3 级策略：permissive / standard / strict (macOS sandbox-exec + Linux bwrap) |
+| 后台任务 | `TaskCreate/Get/List/Update/Stop` + Bash background |
+| 后台会话 | `--bg` + `ps/attach/logs/stop/rm/clean` CLI |
+| MCP 客户端 | stdio + HTTP + OAuth2 PKCE + Resources |
+| 进程内 LSP | tsserver/pylsp/rust-analyzer/gopls JSON-RPC 2.0 |
+| SSH 远程 | SshProfile + rsync 同步 + remote agent |
+| API 重试 | SDK maxRetries=5 指数退避 + 120s timeout |
+| 模块化插件 | Plugin 接口 + `/plugins` 动态加载 |
 
 ## 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| 语言 | TypeScript 5.7 (ESM) |
+| 语言 | TypeScript 5.7 (ESM, strict) |
 | 运行时 | Node.js ≥ 20 |
-| LLM API | OpenAI SDK (兼容 Claude 等端点) |
-| 测试 | Vitest |
+| LLM API | OpenAI SDK (兼容 Claude/GPT/本地端点) |
+| 终端 UI | Ink + React（可选 `--ink`）/ readline REPL（默认） |
+| 测试 | Vitest (3424 tests · 139 files) |
 | Lint | ESLint (typescript-eslint recommendedTypeChecked) |
-| 依赖 | openai · glob · zod (仅 3 个 runtime deps) |
+| 运行时依赖 | openai · glob · zod · ink · react (5 个) |
+
+## 构建
+
+```bash
+npm run build          # tsc → dist/
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint
+npm run test           # vitest run
+npm run test:watch     # vitest watch
+```
 
 ## 许可
 
