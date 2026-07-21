@@ -163,9 +163,14 @@ export class EpisodicMemory {
       appendFileSync(this.filePath, JSON.stringify(full) + '\n', 'utf8')
       // Successful append → bump the tracked count. We increment
       // AFTER the append so a failed append doesn't desync the
-      // counter, and we lazy-init from `null` to 1 if this is the
-      // first observed write to an existing-but-uncounted file.
-      if (this.entryCount === null) this.entryCount = 1
+      // counter. On the first write we lazy-init from the actual
+      // on-disk line count via ensureCount() — note ensureCount()
+      // scans the file AFTER this append, so it already includes
+      // the just-written line; we use it verbatim rather than +1.
+      // Without this, reloading an existing JSONL with N entries
+      // would pin entryCount=1 and skip compaction until ~cap
+      // additional writes accumulated.
+      if (this.entryCount === null) this.entryCount = this.ensureCount()
       else this.entryCount++
     } catch { /* best-effort */ }
     // Enforce the cap AFTER appending so the on-disk state is always

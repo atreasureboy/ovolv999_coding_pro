@@ -125,7 +125,19 @@ export class RuntimeCoordinator {
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
 
-    let finalOutput = ''
+    // P0-2 (continuation output completeness): collect EVERY assistant
+    // text segment emitted during this turn — including continuation
+    // segments after `finish_reason='length'`, budget-continuation
+    // segments, and inter-tool-iteration text — and concatenate them
+    // for the final TurnResult.output. Previously `finalOutput` was
+    // OVERWRITTEN on each LLM round, so multi-segment turns surfaced
+    // only the last fragment to hooks, event subscribers, and the UI
+    // even though the message history accumulated all segments.
+    // The invariant guaranteed here is:
+    //   result.output === concat(all assistant segments in order)
+    //                  === sum of new assistant `content` added this turn
+    const turnAssistantSegments: string[] = []
+    const computeFinalOutput = (): string => turnAssistantSegments.join('')
     let lastToolName: string | undefined
     let pendingToolCalls: StreamingToolCall[] = []
     let pendingParsedCalls: ParsedToolCall[] = []
@@ -153,14 +165,14 @@ export class RuntimeCoordinator {
             })
             if (decision.kind === 'hard_abort') {
               eventEmitter.emit({ type: 'ABORT_REQUESTED', kind: 'hard', reason: 'user_cancelled' })
-              state = transitionQueryState(state, { type: 'hard_abort', output: finalOutput })
+              state = transitionQueryState(state, { type: 'hard_abort', output: computeFinalOutput() })
             } else if (decision.kind === 'soft_abort') {
               eventEmitter.emit({ type: 'ABORT_REQUESTED', kind: 'soft', reason: 'user_interrupt' })
-              state = transitionQueryState(state, { type: 'soft_abort', output: finalOutput })
+              state = transitionQueryState(state, { type: 'soft_abort', output: computeFinalOutput() })
             } else if (decision.kind === 'max_iterations') {
               eventEmitter.emit({ type: 'MAX_ITERATIONS_REACHED', maxIterations: decision.maxIterations })
               renderer.warn(`Max iterations (${decision.maxIterations}) reached`)
-              state = transitionQueryState(state, { type: 'max_iterations', output: finalOutput })
+              state = transitionQueryState(state, { type: 'max_iterations', output: computeFinalOutput() })
             } else {
               eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })
               state = transitionQueryState(state, { type: 'continue' })
@@ -189,7 +201,7 @@ export class RuntimeCoordinator {
               await this.callLLM(systemPrompt, messages, toolDefs, turnAbortController.signal)
 
             if (assistantText) {
-              finalOutput = assistantText
+              turnAssistantSegments.push(assistantText)
               turnTokensProduced += Math.ceil(assistantText.length / 3.5)
             }
 
@@ -245,7 +257,7 @@ export class RuntimeCoordinator {
               type: 'llm_done',
               finishReason,
               hasToolCalls: rawToolCalls.length > 0,
-              output: finalOutput,
+              output: computeFinalOutput(),
             })
             break
           }
@@ -337,7 +349,7 @@ export class RuntimeCoordinator {
               type: 'tools_done',
               aborted: aborted || hardAborted,
               hardAborted,
-              output: finalOutput,
+              output: computeFinalOutput(),
             })
             break
           }
@@ -351,7 +363,7 @@ export class RuntimeCoordinator {
       if (state.kind === 'complete') {
         result = { stopped: true, reason: state.reason, output: state.output }
       } else {
-        result = { stopped: true, reason: 'error', output: finalOutput }
+        result = { stopped: true, reason: 'error', output: computeFinalOutput() }
       }
     } catch (err) {
       const errMsg = (err as Error).message || String(err)
@@ -361,8 +373,9 @@ export class RuntimeCoordinator {
         lastToolName,
       })
       renderer.error(`Engine error: ${errMsg}`)
-      eventEmitter.emit({ type: 'RUN_FAILED', error: errMsg, output: finalOutput })
-      result = { stopped: true, reason: 'error', output: finalOutput || `[Error: ${errMsg}]` }
+      const errOutput = computeFinalOutput()
+      eventEmitter.emit({ type: 'RUN_FAILED', error: errMsg, output: errOutput })
+      result = { stopped: true, reason: 'error', output: errOutput || `[Error: ${errMsg}]` }
     } finally {
       if (sharedState.currentTurnAbortController === turnAbortController) {
         sharedState.currentTurnAbortController = null

@@ -1251,6 +1251,82 @@ describe('EpisodicMemory: bounded retention (defect #8)', () => {
     // every write would also pass `entryCount === cap`.
     expect(mem['entryCount']).toBeLessThan(totalWrites)
   })
+
+  it('P0-8 RELOAD: entryCount reflects pre-existing file contents on first write', () => {
+    // Regression for the fi_goal.md P0-8 bug: previously write()
+    // hard-coded entryCount=1 on first observation, ignoring any
+    // pre-existing JSONL contents. Reloading an existing file with N
+    // entries then writing once left entryCount=1 instead of N+1,
+    // disabling compaction until ~cap ADDITIONAL writes accumulated.
+    const dir = freshDir('epi-reload-count')
+    const cap = 20
+    // Phase 1: pre-populate via one instance.
+    const first = new EpisodicMemory(dir, { maxEpisodes: cap })
+    const preExisting = 15
+    for (let i = 0; i < preExisting; i++) {
+      first.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    expect(first['entryCount']).toBe(preExisting)
+    // Phase 2: simulate a restart by constructing a fresh instance
+    // on the same dir. The new instance has not yet scanned the file.
+    const reloaded = new EpisodicMemory(dir, { maxEpisodes: cap })
+    // (entryCount is lazily computed — null until first write/ensureCount.)
+    expect(reloaded['entryCount']).toBeNull()
+    // Phase 3: one write on the reloaded instance must pick up the
+    // existing N entries and land at N+1 — NOT reset to 1.
+    reloaded.write({ turn: preExisting, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    expect(reloaded['entryCount']).toBe(preExisting + 1)
+    // On-disk reality matches.
+    expect(reloaded.readAll()).toHaveLength(preExisting + 1)
+  })
+
+  it('P0-8 RELOAD: file already over cap compacts on the very next write after reload', () => {
+    // Direct test of the runaway-growth failure mode called out in
+    // fi_goal.md P0-8. Previously a file reloaded at 1.5×cap would
+    // keep growing because entryCount was pinned to 1 on first write,
+    // disabling enforceCap() until ~cap more writes accumulated.
+    const dir = freshDir('epi-reload-overcap')
+    const cap = 10
+    // Pre-populate 1.5×cap entries via instance #1 (which compacts
+    // normally as it goes, ending at exactly cap entries on disk).
+    const first = new EpisodicMemory(dir, { maxEpisodes: cap })
+    const initialWrites = cap + 5
+    for (let i = 0; i < initialWrites; i++) {
+      first.write({ turn: i, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    }
+    // After instance #1's compaction the file holds exactly `cap`.
+    const afterFirst = new EpisodicMemory(dir).readAll()
+    expect(afterFirst).toHaveLength(cap)
+    // Now manually append `extraOverCap` more entries via raw fs so
+    // instance #2 sees a file that is genuinely OVER cap on reload,
+    // simulating an external writer or pre-existing data from before
+    // the cap was lowered. (Without this, the test would only cover
+    // the under-cap reload path, which is not the runaway scenario.)
+    const memDir = join(dir, 'memory')
+    const file = join(memDir, 'episodes.jsonl')
+    const extraOverCap = 8
+    const extraLines: string[] = []
+    for (let i = 0; i < extraOverCap; i++) {
+      extraLines.push(JSON.stringify({
+        id: `manual-${i}`,
+        turn: cap + i,
+        toolName: 'T',
+        inputSummary: '',
+        resultSummary: '',
+        outcome: 'success',
+        timestamp: '',
+      }))
+    }
+    writeFileSync(file, (readFileSync(file, 'utf8').replace(/\n$/, '') + '\n' + extraLines.join('\n') + '\n'), 'utf8')
+    // Phase 2: reload and write once. The fix must detect the
+    // over-cap file and compact back down to cap on the first write.
+    const reloaded = new EpisodicMemory(dir, { maxEpisodes: cap })
+    reloaded.write({ turn: 999, toolName: 'T', inputSummary: '', resultSummary: '', outcome: 'success', timestamp: '' })
+    const final = reloaded.readAll()
+    expect(final).toHaveLength(cap)
+    // The most recent `cap` entries survived (including the new write).
+    expect(final[final.length - 1]?.turn).toBe(999)
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────────────
