@@ -42,7 +42,7 @@ class FakeOpenAI {
   push(s: AsyncIterable<unknown>) { this.q.push({ k: 's', s }) }
 }
 
-async function* lengthThenStopStream(first: string, second: string): AsyncIterable<unknown> {
+async function* lengthThenStopStream(first: string): AsyncIterable<unknown> {
   await Promise.resolve()
   yield {
     choices: [{ delta: { content: first }, index: 0, finish_reason: 'length' }],

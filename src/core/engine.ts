@@ -245,8 +245,38 @@ export class ExecutionEngine {
     return this.config.model
   }
 
+  /**
+   * P0-1 (transactional model switch): update the model atomically.
+   *
+   * Previously this method only mutated `config.model`, leaving every
+   * downstream subsystem holding stale state derived from the old
+   * model:
+   *   - ContextManager.deps.model + resolvedContextWindow cache
+   *     → wrong budget thresholds, wrong max_tokens sent to the LLM,
+   *       compaction summarization requests hitting the OLD model.
+   *   - CriticModule/ReflectionModule capture `model` in their
+   *     factory → background LLM calls (critic loop, post-run
+   *     knowledge extraction) silently targeted the OLD model.
+   *   - ModelGateway._streamUsageSupported latch → switching from a
+   *     provider that rejected stream_options to one that supports
+   *     it left usage streaming permanently disabled.
+   *
+   * The transaction order below matches fi_goal.md §P0-1:
+   *   resolve model → resolve Provider → resolve capabilities →
+   *   update context window → clear caches → notify dependents →
+   *   commit config.
+   *
+   * Cross-Provider switches (different apiKey / baseURL) are NOT
+   * supported here — they require constructing a new ExecutionEngine
+   * (or restart). That is explicitly out of scope until Phase 8
+   * (Provider Capability Abstraction) lands.
+   */
   setModel(model: string): void {
+    if (this.config.model === model) return
     this.config.model = model
+    this.contextManager.onModelChanged(model)
+    this.moduleManager.notifyModelChanged(model)
+    this.modelGateway.resetStreamUsageLatch()
   }
 
   getCostTracker(): CostTracker {

@@ -76,6 +76,25 @@ export class ContextManager {
     return clampMaxOutputTokens(maxOutputTokens ?? this.deps.maxOutputTokens, this.contextWindow)
   }
 
+  /**
+   * P0-1 (transactional model switch): invalidate every piece of state
+   * derived from `model` so the next call sees the new model's context
+   * window, max-output clamp, and budget thresholds. Without this,
+   * `engine.setModel()` left ContextManager pointing at the OLD model
+   * — meaning budget evaluation, compaction thresholds, max_tokens
+   * sent to the LLM, AND compaction summarization requests all used
+   * the OLD model's parameters (or hit the OLD model outright).
+   *
+   * The deps object is intentionally `readonly` so callers cannot
+   * mutate individual fields; we replace the whole reference here to
+   * keep the constructor's "deps is a snapshot" invariant intact.
+   */
+  onModelChanged(model: string): void {
+    if (this.deps.model === model) return
+    ;(this as unknown as { deps: ContextManagerDeps }).deps = { ...this.deps, model }
+    this.resolvedContextWindow = null
+  }
+
   // ── Turn lifecycle ─────────────────────────────────────────────────────
 
   beginTurn(systemPrompt: string): void {

@@ -33,6 +33,16 @@ export class CriticModule implements AgentModule {
     return {}
   }
 
+  /**
+   * P0-1 (transactional model switch): keep the captured model in
+   * sync with the runtime so the periodic critic LLM call targets
+   * the user's currently-selected model rather than the model that
+   * was active when this module was constructed.
+   */
+  onModelChanged(model: string): void {
+    this.model = model
+  }
+
   async onIteration(ctx: ModuleIterationContext): Promise<ModuleIterationResult | void> {
     if (this.config.planMode) return
     if (this.config.poor?.enabled) return

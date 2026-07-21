@@ -52,6 +52,16 @@ export class ReflectionModule implements AgentModule {
     return {}
   }
 
+  /**
+   * P0-1 (transactional model switch): keep the captured model in
+   * sync with the runtime so the post-run knowledge extraction LLM
+   * call targets the user's currently-selected model rather than
+   * the model that was active when this module was constructed.
+   */
+  onModelChanged(model: string): void {
+    this.model = model
+  }
+
   async onComplete(ctx: ModuleRunContext): Promise<void> {
     if (this.config.poor?.enabled) return
     // Skip if the run was too short to yield useful insights

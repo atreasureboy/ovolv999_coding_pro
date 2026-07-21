@@ -65,6 +65,18 @@ export class ModelGateway {
     this._streamUsageSupported = false
   }
 
+  /**
+   * P0-1 (transactional model switch): clear the one-shot latch so a
+   * model switch from a provider that rejects stream_options to one
+   * that supports it does not leave usage streaming permanently
+   * disabled for the lifetime of the process. Best-effort: the next
+   * call will probe stream_options again and re-disable the latch if
+   * the new model also rejects it.
+   */
+  resetStreamUsageLatch(): void {
+    this._streamUsageSupported = true
+  }
+
   async call(
     params: ModelCallParams,
     callbacks?: ModelGatewayCallbacks,

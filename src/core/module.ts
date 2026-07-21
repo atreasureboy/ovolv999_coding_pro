@@ -77,6 +77,13 @@ export interface AgentModule {
   readonly name: string
   /** Modules that must be enabled before this one (resolved by registry) */
   readonly dependencies?: string[]
+  /**
+   * P0-7: criticality. `critical` (default) → boot failure aborts the
+   * engine; `best_effort` → boot failure is logged and the module is
+   * dropped from iteration/complete hooks. Backwards-compatible: a
+   * module that omits the field is treated as `critical`.
+   */
+  readonly criticality?: 'critical' | 'best_effort'
 
   /** Boot Sequence — inject prompt sections, tools, context patches */
   boot(ctx: ModuleBootContext): ModuleBootResult | Promise<ModuleBootResult>
@@ -94,4 +101,14 @@ export interface AgentModule {
 
   /** Called after the engine loop finishes (e.g. reflection knowledge extraction) */
   onComplete?(ctx: ModuleRunContext): void | Promise<void>
+
+  /**
+   * P0-1 (transactional model switch): called when the runtime
+   * switches models mid-session. Modules that capture `model` in
+   * their factory (e.g. Critic, Reflection) MUST override this so
+   * subsequent LLM calls hit the new model instead of the original.
+   * Optional: modules that read `model` from a live reference on
+   * every call can omit it.
+   */
+  onModelChanged?(model: string): void
 }
