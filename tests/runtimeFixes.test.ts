@@ -279,18 +279,19 @@ describe('RUNTIME-FIX priority-1: ExecutionEngine rejects concurrent runTurn', (
     )
 
     const explodingModule = { name: 'exploder', boot: () => { throw new Error('module boot exploded') } }
-    // Mutate the post-construction modules list. The array is private
-    // but structurally accessible. Casting through `unknown` keeps the
-    // test honest — only the engine's internal state access is privileged.
-    const engAsAny = engine as unknown as { modules: Array<{ name: string; boot: () => unknown }> }
-    engAsAny.modules = [explodingModule]
+    // Mutate the post-construction modules list. The ModuleManager's
+    // modules array is public for this purpose. Casting through `unknown`
+    // keeps the test honest — only the engine's internal state access
+    // is privileged.
+    const engAsAny = engine as unknown as { moduleManager: { modules: Array<{ name: string; boot: () => unknown }> } }
+    engAsAny.moduleManager.modules = [explodingModule]
 
     // First runTurn: setup reaches module.boot() which throws.
     await expect(engine.runTurn('q', [])).rejects.toThrow(/module boot exploded/)
 
     // Restore a clean (empty) modules array so the second runTurn
     // doesn't re-trigger the explosion during its setup.
-    engAsAny.modules = []
+    engAsAny.moduleManager.modules = []
 
     // Second runTurn: if the flag leaked, this rejects with "another
     // turn is already in progress". If the outer finally worked, this

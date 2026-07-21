@@ -36,8 +36,9 @@ import type {
 import { createTools } from '../tools/index.js'
 import { getPlanModePrefix } from '../prompts/system.js'
 import type { Renderer } from '../ui/renderer.js'
-import type { AgentModule, ModuleBootResult, ModuleBootContext } from './module.js'
+import type { ModuleBootContext } from './module.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
+import { ModuleManager } from './moduleRuntime/moduleManager.js'
 import { applyAgentToConfig } from './agentPresets.js'
 import { clearFileState } from './fileState.js'
 import {
@@ -88,10 +89,8 @@ export class ExecutionEngine {
   private softAbortOwner: AbortController | null = null
   /** Event log — may be undefined if not configured */
   private eventLog: EngineConfig['eventLog']
-  /** Enabled capability modules */
-  private modules: AgentModule[]
-  /** Cached boot results (populated in runTurn) */
-  private moduleBootResults: ModuleBootResult[] = []
+  /** Module manager — owns module lifecycle (boot, iteration, tool call, complete, dispose) */
+  private moduleManager: ModuleManager
   /** All available tools — base + module-provided (populated in runTurn) */
   private allTools: Tool[]
   /** Cost tracker — accumulates real API token usage and USD cost */
@@ -164,15 +163,20 @@ export class ExecutionEngine {
       else this.permissionManager.setMode('default')
     }
 
-    // Resolve enabled modules
+    // Resolve enabled modules and create module manager
     const enabledNames = this.deriveEnabledModules()
-    this.modules = enabledNames.length > 0
+    const resolvedModules = enabledNames.length > 0
       ? globalModuleRegistry.resolve(enabledNames, {
           client: this.client,
           model: config.model,
           config,
         })
       : []
+    this.moduleManager = new ModuleManager({
+      modules: resolvedModules,
+      renderer: this.renderer,
+      eventLog: this.eventLog,
+    })
 
     this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
     this.contextManager = new ContextManager({
@@ -190,7 +194,8 @@ export class ExecutionEngine {
       toolPolicy: this.toolPolicy,
       permissionManager: this.permissionManager,
       requestPermission: this.config.requestPermission,
-      modules: this.modules,
+      notifyToolCall: (toolName, input, result, turnNumber) =>
+        this.moduleManager.notifyToolCall(toolName, input, result, turnNumber),
       renderer: this.renderer,
     })
     this.toolScheduler = new ToolScheduler({
@@ -255,14 +260,7 @@ export class ExecutionEngine {
       // disposal must not throw — AgentTool calls this from a finally
       // block and any throw would propagate out of the host's runTurn
     }
-    for (const module of this.modules) {
-      const dispose = (module as { dispose?: () => void | Promise<void> }).dispose
-      if (typeof dispose === 'function') {
-        Promise.resolve(dispose.call(module)).catch(() => {
-          // module dispose failures must never break engine disposal
-        })
-      }
-    }
+    this.moduleManager.dispose()
   }
 
   /** Soft interrupt — pause after current tool, preserve history */
@@ -440,29 +438,21 @@ export class ExecutionEngine {
       // Clear file read state for this turn (read-before-edit is per-turn, not cross-turn)
       clearFileState()
 
-      // ── Boot Sequence: resolve + boot modules ──
+      // ── Boot Sequence: boot modules ──
       const bootCtx: ModuleBootContext = {
         cwd: this.config.cwd,
         sessionDir: this.config.sessionDir,
         config: this.config,
         userMessage,
       }
-      this.moduleBootResults = await Promise.all(
-        this.modules.map(m => Promise.resolve(m.boot(bootCtx))),
-      )
-      const moduleSections = this.moduleBootResults.flatMap(r => r.systemPromptSections ?? [])
-      const toolContextPatch = this.moduleBootResults.reduce(
-        (acc, r) => ({ ...acc, ...r.toolContextPatch }),
-        {} as Partial<ToolContext>,
-      )
-      // Collect tools provided by modules
-      const moduleTools = this.moduleBootResults.flatMap(r => r.tools ?? [])
+      const bootOutput = await this.moduleManager.boot(bootCtx)
+      const { systemPromptSections: moduleSections, toolContextPatch, tools: moduleTools } = bootOutput
       this.allTools = [...this.tools, ...moduleTools]
 
       // Record boot trajectory (AgentOS pattern)
       this.eventLog?.append('boot_context', 'engine', {
         trajectory: 'boot_context',
-        modules: this.modules.map(m => m.name),
+        modules: this.moduleManager.moduleNames,
         module_sections: moduleSections.length,
         module_tools: moduleTools.length,
         user_message_length: userMessage.length,
@@ -556,27 +546,11 @@ export class ExecutionEngine {
           }
 
           case 'module_iteration': {
-            for (const module of this.modules) {
-              if (!module.onIteration) continue
-              const iterResult = await module.onIteration({
-                iteration: state.iteration,
-                messages,
-                abortSignal: turnAbortController.signal,
-              })
-              if (iterResult?.injectMessage) {
-                const msg = iterResult.injectMessage
-                // Show full critic output to user via renderer (not raw stdout)
-                const lines = msg.split('\n').filter(l => l.trim())
-                for (const line of lines) {
-                  this.renderer.warn(`[${module.name}] ${line}`)
-                }
-                this.eventLog?.append('module_flag', module.name, {
-                  message: msg.slice(0, 500),
-                  iteration: state.iteration,
-                })
-                messages.push({ role: 'user', content: msg })
-              }
-            }
+            await this.moduleManager.runIteration({
+              iteration: state.iteration,
+              messages,
+              abortSignal: turnAbortController.signal,
+            })
             state = transitionQueryState(state, { type: 'continue' })
             break
           }
@@ -816,19 +790,13 @@ export class ExecutionEngine {
     }
 
     // ── Module onComplete hooks (reflection, etc.) ──
-    for (const module of this.modules) {
-      try {
-        await module.onComplete?.({
-          cwd: this.config.cwd,
-          sessionDir: this.config.sessionDir,
-          turnResult: result,
-          messages,
-          eventLog: this.eventLog,
-        })
-      } catch {
-        // module onComplete failures must never break the engine
-      }
-    }
+    await this.moduleManager.runComplete({
+      cwd: this.config.cwd,
+      sessionDir: this.config.sessionDir,
+      turnResult: result,
+      messages,
+      eventLog: this.eventLog,
+    })
 
     // ── Lifecycle hook: OnComplete ──
     this.config.hookRunner?.runOnComplete?.(result)

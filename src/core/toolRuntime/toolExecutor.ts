@@ -14,11 +14,17 @@
  */
 
 import type { Tool, ToolContext, ToolResult } from '../types.js'
-import type { AgentModule } from '../module.js'
 import type { PermissionManager } from '../permissionSystem.js'
 import { classifyCommandRisk } from '../riskClassifier.js'
 import type { Renderer } from '../../ui/renderer.js'
 import type { ToolPolicy } from './toolPolicy.js'
+
+export type NotifyToolCall = (
+  toolName: string,
+  input: Record<string, unknown>,
+  result: ToolResult,
+  turnNumber: number,
+) => void
 
 export interface ToolExecutorDeps {
   toolPolicy: ToolPolicy
@@ -28,7 +34,7 @@ export interface ToolExecutorDeps {
     input: Record<string, unknown>,
     riskLevel: 'safe' | 'needs-approval' | 'dangerous',
   ) => Promise<{ approved: boolean; feedback?: string }>
-  modules: AgentModule[]
+  notifyToolCall: NotifyToolCall
   renderer: Renderer
 }
 
@@ -90,9 +96,7 @@ export class ToolExecutor {
 
     const result = await tool.execute(input, context)
 
-    for (const module of this.deps.modules) {
-      module.onToolCall?.(toolName, input, result, turnNumber)
-    }
+    this.deps.notifyToolCall(toolName, input, result, turnNumber)
 
     return result
   }
