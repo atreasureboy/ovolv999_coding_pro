@@ -34,14 +34,10 @@ export class ModuleRegistry {
     const resolveOne = (name: string): void => {
       if (seen.has(name)) return
       if (inProgress.has(name)) {
-        // Cycle detected. Surface it on stderr so the misconfiguration is
-        // visible to operators — a silent return would let a circular
-        // dependency hide the broken module from the resolved set without
-        // any indication of why.
-        process.stderr.write(
-          `[moduleRegistry] circular dependency detected while resolving "${name}" — stopping descent\n`,
+        // Cycle detected — refuse to resolve (five_goal §十二 P2-1).
+        throw new Error(
+          `[moduleRegistry] circular dependency detected while resolving "${name}" — refusing to boot`,
         )
-        return
       }
       const factory = this.factories.get(name)
       if (!factory) return

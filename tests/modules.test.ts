@@ -168,14 +168,12 @@ describe('ModuleRegistry', () => {
     expect(modules).toHaveLength(2) // a appears once
   })
 
-  it('detects circular dependencies without crashing', () => {
+  it('detects circular dependencies and throws (five_goal §十二 P2-1)', () => {
     const reg = new ModuleRegistry()
     reg.register('x', () => makeModule('x', ['y']))
     reg.register('y', () => makeModule('y', ['x']))
-    // Should not stack-overflow — cycle detection stops recursion
-    const modules = reg.resolve(['x'], makeCtx())
-    // Each module appears at most once
-    expect(modules.length).toBeLessThanOrEqual(2)
+    // Cycle detection must throw — circular dependencies fail boot.
+    expect(() => reg.resolve(['x'], makeCtx())).toThrow(/circular dependency/i)
   })
 
   it('returns empty for unknown modules', () => {

@@ -7,8 +7,6 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/Tests-3727%20passed-brightgreen)]()
-[![Test Files](https://img.shields.io/badge/Test%20Files-161-blue)]()
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -93,7 +91,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 ```
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                   ovolv999 — 统一 Harness + 模块化 Agent 基座               ║
-║              138 test files · 3339 tests · 32 tools · 83 commands          ║
+║              多模型 Worker · 结构化 Run 状态机 · 资源调度 · 验证闸门 · 恢复  ║
 ║              Runtime: openai · glob · zod · ink · react                     ║
 ╠═══════════════════════════════════════════════════════════════════════════╣
 ║                                                                           ║
@@ -147,20 +145,20 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 ║  │  Abort: softAbort(ESC) / hardAbort(Ctrl+C)                        │   ║
 ║  └─────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                           ║
-║  ┌─ Modules (4) ──┐  ┌─ Tools (32) ────────┐  ┌─ Memory (3 层) ──────┐  ║
+║  ┌─ Modules ──────┐  ┌─ Tools ─────────────┐  ┌─ Memory (3 层) ──────┐  ║
 ║  │ memory         │  │ Bash/Read/Write/Edit │  │ Semantic: 关键词检索  │  ║
 ║  │ critic         │  │ Glob/Grep/Todo       │  │ Episodic: 工具轨迹    │  ║
 ║  │ workspace      │  │ Web* /Agent/Skill    │  │ KnowledgeBase: 结构化 │  ║
 ║  │ reflection     │  │ Plan/Sleep/Snip      │  └──────────────────────┘  ║
 ║  └────────────────┘  │ Worktree/Goal        │                             ║
-║                      │ Task*(5)/Notebook    │  ┌─ Integration ─────────┐  ║
+║                      │ Task*/Notebook       │  ┌─ Integration ─────────┐  ║
 ║  ┌─ MCP Client ───┐  │ ClaudeCode/Diag      │  │ LSP (in-process)      │  ║
-║  │ stdio + HTTP   │  │ MCP Resources(2)     │  │ SSH Remote            │  ║
+║  │ stdio + HTTP   │  │ MCP Resources        │  │ SSH Remote            │  ║
 ║  │ OAuth2 PKCE    │  │ Tmux/Shell Session   │  │ Sandbox (3 levels)    │  ║
 ║  │ Resources      │  └──────────────────────┘  │ Background Sessions   │  ║
 ║  └────────────────┘                            │ MagicDocs             │  ║
 ║  ┌─ Commands ────┐                            │ Telemetry             │  ║
-║  │ 83 built-in   │                            │ Settings Sync         │  ║
+║  │ slash builtin │                            │ Settings Sync         │  ║
 ║  └───────────────┘                            └──────────────────────┘  ║
 ║                                                                           ║
 ║  输出: sessions/session_TIMESTAMP/ → 会话产物、EventLog、agent-logs       ║
@@ -253,7 +251,7 @@ tool_calls [A, B, C, D, E, F]
            → Promise.all([E, F]) → 同时执行
 ```
 
-## 工具参考（32 个）
+## 工具参考
 
 | 类别 | 工具 | 说明 |
 |------|------|------|
@@ -271,7 +269,7 @@ tool_calls [A, B, C, D, E, F]
 | **MCP** | ListMcpResources, ReadMcpResource | MCP 资源读取 |
 | **其他** | AskUser, TodoWrite | 用户交互 + 任务清单 |
 
-## 斜杠命令（83 个）
+## 斜杠命令
 
 | 类别 | 命令 |
 |------|------|
@@ -556,7 +554,7 @@ ovolv999/
 │   │   ├── taskTimer.ts             # 任务计时
 │   │   ├── workspace.ts             # 工作区管理
 │   │   └── strings.ts               # str() 安全转换 helper
-│   ├── tools/                       # 工具层 (32 工具)
+│   ├── tools/                       # 工具层
 │   │   ├── bash.ts                  # 跨平台 shell + 后台任务
 │   │   ├── fileRead.ts / fileWrite.ts / fileEdit.ts
 │   │   ├── glob.ts / grep.ts
@@ -573,7 +571,7 @@ ovolv999/
 │   │   ├── loadSkill.ts / shellSession.ts / tmuxSession.ts
 │   │   ├── mcpToolAdapter.ts
 │   │   └── index.ts                 # 工具注册
-│   ├── commands/                    # 斜杠命令 (83 个)
+│   ├── commands/                    # 斜杠命令
 │   │   ├── builtin.ts               # 全部命令注册
 │   │   ├── index.ts / mod.ts
 │   ├── modules/                     # 内置能力模块
@@ -612,7 +610,7 @@ ovolv999/
 │   └── integrations/                # 外部协议集成
 │       ├── acp.ts                   # Agent Communication Protocol server
 │       └── pipeMode.ts              # 管道模式
-├── tests/                           # 138 test files · 3339 tests
+├── tests/                           # vitest test suite
 └── package.json                     # runtime: openai/glob/zod/ink/react
 ```
 
@@ -652,9 +650,9 @@ ovolv999/
 | 运行时 | Node.js ≥ 20 |
 | LLM API | OpenAI SDK (兼容 Claude/GPT/本地端点) |
 | 终端 UI | Ink + React（可选 `--ink`）/ readline REPL（默认） |
-| 测试 | Vitest (3339 tests · 138 files) |
+| 测试 | Vitest |
 | Lint | ESLint (typescript-eslint recommendedTypeChecked) |
-| 运行时依赖 | openai · glob · zod · ink · react (5 个) |
+| 运行时依赖 | openai · glob · zod · ink · react |
 
 ## 构建
 

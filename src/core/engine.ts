@@ -416,12 +416,22 @@ export class ExecutionEngine {
    * (or restart). That is explicitly out of scope until Phase 8
    * (Provider Capability Abstraction) lands.
    */
-  setModel(model: string): void {
+   setModel(model: string): void {
     if (this.config.model === model) return
-    this.config.model = model
-    this.contextManager.onModelChanged(model)
-    this.moduleManager.notifyModelChanged(model)
-    this.modelGateway.resetStreamUsageLatch()
+    const previousModel = this.config.model
+    try {
+      this.config.model = model
+      this.contextManager.onModelChanged(model)
+      this.moduleManager.notifyModelChanged(model)
+      this.modelGateway.resetStreamUsageLatch()
+    } catch (err) {
+      this.config.model = previousModel
+      try {
+        this.contextManager.onModelChanged(previousModel)
+        this.moduleManager.notifyModelChanged(previousModel)
+      } catch { /* best-effort rollback */ }
+      throw err
+    }
   }
 
   getCostTracker(): CostTracker {

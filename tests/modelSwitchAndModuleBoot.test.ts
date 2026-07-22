@@ -342,13 +342,11 @@ describe('P0-7.A: groupByDependencyDepth', () => {
     expect(layers[1].map(m => m.name).sort()).toEqual(['b1', 'b2'])
   })
 
-  it('stranded cyclic modules land in a final best-effort layer', () => {
+  it('cyclic modules cause groupByDependencyDepth to throw (five_goal §十二 P2-1)', () => {
     const a: AgentModule = { name: 'a', dependencies: ['b'], boot: () => ({}) }
     const b: AgentModule = { name: 'b', dependencies: ['a'], boot: () => ({}) }
-    const layers = groupByDependencyDepth([a, b])
-    // All cyclic modules are stranded — they go in one final layer.
-    expect(layers).toHaveLength(1)
-    expect(layers[0].map(m => m.name).sort()).toEqual(['a', 'b'])
+    // Cyclic dependencies must fail — not be silently booted.
+    expect(() => groupByDependencyDepth([a, b])).toThrow(/circular module dependency/i)
   })
 })
 

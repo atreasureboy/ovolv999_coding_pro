@@ -44,10 +44,12 @@ export interface ModuleBootOutput {
  * can boot in parallel, but layer N+1 does not start until every
  * surviving module in layer N has resolved. Modules with no
  * dependencies (or whose dependencies were filtered out) land in
- * layer 0. Cycles are broken by treating a node currently being
- * visited as already-resolved — emitting a stderr warning so the
- * operator notices (intentionally not a hard throw, to preserve
- * backwards compatibility with existing module sets).
+ * layer 0.
+ *
+ * Cyclic dependencies are a hard error (five_goal §十二 P2-1):
+ * the function THROWS, which propagates through boot() and aborts
+ * engine startup. This prevents a broken module graph from booting
+ * in a partially-initialised state.
  *
  * Returns an array of layers (each an AgentModule[]); layers run
  * strictly in order, modules within a layer run concurrently.
@@ -61,14 +63,6 @@ export function groupByDependencyDepth(modules: AgentModule[]): AgentModule[][] 
     byName.set(m.name, m)
     remaining.set(m.name, m)
   }
-  // Iteratively peel zero-residual layers. A module is "ready" when
-  // every dependency in its list is either unknown to this registry
-  // (treated as external/satisfied — preserves previous behavior of
-  // silently skipping unknown deps) or has already been assigned a
-  // depth in a PRIOR layer. We must NOT assign depths to ready
-  // modules until after their entire layer is collected, otherwise
-  // a sibling in the same layer could see its co-dependent as
-  // "already resolved" and end up in the wrong layer.
   const layers: AgentModule[][] = []
   let progress = true
   while (remaining.size > 0 && progress) {
@@ -83,8 +77,6 @@ export function groupByDependencyDepth(modules: AgentModule[]): AgentModule[][] 
       }
     }
     if (ready.length > 0) {
-      // Assign depths AFTER collecting the layer so siblings don't
-      // see each other as resolved mid-pass.
       const depth = layers.length
       for (const m of ready) depthById.set(m.name, depth)
       layers.push(ready)
@@ -92,15 +84,11 @@ export function groupByDependencyDepth(modules: AgentModule[]): AgentModule[][] 
     }
   }
   if (remaining.size > 0) {
-    // Cyclic or unsatisfiable dependencies. Emit a warning so the
-    // operator can investigate, then put the stragglers in a final
-    // layer so they still boot (preserves the prior Promise.all
-    // behavior rather than bricking the runtime).
+    // Cyclic or unsatisfiable dependencies — refuse to boot.
     const stranded = Array.from(remaining.values()).map(m => m.name).join(', ')
-    process.stderr.write(
-      `[ModuleManager] could not fully resolve module dependencies; booting remaining as best-effort layer: ${stranded}\n`,
+    throw new Error(
+      `[ModuleManager] circular module dependency detected — refusing to boot: ${stranded}`,
     )
-    layers.push(Array.from(remaining.values()))
   }
   return layers
 }
