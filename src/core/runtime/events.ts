@@ -40,6 +40,7 @@ export type RunEvent =
   | { type: 'MAX_ITERATIONS_REACHED'; maxIterations: number }
   | { type: 'RUN_COMPLETED'; result: TurnResult }
   | { type: 'RUN_FAILED'; error: string; output: string }
+  | { type: 'MODEL_CHANGED'; from: string; to: string }
 
 export type RunEventType = RunEvent['type']
 

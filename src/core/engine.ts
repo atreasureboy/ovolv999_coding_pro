@@ -47,7 +47,7 @@ import { ToolRegistry } from './toolRuntime/toolRegistry.js'
 import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
 import { RunEventEmitter } from './runtime/events.js'
-import { ExecutionRunRegistry } from './executionRun.js'
+import { ExecutionRunRegistry, isTerminalRunStatus } from './executionRun.js'
 import { ResourceScheduler } from './resourceScheduler.js'
 import {
   ExecutionRunEventBus,
@@ -124,25 +124,10 @@ export class ExecutionEngine {
       this.runStore = store
       this.runRegistry = recovered
       bus = new ExecutionRunEventBus(recovered, store)
-      // Mark any run that was 'running'/'preparing'/'verifying' at
-      // crash time as 'failed' — there's no worker to pick it back up.
-      for (const run of recovered.list()) {
-        if (
-          run.status === 'preparing' ||
-          run.status === 'running' ||
-          run.status === 'verifying' ||
-          run.status === 'waiting'
-        ) {
-          try {
-            recovered.transition(run.runId, 'failed', {
-              phase: 'recovery-marked-failed',
-              error: 'process restarted mid-run',
-            })
-          } catch {
-            // transition may fail if already terminal; best-effort.
-          }
-        }
-      }
+      // P2-7: non-terminal runs are reconciled AFTER tools are created
+      // so we can try reattach for external_worker runs. See
+      // recoverNonTerminalRuns() below.
+      this.pendingRecovery = true
     } else {
       this.runRegistry = registry
       bus = new ExecutionRunEventBus(registry)
@@ -178,7 +163,7 @@ export class ExecutionEngine {
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
     this.backgroundTaskManager = new BackgroundTaskManager()
-    this.sharedState = new SharedRuntimeState(config.planMode ?? false)
+    this.sharedState = new SharedRuntimeState(config.planMode ?? false, config.model)
     this.fileHistory = config.sessionDir ? new FileHistory(config.sessionDir) : null
     this.permissionManager = config.permissionManager ?? new PermissionManager()
     if (!config.permissionManager) {
@@ -259,9 +244,117 @@ export class ExecutionEngine {
       eventEmitter: this.eventEmitter,
       runRegistry: this.runRegistry,
     })
+
+    // P2-7: reconcile non-terminal runs AFTER tools are created so
+    // recoverWorkers() can call adapter.reattach().
+    this.recoverNonTerminalRuns()
   }
 
   private tools: Tool[]
+  private pendingRecovery = false
+
+  /**
+   * P2-7 (five_goal §十四): reconcile non-terminal runs from the
+   * previous process. Called synchronously at the end of the
+   * constructor.
+   *
+   *   non-worker runs (turn/agent/workflow/shell_task) → 'failed'
+   *   external_worker runs                            → kept non-terminal
+   *     with phase 'recovery-pending-reattach' so the async
+   *     recoverWorkers() method can try reattach.
+   */
+  private recoverNonTerminalRuns(): void {
+    if (!this.pendingRecovery) return
+    this.pendingRecovery = false
+    const registry = this.runRegistry
+    const nonTerminal = registry.list().filter(r =>
+      r.status === 'preparing' ||
+      r.status === 'running' ||
+      r.status === 'verifying' ||
+      r.status === 'waiting',
+    )
+    for (const run of nonTerminal) {
+      if (run.kind === 'external_worker') {
+        // Defer to async recoverWorkers() — keep non-terminal.
+        try {
+          registry.update(run.runId, {
+            phase: 'recovery-pending-reattach',
+            error: 'process restarted mid-run',
+          })
+        } catch { /* best-effort */ }
+      } else {
+        // Non-worker runs cannot survive restart.
+        try {
+          registry.transition(run.runId, 'failed', {
+            phase: 'recovery-marked-failed',
+            error: 'process restarted mid-run',
+          })
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+
+  /**
+   * P2-7: try to reattach external_worker runs that survived the
+   * process restart. For each pending-reattach run, checks if the
+   * tmux session still exists via the tool's WorkerAdapter.reattach().
+   * On success, the run stays non-terminal and the runId→session
+   * mapping is restored. On failure, the run transitions to 'lost'.
+   *
+   * Call this once after construction (e.g. in the boot flow) if
+   * executionRunLogDir is configured.
+   */
+  async recoverWorkers(): Promise<{ reattached: number; lost: number }> {
+    const registry = this.runRegistry
+    const pending = registry.list().filter(r =>
+      r.kind === 'external_worker' &&
+      r.phase === 'recovery-pending-reattach' &&
+      !isTerminalRunStatus(r.status),
+    )
+    if (pending.length === 0) return { reattached: 0, lost: 0 }
+
+    // Find WorkerAdapter tools.
+    const adapters: import('./workerAdapter.js').WorkerAdapter[] = []
+    for (const tool of this.tools) {
+      if (typeof (tool as { reattach?: unknown }).reattach === 'function') {
+        adapters.push(tool as unknown as import('./workerAdapter.js').WorkerAdapter)
+      }
+    }
+
+    let reattached = 0
+    let lost = 0
+    for (const run of pending) {
+      let didReattach = false
+      for (const adapter of adapters) {
+        if (!adapter.reattach) continue
+        try {
+          const handle = await adapter.reattach(run.runId, {
+            type: 'tmux',
+            sessionId: run.worker,
+          })
+          if (handle) {
+            didReattach = true
+            break
+          }
+        } catch { /* best-effort */ }
+      }
+      if (didReattach) {
+        try {
+          registry.update(run.runId, { phase: 'reattached', error: undefined })
+        } catch { /* best-effort */ }
+        reattached++
+      } else {
+        try {
+          registry.transition(run.runId, 'lost', {
+            phase: 'recovery-reattach-failed',
+            error: 'worker pane not found after restart',
+          })
+        } catch { /* best-effort */ }
+        lost++
+      }
+    }
+    return { reattached, lost }
+  }
 
   private deriveEnabledModules(): string[] {
     if (this.config.enabledModules !== undefined) {
@@ -424,11 +517,20 @@ export class ExecutionEngine {
       this.contextManager.onModelChanged(model)
       this.moduleManager.notifyModelChanged(model)
       this.modelGateway.resetStreamUsageLatch()
+      // P2-4: update shared RuntimeModelState + notify subscribers.
+      this.sharedState.updateModelState({ model })
+      // P2-5: emit structured event.
+      this.eventEmitter.emit({
+        type: 'MODEL_CHANGED',
+        from: previousModel,
+        to: model,
+      })
     } catch (err) {
       this.config.model = previousModel
       try {
         this.contextManager.onModelChanged(previousModel)
         this.moduleManager.notifyModelChanged(previousModel)
+        this.sharedState.updateModelState({ model: previousModel })
       } catch { /* best-effort rollback */ }
       throw err
     }

@@ -284,21 +284,17 @@ describe('compactionViolations', () => {
     )
   })
 
-  it('does NOT flag fields that are allowed to change (objective, nextActions, decisions, filesRead, artifacts, verification.passed)', () => {
+  it('does NOT flag fields that are allowed to change (objective value, nextActions when no unresolved, filesRead, verification.passed)', () => {
     const before: WorkingState = {
       ...emptyWorkingState('old'),
       nextActions: ['old step'],
-      decisions: [{ choice: 'old', rationale: 'r' }],
       filesRead: ['/old'],
-      artifacts: [{ id: 'old', kind: 'log' }],
       verification: { passed: ['old-pass'], failed: [] },
     }
     const after: WorkingState = {
       ...emptyWorkingState('new'),
       nextActions: [],
-      decisions: [],
       filesRead: [],
-      artifacts: [],
       verification: { passed: [], failed: [] },
     }
     expect(compactionViolations(before, after)).toEqual([])
@@ -329,6 +325,68 @@ describe('assertCompactionInvariants', () => {
       expect((e as CompactionInvariantError).violations).toHaveLength(1)
       expect((e as CompactionInvariantError).violations[0]!.field).toBe('constraints')
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// INV-6..9: extended compaction invariants (P1-8)
+// ─────────────────────────────────────────────────────────────────────
+describe('INV-6..9: extended compaction invariants', () => {
+  it('INV-6: objective must not be cleared', () => {
+    const before = emptyWorkingState('do important task')
+    const after = emptyWorkingState('')
+    const v = compactionViolations(before, after)
+    expect(v.some((x) => x.field === 'objective')).toBe(true)
+  })
+
+  it('INV-6: objective value CAN change (just not cleared)', () => {
+    const before = emptyWorkingState('old goal')
+    const after = emptyWorkingState('refined goal')
+    expect(compactionViolations(before, after)).toEqual([])
+  })
+
+  it('INV-7: decisions are additive', () => {
+    const before: WorkingState = {
+      ...emptyWorkingState('g'),
+      decisions: [{ choice: 'use postgres', rationale: 'r' }],
+    }
+    const after = emptyWorkingState('g')
+    const v = compactionViolations(before, after)
+    expect(v.some((x) => x.field === 'decisions')).toBe(true)
+  })
+
+  it('INV-8: nextActions must not be cleared while unresolved exist', () => {
+    const before: WorkingState = {
+      ...emptyWorkingState('g'),
+      nextActions: ['fix tests'],
+      unresolved: ['tests broken'],
+    }
+    const after: WorkingState = {
+      ...emptyWorkingState('g'),
+      nextActions: [],
+      unresolved: ['tests broken'],
+    }
+    const v = compactionViolations(before, after)
+    expect(v.some((x) => x.field === 'nextActions')).toBe(true)
+  })
+
+  it('INV-8: nextActions CAN be cleared when nothing unresolved', () => {
+    const before: WorkingState = {
+      ...emptyWorkingState('g'),
+      nextActions: ['old step'],
+    }
+    const after = emptyWorkingState('g')
+    expect(compactionViolations(before, after)).toEqual([])
+  })
+
+  it('INV-9: artifacts are additive', () => {
+    const before: WorkingState = {
+      ...emptyWorkingState('g'),
+      artifacts: [{ id: 'diff-1', kind: 'diff' }],
+    }
+    const after = emptyWorkingState('g')
+    const v = compactionViolations(before, after)
+    expect(v.some((x) => x.field === 'artifacts')).toBe(true)
   })
 })
 

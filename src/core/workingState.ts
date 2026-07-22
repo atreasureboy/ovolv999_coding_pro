@@ -346,6 +346,44 @@ export function compactionViolations(
     })
   }
 
+  // INV-6: objective (must not be cleared while a task is in flight)
+  if (before.objective && !after.objective) {
+    out.push({
+      field: 'objective',
+      detail: 'objective was dropped during compaction',
+    })
+  }
+
+  // INV-7: decisions (additive only — never silently revoke a decision)
+  const beforeDecisions = new Set(before.decisions.map((d) => d.choice))
+  const afterDecisions = new Set(after.decisions.map((d) => d.choice))
+  const droppedDecisions = [...beforeDecisions].filter((d) => !afterDecisions.has(d))
+  if (droppedDecisions.length > 0) {
+    out.push({
+      field: 'decisions',
+      detail: `dropped ${droppedDecisions.length} decision(s)`,
+    })
+  }
+
+  // INV-8: nextActions (must not be emptied while unresolved items exist)
+  if (before.nextActions.length > 0 && after.nextActions.length === 0 && before.unresolved.length > 0) {
+    out.push({
+      field: 'nextActions',
+      detail: 'nextActions cleared while unresolved items remain',
+    })
+  }
+
+  // INV-9: artifacts (additive only — references must not be lost)
+  const beforeArtifactIds = new Set(before.artifacts.map((a) => a.id))
+  const afterArtifactIds = new Set(after.artifacts.map((a) => a.id))
+  const droppedArtifacts = [...beforeArtifactIds].filter((a) => !afterArtifactIds.has(a))
+  if (droppedArtifacts.length > 0) {
+    out.push({
+      field: 'artifacts',
+      detail: `dropped ${droppedArtifacts.length} artifact(s)`,
+    })
+  }
+
   return out
 }
 
