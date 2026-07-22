@@ -37,16 +37,20 @@ import { ListMcpResourcesTool, ReadMcpResourceTool } from './mcpResources.js'
 import { GoalTool } from './goal.js'
 
 /**
- * Wiring for the per-engine AgentTool instance. All fields are REQUIRED
- * — when an `AgentWiring` is supplied to `createTools`, it must be
- * complete. `createTools`'s second parameter itself is OPTIONAL: when
- * omitted, an `AgentTool` with no wiring is constructed and will return
- * a "not initialized" error if its action is invoked.
+ * Wiring for the per-engine AgentTool instance.
+ *
+ * `factory`/`parentConfig`/`parentRenderer` are required for full
+ * sub-agent delegation. However, `runRegistry` alone may be supplied
+ * (without the factory trio) so that ClaudeCodeTool — which doesn't
+ * need an agentFactory — still receives the registry for child-run
+ * tracking. When `factory` is absent, AgentTool returns a "not
+ * initialized" error if its action is invoked, but ClaudeCodeTool
+ * works normally.
  */
 export interface AgentWiring {
-  factory: AgentChildEngineFactory
-  parentConfig: EngineConfig
-  parentRenderer: unknown
+  factory?: AgentChildEngineFactory
+  parentConfig?: EngineConfig
+  parentRenderer?: unknown
   /**
    * Optional ExecutionRun registry (fi_goal.md §三). When supplied,
    * AgentTool and ClaudeCodeTool create child runs for every

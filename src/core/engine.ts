@@ -48,6 +48,7 @@ import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
 import { RunEventEmitter } from './runtime/events.js'
 import { ExecutionRunRegistry } from './executionRun.js'
+import { ResourceScheduler } from './resourceScheduler.js'
 import {
   ExecutionRunEventBus,
   JsonlEventStore,
@@ -88,6 +89,12 @@ export class ExecutionEngine {
    */
   private readonly runEventBus: ExecutionRunEventBus
   private readonly runStore?: JsonlEventStore
+  /**
+   * P1-1 (five_goal §八): ResourceScheduler is ALWAYS present and
+   * wired into ToolScheduler. Per-tool resource claims (file/dir/git
+   * R/W/X) are acquired before execution and released in finally.
+   */
+  private readonly resourceScheduler: ResourceScheduler
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     this.config = applyAgentToConfig(config)
@@ -98,13 +105,76 @@ export class ExecutionEngine {
       maxRetries: 5,
       timeout: 120_000,
     })
+    // ── ExecutionRun registry + event bus (five_goal P0-1) ───────────
+    // Registry and bus ALWAYS exist — the spec forbids tying "has a
+    // Run registry" to "has persistence configured". Only the
+    // EventStore (JSONL backing) is optional; the in-memory registry
+    // and bus are core runtime state.
+    //
+    // CREATED FIRST (before tools, executor, scheduler, coordinator)
+    // so every downstream subsystem can be wired with the registry
+    // handle. Previously createTools ran here and never received the
+    // registry, leaving AgentTool/ClaudeCodeTool unable to mint child
+    // runs — a critical wiring gap.
+    const registry = new ExecutionRunRegistry()
+    let bus: ExecutionRunEventBus
+    if (config.executionRunLogDir) {
+      const store = new JsonlEventStore(config.executionRunLogDir)
+      const recovered = recoverRegistryFromStore(store)
+      this.runStore = store
+      this.runRegistry = recovered
+      bus = new ExecutionRunEventBus(recovered, store)
+      // Mark any run that was 'running'/'preparing'/'verifying' at
+      // crash time as 'failed' — there's no worker to pick it back up.
+      for (const run of recovered.list()) {
+        if (
+          run.status === 'preparing' ||
+          run.status === 'running' ||
+          run.status === 'verifying' ||
+          run.status === 'waiting'
+        ) {
+          try {
+            recovered.transition(run.runId, 'failed', {
+              phase: 'recovery-marked-failed',
+              error: 'process restarted mid-run',
+            })
+          } catch {
+            // transition may fail if already terminal; best-effort.
+          }
+        }
+      }
+    } else {
+      this.runRegistry = registry
+      bus = new ExecutionRunEventBus(registry)
+    }
+    this.runEventBus = bus
+
+    // ── ResourceScheduler (five_goal P1-1) ──────────────────────────
+    // Always created and wired into ToolScheduler. Tools declare
+    // per-input claims via metadata.claims; the scheduler acquires
+    // them atomically before execution and releases in finally.
+    this.resourceScheduler = new ResourceScheduler({
+      workspaceKey: config.cwd,
+      registry: this.runRegistry,
+      eventBus: bus,
+    })
+
+    // ── Tools (NOW wired with the registry) ─────────────────────────
+    // createTools receives runRegistry so AgentTool/ClaudeCodeTool
+    // can create child runs linked to the current TurnRun. The
+    // per-turn runId is still injected dynamically via
+    // ToolContext.execution (coordinator.ts) — the constructor only
+    // passes the registry handle, not a fixed parentRunId.
     this.tools = config.agentFactory
       ? createTools(config.extraTools ?? [], {
           factory: config.agentFactory,
           parentConfig: config,
           parentRenderer: renderer,
+          runRegistry: this.runRegistry,
         })
-      : createTools(config.extraTools ?? [])
+      : createTools(config.extraTools ?? [], {
+          runRegistry: this.runRegistry,
+        })
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
     this.backgroundTaskManager = new BackgroundTaskManager()
@@ -167,57 +237,8 @@ export class ExecutionEngine {
       sharedState: this.sharedState,
       eventEmitter: this.eventEmitter,
       claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
+      resourceScheduler: this.resourceScheduler,
     })
-
-    // ── ExecutionRun registry + event bus (five_goal P0-1) ───────────
-    // Registry and bus ALWAYS exist — the spec forbids tying "has a
-    // Run registry" to "has persistence configured". Only the
-    // EventStore (JSONL backing) is optional; the in-memory registry
-    // and bus are core runtime state.
-    //
-    // Set up BEFORE the coordinator and tools so they can be wired
-    // with the registry handle (GAP-C: turn-level run tracking).
-    const registry = new ExecutionRunRegistry()
-    let bus: ExecutionRunEventBus
-    if (config.executionRunLogDir) {
-      const store = new JsonlEventStore(config.executionRunLogDir)
-      const recovered = recoverRegistryFromStore(store)
-      // Splice recovered runs into the fresh registry by replacing
-      // the registry entirely. (recoverRegistryFromStore returns a
-      // registry instance already populated with prior runs.)
-      this.runStore = store
-      // Re-use the recovered registry as our authoritative one.
-      this.runRegistry = recovered
-      bus = new ExecutionRunEventBus(recovered, store)
-      // Mark any run that was 'running'/'preparing'/'verifying' at
-      // crash time as 'failed' — there's no worker to pick it back up.
-      // (five_goal P2-6: this is "state identification", not auto
-      // recovery — that requires reattach(), see WorkerAdapter.)
-      for (const run of recovered.list()) {
-        if (
-          run.status === 'preparing' ||
-          run.status === 'running' ||
-          run.status === 'verifying' ||
-          run.status === 'waiting'
-        ) {
-          try {
-            recovered.transition(run.runId, 'failed', {
-              phase: 'recovery-marked-failed',
-              error: 'process restarted mid-run',
-            })
-          } catch {
-            // transition may fail if already terminal; best-effort.
-          }
-        }
-      }
-    } else {
-      // No persistence configured — registry + bus still exist so
-      // every turn still gets a RunId, every tool can still spawn
-      // child runs, and observers can still subscribe to events.
-      this.runRegistry = registry
-      bus = new ExecutionRunEventBus(registry)
-    }
-    this.runEventBus = bus
 
     this.coordinator = new RuntimeCoordinator({
       config: this.config,
@@ -468,5 +489,31 @@ export class ExecutionEngine {
 
   getSharedState(): SharedRuntimeState {
     return this.sharedState
+  }
+
+  /**
+   * Returns the base tool list constructed by createTools. These are
+   * the same Tool instances wired into the ToolRegistry. Useful for
+   * integration tests that need to inspect per-tool wiring (e.g.
+   * verify AgentTool.runRegistry was set by the Engine constructor).
+   */
+  getTools(): Tool[] {
+    return this.tools
+  }
+
+  /**
+   * Returns the ToolScheduler instance used by the coordinator.
+   * Integration tests inspect its deps to verify ResourceScheduler
+   * wiring.
+   */
+  getToolScheduler(): ToolScheduler {
+    return this.toolScheduler
+  }
+
+  /**
+   * Returns the ResourceScheduler. Always present (five_goal P1-1).
+   */
+  getResourceScheduler(): ResourceScheduler {
+    return this.resourceScheduler
   }
 }

@@ -275,9 +275,9 @@ function clonePermissionManager(mgr: PermissionManager): PermissionManager {
  * wiring is provided; the runtime guard in `execute()` fires in that case.
  */
 export interface AgentToolWiring {
-  factory: AgentChildEngineFactory
-  parentConfig: EngineConfig
-  parentRenderer: unknown
+  factory?: AgentChildEngineFactory
+  parentConfig?: EngineConfig
+  parentRenderer?: unknown
   /**
    * Optional ExecutionRun registry (fi_goal.md §三 Phase 2). When
    * supplied, every Agent invocation creates a child ExecutionRun,
