@@ -421,6 +421,7 @@ export class AgentTool implements Tool, WorkerAdapter {
       case 'failed':
       case 'verification_failed':
       case 'timed_out':
+      case 'lost':
         return 'failed'
       case 'cancelled': return 'cancelled'
       case 'blocked': return 'waiting'
@@ -465,7 +466,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * reattach() is not supported for in-process AgentTool — child
    * engines cannot survive a host restart. Always returns null.
    */
-  async reattach?(_descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
+  async reattach?(_runId: string, _descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
     return null
   }
 

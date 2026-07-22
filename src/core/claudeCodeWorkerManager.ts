@@ -61,6 +61,10 @@ export interface ClaudeWorkerWaitResult {
   matched: boolean
   output: string
   aborted?: boolean
+  /** 'done' for success sentinel, 'failed' for TASK_FAILED sentinel. */
+  matchKind?: 'done' | 'failed'
+  /** Extracted reason from a [TASK_FAILED <id> reason=...] match. */
+  failureReason?: string
 }
 
 const DEFAULT_CLAUDE_COMMAND = 'claude'
@@ -124,7 +128,8 @@ export function buildClaudeWorkerPrompt(task: string, instructions?: string, tas
     'You are a Claude Code worker controlled by a supervisor agent.',
     'Follow the task exactly. Keep changes narrowly scoped.',
     'Do not commit. Do not push. Do not modify unrelated files.',
-    'When complete, print the final block below EXACTLY (preserving the id):',
+    'When complete, print the final block below EXACTLY (preserving the id).',
+    'If the task FAILED and cannot be completed, print the failure block instead.',
     '',
     '[TASK]',
     task,
@@ -135,6 +140,9 @@ export function buildClaudeWorkerPrompt(task: string, instructions?: string, tas
     'Summary:',
     'Files:',
     'Tests:',
+    '',
+    '[OR — IF THE TASK FAILED]',
+    `[TASK_FAILED ${id} reason=<short description>]`,
   ].filter(Boolean).join('\n')
 }
 
@@ -150,10 +158,13 @@ export function generateTaskId(): string {
  * that satisfies the match.
  */
 export function taskDonePattern(taskId: string): string {
-  // Escape regex metacharacters in the id (UUID is safe, but
-  // defend against future callers passing user-controlled ids).
   const escaped = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return `^\\[TASK_DONE ${escaped}\\]$`
+}
+
+export function taskFailedPattern(taskId: string): string {
+  const escaped = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return `^\\[TASK_FAILED ${escaped} reason=(.+?)\\]$`
 }
 
 function compilePattern(pattern: string): RegExp {
@@ -291,24 +302,28 @@ export class ClaudeCodeWorkerManager {
   }
 
   async waitFor(options: ClaudeWorkerWaitOptions): Promise<ClaudeWorkerWaitResult> {
-    // P0-5: prefer the task-id-bound pattern when a taskId is
-    // supplied so a reused session's stale [DONE] / [TASK_DONE ...]
-    // lines cannot cause a false-positive match. Caller-supplied
-    // `pattern` still wins for callers that haven't migrated yet
-    // (backwards compat — old callers passing pattern get the old
-    // behavior verbatim).
     const pattern = options.pattern
       ?? (options.taskId ? taskDonePattern(options.taskId) : DEFAULT_DONE_PATTERN)
+    const failPattern = options.taskId && !options.pattern
+      ? taskFailedPattern(options.taskId)
+      : null
     const timeoutMs = Math.max(1, options.timeoutMs ?? 120_000)
     const intervalMs = Math.max(100, options.intervalMs ?? 2_000)
     const deadline = Date.now() + timeoutMs
     const regex = compilePattern(pattern)
+    const failRegex = failPattern ? compilePattern(failPattern) : null
     let output = ''
 
     while (Date.now() <= deadline) {
       if (options.signal?.aborted) return { matched: false, output, aborted: true }
       output = await this.capture(options.session, options.lines ?? 120)
-      if (regex.test(output)) return { matched: true, output }
+      if (failRegex) {
+        const failMatch = output.match(failRegex)
+        if (failMatch) {
+          return { matched: true, output, matchKind: 'failed', failureReason: failMatch[1] }
+        }
+      }
+      if (regex.test(output)) return { matched: true, output, matchKind: 'done' }
       const remainingMs = deadline - Date.now()
       if (remainingMs <= 0) break
       const state = await delay(Math.min(intervalMs, remainingMs), options.signal)

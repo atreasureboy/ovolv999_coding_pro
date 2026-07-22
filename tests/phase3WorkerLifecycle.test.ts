@@ -153,6 +153,8 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
     // Kill the pane out-of-band — registry still says 'waiting'.
     calls.stopped.add('s1')
     expect(await t.status(out.runId!)).toBe('lost')
+    // GAP 5.3: status() must now write back to the registry.
+    expect(registry.get(out.runId!)!.status).toBe('lost')
   })
 
   it('status() returns "unknown" for untracked runId', async () => {
@@ -214,19 +216,20 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
   it('reattach() returns null when tmux session is gone', async () => {
     const { manager } = makeFakeManager({ exists: new Set() })
     const t = new ClaudeCodeTool(manager as never)
-    const handle = await t.reattach!({ type: 'tmux', sessionId: 'gone' })
+    const handle = await t.reattach!('orig-run-id', { type: 'tmux', sessionId: 'gone' })
     expect(handle).toBeNull()
   })
 
-  it('reattach() returns a fresh handle when tmux session still exists', async () => {
+  it('reattach() returns a handle with the ORIGINAL runId when tmux session still exists', async () => {
     const { manager } = makeFakeManager()
     const t = new ClaudeCodeTool(manager as never)
-    const handle = await t.reattach!({ type: 'tmux', sessionId: 's1' })
+    const handle = await t.reattach!('orig-run-id', { type: 'tmux', sessionId: 's1' })
     expect(handle).not.toBeNull()
+    expect(handle!.runId).toBe('orig-run-id')
     expect(handle!.workerKind).toBe('claude-code')
     expect(handle!.descriptor.type).toBe('tmux')
     expect(handle!.descriptor.sessionId).toBe('s1')
-    // The new runId can be steered.
+    // The original runId can be steered.
     expect(await t.steer(handle!.runId, 'hi')).toBe(true)
   })
 
@@ -283,7 +286,7 @@ describe('P0-8: AgentTool provides WorkerAdapter stubs', () => {
 
   it('reattach() always returns null — children do not survive restart', async () => {
     const t = makeStubAgent()
-    expect(await t.reattach!({ type: 'internal' })).toBeNull()
+    expect(await t.reattach!('whatever', { type: 'internal' })).toBeNull()
   })
 
   it('cancel() transitions the registry and clears steer queue', async () => {

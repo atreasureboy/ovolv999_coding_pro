@@ -118,6 +118,7 @@ function terminalEventType(status: RunStatus): CoreRunEventType {
     case 'cancelled':           return 'run.cancelled'
     case 'timed_out':           return 'run.failed'
     case 'verification_failed': return 'run.failed'
+    case 'lost':                return 'run.failed'
     default:                    return 'run.progress'
   }
 }
@@ -636,12 +637,11 @@ function applyEventToRegistry(registry: ExecutionRunRegistry, event: RunEventEnv
 }
 
 function statusFromEventType(type: string, current: RunStatus): RunStatus | undefined {
-  // Core event types carry an explicit terminal status.
   if (type === 'run.completed') return 'succeeded'
   if (type === 'run.failed') return 'failed'
   if (type === 'run.cancelled') return 'cancelled'
   if (type === 'run.blocked') return 'blocked'
+  if (type === 'run.lost') return 'lost'
   if (type === 'run.started') return current === 'queued' ? 'preparing' : current
-  // run.progress — no status change, just a phase update.
   return undefined
 }

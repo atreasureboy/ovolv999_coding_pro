@@ -136,6 +136,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     })
     this.runSessions.set(runId, result.session)
     if (registry) {
+      try { registry.transition(runId, 'running', { phase: 'task-sent', worker: result.session }) } catch { /* best-effort */ }
       try { registry.transition(runId, 'waiting', { phase: 'dispatched', worker: result.session }) } catch { /* best-effort */ }
     }
     return {
@@ -165,6 +166,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
         if (run.status === 'cancelled') return 'cancelled'
         if (run.status === 'timed_out') return 'failed'
         if (run.status === 'verification_failed') return 'failed'
+        if (run.status === 'lost') return 'lost'
       }
     }
     // Transport-level liveness check.
@@ -176,8 +178,19 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     }
     if (!exists) {
       // Pane gone but registry still non-terminal → the worker died
-      // out-of-band. Distinct from 'failed' (which implies the run
-      // completed with an error signal); 'lost' means we don't know.
+      // out-of-band. Write back to the registry so the Run doesn't
+      // stay stuck in 'waiting' forever.
+      if (this.runRegistry) {
+        const run = this.runRegistry.get(runId)
+        if (run && !isTerminalRunStatus(run.status)) {
+          try {
+            this.runRegistry.transition(runId, 'lost', {
+              phase: 'pane-disappeared',
+              error: 'worker pane no longer exists',
+            })
+          } catch { /* best-effort */ }
+        }
+      }
       return 'lost'
     }
     // Pane exists — assume still running.
@@ -237,6 +250,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
       registryStatus === 'succeeded' ? 'succeeded'
       : registryStatus === 'cancelled' ? 'cancelled'
       : registryStatus === 'failed' || registryStatus === 'verification_failed' || registryStatus === 'timed_out' ? 'failed'
+      : registryStatus === 'lost' ? 'lost'
       : live === 'lost' ? 'lost'
       : 'failed'
     return {
@@ -250,12 +264,68 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
   }
 
   /**
-   * OPTIONAL: reconnect to a worker after a host restart. Given only
-   * the serialisable descriptor (sessionId), reconstruct the runId↔
-   * session mapping and return a fresh handle. Returns null if the
-   * tmux pane is gone (run should be marked 'lost').
+   * GAP 5.2 (five_goal §六): block until the worker reaches a terminal
+   * state. Polls the tmux pane for [TASK_DONE] / [TASK_FAILED], then
+   * transitions the run through verifying→succeeded or →failed.
    */
-  async reattach(descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
+  async wait(runId: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<WorkerResult> {
+    const session = this.runSessions.get(runId)
+    if (!session) {
+      return { runId, status: 'unknown' as WorkerStatus, error: 'unknown runId' }
+    }
+    if (this.runRegistry) {
+      const run = this.runRegistry.get(runId)
+      if (run && isTerminalRunStatus(run.status)) {
+        return this.collect(runId)
+      }
+      try { this.runRegistry.transition(runId, 'waiting', { phase: 'polling-completion' }) } catch { /* best-effort */ }
+    }
+    const result = await this.manager.waitFor({
+      session,
+      timeoutMs: opts?.timeoutMs ?? 120_000,
+      signal: opts?.signal,
+    })
+    if (result.aborted) {
+      if (this.runRegistry) {
+        try { this.runRegistry.transition(runId, 'cancelled', { phase: 'aborted', error: 'wait aborted via signal' }) } catch { /* best-effort */ }
+      }
+    } else if (result.matched) {
+      if (result.matchKind === 'failed') {
+        if (this.runRegistry) {
+          try { this.runRegistry.transition(runId, 'failed', { phase: 'task-failed', error: result.failureReason ?? 'TASK_FAILED' }) } catch { /* best-effort */ }
+        }
+      } else {
+        if (this.runRegistry) {
+          try { this.runRegistry.transition(runId, 'verifying', { phase: 'completion-matched' }) } catch { /* best-effort */ }
+          try { this.runRegistry.transition(runId, 'succeeded', { phase: 'finalized' }) } catch { /* best-effort */ }
+        }
+      }
+    } else {
+      if (this.runRegistry) {
+        try { this.runRegistry.transition(runId, 'timed_out', { phase: 'wait-timeout', error: 'waitFor timed out' }) } catch { /* best-effort */ }
+      }
+    }
+    // Collect BEFORE cleaning up the runSession mapping.
+    const collected = await this.collect(runId)
+    if (isTerminalRunStatus(this.runRegistry?.get(runId)?.status ?? 'succeeded')) {
+      this.runSessions.delete(runId)
+    }
+    return collected
+  }
+
+  private transitionTerminal(runId: string, to: RunStatus, patch?: Record<string, unknown>): void {
+    if (!this.runRegistry) return
+    try { this.runRegistry.transition(runId, to, patch as never) } catch { /* best-effort */ }
+    if (isTerminalRunStatus(to)) this.runSessions.delete(runId)
+  }
+
+  /**
+   * OPTIONAL: reconnect to a worker after a host restart. Given the
+   * original runId + the serialisable descriptor (sessionId),
+   * reconstruct the runId↔session mapping. Returns null if the tmux
+   * pane is gone (run should be marked 'lost').
+   */
+  async reattach(runId: string, descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
     if (descriptor.type !== 'tmux' || !descriptor.sessionId) return null
     let exists: boolean
     try {
@@ -264,11 +334,6 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
       return null
     }
     if (!exists) return null
-    // Synthesize a fresh runId — the original is lost across restart
-    // unless the host persisted it via the event store and reconciles
-    // separately. The host is responsible for stamping the original
-    // id back onto the run via registry.transition.
-    const runId = `claude-reattached-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     this.runSessions.set(runId, descriptor.sessionId)
     return {
       runId,
@@ -304,7 +369,11 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
           },
           session: {
             type: 'string',
-            description: 'tmux session name. Defaults to ovogo-claude-worker.',
+            description: 'tmux session name. Deprecated — prefer runId for runId-keyed operations.',
+          },
+          runId: {
+            type: 'string',
+            description: 'Run id returned by a prior run action. Preferred over session for capture/wait/send/stop — resolves to the correct tmux session automatically.',
           },
           command: {
             type: 'string',
@@ -361,7 +430,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
         case 'capture':
           return await this.capture(input)
         case 'wait':
-          return await this.wait(input, ctx)
+          return await this.waitAction(input, ctx)
         case 'list':
           return await this.list()
         case 'stop':
@@ -456,11 +525,12 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
         if (waited.aborted) {
           transitionRun('cancelled', { phase: 'aborted', error: 'wait aborted via signal' })
         } else if (waited.matched) {
-          // The [TASK_DONE <id>] match is the completion verification
-          // for an external worker — route through the canonical
-          // verifying → succeeded path.
-          transitionRun('verifying', { phase: 'completion-matched' })
-          transitionRun('succeeded', { phase: 'finalized' })
+          if (waited.matchKind === 'failed') {
+            transitionRun('failed', { phase: 'task-failed', error: waited.failureReason ?? 'worker reported TASK_FAILED' })
+          } else {
+            transitionRun('verifying', { phase: 'completion-matched' })
+            transitionRun('succeeded', { phase: 'finalized' })
+          }
         } else {
           transitionRun('timed_out', { phase: 'wait-timeout', error: 'waitFor timed out' })
         }
@@ -468,12 +538,17 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
           content: [
             `ClaudeCode worker: ${result.session}`,
             result.created ? 'Status: started and task sent' : 'Status: reused and task sent',
-            waited.matched ? 'Completion: matched' : 'Completion: timed out',
+            waited.matched
+              ? (waited.matchKind === 'failed' ? 'Completion: TASK_FAILED' : 'Completion: matched')
+              : 'Completion: timed out',
             '',
             waited.output || '(no output)',
           ].join('\n'),
-          isError: !waited.matched,
-        }
+          isError: !waited.matched || waited.matchKind === 'failed',
+          runId,
+          sessionId: result.session,
+          status: waited.matched ? (waited.matchKind === 'failed' ? 'failed' : 'succeeded') : 'timed_out',
+        } as ToolResult & { runId?: string; sessionId: string; status: string }
       }
 
       // P0-6 (five_goal §六): NO `succeeded` transition here. A dispatched-
@@ -509,8 +584,24 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     }
   }
 
+  /**
+   * GAP 5.1 (five_goal §六): resolve the tmux session for a tool
+   * action. Prefer the runId→session map (populated by the `run`
+   * action). Fall back to input.session for callers that haven't
+   * migrated to the runId protocol.
+   */
+  private resolveSession(input: Record<string, unknown>): string | undefined {
+    if (typeof input.runId === 'string') {
+      const s = this.runSessions.get(input.runId)
+      if (s) return s
+    }
+    if (typeof input.session === 'string') return input.session
+    return undefined
+  }
+
   private async send(input: Record<string, unknown>): Promise<ToolResult> {
-    const session = defaultSession(input)
+    const session = this.resolveSession(input)
+    if (!session) return { content: 'Error: runId or session is required for send.', isError: true }
     const text = str(input.text)
     if (!text) return { content: 'Error: text is required for send.', isError: true }
     if (!await this.manager.sessionExists(session)) return this.sessionNotFound(session)
@@ -519,30 +610,45 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
   }
 
   private async capture(input: Record<string, unknown>): Promise<ToolResult> {
-    const session = defaultSession(input)
+    const session = this.resolveSession(input)
+    if (!session) return { content: 'Error: runId or session is required for capture.', isError: true }
     if (!await this.manager.sessionExists(session)) return this.sessionNotFound(session)
     const output = await this.manager.capture(session, nonNegativeNumber(input.lines, 80))
     return { content: output || '(no output)', isError: false }
   }
 
-  private async wait(input: Record<string, unknown>, ctx?: ToolContext): Promise<ToolResult> {
-    const session = defaultSession(input)
+  private async waitAction(input: Record<string, unknown>, ctx?: ToolContext): Promise<ToolResult> {
+    const session = this.resolveSession(input)
+    if (!session) return { content: 'Error: runId or session is required for wait.', isError: true }
     if (!await this.manager.sessionExists(session)) return this.sessionNotFound(session)
+    // GAP 5.1: when resolving via runId, also thread the taskId for
+    // task-bound matching so a reused session can't satisfy the wait
+    // with a stale sentinel.
+    let taskId: string | undefined
+    if (typeof input.runId === 'string') {
+      const run = this.runRegistry?.get(input.runId)
+      taskId = run?.worker === session ? undefined : undefined
+    }
+    const customPattern = str(input.pattern) || undefined
     const result = await this.manager.waitFor({
       session,
-      pattern: str(input.pattern) || undefined,
+      pattern: customPattern,
+      taskId: customPattern ? undefined : taskId,
       timeoutMs: positiveNumber(input.timeoutMs, 120_000),
       lines: nonNegativeNumber(input.lines, 120),
       signal: ctx?.signal,
     })
     return {
       content: [
-        result.matched ? `Matched completion pattern in ${session}.` :
-          result.aborted ? `Aborted waiting for ${session}.` : `Timed out waiting for ${session}.`,
+        result.matched
+          ? (result.matchKind === 'failed'
+            ? `TASK_FAILED in ${session}${result.failureReason ? ': ' + result.failureReason : ''}.`
+            : `Matched completion pattern in ${session}.`)
+          : result.aborted ? `Aborted waiting for ${session}.` : `Timed out waiting for ${session}.`,
         '',
         result.output || '(no output)',
       ].join('\n'),
-      isError: !result.matched,
+      isError: !result.matched || result.matchKind === 'failed',
     }
   }
 
@@ -555,9 +661,18 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
   }
 
   private async stop(input: Record<string, unknown>): Promise<ToolResult> {
-    const session = defaultSession(input)
+    const session = this.resolveSession(input)
+    if (!session) return { content: 'Error: runId or session is required for stop.', isError: true }
     const result = await this.manager.stop(session)
     if (!result.stopped) return this.sessionNotFound(session)
+    // GAP 5.1: if resolved via runId, also clean up the mapping + transition.
+    if (typeof input.runId === 'string') {
+      const runId = input.runId
+      this.runSessions.delete(runId)
+      if (this.runRegistry) {
+        try { this.runRegistry.transition(runId, 'cancelled', { phase: 'stopped-by-caller' }) } catch { /* best-effort */ }
+      }
+    }
     return { content: `Stopped ClaudeCode worker: ${session}`, isError: false }
   }
 

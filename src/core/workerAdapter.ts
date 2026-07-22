@@ -172,13 +172,21 @@ export interface WorkerAdapter<
   collect(runId: string): Promise<TResult>
 
   /**
+   * OPTIONAL: block until the worker reaches a terminal state (or
+   * timeout). Returns the terminal WorkerResult — same shape as
+   * collect(). Adapters that don't support detached workers can
+   * throw 'not supported'.
+   */
+  wait?(runId: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TResult>
+
+  /**
    * OPTIONAL: reconnect to a worker after a host restart, given only
    * the serialisable WorkerDescriptor persisted earlier. Returns null
    * if the worker can no longer be found (tmux pane gone, child
    * process exited, remote host down). Returning null means the host
    * should mark the run as 'lost' (distinct from 'failed').
    */
-  reattach?(descriptor: WorkerDescriptor): Promise<WorkerHandle | null>
+  reattach?(runId: string, descriptor: WorkerDescriptor): Promise<WorkerHandle | null>
 }
 
 /**

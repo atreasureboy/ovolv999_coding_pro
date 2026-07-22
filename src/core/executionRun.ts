@@ -49,6 +49,7 @@ export type RunStatus =
   | 'timed_out'
   | 'blocked'
   | 'verification_failed'
+  | 'lost'
 
 /**
  * States from which no further transition is possible. The registry
@@ -60,6 +61,7 @@ export const TERMINAL_RUN_STATES: ReadonlySet<RunStatus> = new Set([
   'cancelled',
   'timed_out',
   'verification_failed',
+  'lost',
 ])
 
 export function isTerminalRunStatus(status: RunStatus): boolean {
@@ -76,18 +78,19 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
  * without going through `preparing` again.
  */
 const VALID_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
-  queued:      ['preparing', 'cancelled', 'failed'],
-  preparing:   ['running', 'cancelled', 'failed', 'blocked'],
-  running:     ['waiting', 'verifying', 'succeeded', 'failed', 'cancelled', 'timed_out', 'blocked'],
-  waiting:     ['running', 'verifying', 'cancelled', 'failed', 'timed_out'],
-  verifying:   ['succeeded', 'verification_failed', 'failed', 'cancelled'],
-  blocked:     ['running', 'cancelled', 'failed'],
+  queued:      ['preparing', 'cancelled', 'failed', 'lost'],
+  preparing:   ['running', 'cancelled', 'failed', 'blocked', 'lost'],
+  running:     ['waiting', 'verifying', 'succeeded', 'failed', 'cancelled', 'timed_out', 'blocked', 'lost'],
+  waiting:     ['running', 'verifying', 'cancelled', 'failed', 'timed_out', 'lost'],
+  verifying:   ['succeeded', 'verification_failed', 'failed', 'cancelled', 'lost'],
+  blocked:     ['running', 'cancelled', 'failed', 'lost'],
   // Terminals — intentionally empty.
   succeeded:           [],
   failed:              [],
   cancelled:           [],
   timed_out:           [],
   verification_failed: [],
+  lost:                [],
 }
 
 export class InvalidRunTransition extends Error {
