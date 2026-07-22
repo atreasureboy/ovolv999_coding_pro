@@ -25,7 +25,7 @@ import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { RunEventEmitter } from '../runtime/events.js'
-import { toLegacy, type AnyToolResult } from '../structuredToolResult.js'
+import { toLegacy, isStructuredResult, type AnyToolResult } from '../structuredToolResult.js'
 
 export type NotifyToolCall = (
   toolName: string,
@@ -125,10 +125,29 @@ export class ToolExecutor {
     try {
       // Tools may return either the legacy {content, isError} shape or
       // the structured shape (status/summary/exitCode/stdout/stderr/...).
-      // Normalize at the boundary so downstream consumers (scheduler, UI,
-      // model API) keep working with the legacy shape unchanged.
+      //
+      // five_goal §三: the internal execution chain MUST preserve
+      // structured fields (status, exitCode, stdout, stderr,
+      // diagnostics, artifacts, retryable) all the way through to the
+      // model-message boundary. Only ToolScheduler (which builds the
+      // final {role:'tool'} message for the model API) flattens to
+      // {content, isError} — and even there it reads content/isError
+      // from the same object.
+      //
+      // Previously this called toLegacy() which created a NEW object
+      // with ONLY {content, isError}, irretrievably dropping status,
+      // exitCode, stdout, stderr, etc. — so WorkingState, verification,
+      // and structured event consumers all saw undefined for those
+      // fields. Now we merge: the legacy conversion provides
+      // content/isError, and the structured fields are preserved on
+      // the same object for downstream readers.
       const raw: AnyToolResult = await tool.execute(input, context) as AnyToolResult
-      result = toLegacy(raw)
+      if (isStructuredResult(raw)) {
+        const legacy = toLegacy(raw)
+        result = { ...raw, content: legacy.content, isError: legacy.isError }
+      } else {
+        result = raw
+      }
     } catch (err) {
       result = {
         content: `Tool execution error: ${(err as Error).message || String(err)}`,
@@ -144,6 +163,14 @@ export class ToolExecutor {
     eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
+
+    // five_goal §四: update WorkingState from the structured tool
+    // result. Best-effort — a WorkingState bug must never break the
+    // turn. This is the single integration point: both direct executor
+    // calls and scheduler-routed calls go through here.
+    try {
+      this.deps.contextManager.applyToolEvent({ toolName, input, result })
+    } catch { /* best-effort */ }
 
     return result
   }

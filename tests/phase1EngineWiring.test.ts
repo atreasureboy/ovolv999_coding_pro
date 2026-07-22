@@ -88,8 +88,9 @@ describe('Phase 1: Engine wires Registry into Tools + ResourceScheduler into Too
     const tools = engine.getTools()
     const agent = tools.find((t) => t.name === 'Agent') as AgentTool
     expect(agent).toBeDefined()
-    expect(agent.runRegistry).toBeDefined()
-    expect(agent.runRegistry).toBeInstanceOf(ExecutionRunRegistry)
+    const reg = (agent as unknown as { runRegistry: unknown }).runRegistry
+    expect(reg).toBeDefined()
+    expect(reg).toBeInstanceOf(ExecutionRunRegistry)
     engine.dispose()
   })
 
@@ -98,8 +99,9 @@ describe('Phase 1: Engine wires Registry into Tools + ResourceScheduler into Too
     const tools = engine.getTools()
     const claude = tools.find((t) => t.name === 'ClaudeCode') as ClaudeCodeTool
     expect(claude).toBeDefined()
-    expect(claude.runRegistry).toBeDefined()
-    expect(claude.runRegistry).toBeInstanceOf(ExecutionRunRegistry)
+    const reg = (claude as unknown as { runRegistry: unknown }).runRegistry
+    expect(reg).toBeDefined()
+    expect(reg).toBeInstanceOf(ExecutionRunRegistry)
     engine.dispose()
   })
 
@@ -120,7 +122,8 @@ describe('Phase 1: Engine wires Registry into Tools + ResourceScheduler into Too
     expect(rs).toBeDefined()
     const tools = engine.getTools()
     const agent = tools.find((t) => t.name === 'Agent') as AgentTool
-    expect(agent.runRegistry).toBe(reg)
+    const agentReg = (agent as unknown as { runRegistry: unknown }).runRegistry
+    expect(agentReg).toBe(engine.getRunRegistry())
     engine.dispose()
   })
 })

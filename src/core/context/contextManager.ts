@@ -164,10 +164,11 @@ export class ContextManager {
     const { toolName, input, result } = params
     let s = this.workingState
 
-    if (result.isError !== false && result.status !== 'success') {
+    if (result.isError !== false && result.status !== 'success' && result.status !== 'blocked') {
       // Most error paths leave the state untouched — failures don't
       // mutate filesRead / filesChanged. Bash failures get recorded
-      // below as verification.failed.
+      // below as verification.failed. Agent/Worker blocked results
+      // are handled below (status === 'blocked' passes through).
       if (!(toolName === 'Bash')) return
     }
 
@@ -193,6 +194,13 @@ export class ContextManager {
           ...s,
           unresolved: s.unresolved.filter(u => !u.includes('Bash failed') || !u.endsWith(prefix)),
         }
+      }
+    } else if ((toolName === 'Agent' || toolName === 'ClaudeCode') &&
+               result.status === 'blocked') {
+      // five_goal §四: Agent/Worker blocked → unresolved
+      s = {
+        ...s,
+        unresolved: [...s.unresolved, `${toolName} blocked: ${(result.content ?? '').slice(0, 120)}`],
       }
     }
 

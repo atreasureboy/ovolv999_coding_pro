@@ -263,8 +263,16 @@ export class RuntimeCoordinator {
           }
 
           case 'llm_call': {
+            // five_goal §四: inject WorkingState into the system prompt
+            // before each LLM call. The block is empty (and thus a
+            // no-op) on the first iteration; after tools run it
+            // carries filesRead/filesChanged/verification/unresolved
+            // so the model sees structured progress without having
+            // to parse its own prior tool outputs.
+            const wsBlock = this.deps.contextManager.renderWorkingStateBlock()
+            const effectivePrompt = wsBlock ? `${systemPrompt}\n\n${wsBlock}` : systemPrompt
             const { assistantText, finishReason, rawToolCalls } =
-              await this.callLLM(systemPrompt, messages, toolDefs, turnAbortController.signal)
+              await this.callLLM(effectivePrompt, messages, toolDefs, turnAbortController.signal)
 
             if (assistantText) {
               turnAssistantSegments.push(assistantText)

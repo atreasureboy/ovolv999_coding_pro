@@ -173,6 +173,23 @@ export function addArtifact(state: WorkingState, artifact: ArtifactRef): Working
  * diff-friendly across compaction cycles.
  */
 export function serializeWorkingState(state: WorkingState): string {
+  // five_goal §四: empty WorkingState injects NO text (not even a
+  // header). This prevents polluting the system prompt with an empty
+  // skeleton block on the first turn before any tools have run.
+  const isEmpty =
+    !state.objective &&
+    state.constraints.length === 0 &&
+    state.confirmedFacts.length === 0 &&
+    state.decisions.length === 0 &&
+    state.filesRead.length === 0 &&
+    state.filesChanged.length === 0 &&
+    state.verification.passed.length === 0 &&
+    state.verification.failed.length === 0 &&
+    state.unresolved.length === 0 &&
+    state.nextActions.length === 0 &&
+    state.artifacts.length === 0
+  if (isEmpty) return ''
+
   const lines: string[] = []
   lines.push('# WorkingState (structured task context)')
   lines.push('')

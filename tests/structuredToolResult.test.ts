@@ -206,8 +206,10 @@ describe('Bash tool emits structured shape', () => {
     const s = toStructured(result)
     expect(s.status).toBe('failed')
     expect(s.exitCode).toBeGreaterThanOrEqual(1)
-    // stdout/stderr must be retained (not elided) per spec §六
-    expect(s.stdout).toBeDefined()
+    // stdout/stderr must be retained (not elided) per spec §六.
+    // `cat /no/such/path` writes its error to stderr, so stderr must
+    // be populated; stdout may be empty (undefined).
+    expect(s.stderr).toBeDefined()
   })
 
   it('non-zero exit normalizes to isError=true via toLegacy() (GAP-A fix)', async () => {

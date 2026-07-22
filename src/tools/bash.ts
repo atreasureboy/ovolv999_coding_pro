@@ -758,8 +758,9 @@ export class BashTool implements Tool {
             isError: true,
             status: 'timed_out',
             summary: `Command timed out after ${timeoutMs / 1000}s`,
-            stdout: partialOut,
-          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string })
+            stdout: stdoutOut || undefined,
+            stderr: stderrOut || undefined,
+          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string; stderr?: string })
           return
         }
 
@@ -773,9 +774,10 @@ export class BashTool implements Tool {
             // consumers that opt into the structured shape read .status.
             status: 'success',
             summary: combined.split('\n')[0]!.slice(0, 200) || '(success)',
-            stdout: partialOut,
+            stdout: stdoutOut || undefined,
+            stderr: stderrOut || undefined,
             exitCode: 0,
-          } as ToolResult & { status: 'success'; summary: string; stdout?: string; exitCode?: number })
+          } as ToolResult & { status: 'success'; summary: string; stdout?: string; stderr?: string; exitCode?: number })
           return
         }
 
@@ -788,8 +790,9 @@ export class BashTool implements Tool {
             isError: true,
             status: 'timed_out',
             summary: 'Command timed out',
-            stdout: partialOut,
-          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string })
+            stdout: stdoutOut || undefined,
+            stderr: stderrOut || undefined,
+          } as ToolResult & { status: 'timed_out'; summary: string; stdout?: string; stderr?: string })
           return
         }
 
@@ -809,9 +812,10 @@ export class BashTool implements Tool {
             isError: false,
             status: 'success',
             summary: combined.split('\n')[0]!.slice(0, 200) || `(exit ${exitCode} accepted)`,
-            stdout: out,
+            stdout: stdoutOut || undefined,
+            stderr: stderrOut || undefined,
             exitCode,
-          } as ToolResult & { status: 'success'; summary: string; stdout?: string; exitCode?: number })
+          } as ToolResult & { status: 'success'; summary: string; stdout?: string; stderr?: string; exitCode?: number })
           return
         }
         const hint = buildErrorHint(out)
@@ -820,9 +824,10 @@ export class BashTool implements Tool {
           isError: true,
           status: 'failed',
           summary: `Exit code ${exitCode}`,
-          stdout: out,
+          stdout: stdoutOut || undefined,
+          stderr: stderrOut || undefined,
           exitCode,
-        } as ToolResult & { status: 'failed'; summary: string; stdout?: string; exitCode?: number })
+        } as ToolResult & { status: 'failed'; summary: string; stdout?: string; stderr?: string; exitCode?: number })
       })
     })
   }

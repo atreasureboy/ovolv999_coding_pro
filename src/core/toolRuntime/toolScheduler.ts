@@ -243,7 +243,7 @@ export class ToolScheduler {
     }
 
     for (let i = 0; i < batch.calls.length; i++) {
-      const { tc } = batch.calls[i]
+      const { tc, input } = batch.calls[i]
       const result = results[i]
       try {
         renderer.toolResult(tc.name, result.content, result.isError)

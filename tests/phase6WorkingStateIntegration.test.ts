@@ -173,10 +173,10 @@ describe('P1-6: applyToolEvent updates WorkingState deterministically', () => {
 // P1-7: renderWorkingStateBlock produces stable system-prompt text
 // ─────────────────────────────────────────────────────────────────────
 describe('P1-7: renderWorkingStateBlock produces stable output', () => {
-  it('empty state still renders a header', () => {
+  it('empty state renders NO text (five_goal §四: no injection when empty)', () => {
     const cm = makeContextManager()
     const out = cm.renderWorkingStateBlock()
-    expect(out).toMatch(/WorkingState/)
+    expect(out).toBe('')
   })
 
   it('constraints appear in the rendered block', () => {
