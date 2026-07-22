@@ -553,10 +553,12 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       ? (input.task_mode === 'modify' ? 'modify' : 'read_only')
       : (input.modifies_state === true ? 'modify' : 'read_only')
     const taskMode: 'read_only' | 'modify' = inputMode
-    // P0-4: modify mode forces the verification gate on by default —
-    // the orchestrator cannot accidentally bypass the gate by forgetting
-    // a boolean. Explicit verify:false still wins for read_only tasks.
-    const verify      = taskMode === 'modify' ? input.verify !== false : input.verify === true
+    // P0-4 (five_goal §六.2): modify mode FORCES verify=true. The
+    // model's verify:false input is IGNORED for modify tasks — only
+    // the host config or a trusted human interface can skip
+    // verification on a task that will be auto-merged to the base
+    // branch. Read-only tasks keep verify as opt-in (default false).
+    const verify        = taskMode === 'modify' ? true : input.verify === true
     const modifiesState  = taskMode === 'modify'
     const mergeOnSuccess = input.merge_on_success !== false
 

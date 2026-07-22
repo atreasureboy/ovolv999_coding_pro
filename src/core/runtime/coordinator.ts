@@ -467,14 +467,18 @@ export class RuntimeCoordinator {
       const targetStatus: RunStatus =
         result.reason === 'stop_sequence' ? 'succeeded'
         : result.reason === 'interrupted' ? 'cancelled'
-        : result.reason === 'max_iterations' ? 'succeeded'
+        : result.reason === 'max_iterations' ? 'blocked'
         : 'failed'
       try {
         const run = registry.get(runId)
         if (run && !isTerminalRunStatus(run.status)) {
           registry.transition(runId, targetStatus, {
-            phase: 'completed',
-            error: targetStatus === 'failed' ? (result.output || 'turn failed') : undefined,
+            phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted' : 'completed',
+            error: targetStatus === 'failed'
+              ? (result.output || 'turn failed')
+              : targetStatus === 'blocked'
+                ? 'turn hit max_iterations ceiling'
+                : undefined,
           })
         }
       } catch { /* best-effort: never break the turn result */ }
