@@ -62,7 +62,7 @@ if [ "$ACTION" = "uninstall" ]; then
   if [ -d "$INSTALL_DIR" ]; then
     rm -rf "$INSTALL_DIR" && ok "removed $INSTALL_DIR"
   fi
-  printf "\n%svenv uninstalled. (Run data in ~/.ovogo is left untouched.)%s\n" "$C_DIM" "$C_RESET"
+  printf "\n%sovolv999 uninstalled. (Run data in ~/.ovogo is left untouched.)%s\n" "$C_DIM" "$C_RESET"
   exit 0
 fi
 
@@ -108,10 +108,14 @@ info "Installing dependencies (this can take a minute)..."
   || die "npm install failed."
 info "Building (tsc)..."
 ( cd "$INSTALL_DIR" && npm run build ) || die "build failed."
+# tsc doesn't set the executable bit on the entry; the symlink is only
+# directly runnable (`ovolv999 ...`, not `node .../ovogogogo.js`) if the
+# target has +x (it has a #!/usr/bin/env node shebang).
+chmod +x "$INSTALL_DIR/dist/bin/ovogogogo.js" 2>/dev/null || true
 ok "built"
 
 ENTRY="$INSTALL_DIR/dist/bin/ovogogogo.js"
-[ -f "$ENTRY" ] || die "build output missing: $ENTRY"
+[ -x "$ENTRY" ] || die "build output missing or not executable: $ENTRY"
 
 # ── choose a PATH directory for the symlink (prefer writable, no sudo) ─
 choose_bindir() {

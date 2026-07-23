@@ -8,7 +8,7 @@
     "ovolv999": "./dist/bin/ovogogogo.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').chmodSync('dist/bin/ovogogogo.js',0o755)\"",
     "start": "node dist/bin/ovogogogo.js",
     "dev": "tsx bin/ovogogogo.ts",
     "lint": "eslint src/ bin/ tests/ --ext .ts,.tsx",
