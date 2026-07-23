@@ -152,7 +152,7 @@ export function migrateConfig(
   let current = { ...raw }
 
   if (fromVersion >= LATEST_VERSION) {
-    const config = mergeConfig(DEFAULT_CONFIG, current as Partial<ConfigSchema>)
+    const config = mergeConfig(DEFAULT_CONFIG, current)
     return {
       migrated: false,
       fromVersion,
@@ -179,7 +179,7 @@ export function migrateConfig(
   // Save migrated config
   saveRawConfig(current, scope, cwd)
 
-  const config = mergeConfig(DEFAULT_CONFIG, current as Partial<ConfigSchema>)
+  const config = mergeConfig(DEFAULT_CONFIG, current)
 
   return {
     migrated: appliedMigrations.length > 0,

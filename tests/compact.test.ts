@@ -966,18 +966,19 @@ describe('maybeCompact — abort propagation (cancellation defect fix)', () => {
     )).rejects.toBe(abortErr)
   })
 
-  it('source-level guard: contextManager passes the abort signal to maybeCompact', () => {
+  it('source-level guard: contextManager passes the abort signal to compaction', () => {
     const src = readFileSync(
       fileURLToPath(new URL('../src/core/context/contextManager.ts', import.meta.url)),
       'utf8',
     )
-    // Proactive compact path (evaluateBudget)
-    expect(src).toMatch(/maybeCompact\(/)
-    // Both call sites pass abortSignal
-    const matches = src.match(/maybeCompact\(/g)
+    // P2-6: both compaction paths route through the invariant-guarded
+    // maybeCompactWithInvariants() (proactive in evaluateBudget +
+    // reactive in reactiveCompact), which still forwards abortSignal.
+    expect(src).toMatch(/maybeCompactWithInvariants\(/)
+    const matches = src.match(/maybeCompactWithInvariants\(/g)
     expect(matches?.length).toBeGreaterThanOrEqual(2)
-    // Verify abortSignal is forwarded in both paths
-    expect(src).toMatch(/this\.deps\.client,\s*this\.deps\.model,\s*messages,\s*abortSignal/)
+    // Verify abortSignal is forwarded as the final arg in both paths.
+    expect(src).toMatch(/abortSignal,\s*\)/)
   })
 })
 

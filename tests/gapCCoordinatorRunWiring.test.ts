@@ -99,7 +99,7 @@ describe('GAP-C.1: successful turn records run lifecycle', () => {
     const result = await e.runTurn('hello', [])
     expect(result.result.reason).toBe('stop_sequence')
 
-    const registry = e.getRunRegistry()!
+    const registry = e.getRunRegistry()
     const turnRuns = registry.list({ kind: 'turn' })
     expect(turnRuns.length).toBe(1)
     expect(turnRuns[0].status).toBe('succeeded')
@@ -116,7 +116,7 @@ describe('GAP-C.1: successful turn records run lifecycle', () => {
     const result = await e.runTurn('hello', [])
     expect(result.result.reason).toBe('error')
 
-    const registry = e.getRunRegistry()!
+    const registry = e.getRunRegistry()
     const turnRuns = registry.list({ kind: 'turn' })
     expect(turnRuns.length).toBe(1)
     expect(turnRuns[0].status).toBe('failed')
@@ -169,11 +169,44 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
       maxIters: 3,
     })
 
-    const registry = e.getRunRegistry()!
+    const registry = e.getRunRegistry()
     const loopRuns = registry.list({ kind: 'loop' })
     expect(loopRuns.length).toBe(1)
     expect(loopRuns[0].status).toBe('succeeded')
     // c was never called: loop exits before the first LLM turn.
     expect(c.createCalls).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// GAP-C.4: parentRunId threading (P1-2 fix + P2-7 coverage)
+//
+// Before the P1-2 fix, engine.runTurn() accepted no parentRunId, so a
+// loop's child turns — and every grandchild Agent/Worker run — were
+// orphans (parentRunId=undefined), breaking the hierarchical Run tree.
+// This verifies the per-turn parentRunId override reaches the turn run.
+// ─────────────────────────────────────────────────────────────────────
+describe('GAP-C.4: runTurn threads parentRunId into the turn run', () => {
+  it('sets the turn run parentRunId from the opts override', async () => {
+    const logDir = join(tmp, 'logs')
+    const { c, e } = makeEngine(logDir)
+    c.push(stopStream('hi'))
+    await e.runTurn('hello', [], undefined, { parentRunId: 'loop-parent-42' })
+
+    const registry = e.getRunRegistry()
+    const turnRuns = registry.list({ kind: 'turn' })
+    expect(turnRuns.length).toBe(1)
+    expect(turnRuns[0].parentRunId).toBe('loop-parent-42')
+  })
+
+  it('omits parentRunId when no override is given (back-compat)', async () => {
+    const logDir = join(tmp, 'logs')
+    const { c, e } = makeEngine(logDir)
+    c.push(stopStream('hi'))
+    await e.runTurn('hello', [])
+
+    const turnRuns = e.getRunRegistry().list({ kind: 'turn' })
+    expect(turnRuns.length).toBe(1)
+    expect(turnRuns[0].parentRunId).toBeUndefined()
   })
 })

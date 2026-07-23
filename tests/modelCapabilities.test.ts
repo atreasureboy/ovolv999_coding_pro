@@ -328,8 +328,8 @@ describe('adapter contract: messages → request → stream → events', () => {
       usage: { input: 10, output: 5 },
     })
     expect(events).toHaveLength(2)
-    expect(events[0]!.kind).toBe('text_delta')
-    expect(events[1]!.kind).toBe('usage')
+    expect(events[0].kind).toBe('text_delta')
+    expect(events[1].kind).toBe('usage')
   })
 
   it('usageStreaming capability determines whether the coordinator wires incremental counters', () => {

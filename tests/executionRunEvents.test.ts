@@ -60,11 +60,11 @@ describe('ExecutionRunEventBus assigns monotonic per-run sequence', () => {
     registry.create(agentRun({ goal: 'task' }))
 
     expect(events).toHaveLength(1)
-    expect(events[0]!.type).toBe('run.created')
-    expect(events[0]!.sequence).toBe(1)
-    expect(events[0]!.runId).toMatch(/[0-9a-f-]{36}/i)
-    expect(events[0]!.eventId).toMatch(/[0-9a-f-]{36}/i)
-    expect(events[0]!.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(events[0].type).toBe('run.created')
+    expect(events[0].sequence).toBe(1)
+    expect(events[0].runId).toMatch(/[0-9a-f-]{36}/i)
+    expect(events[0].eventId).toMatch(/[0-9a-f-]{36}/i)
+    expect(events[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
   it('increments sequence per transition on the same run', () => {
@@ -236,7 +236,7 @@ describe('ExecutionRunEventBus subscriber model', () => {
 
     expect(run).toBeDefined()
     expect(errors).toHaveLength(1)
-    expect(errors[0]!.error.message).toBe('best-effort boom')
+    expect(errors[0].error.message).toBe('best-effort boom')
   })
 
   it('critical subscriber errors transition the run to failed', () => {
@@ -410,7 +410,7 @@ describe('recoverRegistryFromStore reconstructs state from JSONL', () => {
     // caller explicitly plugs a new bus.
     let emitCalled = false
     recovered.onEmit = () => { emitCalled = true }
-    const recRun = recovered.list()[0]!
+    const recRun = recovered.list()[0]
     // running → verifying is a valid non-terminal transition.
     recovered.transition(recRun.runId, 'verifying')
     expect(emitCalled).toBe(true)

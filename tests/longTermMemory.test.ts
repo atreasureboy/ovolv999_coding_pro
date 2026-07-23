@@ -218,7 +218,7 @@ describe('R4: expiration', () => {
   })
 
   it('non-expired records survive collectGarbage', () => {
-    let clock = '2026-01-01T00:00:00.000Z'
+    const clock = '2026-01-01T00:00:00.000Z'
     const mem = new LongTermMemory({
       backend: backend(),
       now: () => clock,
@@ -250,7 +250,7 @@ describe('R5: conflict-aware merging', () => {
     mem.record({ ...goodRecord(), confidence: 0.5 })
     const all = mem.query()
     expect(all).toHaveLength(1)
-    expect(all[0]!.confidence).toBe(0.9)
+    expect(all[0].confidence).toBe(0.9)
   })
 
   it('higher-confidence incoming overwrites (same content)', () => {
@@ -259,7 +259,7 @@ describe('R5: conflict-aware merging', () => {
     mem.record({ ...goodRecord(), confidence: 0.95 })
     const all = mem.query()
     expect(all).toHaveLength(1)
-    expect(all[0]!.confidence).toBe(0.95)
+    expect(all[0].confidence).toBe(0.95)
   })
 
   it('verified existing is NOT overwritten by unverified incoming', () => {
@@ -276,7 +276,7 @@ describe('R5: conflict-aware merging', () => {
     })
     const all = mem.query()
     expect(all).toHaveLength(1)
-    expect(all[0]!.verified).toBe(true)
+    expect(all[0].verified).toBe(true)
   })
 
   it('merge unions tags', () => {
@@ -285,7 +285,7 @@ describe('R5: conflict-aware merging', () => {
     mem.record({ ...goodRecord(), tags: ['b', 'c'] })
     const all = mem.query()
     expect(all).toHaveLength(1)
-    expect(all[0]!.tags.sort()).toEqual(['a', 'b', 'c'])
+    expect(all[0].tags.sort()).toEqual(['a', 'b', 'c'])
   })
 })
 
@@ -304,7 +304,7 @@ describe('R6: embedding optional', () => {
     const rec = mem.record({ ...goodRecord(), embedding: [0.1, 0.2, 0.3] })
     expect(rec.embedding).toEqual([0.1, 0.2, 0.3])
     const found = mem.query({ fullText: 'engine' })
-    expect(found[0]!.embedding).toEqual([0.1, 0.2, 0.3])
+    expect(found[0].embedding).toEqual([0.1, 0.2, 0.3])
   })
 })
 

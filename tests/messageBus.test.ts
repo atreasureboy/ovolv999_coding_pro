@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import type {
+  MessageBus} from '../src/core/messageBus.js';
 import {
-  MessageBus,
   getMessageBus,
   resetMessageBus,
   formatAgentList,

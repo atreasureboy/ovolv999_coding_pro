@@ -135,7 +135,7 @@ describe('GAP 5.4: reattach preserves original runId', () => {
   it('reattach(runId, descriptor) returns handle with the SAME runId', async () => {
     const { manager } = makeFakeManager()
     const t = new ClaudeCodeTool(manager as never)
-    const handle = await t.reattach!('my-original-run', { type: 'tmux', sessionId: 's1' })
+    const handle = await t.reattach('my-original-run', { type: 'tmux', sessionId: 's1' })
     expect(handle).not.toBeNull()
     expect(handle!.runId).toBe('my-original-run')
     // The runId→session mapping is established so subsequent steer/status resolve.
@@ -145,7 +145,7 @@ describe('GAP 5.4: reattach preserves original runId', () => {
   it('reattach returns null when pane is gone', async () => {
     const { manager } = makeFakeManager({ exists: new Set() })
     const t = new ClaudeCodeTool(manager as never)
-    expect(await t.reattach!('orig', { type: 'tmux', sessionId: 'gone' })).toBeNull()
+    expect(await t.reattach('orig', { type: 'tmux', sessionId: 'gone' })).toBeNull()
   })
 })
 
@@ -222,7 +222,7 @@ describe('GAP 5.2: wait(runId) adapter method', () => {
 
     const handle = await t.start({ goal: 'g' }, { cwd: '/r' })
 
-    const result = await t.wait!(handle.runId, { timeoutMs: 5000 })
+    const result = await t.wait(handle.runId, { timeoutMs: 5000 })
     expect(result.status).toBe('succeeded')
     expect(registry.get(handle.runId)!.status).toBe('succeeded')
   })
@@ -236,7 +236,7 @@ describe('GAP 5.2: wait(runId) adapter method', () => {
 
     const handle = await t.start({ goal: 'g' }, { cwd: '/r' })
 
-    const result = await t.wait!(handle.runId, { timeoutMs: 5000 })
+    const result = await t.wait(handle.runId, { timeoutMs: 5000 })
     expect(result.status).toBe('failed')
     expect(registry.get(handle.runId)!.status).toBe('failed')
   })
@@ -250,7 +250,7 @@ describe('GAP 5.2: wait(runId) adapter method', () => {
 
     const handle = await t.start({ goal: 'g' }, { cwd: '/r' })
 
-    const result = await t.wait!(handle.runId, { timeoutMs: 5000 })
+    const result = await t.wait(handle.runId, { timeoutMs: 5000 })
     expect(result.status).toBe('failed')
     expect(registry.get(handle.runId)!.status).toBe('timed_out')
   })
@@ -258,7 +258,7 @@ describe('GAP 5.2: wait(runId) adapter method', () => {
   it('wait(unknownRunId) returns unknown without throwing', async () => {
     const { manager } = makeFakeManager()
     const t = new ClaudeCodeTool(manager as never)
-    const result = await t.wait!('never-existed')
+    const result = await t.wait('never-existed')
     expect(result.status).toBe('unknown')
   })
 })

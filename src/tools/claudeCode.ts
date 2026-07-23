@@ -1,7 +1,8 @@
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 import { str } from '../core/strings.js'
-import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
+import type { ExecutionRunRegistry} from '../core/executionRun.js';
+import { type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
 import type {
   WorkerAdapter,
@@ -40,6 +41,17 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
    * when the run reaches a terminal state.
    */
   private readonly runSessions = new Map<string, string>()
+
+  /**
+   * P1-1 fix: runId → Claude Worker taskId (the UUID embedded in the
+   * [TASK_DONE <id>] / [TASK_FAILED <id>] sentinels). Populated by the
+   * `run` action / `start()` so a later `wait({runId})` can bind the
+   * waitFor() to THIS task's sentinel instead of degrading to the
+   * legacy ^[DONE]$ pattern (which is vulnerable to stale-sentinel
+   * matching when a tmux session is reused). Mirrors runSessions
+   * lifecycle: cleared on every terminal transition.
+   */
+  private readonly runTasks = new Map<string, string>()
 
   /**
    * GAP-K: optional emitter the host wires in so successful steer()
@@ -221,6 +233,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
       }
     }
     this.runSessions.delete(runId)
+    this.runTasks.delete(runId)
   }
 
   /**
@@ -309,14 +322,18 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     const collected = await this.collect(runId)
     if (isTerminalRunStatus(this.runRegistry?.get(runId)?.status ?? 'succeeded')) {
       this.runSessions.delete(runId)
+      this.runTasks.delete(runId)
     }
     return collected
   }
 
   private transitionTerminal(runId: string, to: RunStatus, patch?: Record<string, unknown>): void {
     if (!this.runRegistry) return
-    try { this.runRegistry.transition(runId, to, patch as never) } catch { /* best-effort */ }
-    if (isTerminalRunStatus(to)) this.runSessions.delete(runId)
+    try { this.runRegistry.transition(runId, to, patch) } catch { /* best-effort */ }
+    if (isTerminalRunStatus(to)) {
+      this.runSessions.delete(runId)
+      this.runTasks.delete(runId)
+    }
   }
 
   /**
@@ -484,12 +501,13 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     }
     const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
       if (!registry || !runId) return
-      try { registry.transition(runId, to, patch as never) } catch { /* best-effort */ }
+      try { registry.transition(runId, to, patch) } catch { /* best-effort */ }
       // GAP-K: when entering a terminal state, drop the runId→session
       // mapping so future steer() calls for this runId return false
       // instead of writing to a stale tmux pane.
       if (runId && isTerminalRunStatus(to)) {
         this.runSessions.delete(runId)
+        this.runTasks.delete(runId)
       }
     }
 
@@ -506,7 +524,13 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
       // the [TASK_DONE <id>] sentinel in the pane output (P0-5).
       transitionRun('running', { phase: 'task-sent', worker: result.session })
       // GAP-K: record runId→session so steer() can resolve the pane.
-      if (runId) this.runSessions.set(runId, result.session)
+      if (runId) {
+    this.runSessions.set(runId, result.session)
+    if (result.taskId) this.runTasks.set(runId, result.taskId)
+        // P1-1: persist taskId so a later detached wait({runId}) binds
+        // to THIS task's sentinel, not a stale ^[DONE]$.
+        if (result.taskId) this.runTasks.set(runId, result.taskId)
+      }
 
       if (input.wait === true) {
         // P0-5: bind the wait to THIS run's taskId unless the caller
@@ -621,13 +645,16 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     const session = this.resolveSession(input)
     if (!session) return { content: 'Error: runId or session is required for wait.', isError: true }
     if (!await this.manager.sessionExists(session)) return this.sessionNotFound(session)
-    // GAP 5.1: when resolving via runId, also thread the taskId for
-    // task-bound matching so a reused session can't satisfy the wait
-    // with a stale sentinel.
+    // P1-1 fix: recover THIS run's taskId from the runTasks map so the
+    // waitFor() binds to the [TASK_DONE <id>] sentinel of the task that
+    // originally populated this run — NOT the legacy ^[DONE]$ pattern
+    // (which would match a stale sentinel from a prior task when the
+    // tmux session is reused). The previous code read from the registry
+    // but the registry only stores the session name in `worker`, never
+    // the taskId, so taskId was always undefined here (dead ternary).
     let taskId: string | undefined
     if (typeof input.runId === 'string') {
-      const run = this.runRegistry?.get(input.runId)
-      taskId = run?.worker === session ? undefined : undefined
+      taskId = this.runTasks.get(input.runId)
     }
     const customPattern = str(input.pattern) || undefined
     const result = await this.manager.waitFor({
@@ -669,6 +696,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     if (typeof input.runId === 'string') {
       const runId = input.runId
       this.runSessions.delete(runId)
+      this.runTasks.delete(runId)
       if (this.runRegistry) {
         try { this.runRegistry.transition(runId, 'cancelled', { phase: 'stopped-by-caller' }) } catch { /* best-effort */ }
       }

@@ -331,6 +331,11 @@ export class ResourceScheduler {
     leaseId: string,
     claims: ResourceClaim[],
   ): ResourceLease {
+    // The returned lease's `released` getter + `release()` method are
+    // plain function members that must close over THIS scheduler's
+    // maps, so a `this` alias is required (arrow fields aren't usable
+    // as object-literal getters/methods).
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this
     const handle: ResourceLease = {
       runId,
@@ -386,7 +391,7 @@ export class ResourceScheduler {
     while (progress) {
       progress = false
       for (let i = 0; i < this.waiters.length; i++) {
-        const w = this.waiters[i]!
+        const w = this.waiters[i]
         const conflicts = this.findConflicts(w.claims, undefined)
         if (conflicts.length === 0) {
           this.waiters.splice(i, 1)

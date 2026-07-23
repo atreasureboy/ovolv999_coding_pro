@@ -31,6 +31,7 @@ import { spawn, execSync } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
+import { wrapCommand as sandboxWrap } from '../core/sandbox.js'
 import { BASH_DESCRIPTION } from '../prompts/tools.js'
 import { mkdirSync, accessSync, constants } from 'fs'
 import { join } from 'path'
@@ -516,6 +517,17 @@ export class BashTool implements Tool {
         } catch { /* tmux not available, degrade gracefully */ }
       }
 
+      // P1-6 fix: apply the OS-level sandbox wrapper (sandbox-exec on
+      // macOS, bwrap on Linux) when the user has enabled it in
+      // ~/.ovolv999/sandbox.json. wrapCommand() is a no-op (returns the
+      // command unchanged) when sandbox is disabled (the default), so
+      // this preserves existing behaviour unless explicitly opted in.
+      // Only the foreground execution path is wrapped — background
+      // detached tasks keep their raw redirection semantics.
+      if (!IS_WIN_CMD) {
+        actualCommand = sandboxWrap(actualCommand, context.cwd)
+      }
+
       // Choose shell args based on platform
       const shellArgs = IS_WIN_CMD ? ['/c', actualCommand] : ['-c', actualCommand]
 
@@ -773,7 +785,7 @@ export class BashTool implements Tool {
             // isError:false is preserved for backward-compat; downstream
             // consumers that opt into the structured shape read .status.
             status: 'success',
-            summary: combined.split('\n')[0]!.slice(0, 200) || '(success)',
+            summary: combined.split('\n')[0].slice(0, 200) || '(success)',
             stdout: stdoutOut || undefined,
             stderr: stderrOut || undefined,
             exitCode: 0,
@@ -811,7 +823,7 @@ export class BashTool implements Tool {
             content: truncateOutput(prefix + combined, MAX_OUTPUT_LENGTH),
             isError: false,
             status: 'success',
-            summary: combined.split('\n')[0]!.slice(0, 200) || `(exit ${exitCode} accepted)`,
+            summary: combined.split('\n')[0].slice(0, 200) || `(exit ${exitCode} accepted)`,
             stdout: stdoutOut || undefined,
             stderr: stderrOut || undefined,
             exitCode,

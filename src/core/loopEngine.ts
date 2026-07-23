@@ -202,7 +202,11 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     // Run engine turn
     const startMs = Date.now()
     try {
-      const { result } = await engine.runTurn(prompt, [])
+      // P1-2 fix: thread the loopRunId as parentRunId so this turn —
+      // and every grandchild Agent/Worker run it spawns — links back
+      // to the kind='loop' run in the Run tree. Previously runTurn
+      // accepted no parentRunId, orphaning all loop turns.
+      const { result } = await engine.runTurn(prompt, [], undefined, { parentRunId: loopRunId })
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
       renderer.info(`Iteration ${iter} done in ${elapsed}s · ${result.reason}`)
     } catch (err: unknown) {

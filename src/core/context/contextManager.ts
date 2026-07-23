@@ -21,6 +21,7 @@ import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
 import {
   maybeCompact,
+  maybeCompactWithInvariants,
   microCompact,
   maybeTimeBasedMicroCompact,
   estimateTokens,
@@ -280,10 +281,19 @@ export class ContextManager {
         pct,
       })
 
-      const compactResult = await maybeCompact(
+      // P2-6: route through maybeCompactWithInvariants so the
+      // INV-1..INV-9 checks actually run on the production path. Today
+      // compaction only mutates `messages` (WorkingState lives in a
+      // separate field), so before===after and the invariants hold
+      // trivially — but this becomes load-bearing the moment any change
+      // derives WorkingState from the (compacted) message log, catching
+      // silent loss of objective/constraints/filesChanged/verification.
+      const compactResult = await maybeCompactWithInvariants(
         this.deps.client,
         this.deps.model,
         messages,
+        this.workingState,
+        () => this.workingState,
         abortSignal,
       )
 
@@ -376,10 +386,13 @@ export class ContextManager {
    * Mutates messages in place on success. Returns true if compacted.
    */
   async reactiveCompact(messages: OpenAIMessage[], abortSignal: AbortSignal): Promise<boolean> {
-    const compactResult = await maybeCompact(
+    // P2-6: invariant-guarded compaction (see evaluateBudget).
+    const compactResult = await maybeCompactWithInvariants(
       this.deps.client,
       this.deps.model,
       messages,
+      this.workingState,
+      () => this.workingState,
       abortSignal,
     )
     if (compactResult.compacted) {

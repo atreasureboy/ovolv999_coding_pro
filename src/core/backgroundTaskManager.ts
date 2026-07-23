@@ -24,7 +24,8 @@ import { randomUUID } from 'crypto'
 import { writeFileSync, mkdirSync, appendFileSync, renameSync } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
-import { ExecutionRunRegistry, type RunStatus } from './executionRun.js'
+import type { ExecutionRunRegistry} from './executionRun.js';
+import { type RunStatus } from './executionRun.js'
 
 function getShellInvocation(command: string): { shell: string; args: string[] } {
   if (process.platform === 'win32') {
@@ -293,7 +294,7 @@ export class BackgroundTaskManager {
     const runId = this.runIds.get(taskId)
     if (!runId) return
     try {
-      this.runRegistry.transition(runId, to, patch as never)
+      this.runRegistry.transition(runId, to, patch)
     } catch {
       // best-effort — task lifecycle must proceed regardless
     }

@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { ExecutionEngine } from '../src/core/engine.js'
 import { ExecutionRunRegistry } from '../src/core/executionRun.js'
 import { ResourceScheduler } from '../src/core/resourceScheduler.js'
-import { AgentTool, ClaudeCodeTool } from '../src/tools/index.js'
+import type { AgentTool, ClaudeCodeTool } from '../src/tools/index.js'
 import type { EngineConfig } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 

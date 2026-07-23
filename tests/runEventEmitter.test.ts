@@ -14,7 +14,7 @@ describe('RunEventEmitter', () => {
 
     expect(received).toHaveLength(2)
     expect(received[0].type).toBe('RUN_STARTED')
-    expect(received[2 === 2 ? 1 : 0].type).toBe('RUN_COMPLETED')
+    expect(received[1].type).toBe('RUN_COMPLETED')
   })
 
   it('unsubscribe stops delivering events', () => {

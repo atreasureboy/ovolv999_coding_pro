@@ -216,14 +216,14 @@ describe('P0-8: ClaudeCodeTool implements full WorkerAdapter lifecycle', () => {
   it('reattach() returns null when tmux session is gone', async () => {
     const { manager } = makeFakeManager({ exists: new Set() })
     const t = new ClaudeCodeTool(manager as never)
-    const handle = await t.reattach!('orig-run-id', { type: 'tmux', sessionId: 'gone' })
+    const handle = await t.reattach('orig-run-id', { type: 'tmux', sessionId: 'gone' })
     expect(handle).toBeNull()
   })
 
   it('reattach() returns a handle with the ORIGINAL runId when tmux session still exists', async () => {
     const { manager } = makeFakeManager()
     const t = new ClaudeCodeTool(manager as never)
-    const handle = await t.reattach!('orig-run-id', { type: 'tmux', sessionId: 's1' })
+    const handle = await t.reattach('orig-run-id', { type: 'tmux', sessionId: 's1' })
     expect(handle).not.toBeNull()
     expect(handle!.runId).toBe('orig-run-id')
     expect(handle!.workerKind).toBe('claude-code')

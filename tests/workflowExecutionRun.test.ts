@@ -69,7 +69,7 @@ describe('executeWorkflow with a registry walks the state machine', () => {
     expect(runs).toHaveLength(3)
     const wfRuns = runs.filter((r) => r.kind === 'workflow')
     expect(wfRuns).toHaveLength(1)
-    const run = wfRuns[0]!
+    const run = wfRuns[0]
     expect(run.kind).toBe('workflow')
     expect(run.goal).toBe('test workflow')
     expect(run.worker).toBe('test-wf')
@@ -95,7 +95,7 @@ describe('executeWorkflow with a registry walks the state machine', () => {
       steps: [{ name: 's', type: 'shell', command: 'true' }],
     }
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
-    expect(registry.list()[0]!.goal).toBe('bare-name')
+    expect(registry.list()[0].goal).toBe('bare-name')
   })
 })
 
@@ -112,7 +112,7 @@ describe('executeWorkflow failure path lands in failed', () => {
     const result = await executeWorkflow(wf, ctx({ runRegistry: registry }))
 
     expect(result.success).toBe(false)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
     expect(run.error).toMatch(/workflow steps failed/)
   })
@@ -135,8 +135,8 @@ describe('executeWorkflow failure path lands in failed', () => {
     // (RunStatus has no warning variant); phase preserves the distinction.
     const wfRuns = registry.list({ kind: 'workflow' })
     expect(wfRuns).toHaveLength(1)
-    expect(wfRuns[0]!.status).toBe('succeeded')
-    expect(wfRuns[0]!.phase).toBe('completed-with-warnings')
+    expect(wfRuns[0].status).toBe('succeeded')
+    expect(wfRuns[0].phase).toBe('completed-with-warnings')
 
     // The soft-failing step run is itself in 'failed'.
     const stepRuns = registry.list({ kind: 'shell_task' })
@@ -163,7 +163,7 @@ describe('executeWorkflow updates phase per step', () => {
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
 
     // The 'finalized' terminal transition sets phase to 'finalized'.
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.phase).toBe('finalized')
     // But the per-step transitions would have set phase to step:<name>
     // at intermediate points. We can verify the run went through
@@ -194,6 +194,6 @@ describe('parallel workflows get independent runs', () => {
     const wfRuns = runs.filter((r) => r.kind === 'workflow')
     expect(wfRuns).toHaveLength(2)
     expect(wfRuns.map((r) => r.worker).sort()).toEqual(['wf-a', 'wf-b'])
-    expect(wfRuns[0]!.runId).not.toBe(wfRuns[1]!.runId)
+    expect(wfRuns[0].runId).not.toBe(wfRuns[1].runId)
   })
 })

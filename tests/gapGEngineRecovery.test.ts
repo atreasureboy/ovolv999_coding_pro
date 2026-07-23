@@ -73,7 +73,7 @@ describe('GAP-G: engine startup recovery', () => {
     expect(engine.getRunEventBus()).toBeDefined()
     // The JSONL file is created lazily on first append, so we verify
     // by emitting one event.
-    const run = engine.getRunRegistry()!.create({
+    const run = engine.getRunRegistry().create({
       kind: 'agent',
       goal: 'smoke',
       workspace: { cwd: tmp },
@@ -155,7 +155,7 @@ describe('GAP-G: engine startup recovery', () => {
     // Now boot the engine — it should recover the run AND mark it
     // failed (it was 'running' when the prior process died).
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    const registry = engine.getRunRegistry()!
+    const registry = engine.getRunRegistry()
     const recovered = registry.get(priorRunId)
     expect(recovered).toBeDefined()
     expect(recovered!.status).toBe('failed')
@@ -190,7 +190,7 @@ describe('GAP-G: engine startup recovery', () => {
     )
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    const registry = engine.getRunRegistry()!
+    const registry = engine.getRunRegistry()
     const recovered = registry.get(priorRunId)
     expect(recovered!.status).toBe('succeeded') // untouched
   })
@@ -201,7 +201,7 @@ describe('GAP-G: engine startup recovery', () => {
     writeFileSync(join(logDir, 'runs.jsonl'), '{not valid json\n')
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    expect(engine.getRunRegistry()!.size()).toBe(0)
+    expect(engine.getRunRegistry().size()).toBe(0)
   })
 })
 

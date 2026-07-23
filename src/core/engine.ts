@@ -1,11 +1,20 @@
 /**
- * ExecutionEngine — thin facade and assembly root.
+ * ExecutionEngine — assembly root + lifecycle facade.
  *
- * After Phases 2–6, the engine no longer owns the runtime loop. It:
- *   1. Wires subsystems (ModelGateway, ContextManager, ToolRuntime,
- *      ModuleManager) in the constructor.
- *   2. Delegates runTurn() to RuntimeCoordinator.
- *   3. Exposes the public lifecycle API (abort, softAbort, dispose,
+ * After Phases 2–6, the engine no longer owns the runtime loop; the
+ * RuntimeCoordinator drives the Think→Act→Observe cycle. The engine:
+ *   1. Wires subsystems (Registry, EventBus, ResourceScheduler,
+ *      ModelGateway, ContextManager, ToolRuntime, ModuleManager) in
+ *      the constructor in dependency-correct order.
+ *   2. Delegates runTurn() to RuntimeCoordinator (forwarding an
+ *      optional per-turn parentRunId so loop/agent turns link into
+ *      the hierarchical Run tree).
+ *   3. Owns genuinely engine-level concerns that don't belong to any
+ *      single subsystem: crash-recovery reconciliation
+ *      (recoverNonTerminalRuns + scheduled recoverWorkers), the
+ *      transactional model switch (setModel with rollback), and
+ *      resource teardown (dispose/disposeAsync).
+ *   4. Exposes the public lifecycle API (abort, softAbort, dispose,
  *      plan-mode toggles, cost/background-task/permission accessors).
  *
  * Architecture:
@@ -221,7 +230,7 @@ export class ExecutionEngine {
       contextManager: this.contextManager,
       sharedState: this.sharedState,
       eventEmitter: this.eventEmitter,
-      claimSoftAbort: (ctrl) => this.claimSoftAbort(ctrl),
+      claimSoftAbort: (ctrl) => this.sharedState.claimSoftAbort(ctrl),
       resourceScheduler: this.resourceScheduler,
     })
 
@@ -248,10 +257,22 @@ export class ExecutionEngine {
     // P2-7: reconcile non-terminal runs AFTER tools are created so
     // recoverWorkers() can call adapter.reattach().
     this.recoverNonTerminalRuns()
+    // P1-3 fix: schedule the async worker reattach so external_worker
+    // runs don't stay stuck in 'recovery-pending-reattach' forever.
+    // runWorkerRecovery() is a no-op when nothing is pending; the
+    // scheduled promise is merged with any explicit recoverWorkers()
+    // call so tests/hosts that invoke it manually get the same result.
+    this.recoveryInFlight = this.runWorkerRecovery().catch(() => ({ reattached: 0, lost: 0 }))
   }
 
   private tools: Tool[]
   private pendingRecovery = false
+  /**
+   * P1-3: in-flight worker-recovery promise. Set by the constructor's
+   * auto-schedule; consumed (and cleared) by an explicit recoverWorkers()
+   * call so manual callers never double-process the same pending runs.
+   */
+  private recoveryInFlight: Promise<{ reattached: number; lost: number }> | null = null
 
   /**
    * P2-7 (five_goal §十四): reconcile non-terminal runs from the
@@ -305,6 +326,19 @@ export class ExecutionEngine {
    * executionRunLogDir is configured.
    */
   async recoverWorkers(): Promise<{ reattached: number; lost: number }> {
+    // P1-3: if the constructor already auto-scheduled recovery, await
+    // that single pass instead of starting a concurrent one (which
+    // could double-transition the same pending runs). Once consumed,
+    // subsequent callers run a fresh (usually no-op) pass.
+    if (this.recoveryInFlight) {
+      const result = await this.recoveryInFlight
+      this.recoveryInFlight = null
+      return result
+    }
+    return this.runWorkerRecovery()
+  }
+
+  private async runWorkerRecovery(): Promise<{ reattached: number; lost: number }> {
     const registry = this.runRegistry
     const pending = registry.list().filter(r =>
       r.kind === 'external_worker' &&
@@ -450,20 +484,11 @@ export class ExecutionEngine {
     this.sharedState.softAbortOwner = this.sharedState.currentTurnAbortController
   }
 
-  private claimSoftAbort(turnAbortController: AbortController): boolean {
-    if (!this.sharedState.softAbortRequested) return false
-    if (this.sharedState.softAbortOwner !== null && this.sharedState.softAbortOwner !== turnAbortController) {
-      return false
-    }
-    this.sharedState.softAbortRequested = false
-    this.sharedState.softAbortOwner = null
-    return true
-  }
-
   async runTurn(
     userMessage: string,
     history: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
+    opts?: { parentRunId?: string },
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
     if (this._turnInFlight) {
       throw new Error(
@@ -473,7 +498,7 @@ export class ExecutionEngine {
     }
     this._turnInFlight = true
     try {
-      return await this.coordinator.run(userMessage, history, images)
+      return await this.coordinator.run(userMessage, history, images, opts)
     } finally {
       this._turnInFlight = false
     }

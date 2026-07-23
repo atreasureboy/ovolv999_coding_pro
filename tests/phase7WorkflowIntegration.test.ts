@@ -63,9 +63,9 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
     const stepRuns = all.filter((r) => r.kind === 'shell_task')
 
     expect(wfRuns).toHaveLength(1)
-    expect(wfRuns[0]!.parentRunId).toBe('turn-1')
+    expect(wfRuns[0].parentRunId).toBe('turn-1')
     expect(stepRuns).toHaveLength(3)
-    expect(stepRuns.every((r) => r.parentRunId === wfRuns[0]!.runId)).toBe(true)
+    expect(stepRuns.every((r) => r.parentRunId === wfRuns[0].runId)).toBe(true)
     expect(stepRuns.map((r) => r.worker).sort()).toEqual(['build', 'lint', 'test'])
   })
 
@@ -77,7 +77,7 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
 
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
 
-    const stepRun = registry.list({ kind: 'shell_task' })[0]!
+    const stepRun = registry.list({ kind: 'shell_task' })[0]
     expect(stepRun.goal).toContain('echo hello-world')
   })
 
@@ -87,7 +87,7 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
 
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
 
-    const stepRun = registry.list({ kind: 'shell_task' })[0]!
+    const stepRun = registry.list({ kind: 'shell_task' })[0]
     expect(stepRun.resources).toContainEqual({ type: 'directory', key: tmpRoot, access: 'read' })
     expect(stepRun.resources).toContainEqual({ type: 'directory', key: tmpRoot, access: 'write' })
   })
@@ -122,7 +122,7 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
     const stepRuns = registry.list({ kind: 'shell_task' })
     // Only 'fails' ran; 'on-success' was skipped — no run created.
     expect(stepRuns).toHaveLength(1)
-    expect(stepRuns[0]!.worker).toBe('fails')
+    expect(stepRuns[0].worker).toBe('fails')
   })
 
   it('echo/slash/prompt steps fall back to kind=workflow (no dedicated RunKind)', async () => {
@@ -270,7 +270,7 @@ describe('P1-10: executeWorkflow wires abort signal through to shell steps', () 
     expect(result.status).toBe('cancelled')
     expect(result.success).toBe(false)
     // Workflow run still lands in a terminal state.
-    const wfRun = registry.list({ kind: 'workflow' })[0]!
+    const wfRun = registry.list({ kind: 'workflow' })[0]
     expect(wfRun.status).toBe('cancelled')
     // No shell step runs were created because the loop short-circuited.
     expect(registry.list({ kind: 'shell_task' })).toHaveLength(0)
@@ -279,9 +279,9 @@ describe('P1-10: executeWorkflow wires abort signal through to shell steps', () 
   it('shell step structured result is attached to StepResult', async () => {
     const wf = workflow('with-structured', [shellStep('emit', 'echo hi')])
     const result = await executeWorkflow(wf, ctx())
-    expect(result.steps[0]!.structured).toBeDefined()
-    expect(result.steps[0]!.structured!.status).toBe('success')
-    expect(result.steps[0]!.structured!.stdout?.trim()).toBe('hi')
+    expect(result.steps[0].structured).toBeDefined()
+    expect(result.steps[0].structured!.status).toBe('success')
+    expect(result.steps[0].structured!.stdout?.trim()).toBe('hi')
   })
 })
 
@@ -294,7 +294,7 @@ describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
       workflow('clean', [shellStep('a', 'true'), shellStep('b', 'true')]),
       ctx(),
     )
-    expect(result.status).toBe('succeeded' as WorkflowStatus)
+    expect(result.status).toBe('succeeded')
     expect(result.success).toBe(true)
   })
 

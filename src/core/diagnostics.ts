@@ -241,7 +241,7 @@ export function parseBiomeOutput(output: string, _cwd: string): Diagnostic[] {
         column: start.col ?? 1,
         endLine: end?.line,
         endColumn: end?.col,
-        severity: (d.severity === 'error' ? 'error' : d.severity === 'warning' ? 'warning' : 'info') as DiagnosticSeverity,
+        severity: (d.severity === 'error' ? 'error' : d.severity === 'warning' ? 'warning' : 'info'),
         message: d.description ?? '',
         code: d.category,
         source: 'biome',

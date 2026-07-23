@@ -372,8 +372,8 @@ export class LongTermMemory {
   private scanExpired(now: string): string[] {
     // Re-read raw to find TTL-expired entries that load() filtered out.
     if (!(this.backend instanceof JsonlMemoryBackend)) return []
-    if (!existsSync(this.backend['filePath'] as string)) return []
-    const raw = readFileSync(this.backend['filePath'] as string, 'utf8')
+    if (!existsSync(this.backend['filePath'])) return []
+    const raw = readFileSync(this.backend['filePath'], 'utf8')
     const lines = raw.split('\n').filter(Boolean)
     const expired: string[] = []
     for (const line of lines) {

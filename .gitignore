@@ -58,6 +58,9 @@ credentials/
 .DS_Store
 Thumbs.db
 desktop.ini
+# Accidental capture of Windows null-device name as a literal file
+# (created when a `where`/`nul` redirect runs under /bin/sh).
+nul
 
 # IDE
 .vscode/

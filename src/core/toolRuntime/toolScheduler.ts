@@ -153,7 +153,7 @@ export class ToolScheduler {
     if (scheduler && claims.length > 0) {
       const acquireId = runId ?? `toolcall_${callId}`
       try {
-        lease = await scheduler.acquire(acquireId, claims as ResourceClaim[], {
+        lease = await scheduler.acquire(acquireId, claims, {
           signal: toolContext.signal,
         })
       } catch (err) {

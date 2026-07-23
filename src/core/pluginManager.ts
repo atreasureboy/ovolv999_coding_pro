@@ -138,7 +138,7 @@ export function loadManifest(pluginPath: string): PluginManifest | null {
           version: pkg.version ?? '0.0.0',
           description: pkg.description,
           main: pkg.main,
-        } as PluginManifest
+        }
       }
     } catch { /* invalid */ }
   }

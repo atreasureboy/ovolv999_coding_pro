@@ -406,7 +406,7 @@ describe('ACPServer: notifications', () => {
     const { server, output } = createServer()
     await server.handleMessage({
       jsonrpc: '2.0', method: 'initialize', params: {},
-    } as JsonRpcMessage)
+    })
     expect(output).toHaveLength(0)
   })
 
@@ -414,7 +414,7 @@ describe('ACPServer: notifications', () => {
     const { server, output } = createServer()
     await server.handleMessage({
       jsonrpc: '2.0', method: 'some/notification', params: {},
-    } as JsonRpcMessage)
+    })
     expect(output).toHaveLength(0)
   })
 })

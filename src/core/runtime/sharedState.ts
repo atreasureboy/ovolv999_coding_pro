@@ -57,6 +57,24 @@ export class SharedRuntimeState {
   currentTurnAbortController: AbortController | null = null
   softAbortRequested = false
   softAbortOwner: AbortController | null = null
+
+  /**
+   * P2-9: claim a pending soft-abort for the given turn's controller.
+   * Single canonical implementation (previously duplicated on Engine
+   * and RuntimeCoordinator). Returns true iff a soft-abort was
+   * requested AND this controller owns it (no owner, or owner is it),
+   * clearing the request on a successful claim so it fires once.
+   */
+  claimSoftAbort(turnAbortController: AbortController): boolean {
+    if (!this.softAbortRequested) return false
+    if (this.softAbortOwner !== null && this.softAbortOwner !== turnAbortController) {
+      return false
+    }
+    this.softAbortRequested = false
+    this.softAbortOwner = null
+    return true
+  }
+
   allTools: Tool[] = []
   readonly activeToolCalls = new Map<string, ActiveToolCall>()
   readonly activeSubtasks = new Map<string, ActiveSubtask>()

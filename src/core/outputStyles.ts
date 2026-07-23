@@ -146,7 +146,7 @@ export interface StyleLoadResult {
 export function loadOutputStyles(cwd: string): StyleLoadResult {
   const configPath = join(resolve(cwd), CONFIG_PATH)
   const errors: string[] = []
-  let customStyles: OutputStyle[] = []
+  const customStyles: OutputStyle[] = []
   let activeId = 'default'
   let hasConfig = false
 

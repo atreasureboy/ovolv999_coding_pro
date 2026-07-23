@@ -291,7 +291,7 @@ export function stopSession(id: string, graceMs = 5000): boolean {
   // Check after grace period — caller can await this
   const deadline = Date.now() + graceMs
   const checkLiveness = (): void => {
-    if (isPidAlive(meta.pid!) && Date.now() < deadline) {
+    if (isPidAlive(meta.pid) && Date.now() < deadline) {
       // Still alive — escalate
       try { process.kill(meta.pid!, 'SIGKILL') } catch { /* ignore */ }
     }
@@ -508,12 +508,10 @@ export function initChildLogCapture(): string | null {
     } catch { /* ignore disk errors */ }
   }
 
-  // @ts-ignore — patching the write method signature for log capture
   process.stdout.write = (data: unknown, ...rest: unknown[]): boolean => {
     appendLog(data)
     return origWrite(data as string | Uint8Array)
   }
-  // @ts-ignore — same
   process.stderr.write = (data: unknown, ...rest: unknown[]): boolean => {
     appendLog(data)
     return origErrWrite(data as string | Uint8Array)

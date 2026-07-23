@@ -90,7 +90,7 @@ describe('hooks', () => {
     it('ignores unknown events', () => {
       const config = validateHooksConfig({
         UnknownEvent: [{ matcher: '*', command: 'echo' }],
-      } as unknown as Record<string, unknown>)
+      })
       expect((config as Record<string, unknown>).UnknownEvent).toBeUndefined()
     })
   })

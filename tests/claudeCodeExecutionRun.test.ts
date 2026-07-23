@@ -82,7 +82,7 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
     expect(out.isError).toBe(false)
     const runs = registry.list()
     expect(runs).toHaveLength(1)
-    const run = runs[0]!
+    const run = runs[0]
     expect(run.kind).toBe('external_worker')
     expect(run.goal).toBe('refactor x')
     expect(run.worker).toBe('worker-7')
@@ -100,7 +100,7 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
       context(),
     )
 
-    const run = registry.list({ parentRunId: 'parent-99' })[0]!
+    const run = registry.list({ parentRunId: 'parent-99' })[0]
     expect(run).toBeDefined()
     expect(run.parentRunId).toBe('parent-99')
   })
@@ -118,7 +118,7 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
     // 'succeeded'. The run stays non-terminal in 'waiting' so the
     // orchestrator can later wait/steer/cancel/collect with the
     // same runId. Marking 'succeeded' here is explicitly forbidden.
-    expect(registry.list()[0]!.status).toBe('waiting')
+    expect(registry.list()[0].status).toBe('waiting')
   })
 })
 
@@ -138,7 +138,7 @@ describe('ClaudeCodeTool.run wait outcomes map to terminal states', () => {
     )
 
     expect(out.isError).toBe(true)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('timed_out')
     expect(isTerminalRunStatus(run.status)).toBe(true)
   })
@@ -156,7 +156,7 @@ describe('ClaudeCodeTool.run wait outcomes map to terminal states', () => {
     )
 
     expect(out.isError).toBe(true)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('cancelled')
     expect(isTerminalRunStatus(run.status)).toBe(true)
   })
@@ -181,7 +181,7 @@ describe('ClaudeCodeTool.run error path lands in failed', () => {
 
     expect(out.isError).toBe(true)
     expect(out.content).toContain('tmux exploded')
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
     expect(run.error).toBe('tmux exploded')
   })
@@ -198,7 +198,7 @@ describe('ClaudeCodeTool.run error path lands in failed', () => {
     )
 
     expect(out.isError).toBe(true)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
   })
 })
@@ -237,7 +237,7 @@ describe('parallel ClaudeCode runs get independent runs', () => {
 
     const runs = registry.list()
     expect(runs).toHaveLength(2)
-    expect(runs[0]!.runId).not.toBe(runs[1]!.runId)
+    expect(runs[0].runId).not.toBe(runs[1].runId)
     expect(runs.map((r) => r.goal).sort()).toEqual(['A', 'B'])
     expect(runs.every((r) => r.status === 'succeeded')).toBe(true)
   })

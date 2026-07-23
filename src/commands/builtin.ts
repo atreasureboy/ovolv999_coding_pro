@@ -1649,7 +1649,7 @@ registerCommand({
       if (!cronMatch) {
         return text('Usage: /schedule create <cron> <prompt>\nExample: /schedule create "0 9 * * 1-5" "run tests"')
       }
-      let cronExpr = cronMatch[1].replace(/^"(.*)"$/, '$1')
+      const cronExpr = cronMatch[1].replace(/^"(.*)"$/, '$1')
       const prompt = cronMatch[2].replace(/^["'](.*)["']$/, '$1')
 
       // Validate cron

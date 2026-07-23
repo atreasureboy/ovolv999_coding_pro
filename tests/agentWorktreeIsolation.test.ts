@@ -230,7 +230,7 @@ describe('P0-4.B: modifying tasks get an isolated worktree', () => {
 
     expect(out.isError).toBe(false)
     expect(child.constructedCwds).toHaveLength(1)
-    const usedCwd = child.constructedCwds[0]!
+    const usedCwd = child.constructedCwds[0]
     // Child ran inside the worktree subdirectory, NOT the parent repo root.
     expect(usedCwd).not.toBe(gitRoot)
     expect(usedCwd).toContain('.ovolv999/worktrees/')
@@ -283,7 +283,7 @@ describe('P0-4.B: modifying tasks get an isolated worktree', () => {
     expect(out.isError).toBe(false)
     expect(out.content).toContain('[Worktree] kept')
     // The worktree path was recorded — file is there, NOT merged.
-    const usedCwd = child.constructedCwds[0]!
+    const usedCwd = child.constructedCwds[0]
     expect(existsSync(join(usedCwd, 'review.txt'))).toBe(true)
     expect(existsSync(join(gitRoot, 'review.txt'))).toBe(false)
   })
@@ -311,7 +311,7 @@ describe('P0-4.C: failures discard the worktree without merging', () => {
     // No stray file merged into the parent.
     expect(existsSync(join(gitRoot, 'feature.txt'))).toBe(false)
     // The specific worktree subdir is gone.
-    expect(existsSync(child.constructedCwds[0]!)).toBe(false)
+    expect(existsSync(child.constructedCwds[0])).toBe(false)
   })
 
   it('discards on verify-gate failure (no merge of broken code)', async () => {
@@ -388,8 +388,8 @@ describe('P0-4.D: parallel modifying tasks get distinct worktrees', () => {
 
     expect(outA.isError).toBe(false)
     expect(outB.isError).toBe(false)
-    const cwdA = childA.constructedCwds[0]!
-    const cwdB = childB.constructedCwds[0]!
+    const cwdA = childA.constructedCwds[0]
+    const cwdB = childB.constructedCwds[0]
     expect(cwdA).not.toBe(cwdB)
     // Both files merged into parent HEAD.
     expect(existsSync(join(gitRoot, 'a.txt'))).toBe(true)
@@ -607,7 +607,7 @@ describe('P0-4.G: merge artifacts are observable', () => {
     const branches = execSync('git branch --list', { cwd: gitRoot, encoding: 'utf8' })
     expect(branches).not.toMatch(/wt\//)
     // No leftover specific worktree directory.
-    expect(existsSync(child.constructedCwds[0]!)).toBe(false)
+    expect(existsSync(child.constructedCwds[0])).toBe(false)
     // The worktree manager's tracking metadata is empty.
     const mgr = getWorktreeManager(gitRoot)
     expect(mgr.listWorktrees()).toEqual([])

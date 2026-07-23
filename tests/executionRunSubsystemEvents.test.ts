@@ -56,7 +56,7 @@ describe('GAP-B: subsystem events', () => {
       toolName: 'Bash',
       input: { command: 'ls' },
     })
-    const last = events[events.length - 1]!
+    const last = events[events.length - 1]
     expect(last.type).toBe('tool.requested')
     expect(last.payload).toMatchObject({ toolCallId: 'tc1', toolName: 'Bash' })
     expect(last.sequence).toBeGreaterThan(0)
@@ -91,7 +91,7 @@ describe('GAP-B: subsystem events', () => {
       toolName: 'Bash',
       error: 'command not found',
     })
-    expect(events[events.length - 1]!.payload).toMatchObject({ error: 'command not found' })
+    expect(events[events.length - 1].payload).toMatchObject({ error: 'command not found' })
   })
 
   it('emitArtifactCreated persists artifact metadata', () => {
@@ -150,7 +150,7 @@ describe('GAP-B: subsystem events', () => {
 
     const seqs = events.map((e) => e.sequence)
     for (let i = 1; i < seqs.length; i++) {
-      expect(seqs[i]).toBeGreaterThan(seqs[i - 1]!)
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
     }
   })
 

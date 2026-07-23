@@ -144,7 +144,7 @@ describe('AgentTool with a registry walks the canonical state machine', () => {
     // Exactly one run was created.
     const runs = registry.list()
     expect(runs).toHaveLength(1)
-    const run = runs[0]!
+    const run = runs[0]
     expect(run.kind).toBe('agent')
     expect(run.goal).toBe('happy path')
     expect(run.worker).toBe('general-purpose')
@@ -169,7 +169,7 @@ describe('AgentTool with a registry walks the canonical state machine', () => {
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    const run = registry.list({ parentRunId: 'parent-run-42' })[0]!
+    const run = registry.list({ parentRunId: 'parent-run-42' })[0]
     expect(run).toBeDefined()
     expect(run.parentRunId).toBe('parent-run-42')
   })
@@ -201,7 +201,7 @@ describe('AgentTool verify gate produces verification_failed terminal state', ()
     )
 
     expect(out.isError).toBe(true)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('verification_failed')
     expect(isTerminalRunStatus(run.status)).toBe(true)
     expect(run.verification?.passed).toBe(false)
@@ -227,7 +227,7 @@ describe('AgentTool verify gate produces verification_failed terminal state', ()
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    expect(registry.list()[0]!.status).toBe('succeeded')
+    expect(registry.list()[0].status).toBe('succeeded')
   })
 })
 
@@ -249,7 +249,7 @@ describe('AgentTool engine-error produces failed terminal state', () => {
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
     expect(run.error).toBeTruthy()
   })
@@ -269,7 +269,7 @@ describe('AgentTool engine-error produces failed terminal state', () => {
     )
 
     expect(out.isError).toBe(true)
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
     expect(run.error).toBe('child crashed')
   })
@@ -293,7 +293,7 @@ describe('AgentTool run.workspace reflects worktree isolation', () => {
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.workspace.cwd).toBe(gitRoot)
     expect(run.workspace.worktreePath).toBeUndefined()
   })
@@ -324,7 +324,7 @@ describe('AgentTool run.workspace reflects worktree isolation', () => {
     // initial workspace.cwd may be either the parent or the worktree
     // depending on lifecycle ordering — but the run reached
     // succeeded regardless.
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('succeeded')
     expect(run.workspace.cwd).toBe(gitRoot)
   })
@@ -356,7 +356,7 @@ describe('parallel Agent invocations get independent runs', () => {
 
     const runs = registry.list()
     expect(runs).toHaveLength(2)
-    expect(runs[0]!.runId).not.toBe(runs[1]!.runId)
+    expect(runs[0].runId).not.toBe(runs[1].runId)
     expect(runs.map((r) => r.goal).sort()).toEqual(['A', 'B'])
     // Both succeeded independently.
     expect(runs.every((r) => r.status === 'succeeded')).toBe(true)
@@ -386,7 +386,7 @@ describe('AgentTool propagates maxIterations to the run budget', () => {
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.budget.maxIterations).toBe(7)
   })
 })

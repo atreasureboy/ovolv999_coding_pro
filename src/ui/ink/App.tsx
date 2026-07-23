@@ -196,7 +196,9 @@ export function App({
     if (keybindings.conflicts.length > 0) {
       store.addInfo(`⚠ ${keybindings.conflicts.length} keybinding conflict(s). Run /keybindings to see details.`)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // Mount-only: surface keybinding config/conflict banners once on
+    // first paint. (react-hooks plugin is not enabled in this repo.)
+  }, [])
 
   // ── Global key handler (Ctrl+C, Ctrl+L, Ctrl+O, ?, etc.) ──────────────────
 

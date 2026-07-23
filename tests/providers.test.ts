@@ -239,7 +239,7 @@ describe('getProvider', () => {
   })
 
   it('returns unknown provider for invalid ID', () => {
-    const p = getProvider('unknown' as never)
+    const p = getProvider('unknown')
     expect(p.id).toBe('unknown')
   })
 })

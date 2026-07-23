@@ -41,8 +41,8 @@ describe('WorkingState mutators', () => {
     const f2: Fact = { claim: 'engine uses ESM', source: 'engine.ts:12', confirmedAt: '2026-01-01' }
     const s = addFact(addFact(emptyWorkingState('g'), f1), f2)
     expect(s.confirmedFacts).toHaveLength(1)
-    expect(s.confirmedFacts[0]!.source).toBe('engine.ts:12')
-    expect(s.confirmedFacts[0]!.confirmedAt).toBe('2026-01-01')
+    expect(s.confirmedFacts[0].source).toBe('engine.ts:12')
+    expect(s.confirmedFacts[0].confirmedAt).toBe('2026-01-01')
   })
 
   it('recordFileChange is idempotent', () => {
@@ -97,8 +97,8 @@ describe('WorkingState mutators', () => {
     s = addArtifact(s, { id: 'a1', kind: 'log', path: '/x' }) // same id
     s = addArtifact(s, { id: 'a2', kind: 'diff' })
     expect(s.artifacts).toHaveLength(2)
-    expect(s.artifacts[0]!.path).toBeUndefined()
-    expect(s.artifacts[1]!.id).toBe('a2')
+    expect(s.artifacts[0].path).toBeUndefined()
+    expect(s.artifacts[1].id).toBe('a2')
   })
 })
 
@@ -234,7 +234,7 @@ describe('compactionViolations', () => {
     const after = emptyWorkingState('g') // dropped
     const v = compactionViolations(before, after)
     expect(v).toHaveLength(1)
-    expect(v[0]!.field).toBe('constraints')
+    expect(v[0].field).toBe('constraints')
   })
 
   it('flags dropped confirmedFacts', () => {
@@ -242,7 +242,7 @@ describe('compactionViolations', () => {
     const after = emptyWorkingState('g')
     const v = compactionViolations(before, after)
     expect(v).toHaveLength(1)
-    expect(v[0]!.field).toBe('confirmedFacts')
+    expect(v[0].field).toBe('confirmedFacts')
   })
 
   it('flags dropped filesChanged', () => {
@@ -250,16 +250,16 @@ describe('compactionViolations', () => {
     const after = emptyWorkingState('g')
     const v = compactionViolations(before, after)
     expect(v).toHaveLength(1)
-    expect(v[0]!.field).toBe('filesChanged')
+    expect(v[0].field).toBe('filesChanged')
   })
 
   it('flags dropped verification.failed', () => {
-    let before = recordVerification(emptyWorkingState('g'), 'npm test', false)
-    let after = recordVerification(emptyWorkingState('g'), 'npm test', true)
+    const before = recordVerification(emptyWorkingState('g'), 'npm test', false)
+    const after = recordVerification(emptyWorkingState('g'), 'npm test', true)
     // before: failed=[npm test]; after: passed=[npm test] — failed dropped.
     const v = compactionViolations(before, after)
     expect(v).toHaveLength(1)
-    expect(v[0]!.field).toBe('verification.failed')
+    expect(v[0].field).toBe('verification.failed')
   })
 
   it('flags dropped unresolved', () => {
@@ -267,7 +267,7 @@ describe('compactionViolations', () => {
     const after = emptyWorkingState('g')
     const v = compactionViolations(before, after)
     expect(v).toHaveLength(1)
-    expect(v[0]!.field).toBe('unresolved')
+    expect(v[0].field).toBe('unresolved')
   })
 
   it('multiple violations are all reported', () => {
@@ -323,7 +323,7 @@ describe('assertCompactionInvariants', () => {
     } catch (e) {
       expect(e).toBeInstanceOf(CompactionInvariantError)
       expect((e as CompactionInvariantError).violations).toHaveLength(1)
-      expect((e as CompactionInvariantError).violations[0]!.field).toBe('constraints')
+      expect((e as CompactionInvariantError).violations[0].field).toBe('constraints')
     }
   })
 })

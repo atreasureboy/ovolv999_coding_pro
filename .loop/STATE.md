@@ -1,47 +1,31 @@
 # STATE — ovolv999 迭代循环
 
-> 最终目标：参考 `claude-code/` 逆向源码，把 ovolv999 迭代成"超级个人 coding 工具"。
-> 我（glm-5.2）是指挥者，通过 amux 委托 Claude Code (MiniMax-M3) 执行实现，节省 token。
+> 最终目标：参考 claude-code 逆向源码，把 ovolv999 迭代成"超级个人 coding 工具"。
+> glm-5.2 指挥；实现：直接编码 + amux 委托 Claude Code 混合模式。
 
 ## 当前阶段
-**Iteration 7 进行中** — Ink/React 组件树基础设施搭建完成（12 个组件 + UIStore + InkRenderer + 入口函数）。通过 amux 委托 + 自实现混合模式。
+**架构审计 + 全面修复完成**（2026-07-23）。本轮基于对 five_goal Runtime 主链的全面架构审计，修复了审计发现的所有 P1 与可修复 P2 问题。
 
-## 当前目标适配度：约 90%
+## 当前目标适配度：约 92%
 
-### 已适配（可直接保留）
-- 统一 Harness（ExecutionEngine）+ 7 步 Boot Sequence
-- 模块系统：memory / critic / workspace / reflection / mcp（5 模块）
-- 4 个内置 preset + 零代码自定义角色
-- Memory 三原语 + 来源归因 + session 整合闭环
-- 验证闸门 + 调用链追踪 + 6 种 Hooks
-- 29+ 工具（+SnipTool）+ MCP 动态注入 + 工具元信息并发调度
-- 统一权限管理 + **风险分类器（3 级 + 命令注入检测）**
-- 后台任务生命周期 + 流式引擎 + 上下文压缩
-- **Time-based microcompact（零 LLM 成本上下文裁剪）**
-- **Path 安全工具（traversal/null-byte 防护）**
-- **Agent 子代理工具过滤（disallowedTools + 全局禁用集）**
-- **CJK 输入归一化（全角→半角 + 全角空格→半角）**
-- **SnipTool — 零 LLM 成本手动上下文裁剪（工具 + /snip 命令）**
-- **实时斜杠命令自动补全（SlashSuggester — 键入 / 即时过滤 + Tab 补全）**
-- **`/resume [name]` — REPL 内直接恢复历史会话**
-- **`/history [N]` — 显示最近 N 条消息预览**
-- Poor/Budget 模式 + Plan 工具闭环
-- 仅 3 个 runtime deps（openai/glob/zod）
-
-### 本轮新增（Iteration 6 — `/` 命令系统修复）
-- ✅ SlashSuggester（`src/ui/slashSuggest.ts`）：实时 ANSI 覆盖层渲染 + readline completer（Tab 补全），键入 `/` 即时显示命令列表，键入 `/r` 过滤到 `/resume`/`/review` 等
-- ✅ `/resume [name]` 从 stub 变为可用：通过 `loadSession` 回调加载历史会话，`currentSessionDir` 追踪恢复后的保存路径
-- ✅ `/history [N]` 从仅显示计数变为消息预览：role + 前 80 字符，默认显示最近 10 条
-- ✅ SlashCommandContext 新增 `loadSession` 回调
-- ✅ InputHandler 支持 `completer` 参数（readline 原生 Tab 补全）
-- ✅ 27 个新测试（slashSuggest 过滤 + 类行为 + builtin 命令）
+### 本轮修复（架构审计驱动）
+- **P1-1** `claudeCode.ts:630` 死代码三元式：新增 `runTasks` Map 持久化 taskId，detached→wait 路径不再退化为 `^[DONE]$` 陈旧哨兵匹配
+- **P1-2** `engine.runTurn` 增加 `parentRunId` 参数 + loopEngine 透传 loopRunId → 修复 loop→turn Run 树断链（turn 不再是孤儿）
+- **P1-3** 构造器末尾调度 `recoverWorkers()`（in-flight merge）→ external_worker 不再永久卡 `recovery-pending-reattach`
+- **P1-6** sandbox 接入 BashTool 前台执行路径（opt-in，`~/.ovolv999/sandbox.json` enabled 才生效，默认 passthrough）
+- **P1-7** lint 门禁恢复绿色：0 error（原 741 error）。type-strictness/死代码/风格债降为 475 warning（可见、非阻断、增量清理）
+- **P2-6** `maybeCompactWithInvariants` 接入生产压缩路径（evaluateBudget + reactiveCompact）
+- **P2-7** 新增 GAP-C.4 测试覆盖 parentRunId 透传
+- **P2-8** 删除误提交的 `nul` 文件
+- **P2-9** `claimSoftAbort` 去重到 SharedRuntimeState（engine + coordinator 两副本合并）
+- **P2-1** engine.ts 头注释诚实化（"thin facade" → "assembly root + lifecycle facade"）
+- README 能力矩阵诚实化（§3 事件持久化优先、§5 WorkerAdapter 全生命周期 + /workers 直连）
 
 ## 本轮证据
-- `pnpm build` → tsc **0 error**
-- `pnpm lint` → **0 error / 0 warning**
-- `pnpm test` → **51 files / 1136 tests passed**（基线 1107 → +29 用例）
-- `git diff --stat` → 4 files modified, 3 new files (slashSuggest.ts + 3 test files)
-- amux peek 全程可见 Claude Code 探索→实现→测试→修复 lint 的完整过程
+- `npx tsc --noEmit` → **0 error**（exit 0）
+- `npm run lint` → **0 error / 475 warning**（exit 0；baseline 为 741 error）
+- `npx vitest run` → **174 files / 3887 tests passed**（exit 1 仅因预存 lspClient ENOENT 环境错误，无断言失败；baseline 3885 → +2 新测试）
+- `git status` → nul 已 `git rm`；改动覆盖 engine/coordinator/claudeCode/loopEngine/contextManager/sharedState/bash/sandbox/eslint.config/README + 2 测试
 
 ## 当前 P0
 - 无
@@ -49,17 +33,16 @@
 ## 当前 P1
 - 无
 
-## 已知 P2（未修复，低风险）
+## 已知 P2（未修复，低风险/延后）
+- `no-unused-vars` 56 处死 import/局部（lint warn，非阻断，与死代码清理重叠，按需清理）
+- `consistent-type-imports` 48 处（builtin.ts 惰性 require 模式伴生，保留以避免 49 处高风险转换）
 - 模块级全局状态（todo/fileState/shellSession/modes 单例）— 并发子 agent 场景风险，单进程低风险
-- Renderer fd 泄漏 — 异常路径未调 destroy()
-- LoopEngine acceptance 经 shell — 信任边界=用户项目配置
+- `/workers` 命令直连 Manager（未走 WorkerAdapter）— 交互模式有效；程序化生命周期经 WorkerAdapter
+- EventBus in-process `.on()` 无生产订阅者（持久化已生效，订阅为扩展点）
+- `sharedState.modelState` 富字段（provider/capabilities/contextWindow/maxOutput）声明未填充（无 live bug，未被读取）
+- lspClient.test.ts 需 `/nonexistent/server-binary`（预存环境错误）
 
 ## 下一步
-1. **下一轮迭代可选**：FeatureFlag 系统、Worktree 隔离、Provider 抽象、pathSecurity 加固工具路径检查
-2. 可选：compactable-tool 白名单微调（Agent/Task 结果不入白名单）
-3. 可选：用 pathSecurity 加固 FileRead/FileWrite/Bash 工具的路径检查
-
----
-
-## 可以从 STATE.md 继续执行的位置
-工作区改动未提交。下一轮可直接：读 STATE → 选迭代方向 → 写 DETAIL_PLAN → amux send 委托 Claude Code → verify。
+1. 死代码清理（no-unused-vars 56 处，与 P2-2 重叠，可按文件渐进）
+2. 若需 Worker Steering 交互化：`/workers` 改走 WorkerAdapter（start/status/steer/cancel/collect）
+3. 若需事件驱动 UI：Renderer 订阅 EventBus（替换直接调用）

@@ -68,7 +68,7 @@ describe('P1-4: StructuredToolResult normalizers', () => {
       status: 'failed',
       summary: 'short',
       content: 'long content for the model',
-    } as AnyToolResult)
+    })
     expect(r.content).toBe('long content for the model')
   })
 
@@ -132,7 +132,7 @@ describe('P1-5: Bash exit code → status mapping', () => {
 
   it('malformed acceptable_exit_codes falls back to [0]', async () => {
     const t = new BashTool()
-    const out = await t.execute({ command: 'exit 1', acceptable_exit_codes: 'oops' as unknown as number[] }, ctx()) as ToolResultLike & { status?: string }
+    const out = await t.execute({ command: 'exit 1', acceptable_exit_codes: 'oops' }, ctx()) as ToolResultLike & { status?: string }
     expect(out.status).toBe('failed')
   })
 

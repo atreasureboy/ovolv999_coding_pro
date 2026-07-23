@@ -147,7 +147,7 @@ describe('snipCompact', () => {
           role: 'assistant',
           content: [
             { type: 'text', text: 'final answer' },
-            { type: 'thinking' as unknown as 'text', text: 'long internal reasoning' } as never,
+            { type: 'thinking' as unknown as 'text', text: 'long internal reasoning' },
           ],
         },
         ...recentMessages(8),

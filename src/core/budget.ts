@@ -416,18 +416,18 @@ export function formatBudgetSummary(cwd: string): string {
 
 export const BUDGET_PRESETS = {
   conservative: [
-    { name: 'daily-tokens', type: 'tokens' as BudgetType, period: 'daily' as BudgetPeriod, limit: 50_000 },
-    { name: 'daily-cost', type: 'cost' as BudgetType, period: 'daily' as BudgetPeriod, limit: 1.0 },
+    { name: 'daily-tokens', type: 'tokens', period: 'daily', limit: 50_000 },
+    { name: 'daily-cost', type: 'cost', period: 'daily', limit: 1.0 },
   ],
   moderate: [
-    { name: 'daily-tokens', type: 'tokens' as BudgetType, period: 'daily' as BudgetPeriod, limit: 200_000 },
-    { name: 'daily-cost', type: 'cost' as BudgetType, period: 'daily' as BudgetPeriod, limit: 5.0 },
-    { name: 'monthly-cost', type: 'cost' as BudgetType, period: 'monthly' as BudgetPeriod, limit: 100.0 },
+    { name: 'daily-tokens', type: 'tokens', period: 'daily', limit: 200_000 },
+    { name: 'daily-cost', type: 'cost', period: 'daily', limit: 5.0 },
+    { name: 'monthly-cost', type: 'cost', period: 'monthly', limit: 100.0 },
   ],
   heavy: [
-    { name: 'daily-tokens', type: 'tokens' as BudgetType, period: 'daily' as BudgetPeriod, limit: 1_000_000 },
-    { name: 'daily-cost', type: 'cost' as BudgetType, period: 'daily' as BudgetPeriod, limit: 25.0 },
-    { name: 'monthly-cost', type: 'cost' as BudgetType, period: 'monthly' as BudgetPeriod, limit: 500.0 },
+    { name: 'daily-tokens', type: 'tokens', period: 'daily', limit: 1_000_000 },
+    { name: 'daily-cost', type: 'cost', period: 'daily', limit: 25.0 },
+    { name: 'monthly-cost', type: 'cost', period: 'monthly', limit: 500.0 },
   ],
 } satisfies Record<string, Array<{ name: string; type: BudgetType; period: BudgetPeriod; limit: number }>>
 

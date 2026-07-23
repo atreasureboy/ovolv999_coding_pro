@@ -94,7 +94,7 @@ describe('P2-7: Boot recovery distinguishes worker and non-worker runs', () => {
     ])
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    const run = engine.getRunRegistry()!.get(runId)!
+    const run = engine.getRunRegistry().get(runId)!
     expect(run.status).toBe('failed')
     expect(run.error).toMatch(/process restarted/)
   })
@@ -110,7 +110,7 @@ describe('P2-7: Boot recovery distinguishes worker and non-worker runs', () => {
     ])
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    const run = engine.getRunRegistry()!.get(runId)!
+    const run = engine.getRunRegistry().get(runId)!
     expect(run.status).toBe('waiting')
     expect(run.phase).toBe('recovery-pending-reattach')
   })
@@ -126,13 +126,13 @@ describe('P2-7: Boot recovery distinguishes worker and non-worker runs', () => {
     ])
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    expect(engine.getRunRegistry()!.get(runId)!.status).toBe('waiting')
+    expect(engine.getRunRegistry().get(runId)!.status).toBe('waiting')
 
     const result = await engine.recoverWorkers()
     expect(result.lost).toBe(1)
     expect(result.reattached).toBe(0)
 
-    const run = engine.getRunRegistry()!.get(runId)!
+    const run = engine.getRunRegistry().get(runId)!
     expect(run.status).toBe('lost')
     expect(run.phase).toBe('recovery-reattach-failed')
   })
@@ -158,7 +158,7 @@ describe('P2-7: Boot recovery distinguishes worker and non-worker runs', () => {
     ])
 
     const engine = new ExecutionEngine(makeConfig(logDir), noopRenderer)
-    const run = engine.getRunRegistry()!.get(runId)!
+    const run = engine.getRunRegistry().get(runId)!
     expect(run.status).toBe('succeeded')
   })
 })

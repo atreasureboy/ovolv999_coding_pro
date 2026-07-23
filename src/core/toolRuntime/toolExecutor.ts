@@ -141,7 +141,7 @@ export class ToolExecutor {
       // fields. Now we merge: the legacy conversion provides
       // content/isError, and the structured fields are preserved on
       // the same object for downstream readers.
-      const raw: AnyToolResult = await tool.execute(input, context) as AnyToolResult
+      const raw: AnyToolResult = await tool.execute(input, context)
       if (isStructuredResult(raw)) {
         const legacy = toLegacy(raw)
         result = { ...raw, content: legacy.content, isError: legacy.isError }

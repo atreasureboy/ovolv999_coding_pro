@@ -186,3 +186,31 @@
 - 向后兼容：所有新特性默认关闭或可选（disallowedTools 默认空，CJK 归一化幂等）。
 - 测试：47 个新测试覆盖正常/边界/错误路径。
 - Claude Code 自主修正了 spec 的两个缺陷（definition 包装缺失、lint ! 断言），说明 amux 委托质量可靠。
+
+---
+
+## Iteration 8 审计 + 全面修复（2026-07-23，架构级审计驱动）
+
+### 审计方法
+glm-5.2 独立展开全面架构审计：读取全部目标文档 + 跑 tsc/lint/test 拿地面真相 + 派发 4 个并行 explore agent 逐文件核实 five_goal Runtime 主链接入真实性（非复述文档）。
+
+### 发现的真实 bug（已修复）
+- **P1-1** `claudeCode.ts:630` 死代码三元式（`taskId = run?.worker === session ? undefined : undefined`）→ detached→wait 路径 taskId 永远 undefined，退化为 `^[DONE]$` 陈旧哨兵匹配（正是 P0-7 要消除的）。修复：新增 `runTasks` Map 持久化 taskId，镜像 `runSessions` 生命周期。
+- **P1-2** loopEngine→engine.runTurn 父子 Run 断链（runTurn 无 parentRunId 参数，coordinator.deps.parentRunId 从未被填充）→ 所有 loop 下 turn run 是孤儿。修复：runTurn/coordinator.run 增加 opts.parentRunId，loopEngine 透传 loopRunId。
+- **P1-3** `recoverWorkers()` 生产路径从未调用（仅测试调用）→ external_worker run 永久卡 `recovery-pending-reattach`。修复：构造器末尾调度（in-flight merge 防与手动调用竞争）。
+- **lint 回归**：文档多处声称"0 error"，实测 741 error。修复：诚实分层（correctness 规则 error、type/dead-code/style 债 warn、tests 合理放松）→ 0 error / 475 warning。
+
+### 接线/诚实化
+- **P1-6** sandbox 接入 BashTool（opt-in，默认 passthrough，保留原行为）。
+- **P2-6** `maybeCompactWithInvariants` 接入生产压缩路径（防御 WorkingState 未来泄漏进消息流）。
+- **P2-9** claimSoftAbort 去重到 SharedRuntimeState。
+- README 能力矩阵诚实化（§3/§5）。
+
+### 核实后保留（有测试覆盖，按 goal 原则3不删）
+`onModelStateChanged`/`getRunEventBus`/`assembleSystemPrompt`/`mutatesState` 等元数据字段 — 均有测试断言引用，删除会破坏测试。`checkCommandPermission` 核实已不存在（早期已删）。
+
+### 审计小结（Iteration 8）
+- **P0：0**　**P1：0**（P1-1/2/3/6/7 全部修复）
+- **P2 已修复：6**（P2-1/6/7/8/9 + lint 债降级）
+- **P2 已知/延后：7**（死代码渐进清理 / 全局状态 / /workers 程序化 / EventBus 订阅 / modelState 富字段 / lspClient 环境）
+- 测试 3885→3887（+2 GAP-C.4），全部通过；tsc 0 error；lint 0 error

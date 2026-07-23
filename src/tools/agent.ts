@@ -27,7 +27,8 @@ import { execSync } from 'child_process'
 import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
 import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
-import { ExecutionRunRegistry, type RunStatus } from '../core/executionRun.js'
+import type { ExecutionRunRegistry} from '../core/executionRun.js';
+import { type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
 import type { WorkerAdapter, SteerEventEmitter, WorkerHandle, WorkerStatus, WorkerResult, WorkerDescriptor, WorkerTask } from '../core/workerAdapter.js'
 
@@ -661,7 +662,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
       if (!registry || !runId) return
       try {
-        registry.transition(runId, to, patch as never)
+        registry.transition(runId, to, patch)
       } catch {
         // best-effort — registry is observability, not control plane
       }

@@ -67,7 +67,7 @@ describe('BackgroundTaskManager with a registry walks the state machine', () => 
 
     const runs = registry.list()
     expect(runs).toHaveLength(1)
-    const run = runs[0]!
+    const run = runs[0]
     expect(run.kind).toBe('shell_task')
     expect(run.goal).toBe('happy')
     expect(run.workspace.cwd).toBe(tmpRoot)
@@ -86,7 +86,7 @@ describe('BackgroundTaskManager with a registry walks the state machine', () => 
     const id = mgr.createTask('node -e "process.exit(0)"')
     await waitForTerminal(mgr, id)
 
-    const run = registry.list({ parentRunId: 'parent-42' })[0]!
+    const run = registry.list({ parentRunId: 'parent-42' })[0]
     expect(run).toBeDefined()
     expect(run.parentRunId).toBe('parent-42')
   })
@@ -103,7 +103,7 @@ describe('BackgroundTaskManager failure paths land in failed', () => {
     const id = mgr.createTask('node -e "process.exit(3)"', { description: 'fails' })
     await waitForTerminal(mgr, id)
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('failed')
     expect(run.error).toMatch(/non-zero exit code 3/)
   })
@@ -118,7 +118,7 @@ describe('BackgroundTaskManager failure paths land in failed', () => {
     })
     await waitForTerminal(mgr, id)
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     // Either failed (error fired) — never succeeded.
     expect(['failed']).toContain(run.status)
   })
@@ -146,7 +146,7 @@ describe('BackgroundTaskManager stopTask lands in cancelled', () => {
     expect(stopped).toBe(true)
     await waitForTerminal(mgr, id)
 
-    const run = registry.list()[0]!
+    const run = registry.list()[0]
     expect(run.status).toBe('cancelled')
     expect(run.error).toMatch(/stopTask/)
     expect(isTerminalRunStatus(run.status)).toBe(true)
@@ -163,7 +163,7 @@ describe('BackgroundTaskManager stopTask lands in cancelled', () => {
     expect(stopped).toBe(false)
 
     // Run stays in succeeded, not cancelled.
-    expect(registry.list()[0]!.status).toBe('succeeded')
+    expect(registry.list()[0].status).toBe('succeeded')
   })
 })
 
@@ -184,7 +184,7 @@ describe('parallel background tasks get independent runs', () => {
 
     const runs = registry.list()
     expect(runs).toHaveLength(2)
-    expect(runs[0]!.runId).not.toBe(runs[1]!.runId)
+    expect(runs[0].runId).not.toBe(runs[1].runId)
     expect(runs.map((r) => r.goal).sort()).toEqual(['A', 'B'])
     expect(runs.every((r) => r.status === 'succeeded')).toBe(true)
   })

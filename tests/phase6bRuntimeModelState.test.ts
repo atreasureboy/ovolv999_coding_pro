@@ -26,7 +26,7 @@ describe('P2-4: RuntimeModelState shared object', () => {
     expect(s.modelState.model).toBe('claude-sonnet')
     expect(s.modelState.version).toBe(1)
     expect(updates).toHaveLength(1)
-    expect(updates[0]!.model).toBe('claude-sonnet')
+    expect(updates[0].model).toBe('claude-sonnet')
 
     s.updateModelState({ model: 'claude-opus', contextWindow: 200000 })
     expect(s.modelState.version).toBe(2)

@@ -202,8 +202,8 @@ export class ACPServer extends EventEmitter {
     // Only handle requests and notifications (not responses from client)
     if (!('method' in msg)) return
 
-    const req = msg as JsonRpcRequest | JsonRpcNotification
-    const id = 'id' in req ? (req as JsonRpcRequest).id : undefined
+    const req = msg
+    const id = 'id' in req ? (req).id : undefined
     const { method, params } = req
 
     try {
@@ -280,7 +280,7 @@ export class ACPServer extends EventEmitter {
     }
 
     const text = String(params?.text ?? '')
-    const images = Array.isArray(params?.images) ? (params!.images as string[]) : undefined
+    const images = Array.isArray(params?.images) ? (params.images as string[]) : undefined
 
     if (!text) {
       this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "text" param')

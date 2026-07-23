@@ -16,7 +16,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { ToolScheduler } from '../src/core/toolRuntime/toolScheduler.js'
-import { ToolExecutor } from '../src/core/toolRuntime/toolExecutor.js'
+import type { ToolExecutor } from '../src/core/toolRuntime/toolExecutor.js'
 import { ToolRegistry } from '../src/core/toolRuntime/toolRegistry.js'
 import { SharedRuntimeState } from '../src/core/runtime/sharedState.js'
 import { ContextManager } from '../src/core/context/contextManager.js'

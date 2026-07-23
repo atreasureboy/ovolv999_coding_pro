@@ -25,8 +25,9 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join, resolve, extname } from 'path'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
+import type {
+  ExecutionRunRegistry} from './executionRun.js';
 import {
-  ExecutionRunRegistry,
   type RunStatus,
   type RunKind,
   type ResourceClaim,
@@ -329,7 +330,7 @@ export async function executeWorkflow(
   }
   const transitionRun = (to: RunStatus, patch?: Record<string, unknown>): void => {
     if (!registry || !runId) return
-    try { registry.transition(runId, to, patch as never) } catch { /* best-effort */ }
+    try { registry.transition(runId, to, patch) } catch { /* best-effort */ }
   }
 
   transitionRun('preparing', { phase: 'workflow-starting' })
@@ -532,20 +533,20 @@ function withStepRun<T>(
       const fin = finalize(result)
       try {
         registry.transition(
-          stepRunId!,
+          stepRunId,
           fin.success ? 'succeeded' : 'failed',
           {
             phase: fin.phase ?? 'finalized',
             error: fin.error,
             artifacts: fin.artifacts,
-          } as never,
+          },
         )
       } catch { /* best-effort */ }
       return result
     },
     (err) => {
       try {
-        registry.transition(stepRunId!, 'failed', {
+        registry.transition(stepRunId, 'failed', {
           phase: 'exception',
           error: (err as Error).message?.slice(0, 1000) ?? 'step threw',
         })
@@ -837,7 +838,7 @@ export async function runShellAsync(opts: {
       if (typeof killTimer.unref === 'function') killTimer.unref()
       clearTimers()
     }
-    let abortListener: (() => void) | null = onAbort
+    const abortListener: (() => void) | null = onAbort
     signal?.addEventListener('abort', abortListener, { once: true })
 
     child.on('error', (err) => {

@@ -111,8 +111,16 @@ export class RuntimeCoordinator {
     userMessage: string,
     history: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
+    opts?: { parentRunId?: string },
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
     const { config, renderer, eventLog, sharedState, eventEmitter } = this.deps
+
+    // P1-2 fix: resolve the effective parentRunId ONCE. A per-turn
+    // override (opts.parentRunId, e.g. from runLoop's kind='loop' run)
+    // takes precedence over the static deps.parentRunId. This threads
+    // the hierarchical Run tree so a loop's child turns — and every
+    // grandchild Agent/Worker run they spawn — link back to the loop.
+    const effectiveParentRunId = opts?.parentRunId ?? this.deps.parentRunId
 
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
@@ -128,7 +136,7 @@ export class RuntimeCoordinator {
           kind: 'turn',
           goal: userMessage.slice(0, 200),
           workspace: { cwd: config.cwd },
-          parentRunId: this.deps.parentRunId,
+          parentRunId: effectiveParentRunId,
         }).runId
       : undefined
     if (runId && registry) {
@@ -181,7 +189,7 @@ export class RuntimeCoordinator {
     if (runId) {
       toolContext.execution = buildExecutionContext({
         runId,
-        parentRunId: this.deps.parentRunId,
+        parentRunId: effectiveParentRunId,
         cwd: config.cwd,
         signal: turnAbortController.signal,
         model: config.model,
@@ -225,7 +233,7 @@ export class RuntimeCoordinator {
           case 'check_abort': {
             const decision = checkTermination({
               hardAborted: turnAbortController.signal.aborted,
-              softAborted: this.claimSoftAbort(turnAbortController, sharedState),
+              softAborted: this.deps.sharedState.claimSoftAbort(turnAbortController),
               iteration: state.iteration,
               maxIterations: config.maxIterations,
             })
@@ -545,13 +553,4 @@ export class RuntimeCoordinator {
     }
   }
 
-  private claimSoftAbort(turnAbortController: AbortController, sharedState: SharedRuntimeState): boolean {
-    if (!sharedState.softAbortRequested) return false
-    if (sharedState.softAbortOwner !== null && sharedState.softAbortOwner !== turnAbortController) {
-      return false
-    }
-    sharedState.softAbortRequested = false
-    sharedState.softAbortOwner = null
-    return true
-  }
 }

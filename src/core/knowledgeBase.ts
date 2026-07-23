@@ -156,7 +156,7 @@ export function searchKnowledge(
   const lower = query.toLowerCase()
   const limit = options.limit ?? 20
 
-  let results = store.entries.filter(e => {
+  const results = store.entries.filter(e => {
     if (options.category && e.category !== options.category) return false
     return (
       e.key.toLowerCase().includes(lower) ||

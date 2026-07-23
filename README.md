@@ -24,9 +24,9 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 |---|---------|---------|------|
 | 1 | 所有执行行为都有统一 Run ID | `src/core/executionRun.ts` + `coordinator.ts:run()` 每轮 mint `kind='turn'` | `tests/gapCCoordinatorRunWiring.test.ts` |
 | 2 | 所有子任务都有父子关系 | `AgentTool` / `ClaudeCodeTool` / `BackgroundTaskManager` 创建子 run 时携带 `parentRunId` | `tests/agentExecutionRun.test.ts` |
-| 3 | 所有状态变化都有结构化事件 | `ExecutionRunEventBus` 持久化优先 + 关键/尽力两类订阅者 | `tests/executionRunEvents.test.ts` |
+| 3 | 所有状态变化都有结构化事件 | `ExecutionRunEventBus` 持久化优先（JSONL），in-process `.on()` 订阅为扩展点 | `tests/executionRunEvents.test.ts` |
 | 4 | 修改型 Agent 自动使用独立 worktree | `AgentTool` 检测 `modifies_state=true` → worktree + 自动合并 | `tests/agentWorktreeIsolation.test.ts` |
-| 5 | 子 Agent 可以查询、steer、cancel 和 collect | `WorkerAdapter.steer(runId, instruction)`（ClaudeCodeTool + AgentTool） | `tests/gapKWorkerSteer.test.ts` |
+| 5 | 子 Agent 可以查询、steer、cancel 和 collect | `WorkerAdapter` 全生命周期（ClaudeCodeTool 完整实现 start/status/steer/cancel/collect/wait/reattach）；`/workers` 交互命令直连 Manager | `tests/gapKWorkerSteer.test.ts`, `tests/phase3WorkerLifecycle.test.ts` |
 | 6 | 任务完成必须通过 Verification Gate | `AgentTool` verify flag → `verifyPlanExecution` 工具 | `tests/agentFalseSuccess.test.ts` |
 | 7 | 验证失败绝不标记成功 | `StructuredToolResult.status='failed'` → `isError=true`（Bash 非零 exit 同样） | `tests/structuredToolResult.test.ts` |
 | 8 | Worker 崩溃或主进程重启后可恢复状态 | `JsonlEventStore` + `recoverRegistryFromStore` + 引擎启动时标记 in-flight → failed | `tests/gapGEngineRecovery.test.ts` |

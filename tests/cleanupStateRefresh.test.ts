@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { ToolScheduler, partitionToolCalls } from '../src/core/toolRuntime/toolScheduler.js'
-import { ToolExecutor } from '../src/core/toolRuntime/toolExecutor.js'
+import type { ToolExecutor } from '../src/core/toolRuntime/toolExecutor.js'
 import { ToolRegistry } from '../src/core/toolRuntime/toolRegistry.js'
 import { ToolPolicy } from '../src/core/toolRuntime/toolPolicy.js'
 import { SharedRuntimeState } from '../src/core/runtime/sharedState.js'
