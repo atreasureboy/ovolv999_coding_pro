@@ -76,12 +76,26 @@ export interface TaskContext {
   notes?: string
 }
 
+export interface ProviderConfig {
+  /** 'openai' | 'minimax' | 'anthropic' | any provider id (adapter selection). */
+  provider?: string
+  apiKey?: string
+  baseURL?: string
+  model?: string
+}
+
 export interface OvogoSettings {
   hooks?: HooksConfig
   taskContext?: TaskContext
   permissions?: PermissionsConfig
   poor?: { enabled: boolean }
   mcp?: { servers: McpServerConfig[] }
+  /**
+   * First-run wizard output (ovolv999 init). User-level provider
+   * config written to ~/.ovogo/settings.json. resolveApiEnvironment
+   * reads it (process env still wins; this beats the Claude fallback).
+   */
+  provider?: ProviderConfig
 }
 
 function tryParse(path: string): OvogoSettings {
@@ -135,6 +149,17 @@ function normalizeMcp(value: unknown): { servers: McpServerConfig[] } | undefine
   return servers.length > 0 ? { servers } : undefined
 }
 
+function normalizeProvider(value: unknown): ProviderConfig | undefined {
+  if (!isObject(value)) return undefined
+  const p = value
+  const out: ProviderConfig = {}
+  if (typeof p.provider === 'string' && p.provider.trim()) out.provider = p.provider.trim()
+  if (typeof p.apiKey === 'string' && p.apiKey.trim()) out.apiKey = p.apiKey.trim()
+  if (typeof p.baseURL === 'string' && p.baseURL.trim()) out.baseURL = p.baseURL.trim()
+  if (typeof p.model === 'string' && p.model.trim()) out.model = p.model.trim()
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function normalizeSettings(value: unknown): OvogoSettings {
   if (!isObject(value)) return {}
   const settings = value as OvogoSettings
@@ -152,6 +177,7 @@ function normalizeSettings(value: unknown): OvogoSettings {
       ? { enabled: value.poor.enabled }
       : undefined,
     mcp: normalizeMcp(value.mcp),
+    provider: normalizeProvider(value.provider),
     permissions: rawPermissions
       ? {
           mode: typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
@@ -192,6 +218,7 @@ function mergeSettings(a: OvogoSettings, b: OvogoSettings): OvogoSettings {
     permissions: mergedPermissions,
     poor: b.poor ?? a.poor,
     mcp: b.mcp ?? a.mcp,
+    provider: b.provider ?? a.provider,
   }
 }
 
@@ -253,4 +280,26 @@ export function loadSettings(cwd: string): OvogoSettings {
   if (existsSync(globalPath)) settings = mergeSettings(settings, tryParse(globalPath))
   if (existsSync(projectPath)) settings = mergeSettings(settings, tryParse(projectPath))
   return settings
+}
+
+/**
+ * First-run wizard: load/save ONLY the user-level provider config at
+ * ~/.ovogo/settings.json (so the wizard doesn't touch project settings).
+ */
+export function getGlobalSettingsPath(): string {
+  return join(homedir(), '.ovogo', 'settings.json')
+}
+
+export function loadGlobalProvider(): ProviderConfig | undefined {
+  const path = getGlobalSettingsPath()
+  if (!existsSync(path)) return undefined
+  return tryParse(path).provider
+}
+
+export function saveGlobalProvider(provider: ProviderConfig): void {
+  const path = getGlobalSettingsPath()
+  const current = existsSync(path) ? tryParse(path) : {}
+  const next: OvogoSettings = { ...current, provider }
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(next, null, 2) + '\n', 'utf8')
 }

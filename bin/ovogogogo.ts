@@ -66,7 +66,8 @@ import { SlashSuggester } from '../src/ui/slashSuggest.js'
 import { runWithDeadline } from '../src/ui/turnDeadline.js'
 import { trimHistoryForNextTurn } from '../src/ui/historyTrimmer.js'
 import type { EngineConfig, OpenAIMessage } from '../src/core/types.js'
-import { getProjectSettingsPath, loadSettings, saveProjectSettings } from '../src/config/settings.js'
+import { getProjectSettingsPath, loadSettings, saveProjectSettings, loadGlobalProvider } from '../src/config/settings.js'
+import { runFirstRunWizard } from '../src/config/wizard.js'
 import { loadProjectConfig } from '../src/config/projectConfig.js'
 import { HookRunner, NoopHookRunner } from '../src/config/hooks.js'
 import { loadSkills, expandSkillPrompt, formatSkillIndex } from '../src/skills/loader.js'
@@ -154,6 +155,7 @@ interface Args {
   pipe: boolean
   pipeFormat: 'text' | 'json'
   bg: boolean
+  init: boolean
 }
 
 /**
@@ -367,6 +369,7 @@ function parseArgs(argv: string[]): Args {
   let pipe = false
   let pipeFormat: 'text' | 'json' = 'text'
   let bg = false
+  let init = false
 
   try {
     for (let i = 0; i < args.length; i++) {
@@ -411,6 +414,7 @@ function parseArgs(argv: string[]): Args {
         case '--ink': ink = true; break
         case '--pipe': pipe = true; break
         case '--bg': bg = true; break
+        case '--init': init = true; break
         case '--format':
           pipeFormat = requireValue(arg, args[++i]) as 'text' | 'json'
           if (pipeFormat !== 'text' && pipeFormat !== 'json') {
@@ -418,7 +422,8 @@ function parseArgs(argv: string[]): Args {
           }
           break
         default:
-          if (!arg.startsWith('-')) task = task ? task + ' ' + arg : arg
+          if (arg === 'init') init = true
+          else if (!arg.startsWith('-')) task = task ? task + ' ' + arg : arg
       }
     }
   } catch (err) {
@@ -428,14 +433,14 @@ function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init }
 }
 
 interface ResolvedApiEnvironment {
   apiKey: string | undefined
   baseURL: string | undefined
   model: string
-  provider: 'minimax' | 'openai'
+  provider: string
 }
 
 /**
@@ -444,13 +449,13 @@ interface ResolvedApiEnvironment {
  * same account without copying credentials into another config file.
  */
 function resolveApiEnvironment(): ResolvedApiEnvironment {
-  // The Claude Code CLI keeps its provider env (e.g. MiniMax M3 via the
-  // Anthropic facade) in ~/.claude/settings.json under an "env" block.
-  // That block is loaded by claude code itself and NOT exported to the
-  // shell, so `process.env.ANTHROPIC_*` is empty when ovolv999 runs in a
-  // normal shell. Fall back to reading that file so ovolv999 shares the
-  // same account zero-config (the bin's stated intent). Process env
-  // always wins when present.
+  // Priority: 1) explicit process env (power user)  2) first-run wizard
+  // config in ~/.ovogo/settings.json  3) ~/.claude/settings.json (auto
+  // reuse)  4) OpenAI default.
+
+  // 1 + 3 merged for the Anthropic facade check: process env wins, then
+  // the Claude settings.json fallback (the block claude code keeps under
+  // "env", which is NOT exported to the shell).
   const claudeEnv = readClaudeSettingsEnv()
   const lookup = (k: string): string | undefined => process.env[k] ?? claudeEnv[k]
 
@@ -471,6 +476,18 @@ function resolveApiEnvironment(): ResolvedApiEnvironment {
       baseURL: anthropicBaseURL!.replace(/\/anthropic\/?$/i, '/v1'),
       model: rawModel.replace(/\[[^\]]*\]$/, ''),
       provider: 'minimax',
+    }
+  }
+
+  // 2) first-run wizard output (explicit user choice via `ovolv999 init`).
+  // Beats the OpenAI default and any non-minimax Claude fallback.
+  const wizard = loadGlobalProvider()
+  if (wizard?.apiKey) {
+    return {
+      apiKey: wizard.apiKey,
+      baseURL: wizard.baseURL,
+      model: process.env.OVOGO_MODEL ?? wizard.model ?? 'gpt-4o',
+      provider: wizard.provider ?? 'openai',
     }
   }
 
@@ -520,6 +537,7 @@ OPTIONS
   --ink                     Launch with Ink/React UI (full component tree, live autocomplete)
   --pipe                    Pipe mode: read stdin as context, output to stdout (no UI)
   --format <text|json>      Output format for pipe mode (default: text)
+  init                      First-run provider wizard (detects Claude Code / OpenAI; writes ~/.ovogo/settings.json)
   -v, --version             Print version and exit
   -h, --help                Show this help
 
@@ -1395,10 +1413,19 @@ async function main(): Promise<void> {
   const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
   initChildLogCapture()
 
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
+
+  // `ovolv999 init` / `--init`: interactive first-run provider wizard.
+  // Writes ~/.ovogo/settings.json (provider block); resolveApiEnvironment
+  // reads it next launch (process env still wins).
+  if (init) {
+    const { configured } = await runFirstRunWizard({})
+    if (!configured) process.exit(1)
+    process.exit(0)
+  }
 
   // Load skills early so --help can list them
   const skills = loadSkills(cwd)

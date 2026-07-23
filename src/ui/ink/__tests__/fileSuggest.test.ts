@@ -7,7 +7,10 @@ import { suggestFiles, fuzzyMatch } from '../fileSuggest.js'
 
 describe('suggestFiles', () => {
   it('returns files in cwd for empty query', () => {
-    const results = suggestFiles(process.cwd(), '')
+    // Use a cap larger than the repo's root entry count so the assertion
+    // is deterministic — the default max=15 caps the empty-query list and
+    // which 15 of ~31 root entries surface is readdirSync-order dependent.
+    const results = suggestFiles(process.cwd(), '', 100)
     expect(results.length).toBeGreaterThan(0)
     // Should include package.json
     expect(results.some((r) => r.path === 'package.json')).toBe(true)

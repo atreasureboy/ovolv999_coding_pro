@@ -184,8 +184,11 @@ cat <<EOF
 ${C_BOLD}${C_GREEN}  ovolv999 installed successfully.${C_RESET}
 
 ${C_BOLD}Quick start${C_RESET}
+  ${C_DIM}# first-run provider wizard (detects Claude Code / OpenAI, ~10s)${C_RESET}
+  ${C_BOLD}ovolv999${C_RESET} init
+
   ${C_DIM}# interactive REPL${C_RESET}
-  ovolv999
+  ${C_BOLD}ovolv999${C_RESET}
 
   ${C_DIM}# single task${C_RESET}
   ${C_BOLD}ovolv999${C_RESET} "fix the failing tests in src/core"
