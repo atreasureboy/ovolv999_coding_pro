@@ -47,6 +47,7 @@ import {
 } from '../queryStateMachine.js'
 import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
+import type { RoutingInput } from '../model/modelRouter.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
@@ -59,6 +60,7 @@ import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion } from './completionContract.js'
+import { interventionMessageForStall } from './progressMonitor.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -97,6 +99,13 @@ export interface CoordinatorDeps {
   runRegistry?: ExecutionRunRegistry
   /** Phase 4: progress/stall monitor (queried each iteration). */
   progressMonitor?: ProgressMonitor
+  /**
+   * Phase 2: per-turn adaptive model routing. Called once after boot
+   * with the turn's signals; if it returns a model string, the engine
+   * has switched this turn's model. Null = no change / routing off /
+   * manual override in effect.
+   */
+  routeModel?: (input: RoutingInput) => string | null
   /**
    * Parent run id (e.g. a `kind='loop'` run from runLoop). When set,
    * the per-turn run records it as parentRunId for hierarchical queries.
@@ -203,6 +212,21 @@ export class RuntimeCoordinator {
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
 
+    // Phase 2: adaptive model routing — one decision per turn, after
+    // boot, before the first LLM call. Driven by goal complexity +
+    // context usage (not every iteration, to avoid thrashing). Honours
+    // manual override + routing-enabled (handled in the engine callback).
+    if (this.deps.routeModel) {
+      try {
+        const routed = this.deps.routeModel({
+          userGoal: userMessage,
+          // contextUsageRatio omitted at turn start (context is just
+          // system prompt + user msg); the router defaults to no pressure.
+        })
+        if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
+      } catch { /* best-effort: routing must never break the turn */ }
+    }
+
     // P0-2 (continuation output completeness): collect EVERY assistant
     // text segment emitted during this turn — including continuation
     // segments after `finish_reason='length'`, budget-continuation
@@ -231,6 +255,7 @@ export class RuntimeCoordinator {
 
     let result: TurnResult
     const turnStartMs = Date.now()
+    let stallInterventionApplied = false // dedupe: one system nudge per stall episode
 
     try {
       while (!isTerminal(state)) {
@@ -267,6 +292,16 @@ export class RuntimeCoordinator {
                 if (verdict.kind !== 'progressing') {
                   renderer.warn(`Stall detected (${verdict.kind}): ${verdict.reason} → suggested: ${verdict.action}`)
                   eventEmitter.emit({ type: 'STALL_DETECTED', kind: verdict.kind, reason: verdict.reason, action: verdict.action })
+                  // Phase 4 active intervention: inject a role:system nudge
+                  // (NOT a user message) once per stall episode to force a
+                  // strategy change. Reset when progress resumes.
+                  const nudge = interventionMessageForStall(verdict)
+                  if (nudge && !stallInterventionApplied) {
+                    messages.push(nudge)
+                    stallInterventionApplied = true
+                  }
+                } else {
+                  stallInterventionApplied = false
                 }
               }
               eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })

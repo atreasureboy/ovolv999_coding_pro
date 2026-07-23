@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ProgressMonitor, DEFAULT_THRESHOLDS } from '../src/core/runtime/progressMonitor.js'
+import { ProgressMonitor, DEFAULT_THRESHOLDS, interventionMessageForStall, type StallVerdict } from '../src/core/runtime/progressMonitor.js'
 import { evaluateCompletion } from '../src/core/runtime/completionContract.js'
 
 const ok = { isError: false, content: 'done' }
@@ -69,6 +69,37 @@ describe('ProgressMonitor + StallDetector (Phase 4)', () => {
     const after = m.snapshot(20).minutesSinceLastMeaningfulProgress
     expect(after).toBeLessThanOrEqual(before)
     expect(m.snapshot(20).verificationDelta).toBe(-6)
+  })
+})
+
+describe('interventionMessageForStall (Phase 4 active intervention)', () => {
+  it('returns null for progressing (no intervention)', () => {
+    expect(interventionMessageForStall({ kind: 'progressing' })).toBeNull()
+  })
+
+  it('returns null for blocked (terminal transition handles it)', () => {
+    expect(interventionMessageForStall({ kind: 'blocked', reason: 'x', action: 'report-blocked' })).toBeNull()
+  })
+
+  it('returns a role:system nudge (NOT user) for soft/hard/repeated/budget', () => {
+    const cases: Array<Extract<StallVerdict, { reason: string }>> = [
+      { kind: 'soft-stall', reason: 'no progress 10min', action: 'summarize-and-replan' },
+      { kind: 'hard-stall', reason: 'no progress 25min', action: 'escalate-critic' },
+      { kind: 'repeated-failure', reason: '3 identical errors', action: 'root-cause-subtask' },
+      { kind: 'budget-pressure', reason: 'budget 10%', action: 'narrow-scope' },
+    ]
+    for (const v of cases) {
+      const msg = interventionMessageForStall(v)
+      expect(msg).not.toBeNull()
+      expect(msg!.role).toBe('system') // NOT 'user' — must not forge user input
+      expect(msg!.content.length).toBeGreaterThan(0)
+      expect(msg!.content).toContain(v.reason)
+    }
+  })
+
+  it('hard-stall nudge instructs to STOP and re-analyse', () => {
+    const msg = interventionMessageForStall({ kind: 'hard-stall', reason: 'r', action: 'escalate-critic' })!
+    expect(msg.content).toMatch(/STOP|first principles|blocker/i)
   })
 })
 

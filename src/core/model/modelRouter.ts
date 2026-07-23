@@ -254,6 +254,13 @@ export class ModelRouter {
     // Complexity → want reasoning + coding strength.
     score += complexity * (cap.reasoning * 0.6 + cap.coding * 0.4)
 
+    // Trivial tasks should prefer the CHEAP model: as complexity falls,
+    // the cost advantage (cap.cost, 1=cheapest) weighs in more. This is
+    // what makes "list files" route to the cheap model and "redesign the
+    // architecture" route to the strong one — otherwise capability scores
+    // dominate and the strong model always wins. (eight_goal §四 默认策略.)
+    score += (1 - complexity) * cap.cost * 0.8
+
     // Long-context pressure → want a big window.
     const ctxRatio = input.contextUsageRatio ?? 0
     if (ctxRatio > (this.routing.longContextThreshold ?? DEFAULT_LONG_CONTEXT_THRESHOLD)) {

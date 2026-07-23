@@ -21,7 +21,9 @@ describe('ModelRouter (Phase 2)', () => {
     // sticky: a later trivial task still uses the override
     expect(r.route({ userGoal: 'list files' }).selectedModel).toBe('haiku')
     r.setManualOverride(null)
-    expect(r.route({ userGoal: 'list files' }).selectedModel).not.toBe('haiku')
+    // override cleared: a complex task now routes to the strong model
+    // (not the previously-overridden haiku)
+    expect(r.route({ userGoal: 'redesign the architecture', needsArchitecture: true }).selectedModel).toBe('sonnet')
   })
 
   it('routes a complex architecture task to the strong-reasoning model', () => {

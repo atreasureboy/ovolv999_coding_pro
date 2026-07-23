@@ -331,6 +331,22 @@ export class ExecutionEngine {
       eventEmitter: this.eventEmitter,
       runRegistry: this.runRegistry,
       progressMonitor: this.progressMonitor,
+      // Phase 2: per-turn adaptive routing. The callback runs the router
+      // and, when routing is enabled with no manual override and the
+      // decision differs from the current model, transactionally switches
+      // (setModel) for this turn. Honours --model//model override priority.
+      routeModel: (input) => {
+        const router = this.modelRouter
+        if (!router.isRoutingEnabled() || router.getManualOverride()) return null
+        const decision = router.route(input)
+        if (decision.selectedModel && decision.selectedModel !== this.config.model) {
+          try {
+            this.setModel(decision.selectedModel)
+            return decision.selectedModel
+          } catch { return null }
+        }
+        return null
+      },
     })
 
     // P2-7: reconcile non-terminal runs AFTER tools are created so
