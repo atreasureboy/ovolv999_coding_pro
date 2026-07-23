@@ -172,6 +172,34 @@ registerCommand({
   },
 })
 
+// ── Phase 3: task graph ──────────────────────────────────────────
+registerCommand({
+  name: 'tasks',
+  description: 'Show the task graph: nodes, dependencies, status, blockers',
+  usage: '/tasks',
+  handler: (_args, ctx) => {
+    const g = ctx.engine.getTaskGraph()
+    const snap = g.snapshot()
+    if (snap.summary.total === 0) {
+      return text('No task graph for this run (simple task — no decomposition).')
+    }
+    const s = snap.summary
+    const lines = [
+      `TaskGraph: ${s.completed}/${s.total} completed · ${s.failed} failed · ${s.blocked} blocked · ${s.running} running · ${s.ready} ready · ${s.pending} pending`,
+      '',
+    ]
+    for (const n of snap.nodes) {
+      const deps = n.dependencies.length ? ` ← [${n.dependencies.join(',')}]` : ''
+      const flag = n.status === 'blocked' ? `  ⚠ ${n.blockReason ?? ''}`
+        : n.status === 'failed' ? `  ✗ ${n.failReason ?? ''}`
+        : ''
+      lines.push(`  [${n.status.padEnd(10)}] ${n.title}${deps}${flag}`)
+    }
+    return text(lines.join('\n'))
+  },
+})
+
+
 // ── /compact — manually trigger compaction ─────────────────────────────────
 
 registerCommand({

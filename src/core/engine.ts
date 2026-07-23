@@ -51,6 +51,7 @@ import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
 import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig } from './model/modelRouter.js'
 import { ProgressMonitor } from './runtime/progressMonitor.js'
+import { TaskGraph } from './runtime/taskGraph.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -137,6 +138,13 @@ export class ExecutionEngine {
    * Drives /progress and the soft/hard-stall interventions.
    */
   private readonly progressMonitor: ProgressMonitor
+  /**
+   * Phase 3: optional task-decomposition DAG. Empty for simple tasks
+   * (eight_goal §五.1 — don't force a graph on trivial work). A
+   * planner/model populates it; the CompletionContract gate refuses
+   * 'completed' while it has unfinished nodes.
+   */
+  private readonly taskGraph: TaskGraph
   private contextManager: ContextManager
   private toolPolicy: ToolPolicy
   private toolRegistry: ToolRegistry
@@ -273,6 +281,8 @@ export class ExecutionEngine {
     // Phase 4: progress/stall monitor (ToolExecutor feeds it; coordinator
     // queries detectStall each iteration).
     this.progressMonitor = new ProgressMonitor()
+    // Phase 3: task graph (empty until a planner populates it).
+    this.taskGraph = new TaskGraph()
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,
@@ -331,6 +341,7 @@ export class ExecutionEngine {
       eventEmitter: this.eventEmitter,
       runRegistry: this.runRegistry,
       progressMonitor: this.progressMonitor,
+      taskGraph: this.taskGraph,
       // Phase 2: per-turn adaptive routing. The callback runs the router
       // and, when routing is enabled with no manual override and the
       // decision differs from the current model, transactionally switches
@@ -670,6 +681,11 @@ export class ExecutionEngine {
   /** Phase 4: progress/stall monitor (fed by ToolExecutor, queried each iteration). */
   getProgressMonitor(): ProgressMonitor {
     return this.progressMonitor
+  }
+
+  /** Phase 3: task-decomposition graph (empty for simple tasks). */
+  getTaskGraph(): TaskGraph {
+    return this.taskGraph
   }
 
   getBackgroundTaskManager(): BackgroundTaskManager {

@@ -61,6 +61,9 @@ import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion } from './completionContract.js'
 import { interventionMessageForStall } from './progressMonitor.js'
+import { shouldInvokeCritic, buildCriticReport, criticReportToGuidance } from './criticTrigger.js'
+import { reviewRun } from './reviewer.js'
+import type { TaskGraph } from './taskGraph.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -99,6 +102,8 @@ export interface CoordinatorDeps {
   runRegistry?: ExecutionRunRegistry
   /** Phase 4: progress/stall monitor (queried each iteration). */
   progressMonitor?: ProgressMonitor
+  /** Phase 3: task graph — gates completion when it has unfinished nodes. */
+  taskGraph?: TaskGraph
   /**
    * Phase 2: per-turn adaptive model routing. Called once after boot
    * with the turn's signals; if it returns a model string, the engine
@@ -256,6 +261,7 @@ export class RuntimeCoordinator {
     let result: TurnResult
     const turnStartMs = Date.now()
     let stallInterventionApplied = false // dedupe: one system nudge per stall episode
+    let criticInterventionApplied = false // dedupe: one critic nudge per risk episode
 
     try {
       while (!isTerminal(state)) {
@@ -302,6 +308,39 @@ export class RuntimeCoordinator {
                   }
                 } else {
                   stallInterventionApplied = false
+                }
+                // Phase 5: adaptive (risk-triggered) critic. Replaces the
+                // fixed every-N-turns waste: only invoke when real risk is
+                // present (repeated failures / stall / large scope). Injects
+                // a structured role:system nudge (NOT a user message), deduped
+                // per risk episode.
+                const snap = pm.snapshot(elapsedMin)
+                const ws = this.deps.contextManager.getWorkingState()
+                const criticDecision = shouldInvokeCritic({
+                  snapshot: snap,
+                  modelClaimingCompletion: false, // completion-time covered by the CompletionContract gate
+                  isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
+                  changedFilesCount: ws.filesChanged.length,
+                  unresolvedCount: ws.unresolved.length,
+                  remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
+                })
+                if (criticDecision.invoke && !criticInterventionApplied) {
+                  const guidance = criticReportToGuidance(buildCriticReport({
+                    snapshot: snap,
+                    modelClaimingCompletion: false,
+                    isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
+                    changedFilesCount: ws.filesChanged.length,
+                    unresolvedCount: ws.unresolved.length,
+                    remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
+                  }))
+                  if (guidance) {
+                    messages.push(guidance)
+                    criticInterventionApplied = true
+                    renderer.warn(`Critic invoked: ${criticDecision.reason}`)
+                    eventEmitter.emit({ type: 'STALL_DETECTED', kind: 'critic', reason: criticDecision.reason, action: 'review' })
+                  }
+                } else if (!criticDecision.invoke) {
+                  criticInterventionApplied = false
                 }
               }
               eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })
@@ -545,6 +584,14 @@ export class RuntimeCoordinator {
       if (runningChildren > 0) {
         completionBlockers = [...completionBlockers, `${runningChildren} child subtask(s) still running`]
       }
+      // Phase 3: a non-empty TaskGraph with unfinished nodes blocks
+      // completion — the model can't declare done while planned work
+      // remains. Hard failures (failed/blocked nodes) also block.
+      const tg = this.deps.taskGraph
+      if (tg && tg.size() > 0 && tg.hasUnfinished()) {
+        const snap = tg.snapshot().summary
+        completionBlockers = [...completionBlockers, `TaskGraph unfinished: ${snap.completed}/${snap.total} done, ${snap.failed} failed, ${snap.blocked} blocked, ${snap.running + snap.ready + snap.pending} active`]
+      }
       if (completionBlockers.length > 0) {
         renderer.warn(`Completion gate: marking Run blocked despite stop_sequence — ${completionBlockers.join('; ')}`)
       }
@@ -576,6 +623,26 @@ export class RuntimeCoordinator {
         }
       } catch { /* best-effort: never break the turn result */ }
     }
+
+    // Phase 5: final Reviewer — a deterministic post-run verdict from
+    // structured state (NOT the model's self-report). Surfaces partial/
+    // blocked loudly so false-success can't hide. Best-effort.
+    try {
+      const ws = this.deps.contextManager.getWorkingState()
+      const review = reviewRun({
+        goalPresent: userMessage.trim().length > 0,
+        changedFiles: ws.filesChanged,
+        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
+        verificationPassed: ws.verification.failed.length === 0,
+        unhandledFailures: ws.verification.failed.length,
+        unresolvedBlockers: ws.unresolved.length,
+        unsatisfiedAcceptance: 0,
+        scopeExcessive: ws.filesChanged.length > 20,
+      })
+      if (review.verdict !== 'completed') {
+        renderer.warn(`Reviewer verdict: ${review.verdict} — ${review.findings.join('; ')}`)
+      }
+    } catch { /* best-effort */ }
 
     // ── Module onComplete hooks ──
     await this.deps.moduleManager.runComplete({
