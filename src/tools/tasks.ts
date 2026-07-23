@@ -16,6 +16,7 @@
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import {
   type BackgroundTaskManager,
   formatTaskList,
@@ -30,7 +31,7 @@ function getManager(ctx: ToolContext): BackgroundTaskManager | undefined {
 
 export class TaskCreateTool implements Tool {
   name = 'TaskCreate'
-  metadata = { mutatesState: true, longRunning: true, concurrencySafe: false }
+  metadata = { mutatesState: true, longRunning: true, concurrencySafe: false, claims: (): ResourceClaim[] => [{ type: 'process', key: 'task-manager', access: 'exclusive' as const }] }
 
   definition: ToolDefinition = {
     type: 'function',

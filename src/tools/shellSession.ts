@@ -9,6 +9,7 @@ import * as net from 'net'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { str } from '../core/strings.js'
 
 interface ShellConn {
@@ -51,7 +52,7 @@ function escapeRegex(s: string): string {
 
 export class ShellSessionTool implements Tool {
   name = 'ShellSession'
-  metadata = { mutatesState: true, concurrencySafe: true, longRunning: true }
+  metadata = { mutatesState: true, concurrencySafe: true, longRunning: true, claims: (): ResourceClaim[] => [{ type: 'process', key: 'shell-session', access: 'exclusive' as const }] }
 
   definition: ToolDefinition = {
     type: 'function',

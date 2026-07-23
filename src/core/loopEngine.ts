@@ -18,7 +18,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { runCommandSync } from './commandRunner.js'
 import type { ExecutionEngine } from './engine.js'
 import type { Renderer } from '../ui/renderer.js'
 import { isTerminalRunStatus } from './executionRun.js'
@@ -59,14 +59,21 @@ function parseAcceptance(content: string): Array<{ id: string; command: string }
 }
 
 function runAcceptance(command: string, cwd: string): { passed: boolean; output: string } {
-  try {
-    const output = execSync(command, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
-    return { passed: true, output: output.trim().slice(0, 500) }
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string }
-    const output = ((e.stdout ?? '') + (e.stderr ?? '')).trim().slice(0, 500)
-    return { passed: false, output: output || e.message || 'failed' }
+  // Phase 1: route through CommandRunner for unified timeout / output
+  // limits / structured result. These acceptance commands run during
+  // autonomous LOOP iterations — they MUST be bounded.
+  const res = runCommandSync({
+    executable: command,
+    args: [],
+    cwd,
+    shell: true,
+    timeoutMs: 60_000,
+  })
+  const output = ((res.stdout ?? '') + (res.stderr ?? '')).trim().slice(0, 500)
+  if (res.exitCode === 0 && !res.timedOut && !res.cancelled) {
+    return { passed: true, output }
   }
+  return { passed: false, output: output || (res.timedOut ? 'timed out' : 'failed') }
 }
 
 function runQualityGates(cwd: string): { passed: boolean; results: string[] } {

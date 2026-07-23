@@ -16,6 +16,7 @@
 import { exec as execCb } from 'child_process'
 import { promisify } from 'util'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { str } from '../core/strings.js'
 
 const exec = promisify(execCb)
@@ -58,7 +59,7 @@ function chunkText(text: string, size = 50): string[] {
 
 export class TmuxSessionTool implements Tool {
   name = 'TmuxSession'
-  metadata = { mutatesState: true, concurrencySafe: true, longRunning: true }
+  metadata = { mutatesState: true, concurrencySafe: true, longRunning: true, claims: (): ResourceClaim[] => [{ type: 'process', key: 'tmux-session', access: 'exclusive' as const }] }
 
   definition: ToolDefinition = {
     type: 'function',
