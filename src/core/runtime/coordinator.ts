@@ -45,6 +45,7 @@ import {
   checkTokenBudget,
   type QueryState,
 } from '../queryStateMachine.js'
+import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
@@ -57,6 +58,7 @@ import { isTerminalRunStatus } from '../executionRun.js'
 import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
+import { evaluateCompletion } from './completionContract.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -93,6 +95,8 @@ export interface CoordinatorDeps {
    * Absent = back-compat (no run tracked).
    */
   runRegistry?: ExecutionRunRegistry
+  /** Phase 4: progress/stall monitor (queried each iteration). */
+  progressMonitor?: ProgressMonitor
   /**
    * Parent run id (e.g. a `kind='loop'` run from runLoop). When set,
    * the per-turn run records it as parentRunId for hierarchical queries.
@@ -226,6 +230,7 @@ export class RuntimeCoordinator {
     const MAX_LENGTH_RETRIES = 3
 
     let result: TurnResult
+    const turnStartMs = Date.now()
 
     try {
       while (!isTerminal(state)) {
@@ -248,6 +253,22 @@ export class RuntimeCoordinator {
               renderer.warn(`Max iterations (${decision.maxIterations}) reached`)
               state = transitionQueryState(state, { type: 'max_iterations', output: computeFinalOutput() })
             } else {
+              // Phase 4: stall detection. Before continuing, ask the
+              // ProgressMonitor whether the run has stalled. On a non-
+              // progressing verdict, surface a warning + structured event
+              // (observable via /trace). Active replan-injection is the
+              // InternalControlMessage (Phase 1.2) follow-up; detection is
+              // live here so stalls never pass silently.
+              const pm = this.deps.progressMonitor
+              if (pm) {
+                pm.tick()
+                const elapsedMin = (Date.now() - turnStartMs) / 60_000
+                const verdict = pm.detectStall(elapsedMin, 1)
+                if (verdict.kind !== 'progressing') {
+                  renderer.warn(`Stall detected (${verdict.kind}): ${verdict.reason} → suggested: ${verdict.action}`)
+                  eventEmitter.emit({ type: 'STALL_DETECTED', kind: verdict.kind, reason: verdict.reason, action: verdict.action })
+                }
+              }
               eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })
               state = transitionQueryState(state, { type: 'continue' })
             }
@@ -470,10 +491,35 @@ export class RuntimeCoordinator {
 
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
+    // ── CompletionContract gate (eight_goal Phase 4 §六) ──
+    // A model `stop_sequence` does NOT automatically mean the Run
+    // succeeded. CONSERVATIVELY block only on POSITIVE failure evidence
+    // (failed verification commands, or child subtasks still running) —
+    // never on mere "no changes", since a Q&A turn legitimately produces
+    // none. This catches false-success (model declares done while
+    // verification is red / workers outstanding) without breaking normal
+    // turns. result.reason is unchanged; only the Run status is gated.
+    let completionBlockers: string[] = []
+    if (result.reason === 'stop_sequence') {
+      const ws = this.deps.contextManager.getWorkingState()
+      const failedVerifications = ws.verification.failed.length
+      const runningChildren = sharedState.activeSubtasks.size
+      if (failedVerifications > 0) {
+        completionBlockers = [...completionBlockers, `${failedVerifications} failed verification command(s): ${ws.verification.failed.slice(0, 3).join(', ')}`]
+      }
+      if (runningChildren > 0) {
+        completionBlockers = [...completionBlockers, `${runningChildren} child subtask(s) still running`]
+      }
+      if (completionBlockers.length > 0) {
+        renderer.warn(`Completion gate: marking Run blocked despite stop_sequence — ${completionBlockers.join('; ')}`)
+      }
+    }
+
     // ── ExecutionRun terminal transition (GAP-C) ──
     if (runId && registry) {
       const targetStatus: RunStatus =
-        result.reason === 'stop_sequence' ? 'succeeded'
+        result.reason === 'stop_sequence'
+          ? (completionBlockers.length > 0 ? 'blocked' : 'succeeded')
         : result.reason === 'interrupted' ? 'cancelled'
         : result.reason === 'max_iterations' ? 'blocked'
         : 'failed'
@@ -481,11 +527,15 @@ export class RuntimeCoordinator {
         const run = registry.get(runId)
         if (run && !isTerminalRunStatus(run.status)) {
           registry.transition(runId, targetStatus, {
-            phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted' : 'completed',
+            phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted'
+              : completionBlockers.length > 0 ? 'completion-gate-blocked'
+              : 'completed',
             error: targetStatus === 'failed'
               ? (result.output || 'turn failed')
               : targetStatus === 'blocked'
-                ? 'turn hit max_iterations ceiling'
+                ? completionBlockers.length > 0
+                  ? `completion gate: ${completionBlockers.join('; ')}`
+                  : 'turn hit max_iterations ceiling'
                 : undefined,
           })
         }

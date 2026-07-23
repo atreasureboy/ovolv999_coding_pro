@@ -38,6 +38,7 @@ export type RunEvent =
   | { type: 'PLAN_MODE_EXITED' }
   | { type: 'ABORT_REQUESTED'; kind: 'soft' | 'hard'; reason: string }
   | { type: 'MAX_ITERATIONS_REACHED'; maxIterations: number }
+  | { type: 'STALL_DETECTED'; kind: string; reason: string; action: string }
   | { type: 'RUN_COMPLETED'; result: TurnResult }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }

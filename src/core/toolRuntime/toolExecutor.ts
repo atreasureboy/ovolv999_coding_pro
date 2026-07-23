@@ -25,6 +25,7 @@ import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { RunEventEmitter } from '../runtime/events.js'
+import type { ProgressMonitor } from '../runtime/progressMonitor.js'
 import { toLegacy, isStructuredResult, type AnyToolResult } from '../structuredToolResult.js'
 
 export type NotifyToolCall = (
@@ -47,6 +48,8 @@ export interface ToolExecutorDeps {
   notifyToolCall: NotifyToolCall
   hookRunner?: IHookRunner
   eventEmitter?: RunEventEmitter
+  /** Phase 4: records every tool result for stall detection. */
+  progressMonitor?: ProgressMonitor
   renderer: Renderer
 }
 
@@ -170,6 +173,16 @@ export class ToolExecutor {
     // calls and scheduler-routed calls go through here.
     try {
       this.deps.contextManager.applyToolEvent({ toolName, input, result })
+    } catch { /* best-effort */ }
+
+    // Phase 4: feed the same tool result to the ProgressMonitor so the
+    // StallDetector sees changed files, repeated calls, and consecutive
+    // errors. Best-effort, mirrors the WorkingState integration point.
+    try {
+      this.deps.progressMonitor?.recordToolCall(toolName, input, {
+        isError: result.isError,
+        content: typeof result.content === 'string' ? result.content : '',
+      })
     } catch { /* best-effort */ }
 
     return result

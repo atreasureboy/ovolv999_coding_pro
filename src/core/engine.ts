@@ -50,6 +50,7 @@ import { PermissionManager } from './permissionSystem.js'
 import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
 import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig } from './model/modelRouter.js'
+import { ProgressMonitor } from './runtime/progressMonitor.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -130,6 +131,12 @@ export class ExecutionEngine {
    * priority). /route and /models read this.
    */
   private readonly modelRouter: ModelRouter
+  /**
+   * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
+   * result here; the coordinator queries detectStall() each iteration.
+   * Drives /progress and the soft/hard-stall interventions.
+   */
+  private readonly progressMonitor: ProgressMonitor
   private contextManager: ContextManager
   private toolPolicy: ToolPolicy
   private toolRegistry: ToolRegistry
@@ -263,6 +270,9 @@ export class ExecutionEngine {
     // single-profile router wraps the configured model (routing is a
     // no-op but manual override + health + /route still work).
     this.modelRouter = buildRouter(this.config)
+    // Phase 4: progress/stall monitor (ToolExecutor feeds it; coordinator
+    // queries detectStall each iteration).
+    this.progressMonitor = new ProgressMonitor()
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,
@@ -286,6 +296,7 @@ export class ExecutionEngine {
         this.moduleManager.notifyToolCall(toolName, input, result, turnNumber),
       hookRunner: this.config.hookRunner,
       eventEmitter: this.eventEmitter,
+      progressMonitor: this.progressMonitor,
       renderer: this.renderer,
     })
     this.toolScheduler = new ToolScheduler({
@@ -319,6 +330,7 @@ export class ExecutionEngine {
       sharedState: this.sharedState,
       eventEmitter: this.eventEmitter,
       runRegistry: this.runRegistry,
+      progressMonitor: this.progressMonitor,
     })
 
     // P2-7: reconcile non-terminal runs AFTER tools are created so
@@ -637,6 +649,11 @@ export class ExecutionEngine {
   /** Phase 2: adaptive model router (profiles, health, /route, /models). */
   getModelRouter(): ModelRouter {
     return this.modelRouter
+  }
+
+  /** Phase 4: progress/stall monitor (fed by ToolExecutor, queried each iteration). */
+  getProgressMonitor(): ProgressMonitor {
+    return this.progressMonitor
   }
 
   getBackgroundTaskManager(): BackgroundTaskManager {
