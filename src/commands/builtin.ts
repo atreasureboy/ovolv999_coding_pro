@@ -125,6 +125,53 @@ registerCommand({
   },
 })
 
+// ── Phase 2: adaptive model routing ──────────────────────────────
+registerCommand({
+  name: 'route',
+  description: 'Show the last model routing decision and its reasons',
+  usage: '/route',
+  handler: (_args, ctx) => {
+    const router = ctx.engine.getModelRouter()
+    const d = router.getLastDecision()
+    const override = router.getManualOverride()
+    const lines: string[] = []
+    if (override) lines.push(`Manual override (highest priority): ${override}`)
+    lines.push(`Routing enabled: ${router.isRoutingEnabled()}`)
+    if (!d) {
+      lines.push('', 'No routing decision yet — run a turn first.')
+    } else {
+      lines.push(
+        '',
+        `Selected: ${d.selectedModel}  (profile: ${d.selectedProfile})`,
+        `Confidence: ${d.confidence}   Complexity: ${d.estimatedComplexity}`,
+        `Reasons: ${d.reasonCodes.join(', ') || '(none)'}`,
+        `Fallback chain: ${d.fallbackChain.length ? d.fallbackChain.join(' → ') : '(none)'}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+})
+
+registerCommand({
+  name: 'models',
+  description: 'List configured model profiles with health (calls/failures/latency)',
+  usage: '/models',
+  handler: (_args, ctx) => {
+    const router = ctx.engine.getModelRouter()
+    const profiles = router.listProfiles()
+    if (profiles.length === 0) return text('No model profiles configured.')
+    const lines = profiles.map((p) => {
+      const h = router.getProfileHealth(p.id)
+      const health = h ? `${h.calls} calls, ${h.failures} fail, ${Math.round(h.ewmaLatency)}ms avg` : 'no data'
+      const caps = p.capabilities
+      return `  ${p.available ? '' : '(disabled) '}${p.model}  [${p.id}]  roles: ${p.roles.join(',')}` +
+        `\n      reasoning=${caps.reasoning} coding=${caps.coding} ctx=${caps.contextWindow} tools=${caps.toolCalling} cost=${caps.cost} speed=${caps.speed}` +
+        `\n      health: ${health}`
+    })
+    return text(['Model profiles:', ...lines, '', `Routing enabled: ${router.isRoutingEnabled()}`].join('\n'))
+  },
+})
+
 // ── /compact — manually trigger compaction ─────────────────────────────────
 
 registerCommand({

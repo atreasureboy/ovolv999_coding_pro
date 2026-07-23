@@ -90,12 +90,14 @@ export interface OvogoSettings {
   permissions?: PermissionsConfig
   poor?: { enabled: boolean }
   mcp?: { servers: McpServerConfig[] }
-  /**
-   * First-run wizard output (ovolv999 init). User-level provider
-   * config written to ~/.ovogo/settings.json. resolveApiEnvironment
-   * reads it (process env still wins; this beats the Claude fallback).
-   */
   provider?: ProviderConfig
+  /**
+   * Phase 2 (eight_goal §四): model profiles + adaptive routing config.
+   * When `profiles` has >1 entry and routing.enabled, the ModelRouter
+   * selects per turn by complexity/context/budget/failure. Omit for the
+   * default single-model router (no-op routing, override+health still work).
+   */
+  models?: { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } }
 }
 
 function tryParse(path: string): OvogoSettings {
@@ -160,6 +162,18 @@ function normalizeProvider(value: unknown): ProviderConfig | undefined {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
+function normalizeModels(value: unknown): { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } } | undefined {
+  if (!isObject(value) || !Array.isArray(value.profiles)) return undefined
+  const profiles = value.profiles.filter(isObject)
+  if (profiles.length === 0) return undefined
+  const r = isObject(value.routing) ? value.routing : {}
+  const routing: Record<string, unknown> = {}
+  if (typeof r.enabled === 'boolean') routing.enabled = r.enabled
+  if (typeof r.longContextThreshold === 'number') routing.longContextThreshold = r.longContextThreshold
+  if (typeof r.failureEscalationThreshold === 'number') routing.failureEscalationThreshold = r.failureEscalationThreshold
+  return { profiles, routing }
+}
+
 function normalizeSettings(value: unknown): OvogoSettings {
   if (!isObject(value)) return {}
   const settings = value as OvogoSettings
@@ -178,6 +192,7 @@ function normalizeSettings(value: unknown): OvogoSettings {
       : undefined,
     mcp: normalizeMcp(value.mcp),
     provider: normalizeProvider(value.provider),
+    models: normalizeModels(value.models),
     permissions: rawPermissions
       ? {
           mode: typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
@@ -219,6 +234,7 @@ function mergeSettings(a: OvogoSettings, b: OvogoSettings): OvogoSettings {
     poor: b.poor ?? a.poor,
     mcp: b.mcp ?? a.mcp,
     provider: b.provider ?? a.provider,
+    models: b.models ?? a.models,
   }
 }
 

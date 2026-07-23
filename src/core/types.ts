@@ -278,6 +278,14 @@ export interface EngineConfig {
    * the extension point for native adapters.
    */
   provider?: string
+  /**
+   * Phase 2: model profiles for adaptive routing (eight_goal §四).
+   * `profiles` is a list of ModelProfile-shaped objects; when >1 and
+   * routing.enabled, the ModelRouter selects per turn. Typed as unknown[]
+   * here (validated in the engine) to keep types.ts free of a modelRouter
+   * import cycle.
+   */
+  models?: { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } }
   maxIterations: number
   cwd: string
   permissionMode: 'auto' | 'ask' | 'deny'

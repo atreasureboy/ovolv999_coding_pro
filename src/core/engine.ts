@@ -49,6 +49,7 @@ import { FileHistory } from './fileHistory.js'
 import { PermissionManager } from './permissionSystem.js'
 import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
+import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig } from './model/modelRouter.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -65,6 +66,52 @@ import {
   recoverRegistryFromStore,
 } from './executionRunEvents.js'
 
+/**
+ * Phase 2: construct the ModelRouter from EngineConfig. Validates the
+ * raw `models.profiles` (unknown[]) into typed ModelProfile[]. Falls
+ * back to a single-profile router wrapping the configured model when
+ * profiles are absent/invalid — so routing is always a safe no-op when
+ * unconfigured, and override/health/`/route` still function.
+ */
+function buildRouter(config: EngineConfig): ModelRouter {
+  const rawProfiles = config.models?.profiles
+  if (Array.isArray(rawProfiles) && rawProfiles.length > 0) {
+    const profiles: ModelProfile[] = []
+    for (const rp of rawProfiles) {
+      if (!rp || typeof rp !== 'object') continue
+      const p = rp as Record<string, unknown>
+      if (typeof p.model !== 'string' || !p.model) continue
+      const cap = (p.capabilities ?? {}) as Record<string, unknown>
+      const num = (v: unknown, d: number): number => typeof v === 'number' && Number.isFinite(v) ? v : d
+      profiles.push({
+        id: typeof p.id === 'string' ? p.id : p.model,
+        provider: typeof p.provider === 'string' ? p.provider : (config.provider ?? 'openai'),
+        model: p.model,
+        capabilities: {
+          reasoning: num(cap.reasoning, 0.7),
+          coding: num(cap.coding, 0.7),
+          contextWindow: num(cap.contextWindow, 128_000),
+          toolCalling: num(cap.toolCalling, 0.7),
+          speed: num(cap.speed, 0.6),
+          cost: num(cap.cost, 0.5),
+        },
+        roles: Array.isArray(p.roles) ? p.roles.filter((r): r is string => typeof r === 'string') : ['main'],
+        available: p.available !== false,
+      })
+    }
+    if (profiles.length > 0) {
+      const r = config.models?.routing ?? {}
+      const routing: RoutingConfig = {
+        enabled: r.enabled !== false,
+        longContextThreshold: r.longContextThreshold,
+        failureEscalationThreshold: r.failureEscalationThreshold,
+      }
+      return new ModelRouter(profiles, routing)
+    }
+  }
+  return routerFromSingleModel(config.model, config.provider ?? 'openai')
+}
+
 export class ExecutionEngine {
   private client: OpenAI
   private config: EngineConfig
@@ -76,6 +123,13 @@ export class ExecutionEngine {
   private fileHistory: FileHistory | null
   private permissionManager: PermissionManager
   private modelGateway: ModelGateway
+  /**
+   * Phase 2: adaptive model router. Holds configured profiles, tracks
+   * per-profile health, and produces explainable RoutingDecisions.
+   * Manual setModel() is registered as the sticky override (highest
+   * priority). /route and /models read this.
+   */
+  private readonly modelRouter: ModelRouter
   private contextManager: ContextManager
   private toolPolicy: ToolPolicy
   private toolRegistry: ToolRegistry
@@ -204,6 +258,11 @@ export class ExecutionEngine {
       adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
       renderer: this.renderer,
     })
+    // Phase 2: build the adaptive model router. Multi-profile routing
+    // activates when config declares `models.profiles`; otherwise a
+    // single-profile router wraps the configured model (routing is a
+    // no-op but manual override + health + /route still work).
+    this.modelRouter = buildRouter(this.config)
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,
@@ -542,9 +601,11 @@ export class ExecutionEngine {
    * (or restart). That is explicitly out of scope until Phase 8
    * (Provider Capability Abstraction) lands.
    */
-   setModel(model: string): void {
+    setModel(model: string): void {
     if (this.config.model === model) return
     const previousModel = this.config.model
+    // Phase 2: a manual setModel is the sticky routing override.
+    this.modelRouter.setManualOverride(model)
     try {
       this.config.model = model
       this.contextManager.onModelChanged(model)
@@ -571,6 +632,11 @@ export class ExecutionEngine {
 
   getCostTracker(): CostTracker {
     return this.costTracker
+  }
+
+  /** Phase 2: adaptive model router (profiles, health, /route, /models). */
+  getModelRouter(): ModelRouter {
+    return this.modelRouter
   }
 
   getBackgroundTaskManager(): BackgroundTaskManager {
