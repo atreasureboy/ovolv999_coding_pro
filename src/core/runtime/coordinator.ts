@@ -407,8 +407,8 @@ export class RuntimeCoordinator {
             if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
               emptyResponseCount++
               messages.push({
-                role: 'user',
-                content: 'Your previous response was empty (no text, no tool call). Please respond with text or invoke a tool.',
+                role: 'system',
+                content: '[runtime] Your previous response was empty (no text, no tool call). Please respond with text or invoke a tool.',
               })
               state = transitionQueryState(state, { type: 'continue' })
               break
@@ -422,8 +422,8 @@ export class RuntimeCoordinator {
                 partial_length: assistantText.length,
               })
               messages.push({
-                role: 'user',
-                content: 'Continue your previous response from where it was cut off. Do not repeat what you already wrote — just continue.',
+                role: 'system',
+                content: '[runtime] Continue your previous response from where it was cut off. Do not repeat what you already wrote — just continue.',
               })
               state = transitionQueryState(state, { type: 'continue' })
               break
@@ -449,7 +449,7 @@ export class RuntimeCoordinator {
                   turn_tokens: decision.turnTokens,
                   budget: decision.budget,
                 })
-                messages.push({ role: 'user', content: decision.nudgeMessage })
+                messages.push({ role: 'system', content: `[runtime] ${decision.nudgeMessage}` })
                 state = transitionQueryState(state, { type: 'continue' })
                 break
               }

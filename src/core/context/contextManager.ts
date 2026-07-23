@@ -347,9 +347,9 @@ export class ContextManager {
     const tokensBefore = estimateTokens(messages)
     const kept = messages.slice(-keepRecent)
     const boundary: OpenAIMessage = {
-      role: 'user',
+      role: 'system',
       content:
-        `[snip] ${removeCount} older messages were removed to free context space` +
+        `[runtime snip] ${removeCount} older messages were removed to free context space` +
         (reason ? ` (${reason})` : '') +
         '. Continue working from the current context — earlier details are no longer available.',
     }

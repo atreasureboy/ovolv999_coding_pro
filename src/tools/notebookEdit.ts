@@ -15,6 +15,7 @@
 import { readFileSync } from 'fs'
 import { extname, resolve, isAbsolute } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
 import { atomicWrite } from '../core/atomicWrite.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -44,7 +45,14 @@ type EditMode = 'replace' | 'insert' | 'delete'
 
 export class NotebookEditTool implements Tool {
   name = 'NotebookEdit'
-  metadata = { mutatesState: true, concurrencySafe: false }
+  metadata = {
+    mutatesState: true,
+    concurrencySafe: false,
+    claims: (input: Record<string, unknown>): ResourceClaim[] => {
+      const p = typeof input.notebook_path === 'string' ? input.notebook_path : ''
+      return p ? [{ type: 'file', key: `file:${p}`, access: 'write' as const }] : []
+    },
+  }
 
   definition: ToolDefinition = {
     type: 'function',

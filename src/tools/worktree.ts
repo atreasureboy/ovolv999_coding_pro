@@ -18,6 +18,12 @@ import { execSync, execFileSync } from 'child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { join, resolve } from 'path'
 import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
+import type { ResourceClaim } from '../core/executionRun.js'
+
+// Git operations are exclusive — worktree create/exit must serialise with
+// each other and with any `git ...` Bash command (which claims git:HEAD
+// exclusive). Forces safe ordering of repo-mutating operations.
+const GIT_EXCLUSIVE: ResourceClaim[] = [{ type: 'git', key: 'HEAD', access: 'exclusive' }]
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -260,7 +266,7 @@ export function _resetWorktreeManagersForTest(): void {
 
 export class EnterWorktreeTool implements Tool {
   name = 'EnterWorktree'
-  metadata = { readOnly: false, longRunning: false, concurrencySafe: false }
+  metadata = { readOnly: false, longRunning: false, concurrencySafe: false, claims: () => GIT_EXCLUSIVE }
 
   definition: ToolDefinition = {
     type: 'function',
@@ -318,7 +324,7 @@ After creating a worktree, file paths returned to the agent will reference the i
 
 export class ExitWorktreeTool implements Tool {
   name = 'ExitWorktree'
-  metadata = { readOnly: false, longRunning: false, concurrencySafe: false }
+  metadata = { readOnly: false, longRunning: false, concurrencySafe: false, claims: () => GIT_EXCLUSIVE }
 
   definition: ToolDefinition = {
     type: 'function',

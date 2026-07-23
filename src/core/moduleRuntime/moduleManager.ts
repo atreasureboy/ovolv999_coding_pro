@@ -193,7 +193,7 @@ export class ModuleManager {
           message: msg.slice(0, 500),
           iteration,
         })
-        messages.push({ role: 'user', content: msg })
+        messages.push({ role: 'system', content: `[runtime critic] ${msg}` })
       }
     }
   }
