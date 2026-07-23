@@ -199,6 +199,77 @@ registerCommand({
   },
 })
 
+// ── Phase 7: observability (/trace, /why) ─────────────────────────
+registerCommand({
+  name: 'trace',
+  description: 'Show the structured execution trace: goal, model routing, task graph, progress, final status',
+  usage: '/trace',
+  handler: (_args, ctx) => {
+    const e = ctx.engine
+    const lines: string[] = ['=== Execution Trace ===']
+    const reg = e.getRunRegistry()
+    const runs = reg.list({ kind: 'turn' })
+    if (runs.length > 0) {
+      const r = runs[runs.length - 1]
+      lines.push(`Goal: ${r.goal}`)
+      lines.push(`Final status: ${r.status} (${r.phase})${r.error ? ' — ' + r.error : ''}`)
+    }
+    const d = e.getModelRouter().getLastDecision()
+    if (d) {
+      lines.push('', 'Model routing:')
+      lines.push(`  selected: ${d.selectedModel} [${d.selectedProfile}] conf=${d.confidence} complexity=${d.estimatedComplexity}`)
+      lines.push(`  reasons: ${d.reasonCodes.join(', ')}`)
+      if (d.fallbackChain.length) lines.push(`  fallback: ${d.fallbackChain.join(' → ')}`)
+    }
+    const tg = e.getTaskGraph().snapshot()
+    if (tg.summary.total > 0) {
+      const s = tg.summary
+      lines.push('', `TaskGraph: ${s.completed}/${s.total} done · ${s.failed} failed · ${s.blocked} blocked · ${s.running + s.ready + s.pending} active`)
+      for (const n of tg.nodes.slice(0, 12)) lines.push(`  [${n.status}] ${n.title}`)
+    }
+    const pm = e.getProgressMonitor().snapshot(0)
+    if (pm.changedFiles.length > 0 || pm.repeatedErrors > 0) {
+      lines.push('', `Progress: ${pm.changedFiles.length} file(s) changed · ${pm.repeatedErrors} consecutive error(s) · verification Δ=${pm.verificationDelta}`)
+    }
+    return text(lines.join('\n'))
+  },
+})
+
+registerCommand({
+  name: 'why',
+  description: 'Explain the key runtime decisions from structured events (model choice, completion, blockers)',
+  usage: '/why',
+  handler: (_args, ctx) => {
+    const e = ctx.engine
+    const lines: string[] = ['=== Why (decision explanations) ===']
+    const d = e.getModelRouter().getLastDecision()
+    if (d) {
+      const override = e.getModelRouter().getManualOverride()
+      lines.push(`Model "${d.selectedModel}":`)
+      if (override) lines.push(`  because: manual override (--model//model) — highest priority`)
+      else lines.push(`  because: ${d.reasonCodes.join('; ') || 'single profile / default'}`)
+    }
+    const reg = e.getRunRegistry()
+    const runs = reg.list({ kind: 'turn' })
+    if (runs.length > 0) {
+      const r = runs[runs.length - 1]
+      if (r.status === 'blocked') {
+        lines.push('', `Blocked:`)
+        lines.push(`  because: ${r.error ?? r.phase}`)
+      } else if (r.status === 'succeeded') {
+        lines.push('', `Completed: stop_sequence with no verification failures or running children.`)
+      }
+    }
+    const tg = e.getTaskGraph()
+    if (tg.size() > 0 && tg.hasUnfinished()) {
+      lines.push('', `Not completed (TaskGraph):`)
+      lines.push(`  because: ${tg.snapshot().summary.total - tg.snapshot().summary.completed} task node(s) still unfinished`)
+    }
+    return text(lines.join('\n'))
+  },
+})
+
+
 
 // ── /compact — manually trigger compaction ─────────────────────────────────
 

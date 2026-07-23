@@ -229,16 +229,24 @@ export class ExecutionEngine {
     // per-turn runId is still injected dynamically via
     // ToolContext.execution (coordinator.ts) — the constructor only
     // passes the registry handle, not a fixed parentRunId.
+    //
+    // Phase 3/4: progress monitor + task graph must exist BEFORE
+    // createTools (the TaskPlan tool receives the graph handle).
+    this.modelRouter = buildRouter(this.config)
+    this.progressMonitor = new ProgressMonitor()
+    this.taskGraph = new TaskGraph()
     this.tools = config.agentFactory
       ? createTools(config.extraTools ?? [], {
-          factory: config.agentFactory,
-          parentConfig: config,
-          parentRenderer: renderer,
-          runRegistry: this.runRegistry,
-        })
+           factory: config.agentFactory,
+           parentConfig: config,
+           parentRenderer: renderer,
+           runRegistry: this.runRegistry,
+           taskGraph: this.taskGraph,
+         })
       : createTools(config.extraTools ?? [], {
-          runRegistry: this.runRegistry,
-        })
+           runRegistry: this.runRegistry,
+           taskGraph: this.taskGraph,
+         })
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
     this.backgroundTaskManager = new BackgroundTaskManager()
@@ -273,16 +281,7 @@ export class ExecutionEngine {
       adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
       renderer: this.renderer,
     })
-    // Phase 2: build the adaptive model router. Multi-profile routing
-    // activates when config declares `models.profiles`; otherwise a
-    // single-profile router wraps the configured model (routing is a
-    // no-op but manual override + health + /route still work).
     this.modelRouter = buildRouter(this.config)
-    // Phase 4: progress/stall monitor (ToolExecutor feeds it; coordinator
-    // queries detectStall each iteration).
-    this.progressMonitor = new ProgressMonitor()
-    // Phase 3: task graph (empty until a planner populates it).
-    this.taskGraph = new TaskGraph()
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,
