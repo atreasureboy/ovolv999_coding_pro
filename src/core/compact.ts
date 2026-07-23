@@ -706,22 +706,25 @@ export async function maybeCompact(
     return { compacted: false, messages, summaryTokens: 0, originalTokens }
   }
 
-  // Build compacted history: summary message + recent verbatim messages
+  // Build compacted history: summary message + recent verbatim messages.
+  //
+  // Phase 6.1 (six_goal §六.1): the compaction summary is RUNTIME-
+  // provided context, NOT user input, so it MUST be a `system` message.
+  // The previous code authored it as role:'user' and paired it with a
+  // FORGED `role:'assistant'` acknowledgment ("I've reviewed the
+  // conversation summary...") — putting words in the assistant's mouth
+  // and polluting the real conversation history with fabricated turns.
+  // A system message is the semantically-correct, alternation-safe
+  // home for compacted context and needs no synthetic partner turn.
   const summaryContent = `[CONVERSATION SUMMARY — previous context compacted]\n\n${summary}`
 
   const summaryMessage: OpenAIMessage = {
-    role: 'user',
+    role: 'system',
     content: summaryContent,
-  }
-
-  const syntheticAssistantAck: OpenAIMessage = {
-    role: 'assistant',
-    content: `I've reviewed the conversation summary and have the context needed to continue.`,
   }
 
   const compactedMessages: OpenAIMessage[] = [
     summaryMessage,
-    syntheticAssistantAck,
     ...recentMessages,
   ]
 

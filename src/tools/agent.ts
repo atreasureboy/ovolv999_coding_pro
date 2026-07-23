@@ -319,6 +319,15 @@ export class AgentTool implements Tool, WorkerAdapter {
    * Entries are removed when the run reaches a terminal state.
    */
   private readonly steerQueue = new Map<string, string[]>()
+  /**
+   * Phase 4 (six_goal §七.2): runId → abort trigger for each running
+   * in-process child engine. Populated when a child run starts so
+   * `cancel(runId)` can ACTUALLY terminate the child (call its
+   * `abort()`), not merely transition the registry status. Cleared in
+   * the run's `finally`. Without this map, cancel(runId) had no path
+   * to the in-flight `runTurn()`.
+   */
+  private readonly childAborts = new Map<string, () => void>()
   private readonly onSteeredHook?: SteerEventEmitter
 
   /** Immutable per-instance wiring — captured once in the constructor and
@@ -435,10 +444,15 @@ export class AgentTool implements Tool, WorkerAdapter {
    * observes between iterations. Idempotent.
    */
   async cancel(runId: string, reason?: string): Promise<void> {
-    // AgentTool doesn't currently track runId → child engine handle
-    // (children are awaited synchronously). The registry transition
-    // is best-effort; a synchronous child mid-run will observe the
-    // abort via its own signal (set up by execute() from context).
+    // Phase 4: actually terminate the running in-process child by
+    // firing its abort trigger. This propagates to the child engine's
+    // turnAbortController, cancelling its in-flight LLM call / tool
+    // execution. Previously cancel() only flipped the registry status
+    // and the child kept running to completion.
+    const abort = this.childAborts.get(runId)
+    if (abort) {
+      try { abort() } catch { /* best-effort */ }
+    }
     const registry = this.runRegistry
     if (!registry) return
     try {
@@ -860,6 +874,13 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     let abortListener: (() => void) | null = null
 
     try {
+      // Phase 4: register this child's abort trigger keyed by runId so
+      // cancel(runId) can terminate the running child directly — not
+      // just flip the registry status. Independent of the parent-signal
+      // wiring below: a caller-initiated cancel(runId) must reach the
+      // child even when the parent turn's signal is not aborted.
+      if (runId) this.childAborts.set(runId, () => childEngine.abort())
+
       if (context.signal) {
         if (context.signal.aborted) {
           // Pre-aborted path: the parent task was already cancelled
@@ -1187,6 +1208,9 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       if (sharedRuntimeState?.activeSubtasks) {
         sharedRuntimeState.activeSubtasks.delete(subtaskId)
       }
+      // Phase 4: drop the runId → abort mapping on every exit path
+      // (success/error/abort) so it can't retain a dead childEngine.
+      if (runId) this.childAborts.delete(runId)
     }
   }
 }

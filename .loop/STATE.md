@@ -4,22 +4,21 @@
 > glm-5.2 指挥；实现：直接编码 + amux 委托 Claude Code 混合模式。
 
 ## 当前阶段
-**架构审计 + 全面修复完成**（2026-07-23）。本轮基于对 five_goal Runtime 主链的全面架构审计，修复了审计发现的所有 P1 与可修复 P2 问题。
+**v0.2 Runtime Integrity 推进（six_goal Phase 3/4/6.1）**（2026-07-23）。参考 GPT-5.6 的 six_goal.md 建议，先全面核实其论断（非猜测），再实施高价值有界改进；大项（Provider/CommandRunner/SQLite/Eval/CI）写入 docs/V0_2_RUNTIME_INTEGRITY.md 作为 v0.3 milestone。
 
-## 当前目标适配度：约 92%
+## 当前目标适配度：约 93%
 
-### 本轮修复（架构审计驱动）
-- **P1-1** `claudeCode.ts:630` 死代码三元式：新增 `runTasks` Map 持久化 taskId，detached→wait 路径不再退化为 `^[DONE]$` 陈旧哨兵匹配
-- **P1-2** `engine.runTurn` 增加 `parentRunId` 参数 + loopEngine 透传 loopRunId → 修复 loop→turn Run 树断链（turn 不再是孤儿）
-- **P1-3** 构造器末尾调度 `recoverWorkers()`（in-flight merge）→ external_worker 不再永久卡 `recovery-pending-reattach`
-- **P1-6** sandbox 接入 BashTool 前台执行路径（opt-in，`~/.ovolv999/sandbox.json` enabled 才生效，默认 passthrough）
-- **P1-7** lint 门禁恢复绿色：0 error（原 741 error）。type-strictness/死代码/风格债降为 475 warning（可见、非阻断、增量清理）
-- **P2-6** `maybeCompactWithInvariants` 接入生产压缩路径（evaluateBudget + reactiveCompact）
-- **P2-7** 新增 GAP-C.4 测试覆盖 parentRunId 透传
-- **P2-8** 删除误提交的 `nul` 文件
-- **P2-9** `claimSoftAbort` 去重到 SharedRuntimeState（engine + coordinator 两副本合并）
-- **P2-1** engine.ts 头注释诚实化（"thin facade" → "assembly root + lifecycle facade"）
-- README 能力矩阵诚实化（§3 事件持久化优先、§5 WorkerAdapter 全生命周期 + /workers 直连）
+### 本轮修复（six_goal 驱动）
+- **Phase 3** ResourceScheduler 成为唯一调度源：`partitionToolCalls` 改为 claims 驱动，**删除 LEGACY_CONCURRENCY_SAFE_TOOLS 白名单**；无 claims 工具默认串行（§六.3）；新增 `claimsConflictBetween` 批量冲突谓词
+- **Phase 4** AgentTool.cancel 真正终止运行中子 agent：新增 `childAborts` (runId→abort) 映射，cancel(runId) 调 `childEngine.abort()`（原仅改 registry 状态，不真正取消）
+- **Phase 6.1** 修复消息语义：compaction summary 从 `role:user` 改为 `role:system`（运行时上下文非用户输入），**删除伪造的 synthetic assistant ack**（把话塞进 assistant 嘴里）
+- **Phase 0** 新增 `docs/V0_2_RUNTIME_INTEGRITY.md`（真实调用图 + 名义vs实际 + 双轨实现 + exec 旁路 + 修改计划 + 兼容风险）
+
+### six_goal 核实结果（非猜测）
+- ✓ 已满足：coordinator 无 provider 分支、max_iterations→blocked、EventStore 写失败不吞
+- ✗ 本轮修复：legacy 白名单（Phase3）、cancel 不生效（Phase4）、compaction 伪造（Phase6.1）
+- ✗ 确认未接入：ModelGateway 直接调 OpenAI SDK，ProviderAdapter 平行未用（Phase1，v0.3）
+- ⚠ 部分残留：coordinator nudges/critic/snip 仍 role:user（Phase6.1 余项，v0.3 InternalControlMessage）
 
 ## 本轮证据
 - `npx tsc --noEmit` → **0 error**（exit 0）

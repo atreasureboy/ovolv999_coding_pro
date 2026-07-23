@@ -27,6 +27,7 @@ import type { ToolRegistry } from './toolRegistry.js'
 import type { SharedRuntimeState } from '../runtime/sharedState.js'
 import type { RunEventEmitter } from '../runtime/events.js'
 import type { ResourceScheduler, ResourceLease } from '../resourceScheduler.js'
+import { claimsConflictBetween } from '../resourceScheduler.js'
 import type { ResourceClaim } from '../executionRun.js'
 
 export interface ParsedToolCall {
@@ -37,26 +38,56 @@ export interface ParsedToolCall {
 export interface ToolBatch {
   safe: boolean
   calls: ParsedToolCall[]
+  /**
+   * Accumulated resource claims of the calls in this batch. Populated
+   * for parallel (safe) batches so the planner can test whether an
+   * incoming call's claims conflict with the batch. Empty for serial
+   * batches.
+   */
+  accumulatedClaims: ResourceClaim[]
 }
 
-const LEGACY_CONCURRENCY_SAFE_TOOLS = new Set([
-  'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash', 'Agent', 'ShellSession', 'TmuxSession',
-])
-
+/**
+ * Partition tool calls into batches for execution (six_goal §六 / Phase 3).
+ *
+ * ResourceScheduler is the SOLE authority for concurrency: a tool call
+ * may join a parallel batch ONLY IF it declares resource claims (via
+ * `metadata.claims`) AND those claims don't pairwise-conflict with the
+ * claims already accumulated in the batch. A tool that declares no
+ * claims defaults to SERIAL (six_goal §六.3: "没有声明资源的工具默认
+ * 串行执行") — it cannot be proven conflict-free, so it runs alone.
+ *
+ * This replaces the old name-based `LEGACY_CONCURRENCY_SAFE_TOOLS`
+ * whitelist + static `concurrencySafe` metadata. The authoritative
+ * correctness guard remains `ResourceScheduler.acquire()` in
+ * `executeWithClaims` — partition is a best-effort planner that avoids
+ * launching tools which would immediately block on the lock.
+ */
 export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): ToolBatch[] {
   const batches: ToolBatch[] = []
+  const findTool = (name: string) => tools?.find(t => t.name === name)
 
   for (const call of calls) {
-    const tool = tools?.find(t => t.name === call.tc.name)
-    const safe = tool?.isConcurrencySafe
-      ? tool.isConcurrencySafe(call.input)
-      : (tool?.metadata?.concurrencySafe ?? LEGACY_CONCURRENCY_SAFE_TOOLS.has(call.tc.name))
+    const tool = findTool(call.tc.name)
+    // six_goal §六.3: only claim-declaring tools may parallelise.
+    const claims = tool?.metadata?.claims ? tool.metadata.claims(call.input) : []
+    const parallelizable = claims.length > 0
     const last = batches[batches.length - 1]
 
-    if (last && last.safe && safe) {
+    if (
+      parallelizable &&
+      last?.safe &&
+      last.accumulatedClaims.length > 0 &&
+      !claimsConflictBetween(last.accumulatedClaims, claims)
+    ) {
       last.calls.push(call)
+      last.accumulatedClaims.push(...claims)
     } else {
-      batches.push({ safe, calls: [call] })
+      batches.push({
+        safe: parallelizable,
+        calls: [call],
+        accumulatedClaims: [...claims],
+      })
     }
   }
 

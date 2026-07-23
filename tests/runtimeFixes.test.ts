@@ -464,7 +464,10 @@ describe('RUNTIME-FIX priority-3: enforceAggregateToolResultBudget catches many-
         function: { name: 'Big', description: '', parameters: { type: 'object', properties: {} } },
       },
       execute: async (input) => Promise.resolve({ content: 'x'.repeat(15_000) + `[item-${(input as { idx: number }).idx}]`, isError: false }),
-      isConcurrencySafe: () => true,
+      // Phase 3: partition is claims-based now. Give every Big call a
+      // shared READ claim — read/read is compatible, so all 10 merge
+      // into ONE parallel batch (the test's precondition).
+      metadata: { claims: () => [{ type: 'process', key: 'proc:big', access: 'read' }] },
     }
     const { partitionToolCalls } = await import('../src/core/toolRuntime/toolScheduler.js')
     const batches = partitionToolCalls(items, [bigTool])

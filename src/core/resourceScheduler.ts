@@ -128,6 +128,29 @@ function claimsConflict(
 }
 
 /**
+ * Pairwise batch conflict: do any claim in `a` conflict with any claim
+ * in `b`? Two claims conflict when they target the same resource
+ * (same type + key) with conflicting access modes. Used by the
+ * ToolScheduler partition planner to decide which tool calls may
+ * launch together in a parallel batch WITHOUT first racing for the
+ * lock. This is a best-effort planner hint — the authoritative check
+ * remains `ResourceScheduler.acquire()` (which also normalises keys
+ * per workspace). Pre-acquire claims use raw tool-generated keys,
+ * which are consistent within a single turn (same cwd).
+ */
+export function claimsConflictBetween(a: ResourceClaim[], b: ResourceClaim[]): boolean {
+  if (a.length === 0 || b.length === 0) return false
+  for (const ca of a) {
+    for (const cb of b) {
+      if (ca.type === cb.type && ca.key === cb.key && claimsConflict(ca.access, cb.access)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
  * Normalize a claim for storage. Git claims are forced to 'exclusive'
  * (per §五 "Git 操作串行化"). Claim keys are namespaced by workspaceCwd
  * when the scheduler is constructed with isolation enabled.

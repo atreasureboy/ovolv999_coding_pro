@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { partitionToolCalls } from '../src/core/toolRuntime/toolScheduler.js'
+import type { Tool } from '../src/core/types.js'
+import type { ResourceClaim } from '../src/core/executionRun.js'
 import {
   calculateContextState,
   estimateTokens,
@@ -20,75 +22,121 @@ function makeParsedToolCall(
   }
 }
 
+/**
+ * Build a minimal Tool stub whose only relevant field for partitioning
+ * is `metadata.claims`. partitionToolCalls reads only `tool.name` and
+ * `tool.metadata.claims` (six_goal §六: claims are the sole concurrency
+ * authority; the legacy name whitelist + static concurrencySafe flag
+ * are gone).
+ */
+function claimTool(name: string, claimsFn: (input: Record<string, unknown>) => ResourceClaim[]): Tool {
+  return {
+    name,
+    metadata: { claims: claimsFn },
+    definition: { type: 'function', function: { name, description: '', parameters: { type: 'object', properties: {} } } },
+    async execute() { return { content: '', isError: false } },
+  } as unknown as Tool
+}
+
+const readFile = (p: string): ResourceClaim => ({ type: 'file', key: `file:${p}`, access: 'read' })
+const writeFile = (p: string): ResourceClaim => ({ type: 'file', key: `file:${p}`, access: 'write' })
+
+// Realistic claim stubs mirroring the production tools' claim shapes.
+const Read = claimTool('Read', (i) => [readFile(String(i.file_path ?? 'x'))])
+const Edit = claimTool('Edit', (i) => [writeFile(String(i.file_path ?? 'x'))])
+const Write = claimTool('Write', (i) => [writeFile(String(i.file_path ?? 'x'))])
+const Glob = claimTool('Glob', (i) => (i.path ? [{ type: 'directory', key: `dir:${i.path}`, access: 'read' }] : []))
+const Bash = claimTool('Bash', (i) => [{ type: 'process', key: `proc:${String(i.command ?? '')}`, access: 'write' }])
+// Agent declares NO claims → defaults to serial (six_goal §六.3).
+const Agent = claimTool('Agent', () => [])
+const allTools = [Read, Edit, Write, Glob, Bash, Agent]
+
 describe('partitionToolCalls', () => {
-  it('groups safe tools into a single parallel batch', () => {
+  it('groups non-conflicting claim-declaring tools into one parallel batch', () => {
+    // Read(a) + Glob(dir) + Read(b): all reads, distinct keys → no conflict
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
-      makeParsedToolCall('Glob', { pattern: '*.ts' }),
-      makeParsedToolCall('Grep', { pattern: 'foo' }),
+      makeParsedToolCall('Glob', { pattern: '*.ts', path: 'src' }),
+      makeParsedToolCall('Read', { file_path: 'b.ts' }),
     ]
-
-    const batches = partitionToolCalls(calls)
+    const batches = partitionToolCalls(calls, allTools)
     expect(batches).toHaveLength(1)
     expect(batches[0].safe).toBe(true)
     expect(batches[0].calls).toHaveLength(3)
   })
 
-  it('separates Write/Edit into their own serial batches', () => {
+  it('splits same-file read+write into separate batches (R/W conflict)', () => {
+    // Read(a) claims file:a/read, Edit(a) claims file:a/write → conflict,
+    // so they are NOT merged into one parallel batch.
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
-      makeParsedToolCall('Write', { file_path: 'b.ts', content: 'hello' }),
-      makeParsedToolCall('Glob', { pattern: '*.ts' }),
+      makeParsedToolCall('Edit', { file_path: 'a.ts', old_string: 'foo', new_string: 'bar' }),
     ]
-
-    const batches = partitionToolCalls(calls)
-    // Read is safe (batch 1), Write is unsafe (batch 2), Glob is safe but
-    // follows unsafe so it starts a new batch (batch 3)
-    expect(batches).toHaveLength(3)
-    expect(batches[0].safe).toBe(true)
-    expect(batches[1].safe).toBe(false)
-    expect(batches[2].safe).toBe(true)
+    const batches = partitionToolCalls(calls, allTools)
+    expect(batches).toHaveLength(2)
+    expect(batches[0].calls).toHaveLength(1)   // Read(a) alone
+    expect(batches[1].calls).toHaveLength(1)   // Edit(a) alone (conflict prevented merge)
   })
 
-  it('merges consecutive safe tool calls into one batch', () => {
+  it('allows parallel edits to DIFFERENT files (no conflict, precise — not coarse "Edit always serial")', () => {
+    const calls = [
+      makeParsedToolCall('Edit', { file_path: 'a.ts', old_string: 'x', new_string: 'y' }),
+      makeParsedToolCall('Edit', { file_path: 'b.ts', old_string: 'x', new_string: 'y' }),
+    ]
+    const batches = partitionToolCalls(calls, allTools)
+    // file:a/write vs file:b/write — distinct keys, no conflict → one parallel batch.
+    expect(batches).toHaveLength(1)
+    expect(batches[0].safe).toBe(true)
+  })
+
+  it('splits same-file write+write into separate batches', () => {
+    const calls = [
+      makeParsedToolCall('Edit', { file_path: 'a.ts', old_string: 'x', new_string: 'y' }),
+      makeParsedToolCall('Write', { file_path: 'a.ts', content: 'z' }),
+    ]
+    const batches = partitionToolCalls(calls, allTools)
+    expect(batches).toHaveLength(2)
+    expect(batches[0].calls).toHaveLength(1)
+    expect(batches[1].calls).toHaveLength(1)
+  })
+
+  it('forces a claim-less tool (Agent) into a serial batch', () => {
+    // six_goal §六.3: tools declaring no claims default to serial.
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
-      makeParsedToolCall('Glob', { pattern: '*.ts' }),
-      makeParsedToolCall('WebFetch', { url: 'http://example.com' }),
+      makeParsedToolCall('Agent', { description: 'do thing' }),
     ]
+    const batches = partitionToolCalls(calls, allTools)
+    expect(batches).toHaveLength(2)
+    expect(batches[0].safe).toBe(true)   // Read parallel
+    expect(batches[1].safe).toBe(false)  // Agent serial (no claims)
+  })
 
-    const batches = partitionToolCalls(calls)
+  it('puts two distinct Bash commands in one parallel batch', () => {
+    // Bash claims process:<cmd>; distinct commands → distinct keys → no conflict
+    const calls = [
+      makeParsedToolCall('Bash', { command: 'ls' }),
+      makeParsedToolCall('Bash', { command: 'pwd' }),
+    ]
+    const batches = partitionToolCalls(calls, allTools)
     expect(batches).toHaveLength(1)
     expect(batches[0].safe).toBe(true)
   })
 
   it('handles empty input', () => {
-    const batches = partitionToolCalls([])
-    expect(batches).toHaveLength(0)
+    expect(partitionToolCalls([], allTools)).toHaveLength(0)
   })
 
-  it('puts Bash in parallel batch (per design: dependent ops use &&)', () => {
+  it('defaults to serial when no tool instances are supplied (cannot compute claims)', () => {
+    // Back-compat callers that pass only call names: with no tool to
+    // declare claims, every call is conservatively serial (six_goal §六.3).
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
-      makeParsedToolCall('Bash', { command: 'ls' }),
-    ]
-
-    const batches = partitionToolCalls(calls)
-    expect(batches).toHaveLength(1)
-    expect(batches[0].safe).toBe(true)
-  })
-
-  it('starts new batch when unsafe tool interrupts safe sequence', () => {
-    const calls = [
-      makeParsedToolCall('Read', { file_path: 'a.ts' }),
-      makeParsedToolCall('Edit', { file_path: 'a.ts', old_string: 'foo', new_string: 'bar' }),
       makeParsedToolCall('Read', { file_path: 'b.ts' }),
-      makeParsedToolCall('Edit', { file_path: 'b.ts', old_string: 'x', new_string: 'y' }),
     ]
-
     const batches = partitionToolCalls(calls)
-    // Read(safe) → Edit(unsafe) → Read(safe) → Edit(unsafe)
-    expect(batches).toHaveLength(4)
+    expect(batches).toHaveLength(2)
+    expect(batches.every(b => b.safe === false)).toBe(true)
   })
 })
 
