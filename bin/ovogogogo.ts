@@ -444,8 +444,18 @@ interface ResolvedApiEnvironment {
  * same account without copying credentials into another config file.
  */
 function resolveApiEnvironment(): ResolvedApiEnvironment {
-  const anthropicBaseURL = process.env.ANTHROPIC_BASE_URL
-  const anthropicApiKey = process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY
+  // The Claude Code CLI keeps its provider env (e.g. MiniMax M3 via the
+  // Anthropic facade) in ~/.claude/settings.json under an "env" block.
+  // That block is loaded by claude code itself and NOT exported to the
+  // shell, so `process.env.ANTHROPIC_*` is empty when ovolv999 runs in a
+  // normal shell. Fall back to reading that file so ovolv999 shares the
+  // same account zero-config (the bin's stated intent). Process env
+  // always wins when present.
+  const claudeEnv = readClaudeSettingsEnv()
+  const lookup = (k: string): string | undefined => process.env[k] ?? claudeEnv[k]
+
+  const anthropicBaseURL = lookup('ANTHROPIC_BASE_URL')
+  const anthropicApiKey = lookup('ANTHROPIC_AUTH_TOKEN') ?? lookup('ANTHROPIC_API_KEY')
   const isMiniMax = Boolean(
     anthropicApiKey &&
     anthropicBaseURL &&
@@ -469,6 +479,22 @@ function resolveApiEnvironment(): ResolvedApiEnvironment {
     baseURL: process.env.OPENAI_BASE_URL,
     model: process.env.OVOGO_MODEL ?? 'gpt-4o',
     provider: 'openai',
+  }
+}
+
+/**
+ * Read the `env` block from ~/.claude/settings.json (if present) so
+ * ovolv999 can reuse the Claude Code provider config without the user
+ * copying credentials into a second place. Returns {} on any error.
+ */
+function readClaudeSettingsEnv(): Record<string, string> {
+  try {
+    const path = join(homedir(), '.claude', 'settings.json')
+    const raw = readFileSync(path, 'utf8')
+    const env = (JSON.parse(raw) as { env?: Record<string, string> }).env
+    return env && typeof env === 'object' ? env : {}
+  } catch {
+    return {}
   }
 }
 
