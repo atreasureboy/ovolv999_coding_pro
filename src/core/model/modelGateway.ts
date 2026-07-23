@@ -1,14 +1,16 @@
 /**
- * ModelGateway — owns LLM API calls, streaming establishment, retry,
- * and provider compatibility. Extracted from engine.ts to isolate model
- * communication from the run loop.
+ * ModelGateway — owns the model I/O boundary of the run loop. Extracted
+ * from engine.ts to isolate model communication from iteration logic.
  *
- * Responsibilities:
- * - Build and send chat completion requests
- * - stream_options.include_usage detection + fallback
- * - Reactive compaction on context-overflow errors (via callback)
- * - Usage recording (via callback)
- * - Stall timeout (via StreamConsumer watchdog)
+ * Phase 1 (six_goal §四): ModelGateway no longer touches the OpenAI SDK
+ * directly. ALL provider-specific behaviour (request shape, streaming
+ * transport, stream_options probing) lives behind a ProviderAdapter.
+ * ModelGateway is now provider-agnostic: it builds a ProviderStreamRequest,
+ * delegates stream establishment to the adapter, and owns only the
+ * concerns that are truly cross-provider:
+ *   - reactive compaction on context-overflow errors (via callback)
+ *   - usage recording (via callback)
+ *   - stream-stall watchdog (via StreamConsumer)
  *
  * Does NOT decide what the agent does next. The coordinator drives
  * iteration; ModelGateway just sends requests and returns results.
@@ -19,9 +21,10 @@ import type { OpenAIMessage, ToolDefinition } from '../types.js'
 import type { TokenUsage } from '../costTracker.js'
 import type { Renderer } from '../../ui/renderer.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
+import type { ProviderAdapter } from './providerAdapter.js'
 
 export interface ModelGatewayDeps {
-  client: OpenAI
+  adapter: ProviderAdapter
   renderer: Renderer
   streamConsumer?: StreamConsumer
 }
@@ -46,35 +49,32 @@ export interface ModelGatewayCallbacks {
 }
 
 export class ModelGateway {
-  private readonly client: OpenAI
+  private readonly adapter: ProviderAdapter
   private readonly renderer: Renderer
   private readonly streamConsumer: StreamConsumer
-  private _streamUsageSupported = true
 
   constructor(deps: ModelGatewayDeps) {
-    this.client = deps.client
+    this.adapter = deps.adapter
     this.renderer = deps.renderer
     this.streamConsumer = deps.streamConsumer ?? new StreamConsumer({ renderer: this.renderer })
   }
 
   get streamUsageSupported(): boolean {
-    return this._streamUsageSupported
+    return this.adapter.streamUsageSupported
   }
 
   markStreamUsageUnsupported(): void {
-    this._streamUsageSupported = false
+    // Phase 1: delegated to the adapter — the latch is a provider-level
+    // concern (whether THIS backend can stream usage tokens).
+    this.adapter.markStreamUsageUnsupported()
   }
 
   /**
-   * P0-1 (transactional model switch): clear the one-shot latch so a
-   * model switch from a provider that rejects stream_options to one
-   * that supports it does not leave usage streaming permanently
-   * disabled for the lifetime of the process. Best-effort: the next
-   * call will probe stream_options again and re-disable the latch if
-   * the new model also rejects it.
+   * P0-1 (transactional model switch): clear the adapter's usage-streaming
+   * probe latch so a model switch re-probes stream_options support.
    */
   resetStreamUsageLatch(): void {
-    this._streamUsageSupported = true
+    this.adapter.resetStreamUsageLatch()
   }
 
   async call(
@@ -86,78 +86,34 @@ export class ModelGateway {
     this.renderer.startSpinner()
     const callStartMs = Date.now()
 
+    const streamReq = {
+      model,
+      systemPrompt,
+      messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+      tools: toolDefs,
+      temperature,
+      maxOutputTokens,
+      signal: abortSignal,
+    }
+
     let stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>
     try {
-      stream = await this.client.chat.completions.create(
-        {
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-          ],
-          tools: toolDefs.length > 0 ? toolDefs : undefined,
-          tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
-          temperature: temperature ?? 0,
-          max_tokens: maxOutputTokens,
-          stream: true,
-          ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
-        },
-        { signal: abortSignal },
-      )
+      stream = await this.adapter.stream(streamReq)
     } catch (err: unknown) {
       this.renderer.stopSpinner()
-
       const errMsg = (err as Error).message || ''
 
-      if (errMsg.includes('stream_options') || errMsg.includes('stream_options is not supported')) {
-        this._streamUsageSupported = false
-        stream = await this.client.chat.completions.create(
-          {
-            model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-            ],
-            tools: toolDefs,
-            tool_choice: 'auto',
-            temperature: temperature ?? 0,
-            max_tokens: maxOutputTokens,
-            stream: true,
-          },
-          { signal: abortSignal },
-        )
-        const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
-        callbacks?.onUsage?.(result.usage, callStartMs)
-        return result
-      }
-
+      // Reactive compaction on context-overflow — provider-agnostic
+      // (detected by error-message signature across OpenAI-compatible
+      // backends). The adapter has already surfaced the raw error.
       if (this.isContextOverflowError(errMsg) && callbacks?.onContextOverflow) {
         this.renderer.warn('Context too long — auto-compacting and retrying...')
         const compacted = await callbacks.onContextOverflow(messages, abortSignal)
-        if (compacted) {
-          stream = await this.client.chat.completions.create(
-            {
-              model,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
-              ],
-              tools: toolDefs.length > 0 ? toolDefs : undefined,
-              tool_choice: toolDefs.length > 0 ? 'auto' : undefined,
-              temperature: temperature ?? 0,
-              max_tokens: maxOutputTokens,
-              stream: true,
-              ...(this._streamUsageSupported ? { stream_options: { include_usage: true } } : {}),
-            },
-            { signal: abortSignal },
-          )
-          const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
-          callbacks?.onUsage?.(result.usage, callStartMs)
-          return result
-        }
+        if (!compacted) throw err
+        stream = await this.adapter.stream(streamReq)
+      } else {
+        throw err
       }
-
-      throw err
     }
 
     const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)

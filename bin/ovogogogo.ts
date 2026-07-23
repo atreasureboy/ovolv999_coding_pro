@@ -453,10 +453,13 @@ function resolveApiEnvironment(): ResolvedApiEnvironment {
   )
 
   if (isMiniMax) {
+    // MiniMax's OpenAI-compatible /v1 endpoint rejects the Anthropic-
+    // protocol context-variant suffix (e.g. "MiniMax-M3[1m]"); strip it.
+    const rawModel = process.env.OVOGO_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'MiniMax-M3'
     return {
       apiKey: anthropicApiKey,
       baseURL: anthropicBaseURL!.replace(/\/anthropic\/?$/i, '/v1'),
-      model: process.env.OVOGO_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'MiniMax-M3',
+      model: rawModel.replace(/\[[^\]]*\]$/, ''),
       provider: 'minimax',
     }
   }
@@ -1648,6 +1651,10 @@ async function main(): Promise<void> {
     model: projectConfig?.model ?? model,
     apiKey,
     baseURL: apiEnvironment.baseURL,
+    // Phase 1: drive ProviderAdapter selection from the resolved
+    // environment (minimax vs openai today; both route through the
+    // openai-compatible adapter since MiniMax M3 is served at /v1).
+    provider: apiEnvironment.provider,
     maxIterations: projectConfig?.maxIterations ?? maxIter,
     cwd,
     permissionMode: projectConfig?.permissionMode ?? 'auto',

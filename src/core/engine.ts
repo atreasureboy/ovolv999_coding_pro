@@ -48,6 +48,7 @@ import { BackgroundTaskManager } from './backgroundTaskManager.js'
 import { FileHistory } from './fileHistory.js'
 import { PermissionManager } from './permissionSystem.js'
 import { ModelGateway } from './model/modelGateway.js'
+import { createProviderAdapter } from './model/providerAdapter.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -195,7 +196,14 @@ export class ExecutionEngine {
       eventLog: this.eventLog,
     })
 
-    this.modelGateway = new ModelGateway({ client: this.client, renderer: this.renderer })
+    this.modelGateway = new ModelGateway({
+      // Phase 1: ModelGateway delegates to a ProviderAdapter instead of
+      // touching the OpenAI SDK directly. The adapter owns provider
+      // request shape + stream_options probing; selection is driven by
+      // config.provider (default openai-compatible).
+      adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
+      renderer: this.renderer,
+    })
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,

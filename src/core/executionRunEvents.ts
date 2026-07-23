@@ -147,8 +147,16 @@ function eventTypeForTransition(from: RunStatus, to: RunStatus): CoreRunEventTyp
  * Round 5 ships a JSONL implementation. SQLite lands later — same
  * interface, different backend.
  */
-export interface EventStore {
+ export interface EventStore {
   append(event: RunEventEnvelope): void
+  /**
+   * Phase 5 (six_goal §五.1): atomically persist multiple events in a
+   * single durable write, so a run-state transition and its
+   * corresponding event commit together (crash between them can't leave
+   * the log with an event but no state, or vice-versa). Implementations
+   * that can't batch atomically should fall back to sequential append.
+   */
+  appendBatch(events: RunEventEnvelope[]): void
   readAll(): RunEventEnvelope[]
   /** Path or identifier for diagnostics. */
   readonly label: string
@@ -191,6 +199,16 @@ export class JsonlEventStore implements EventStore {
     appendFileSync(this.filePath, JSON.stringify(event) + '\n', 'utf8')
   }
 
+  appendBatch(events: RunEventEnvelope[]): void {
+    // Phase 5: a SINGLE appendFileSync of all lines — one kernel-level
+    // atomic write for the whole batch. Crash mid-batch can't leave a
+    // partial transition: either the whole batch lands or the tail of
+    // the log is dropped (and readAll's line-skip + dedup handle that).
+    if (events.length === 0) return
+    const payload = events.map((e) => JSON.stringify(e) + '\n').join('')
+    appendFileSync(this.filePath, payload, 'utf8')
+  }
+
   readAll(): RunEventEnvelope[] {
     if (!existsSync(this.filePath)) return []
     let raw: string
@@ -210,7 +228,14 @@ export class JsonlEventStore implements EventStore {
         // Real crash recovery must be robust to this.
       }
     }
-    return events
+    // Phase 5 (six_goal §五.3): idempotent replay — if the same eventId
+    // appears more than once (re-apply after a partial recovery, or a
+    // duplicated batch), keep the LAST occurrence so replay is safe.
+    const seen = new Map<string, RunEventEnvelope>()
+    for (const e of events) {
+      if (e.eventId) seen.set(e.eventId, e)
+    }
+    return seen.size === events.length ? events : Array.from(seen.values())
   }
 
   /** Truncate the log (test use only — never call in production). */

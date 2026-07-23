@@ -24,6 +24,7 @@ import { tmuxLayout } from '../ui/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
+import { runCommandSync } from '../core/commandRunner.js'
 import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
 import { getWorktreeManager, type WorktreeInfo } from './worktree.js'
@@ -115,15 +116,27 @@ export function runVerification(cwd: string): { passed: boolean; output: string 
   let allPassed = true
 
   for (const cmd of commands) {
-    try {
-      execSync(cmd, { cwd, encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
-      results.push(`✓ ${cmd.split(' ')[1] || cmd} — passed`)
-    } catch (err: unknown) {
+    // Phase 2: route through CommandRunner instead of execSync. The
+    // verification commands are trusted project scripts (package.json
+    // scripts / language toolchains), so shell:true is acceptable here
+    // (trust boundary = user project config, same as AUDIT-006).
+    // CommandRunner adds process-tree kill on timeout, bounded output,
+    // and a structured result — execSync gave none of these.
+    const label = cmd.split(' ')[1] || cmd
+    const res = runCommandSync({
+      executable: cmd,
+      args: [],
+      cwd,
+      shell: true,
+      timeoutMs: 60_000,
+    })
+    if (res.exitCode === 0 && !res.timedOut && !res.cancelled) {
+      results.push(`✓ ${label} — passed`)
+    } else {
       allPassed = false
-      const e = err as { stdout?: string; stderr?: string; message?: string }
-      const output = (e.stdout ?? '') + (e.stderr ?? '')
-      const trimmed = output.trim().slice(0, 800)
-      results.push(`✗ ${cmd.split(' ')[1] || cmd} — FAILED\n${trimmed}`)
+      const reason = res.timedOut ? 'TIMEOUT' : res.cancelled ? 'CANCELLED' : 'FAILED'
+      const trimmed = ((res.stdout ?? '') + (res.stderr ?? '')).trim().slice(0, 800)
+      results.push(`✗ ${label} — ${reason}\n${trimmed}`)
     }
   }
 

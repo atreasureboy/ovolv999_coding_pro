@@ -4,15 +4,15 @@
 > glm-5.2 指挥；实现：直接编码 + amux 委托 Claude Code 混合模式。
 
 ## 当前阶段
-**v0.2 Runtime Integrity 推进（six_goal Phase 3/4/6.1）**（2026-07-23）。参考 GPT-5.6 的 six_goal.md 建议，先全面核实其论断（非猜测），再实施高价值有界改进；大项（Provider/CommandRunner/SQLite/Eval/CI）写入 docs/V0_2_RUNTIME_INTEGRITY.md 作为 v0.3 milestone。
+**v0.2 Runtime Integrity Phase 1/2/5 完成**（2026-07-23，six_goal 驱动）。ProviderAdapter 真正接管模型请求（**MiniMax M3 端到端实测通过**）；CommandRunner 统一命令执行（runVerification 已迁移）；EventStore 加原子批量+幂等。Phase 3/4/6.1 此前已完成。可手动测试。
 
-## 当前目标适配度：约 93%
+## 当前目标适配度：约 95%
 
-### 本轮修复（six_goal 驱动）
-- **Phase 3** ResourceScheduler 成为唯一调度源：`partitionToolCalls` 改为 claims 驱动，**删除 LEGACY_CONCURRENCY_SAFE_TOOLS 白名单**；无 claims 工具默认串行（§六.3）；新增 `claimsConflictBetween` 批量冲突谓词
-- **Phase 4** AgentTool.cancel 真正终止运行中子 agent：新增 `childAborts` (runId→abort) 映射，cancel(runId) 调 `childEngine.abort()`（原仅改 registry 状态，不真正取消）
-- **Phase 6.1** 修复消息语义：compaction summary 从 `role:user` 改为 `role:system`（运行时上下文非用户输入），**删除伪造的 synthetic assistant ack**（把话塞进 assistant 嘴里）
-- **Phase 0** 新增 `docs/V0_2_RUNTIME_INTEGRITY.md`（真实调用图 + 名义vs实际 + 双轨实现 + exec 旁路 + 修改计划 + 兼容风险）
+### 本轮修复（six_goal Phase 1/2/5）
+- **Phase 1** ProviderAdapter 接管 ModelGateway：新增 `providerAdapter.ts`（OpenAICompatibleAdapter 拥有 stream_options 探测/请求形状），ModelGateway 只剩 provider-agnostic 的 overflow/retry/watchdog；config.provider 驱动选择。**M3 实测**：经 adapter 流式返回 text+usage
+- **Phase 1 修 bug**：MiniMax `/v1` 拒绝 `[1m]` 后缀 → resolveApiEnvironment 剥离
+- **Phase 2** CommandRunner（`commandRunner.ts`）：CommandSpec/CommandResult、spawn+进程树 kill、timeout/abort/output 限制、shell=false 默认；runVerification 从 execSync 迁移过来；~30 处 exec 余项列入 allowlist
+- **Phase 5** EventStore：`appendBatch` 原子多事件写 + readAll 按 eventId 幂等去重（SQLite WAL → v0.3）
 
 ### six_goal 核实结果（非猜测）
 - ✓ 已满足：coordinator 无 provider 分支、max_iterations→blocked、EventStore 写失败不吞

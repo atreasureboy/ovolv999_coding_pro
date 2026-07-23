@@ -20,6 +20,7 @@ import { ExecutionEngine } from '../src/core/engine.js'
 import { ContextManager } from '../src/core/context/contextManager.js'
 import { ModuleManager, groupByDependencyDepth } from '../src/core/moduleRuntime/moduleManager.js'
 import { ModelGateway } from '../src/core/model/modelGateway.js'
+import { createProviderAdapter } from '../src/core/model/providerAdapter.js'
 import { CriticModule } from '../src/modules/critic.js'
 import { ReflectionModule } from '../src/modules/reflection.js'
 import { SemanticMemory } from '../src/core/semanticMemory.js'
@@ -246,7 +247,7 @@ describe('P0-1.B: modules observe onModelChanged', () => {
 describe('P0-1.C: ModelGateway.resetStreamUsageLatch', () => {
   it('a latched-false state returns to true after resetStreamUsageLatch', () => {
     const r = fakeRenderer()
-    const gw = new ModelGateway({ client: fakeClient() as never, renderer: r })
+    const gw = new ModelGateway({ adapter: createProviderAdapter({ client: fakeClient() as never }), renderer: r })
     expect(gw.streamUsageSupported).toBe(true)
     gw.markStreamUsageUnsupported()
     expect(gw.streamUsageSupported).toBe(false)

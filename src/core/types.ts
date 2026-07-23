@@ -270,6 +270,14 @@ export interface EngineConfig {
   model: string
   baseURL?: string
   apiKey: string
+  /**
+   * Phase 1 (six_goal §四): provider id driving ProviderAdapter
+   * selection (e.g. 'openai', 'minimax', 'anthropic'). Omit for the
+   * default openai-compatible adapter. All currently-supported
+   * providers speak the OpenAI Chat Completions shape; this field is
+   * the extension point for native adapters.
+   */
+  provider?: string
   maxIterations: number
   cwd: string
   permissionMode: 'auto' | 'ask' | 'deny'

@@ -35,11 +35,13 @@ Recovery (engine ctor)
 
 | Claim | Real state | Evidence |
 |---|---|---|
-| ProviderAdapter takes over model requests | **NOT wired** — ModelGateway calls `client.chat.completions.create()` directly (OpenAI SDK shape) | modelGateway.ts:91,114,138 |
+| ProviderAdapter takes over model requests | **TRUE post-Phase 1** — ModelGateway delegates to a ProviderAdapter; OpenAI-compatible adapter wraps the SDK. Proven end-to-end with MiniMax M3 (non-OpenAI provider streams + usage through the adapter) | modelGateway.ts, providerAdapter.ts; M3 smoke: text+usage returned |
 | Coordinator has no provider branches | **TRUE** — no `if provider===` anywhere | grep clean |
 | ResourceScheduler is sole concurrency authority | **TRUE post-Phase 3** — partition is claims-based, legacy whitelist removed | toolScheduler.ts:46-90 |
 | Agent cancel terminates running child | **TRUE post-Phase 4** — runId→abort map fires childEngine.abort() | agent.ts:325,864,437 |
-| Control messages not disguised as user | **PARTIAL** — compaction summary fixed (system role, no fake ack); coordinator nudges/critic/snip still role:'user' | compact.ts:712, coordinator.ts:314,329,357, critic.ts:77, contextManager.ts:349 |
+| Control messages not disguised as user | **PARTIAL** — compaction summary fixed (system role, no fake ack); coordinator nudges/critic/snip still role:'user' | compact.ts:712, coordinator.ts:314,329,357 |
+| Commands unified through CommandRunner | **PARTIAL post-Phase 2** — CommandRunner exists; runVerification migrated; ~30 exec sites remain on allowlist | commandRunner.ts, agent.ts:runVerification |
+| EventStore atomic + idempotent | **PARTIAL post-Phase 5** — appendBatch (atomic multi-event) + idempotent eventId dedup; SQLite WAL deferred to v0.3 | executionRunEvents.ts:150,187 |
 | max_iterations ≠ succeeded | **TRUE** — maps to `blocked` | coordinator.ts:466-485 |
 | Critical event persist failures not swallowed | **TRUE** — JsonlEventStore.append throws on disk-full | gapLFaultInjection.test.ts |
 
@@ -81,20 +83,23 @@ Recovery (engine ctor)
 
 | Phase | Item | Status |
 |---|---|---|
+| 1 | ProviderAdapter takes over ModelGateway; OpenAI-compatible adapter; config.provider drives selection; **M3 proven end-to-end** | ✅ done |
+| 1 | Fix: MiniMax `/v1` rejects the `[1m]` Anthropic suffix → strip it in resolveApiEnvironment | ✅ done |
+| 2 | CommandRunner (CommandSpec/CommandResult, spawn + process-tree kill, timeout/abort/output limits); runVerification migrated | ✅ done |
 | 3 | Claims-based partition; remove LEGACY_CONCURRENCY_SAFE_TOOLS | ✅ done |
-| 3 | `claimsConflictBetween` exported for the planner | ✅ done |
 | 4 | AgentTool cancel truly aborts child (runId→abort map) | ✅ done |
+| 5 | EventStore appendBatch (atomic multi-event) + idempotent eventId dedup | ✅ done (SQLite WAL → v0.3) |
 | 6.1 | Compaction summary → system role; remove forged assistant ack | ✅ done |
 | 0 | This audit document | ✅ done |
 
 ## 10. Modification plan (deferred — v0.3 milestones)
 
-1. **Phase 1 — Provider runtime unification**: make ModelGateway delegate to a ProviderAdapter (OpenAICompatible first); move stream_options compat + retry/timeout into the adapter. Biggest remaining architectural gap.
-2. **Phase 2 — CommandRunner**: unify exec/execSync/spawn behind a CommandSpec/CommandResult abstraction (timeout, abort, process-tree kill, output limits, sandbox, resource claims). Migrate verification → git → loop gates → tools.
-3. **Phase 6.1 remainder — InternalControlMessage**: the coordinator nudges (empty-retry, length-continue, budget-nudge), critic injection, and snip boundary are still `role:'user'`. Introduce an internal message type converted to provider expression at the adapter boundary so they don't pollute genuine user history.
-4. **Phase 5 — EventStore (SQLite WAL)**: atomic run-state + event transaction, monotonic sequence, replay, crash rebuild, schema version, JSONL import.
+1. **Phase 1 remainder**: a native Anthropic-Messages ProviderAdapter (translates Anthropic SSE → OpenAI chunk shape) so providers that only speak Anthropic-protocol work without an OpenAI-compatible facade. (Today MiniMax/Anthropic-via-/v1 already work through OpenAICompatibleAdapter.)
+2. **Phase 2 remainder**: migrate the remaining ~30 exec sites (worktree git ops, Loop quality gates, utils/config/ui helpers) to CommandRunner — they're on the allowlist in §5.
+3. **Phase 5 remainder**: SQLite WAL EventStore backend (run-state + event in one DB transaction, schema version, JSONL import) behind the now-clean EventStore interface; wire Registry state-writes to use appendBatch for true state+event atomicity.
+4. **Phase 6.1 remainder**: InternalControlMessage type for coordinator nudges / critic / snip so they don't pollute genuine user history.
 5. **Phase 7 — Eval**: deterministic end-to-end coding eval with baseline comparison.
-6. **Phase 8 — Engineering**: package.json hygiene, GitHub Actions (typecheck/lint/unit/integration/eval/build), README Stable/Beta/Experimental labelling.
+6. **Phase 8 — Engineering**: package.json hygiene, GitHub Actions, README Stable/Beta/Experimental labelling.
 
 ## 11. Compatibility risks (this round)
 
