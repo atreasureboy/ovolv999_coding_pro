@@ -218,15 +218,22 @@ export class RuntimeCoordinator {
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
 
     // Phase 2: adaptive model routing — one decision per turn, after
-    // boot, before the first LLM call. Driven by goal complexity +
-    // context usage (not every iteration, to avoid thrashing). Honours
-    // manual override + routing-enabled (handled in the engine callback).
+    // boot, before the first LLM call. v0.3.1 (te_goal §三.1.3): pass
+    // REAL routing signals, not just userGoal. The router uses these to
+    // score complexity/context/budget/health and pick the right model.
     if (this.deps.routeModel) {
       try {
+        const ws = this.deps.contextManager.getWorkingState()
+        const pm = this.deps.progressMonitor
+        const filesTouched = ws.filesRead.length + ws.filesChanged.length
         const routed = this.deps.routeModel({
           userGoal: userMessage,
-          // contextUsageRatio omitted at turn start (context is just
-          // system prompt + user msg); the router defaults to no pressure.
+          repoFileCount: filesTouched * 10, // rough proxy for repo scale explored
+          filesTouched,
+          consecutiveFailures: pm?.snapshot(0).repeatedErrors ?? 0,
+          needsArchitecture:
+            /architect|refactor|redesign|root cause|migration|design decision/i.test(userMessage)
+            || filesTouched > 8, // multi-file changes hint at architecture
         })
         if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
       } catch { /* best-effort: routing must never break the turn */ }
@@ -296,6 +303,11 @@ export class RuntimeCoordinator {
               const pm = this.deps.progressMonitor
               if (pm) {
                 pm.tick()
+                // v0.3.1 (te_goal §六.1): feed real verification signal
+                // into ProgressMonitor each iteration. A drop in failing
+                // commands = meaningful progress; no change = stall timer
+                // keeps running.
+                pm.recordVerification(this.deps.contextManager.getWorkingState().verification.failed.length)
                 const elapsedMin = (Date.now() - turnStartMs) / 60_000
                 const verdict = pm.detectStall(elapsedMin, 1)
                 if (verdict.kind !== 'progressing') {
