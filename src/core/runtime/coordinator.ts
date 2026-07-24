@@ -61,7 +61,7 @@ import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion } from './completionContract.js'
 import { interventionMessageForStall } from './progressMonitor.js'
-import { shouldInvokeCritic, buildCriticReport, criticReportToGuidance } from './criticTrigger.js'
+import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
 import { boot } from './boot.js'
@@ -265,7 +265,6 @@ export class RuntimeCoordinator {
     let result: TurnResult
     const turnStartMs = Date.now()
     let stallInterventionApplied = false // dedupe: one system nudge per stall episode
-    let criticInterventionApplied = false // dedupe: one critic nudge per risk episode
 
     try {
       while (!isTerminal(state)) {
@@ -313,39 +312,9 @@ export class RuntimeCoordinator {
                 } else {
                   stallInterventionApplied = false
                 }
-                // Phase 5: adaptive (risk-triggered) critic. Replaces the
-                // fixed every-N-turns waste: only invoke when real risk is
-                // present (repeated failures / stall / large scope). Injects
-                // a structured role:system nudge (NOT a user message), deduped
-                // per risk episode.
-                const snap = pm.snapshot(elapsedMin)
-                const ws = this.deps.contextManager.getWorkingState()
-                const criticDecision = shouldInvokeCritic({
-                  snapshot: snap,
-                  modelClaimingCompletion: false, // completion-time covered by the CompletionContract gate
-                  isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
-                  changedFilesCount: ws.filesChanged.length,
-                  unresolvedCount: ws.unresolved.length,
-                  remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
-                })
-                if (criticDecision.invoke && !criticInterventionApplied) {
-                  const guidance = criticReportToGuidance(buildCriticReport({
-                    snapshot: snap,
-                    modelClaimingCompletion: false,
-                    isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
-                    changedFilesCount: ws.filesChanged.length,
-                    unresolvedCount: ws.unresolved.length,
-                    remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
-                  }))
-                  if (guidance) {
-                    messages.push(guidance)
-                    criticInterventionApplied = true
-                    renderer.warn(`Critic invoked: ${criticDecision.reason}`)
-                    eventEmitter.emit({ type: 'STALL_DETECTED', kind: 'critic', reason: criticDecision.reason, action: 'review' })
-                  }
-                } else if (!criticDecision.invoke) {
-                  criticInterventionApplied = false
-                }
+                // v0.3.1: critic is now single-track — the risk signal is
+                // computed in module_iteration and passed to CriticModule
+                // via criticRequested. No separate coordinator injection.
               }
               eventEmitter.emit({ type: 'ITERATION_STARTED', iteration: state.iteration })
               state = transitionQueryState(state, { type: 'continue' })
@@ -360,10 +329,30 @@ export class RuntimeCoordinator {
           }
 
           case 'module_iteration': {
+            // v0.3.1 (te_goal §六.3): single-track critic. The coordinator
+            // computes the risk signal here and passes criticRequested to
+            // the module. CriticModule is the SOLE critic actuator (LLM
+            // review); the coordinator no longer injects its own critic
+            // guidance. This eliminates the dual-critic problem.
+            let criticRequested = false
+            const pmSnap = this.deps.progressMonitor
+            if (pmSnap) {
+              const snap = pmSnap.snapshot((Date.now() - turnStartMs) / 60_000)
+              const ws = this.deps.contextManager.getWorkingState()
+              criticRequested = shouldInvokeCritic({
+                snapshot: snap,
+                modelClaimingCompletion: false,
+                isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
+                changedFilesCount: ws.filesChanged.length,
+                unresolvedCount: ws.unresolved.length,
+                remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
+              }).invoke
+            }
             await this.deps.moduleManager.runIteration({
               iteration: state.iteration,
               messages,
               abortSignal: turnAbortController.signal,
+              criticRequested,
             })
             state = transitionQueryState(state, { type: 'continue' })
             break

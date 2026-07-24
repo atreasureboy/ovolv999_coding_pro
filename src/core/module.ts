@@ -50,6 +50,9 @@ export interface ModuleIterationContext {
   iteration: number
   messages: OpenAIMessage[]
   abortSignal: AbortSignal
+  /** v0.3.1: risk-gated critic signal — when true, CriticModule runs
+   * immediately instead of waiting for its fixed interval. */
+  criticRequested?: boolean
 }
 
 /** Return value of module.onIteration() — can inject a message into the conversation */

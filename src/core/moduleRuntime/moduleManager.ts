@@ -173,8 +173,9 @@ export class ModuleManager {
     iteration: number
     messages: OpenAIMessage[]
     abortSignal: AbortSignal
+    criticRequested?: boolean
   }): Promise<void> {
-    const { iteration, messages, abortSignal } = params
+    const { iteration, messages, abortSignal, criticRequested } = params
 
     for (const module of this.modules) {
       if (!module.onIteration) continue
@@ -182,6 +183,7 @@ export class ModuleManager {
         iteration,
         messages,
         abortSignal,
+        criticRequested,
       })
       if (iterResult?.injectMessage) {
         const msg = iterResult.injectMessage
