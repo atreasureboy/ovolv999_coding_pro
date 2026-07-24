@@ -83,7 +83,7 @@ function getMessageContent(msg: OpenAIMessage): string {
 
 function tryParseToolArgs(args: string): Record<string, unknown> {
   try {
-    return JSON.parse(args)
+    return JSON.parse(args) as Record<string, unknown>
   } catch {
     return {}
   }

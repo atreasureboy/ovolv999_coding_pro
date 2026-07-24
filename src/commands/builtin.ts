@@ -9,7 +9,10 @@
  * pattern is intentional; the two lint rules below would fire on every
  * require call. They are disabled at file scope with justification.
  */
-/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports,
+   @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment,
+   @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument,
+   @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return */
 
 import { registerCommand } from './index.js'
 import type { SlashCommandContext, SlashCommandResult } from './index.js'

@@ -113,7 +113,7 @@ describe('eval: TS single-file bugfix (deterministic)', () => {
     // a devDependency) and asserts add(2,3)===5. Confirms the change is
     // not just textually different but actually correct + runnable.
     writeFileSync(join(dir, 'verify.mts'), `import { add } from './src/add.ts'\nif (add(2,3) !== 5) process.exit(1)\n`, 'utf8')
-    let compiles = false
+    let compiles: boolean
     try {
       execSync('npx tsx verify.mts', { cwd: dir, stdio: 'pipe', timeout: 30_000 })
       compiles = true

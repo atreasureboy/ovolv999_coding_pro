@@ -149,8 +149,8 @@ export function renderInline(text: string): string {
   })
 
   // Bold
-  result = result.replace(/\*\*([^*]+)\*\*/g, (_, content) => boldText(content))
-  result = result.replace(/__([^_]+)__/g, (_, content) => boldText(content))
+  result = result.replace(/\*\*([^*]+)\*\*/g, (_, content: string) => boldText(content))
+  result = result.replace(/__([^_]+)__/g, (_, content: string) => boldText(content))
 
   // Italic
   result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, (_, content) => ANSI.ITALIC + content + ANSI.RESET)

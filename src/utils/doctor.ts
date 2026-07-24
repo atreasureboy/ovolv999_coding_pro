@@ -251,7 +251,7 @@ function checkSkills(cwd: string, results: CheckResult[]): void {
     return
   }
 
-  let mdFiles: string[] = []
+  let mdFiles: string[]
   try {
     mdFiles = readdirSync(skillsDir).filter(f => extname(f) === '.md')
   } catch {

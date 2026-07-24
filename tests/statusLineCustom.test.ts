@@ -135,6 +135,7 @@ describe('statusLineCustom', () => {
         { type: 'cwd', maxWidth: 5 },
       ])
       // truncate adds '...' when maxWidth > 3
+      // eslint-disable-next-line no-control-regex
       const stripped = out.replace(/\x1b\[[0-9;]*m/g, '')
       expect(stripped.length).toBeLessThanOrEqual(20) // accounting for color codes stripped
     })

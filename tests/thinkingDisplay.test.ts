@@ -82,6 +82,7 @@ describe('thinkingDisplay', () => {
     it('applies different colors to different chars', () => {
       const result = rainbow('ab')
       // Should contain at least 2 different color codes
+      // eslint-disable-next-line no-control-regex
       const colorCodes = result.match(/\x1b\[38;5;(\d+)m/g)
       expect(colorCodes!.length).toBeGreaterThanOrEqual(2)
     })

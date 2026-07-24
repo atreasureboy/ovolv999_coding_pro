@@ -374,6 +374,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * Note: delivery to the child engine's next iteration is
    * best-effort and depends on runAgentTask polling this queue.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async steer(runId: string, instruction: string): Promise<boolean> {
     const registry = this.runRegistry
     if (registry) {
@@ -423,6 +424,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * Not supported for in-process AgentTool — child engines are
    * synchronous. Use execute() directly. Always rejects.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async start(
     _task: WorkerTask,
     _context?: { cwd?: string; signal?: AbortSignal; parentRunId?: string },
@@ -434,6 +436,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * Query the registry for the child run's current status. Returns
    * 'unknown' for runIds not tracked by this instance's registry.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async status(runId: string): Promise<WorkerStatus> {
     const registry = this.runRegistry
     if (!registry) return 'unknown'
@@ -456,6 +459,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * Abort a running child engine. Sets the abort signal the child
    * observes between iterations. Idempotent.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async cancel(runId: string, reason?: string): Promise<void> {
     // Phase 4: actually terminate the running in-process child by
     // firing its abort trigger. This propagates to the child engine's
@@ -494,6 +498,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * reattach() is not supported for in-process AgentTool — child
    * engines cannot survive a host restart. Always returns null.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async reattach?(_runId: string, _descriptor: WorkerDescriptor): Promise<WorkerHandle | null> {
     return null
   }

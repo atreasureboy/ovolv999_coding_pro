@@ -92,7 +92,7 @@ export function loadConfig(): TelemetryConfig {
   const path = getConfigPath()
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(readFileSync(path, 'utf8')) }
+    return { ...DEFAULT_CONFIG, ...(JSON.parse(readFileSync(path, 'utf8')) as Partial<TelemetryConfig>) }
   } catch {
     return { ...DEFAULT_CONFIG }
   }

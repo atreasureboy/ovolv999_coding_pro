@@ -59,7 +59,7 @@ import { isTerminalRunStatus } from '../executionRun.js'
 import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
-import { evaluateCompletion } from './completionContract.js'
+import { evaluateCompletion, type CompletionVerdict } from './completionContract.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
@@ -926,7 +926,7 @@ export class RuntimeCoordinator {
     const callStartMs = Date.now()
     const modelAtStart = this.deps.config.model
     this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
-    let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null = null
+    let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null
     let providerFailed = false
     let attemptModel = modelAtStart
     const attemptStartedAt = Date.now()
@@ -1095,7 +1095,7 @@ export class RuntimeCoordinator {
  * that need the full discriminated union read `completionVerdict`
  * from the coordinator scope directly.
  */
-function serializeVerdict(v: import('./completionContract.js').CompletionVerdict): {
+function serializeVerdict(v: CompletionVerdict): {
   status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[]
 } {
   if (v.status === 'completed') {

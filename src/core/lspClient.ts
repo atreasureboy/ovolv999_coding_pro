@@ -17,7 +17,7 @@
  * — usually the Diagnostics tool — falls back to a tsc shellout.
  */
 
-import { spawn, type ChildProcess } from 'child_process'
+import { spawn, execSync, type ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import { resolve } from 'path'
 import { existsSync } from 'fs'
@@ -121,7 +121,6 @@ export function detectServer(languageId: LanguageId = 'typescript'): ServerSpec 
 
   for (const spec of specs) {
     try {
-      const { execSync } = require('child_process')
       execSync(`which ${spec.command} 2>/dev/null`, { stdio: 'pipe', timeout: 2000 })
       return spec
     } catch { /* not found */ }
@@ -222,6 +221,7 @@ export class LspClient extends EventEmitter {
 
   // ── Document Sync ─────────────────────────────────────────────────────
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async openDocument(uri: string, text: string, languageId?: string): Promise<void> {
     if (!this.isRunning()) return
     this.notify('textDocument/didOpen', {
@@ -234,6 +234,7 @@ export class LspClient extends EventEmitter {
     })
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async changeDocument(uri: string, text: string, version: number): Promise<void> {
     if (!this.isRunning()) return
     this.notify('textDocument/didChange', {
@@ -242,6 +243,7 @@ export class LspClient extends EventEmitter {
     })
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async saveDocument(uri: string, text?: string): Promise<void> {
     if (!this.isRunning()) return
     this.notify('textDocument/didSave', {
@@ -250,6 +252,7 @@ export class LspClient extends EventEmitter {
     })
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async closeDocument(uri: string): Promise<void> {
     if (!this.isRunning()) return
     this.notify('textDocument/didClose', { textDocument: { uri } })

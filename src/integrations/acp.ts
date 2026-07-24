@@ -279,6 +279,7 @@ export class ACPServer extends EventEmitter {
       return
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const text = String(params?.text ?? '')
     const images = Array.isArray(params?.images) ? (params.images as string[]) : undefined
 
@@ -307,6 +308,7 @@ export class ACPServer extends EventEmitter {
   private handleFileRead(id: string | number | undefined, params?: Record<string, unknown>): void {
     if (!this.handlers.onFileRead) {
       // Default: read from filesystem
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const path = String(params?.path ?? '')
       if (!path) {
         this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "path"')
@@ -321,6 +323,7 @@ export class ACPServer extends EventEmitter {
       return
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const path = String(params?.path ?? '')
     if (!path) {
       this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "path"')
@@ -331,7 +334,9 @@ export class ACPServer extends EventEmitter {
   }
 
   private handleFileWrite(id: string | number | undefined, params?: Record<string, unknown>): void {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const path = String(params?.path ?? '')
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const content = String(params?.content ?? '')
 
     if (!path) {

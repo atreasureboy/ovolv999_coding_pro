@@ -374,7 +374,10 @@ function checkMcpConfig(): SystemCheck {
   }
 
   try {
-    const config = JSON.parse(readFileSync(configPath, 'utf8'))
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      servers?: Record<string, unknown>
+      mcpServers?: Record<string, unknown>
+    }
     const servers = Object.keys(config.servers ?? config.mcpServers ?? {})
     if (servers.length > 10) {
       return {

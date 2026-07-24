@@ -107,6 +107,7 @@ describe('StatusLine', () => {
         maxWidth: 20,
       })
       // Should be truncated to fit
+      // eslint-disable-next-line no-control-regex
       const stripped = result.replace(/\x1b\[[0-9;]*m/g, '')
       expect(stripped.length).toBeLessThanOrEqual(100) // Allow some slack for ANSI
     })

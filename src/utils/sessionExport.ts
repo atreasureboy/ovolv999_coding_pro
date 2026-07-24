@@ -64,7 +64,7 @@ export function exportSession(messages: OpenAIMessage[], options: ExportOptions)
       content = toTranscript(messages, options)
       break
     default:
-      throw new Error(`Unknown export format: ${format}`)
+      throw new Error(`Unknown export format: ${String(format)}`)
   }
 
   return {
@@ -123,7 +123,7 @@ function toMarkdown(messages: OpenAIMessage[], options: ExportOptions): string {
             lines.push(`**${call.function?.name ?? 'unknown'}**`)
             lines.push('```json')
             try {
-              const args = call.function?.arguments ? JSON.parse(call.function.arguments) : {}
+              const args = call.function?.arguments ? (JSON.parse(call.function.arguments) as Record<string, unknown>) : {}
               lines.push(JSON.stringify(args, null, 2))
             } catch {
               lines.push(call.function?.arguments ?? '{}')
@@ -227,7 +227,7 @@ function toTranscript(messages: OpenAIMessage[], options: ExportOptions): string
         const name = call.function?.name ?? 'unknown'
         let args = ''
         try {
-          const parsed = call.function?.arguments ? JSON.parse(call.function.arguments) : {}
+          const parsed = call.function?.arguments ? (JSON.parse(call.function.arguments) as Record<string, unknown>) : {}
           args = Object.entries(parsed)
             .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.slice(0, 50)}"` : String(v)}`)
             .join(', ')

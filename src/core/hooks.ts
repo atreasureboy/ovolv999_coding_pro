@@ -278,7 +278,7 @@ export function loadHooksConfig(): HooksConfig {
   if (!existsSync(path)) return {}
   try {
     const raw = readFileSync(path, 'utf8')
-    const parsed = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
     return validateHooksConfig(parsed)
   } catch {
     return {}

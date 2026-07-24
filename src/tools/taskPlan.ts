@@ -64,6 +64,7 @@ export class TaskPlanTool implements Tool {
 
   constructor(private readonly resolver?: TaskGraphResolver) {}
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     // v0.3.2 (ele_goal §Phase 2): resolve the graph for the CURRENT
     // run from the resolver. Production never falls back to a

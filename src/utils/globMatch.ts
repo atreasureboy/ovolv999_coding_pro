@@ -72,7 +72,7 @@ function globToRegex(pattern: string): RegExp {
         i++
         break
 
-      case '[':
+      case '[': {
         // Character class
         const end = pattern.indexOf(']', i)
         if (end === -1) {
@@ -85,8 +85,9 @@ function globToRegex(pattern: string): RegExp {
           i = end + 1
         }
         break
+      }
 
-      case '{':
+      case '{': {
         // Should have been expanded already, but handle inline
         const endBrace = pattern.indexOf('}', i)
         if (endBrace === -1) {
@@ -98,6 +99,7 @@ function globToRegex(pattern: string): RegExp {
           i = endBrace + 1
         }
         break
+      }
 
       case '.':
       case '+':
@@ -138,7 +140,7 @@ export function isValidGlob(pattern: string): boolean {
 
 export function extractGlobBase(pattern: string): { base: string; rest: string } {
   // Find the first wildcard
-  const wildcardIdx = pattern.search(/[*?\[{]/)
+  const wildcardIdx = pattern.search(/[*?[{]/)
   if (wildcardIdx === -1) return { base: pattern, rest: '' }
 
   // Find the last / before the wildcard

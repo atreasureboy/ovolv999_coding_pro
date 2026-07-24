@@ -416,9 +416,12 @@ function parseArgs(argv: string[]): Args {
         case '--bg': bg = true; break
         case '--init': init = true; break
         case '--format':
-          pipeFormat = requireValue(arg, args[++i]) as 'text' | 'json'
-          if (pipeFormat !== 'text' && pipeFormat !== 'json') {
-            throw new ArgError(`Error: --format must be "text" or "json" (got "${pipeFormat}")`)
+          {
+            const rawFormat = requireValue(arg, args[++i])
+            if (rawFormat !== 'text' && rawFormat !== 'json') {
+              throw new ArgError(`Error: --format must be "text" or "json" (got "${rawFormat}")`)
+            }
+            pipeFormat = rawFormat
           }
           break
         default:

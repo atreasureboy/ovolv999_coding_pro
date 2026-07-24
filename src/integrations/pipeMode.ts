@@ -167,7 +167,12 @@ export function gatherProjectContext(cwd: string): string {
   const pkgPath = join(resolve(cwd), 'package.json')
   if (existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+        name?: string
+        version?: string
+        description?: string
+        scripts?: Record<string, unknown>
+      }
       parts.push(`Project: ${pkg.name ?? 'unnamed'} v${pkg.version ?? '0.0.0'}`)
       if (pkg.description) parts.push(`Description: ${pkg.description}`)
       if (pkg.scripts) {

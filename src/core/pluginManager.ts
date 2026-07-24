@@ -80,7 +80,7 @@ export function discoverPlugins(): Plugin[] {
     return plugins
   }
 
-  let entries: string[] = []
+  let entries: string[]
   try {
     entries = readdirSync(dir)
   } catch { return plugins }
@@ -292,7 +292,7 @@ export function installPlugin(opts: InstallOptions): InstallResult {
     }
   }
 
-  return { success: false, message: `Unknown install source: ${opts.from}` }
+  return { success: false, message: `Unknown install source: ${String(opts.from)}` }
 }
 
 export function uninstallPlugin(name: string): InstallResult {

@@ -20,7 +20,7 @@
 
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { execSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ function getDefaultReadOnlyPaths(): string[] {
 }
 
 function getTempPaths(): string[] {
-  const tmp = require('os').tmpdir()
+  const tmp = tmpdir()
   const cache = join(homedir(), '.ovolv999')
   return [tmp, cache, '/var/tmp', '/tmp']
 }

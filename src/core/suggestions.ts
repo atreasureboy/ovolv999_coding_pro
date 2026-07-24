@@ -189,7 +189,10 @@ export function detectTestSetup(cwd: string): { hasTests: boolean; framework: st
       const pkgPath = join(resolve(cwd), 'package.json')
       if (existsSync(pkgPath)) {
         try {
-          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+            devDependencies?: Record<string, unknown>
+            dependencies?: Record<string, unknown>
+          }
           if (pkg.devDependencies?.[framework] || pkg.dependencies?.[framework]) {
             return { hasTests: true, framework }
           }

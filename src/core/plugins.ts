@@ -121,7 +121,7 @@ export function validateManifest(data: unknown): PluginManifest | null {
 /** Parse a plugin.json file */
 export function parseManifest(raw: string): PluginManifest | null {
   try {
-    const parsed = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
     return validateManifest(parsed)
   } catch {
     return null

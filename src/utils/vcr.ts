@@ -21,7 +21,7 @@
  */
 
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ export class VCR {
   clearFixtures(): number {
     const fixtures = this.listFixtures()
     for (const f of fixtures) {
-      try { require('fs').unlinkSync(f) } catch { /* skip */ }
+      try { unlinkSync(f) } catch { /* skip */ }
     }
     return fixtures.length
   }

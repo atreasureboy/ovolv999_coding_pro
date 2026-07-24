@@ -109,7 +109,7 @@ export function getRawConfig(scope: 'global' | 'project', cwd?: string): Record<
 
   if (!existsSync(path)) return null
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
   } catch {
     return null
   }
