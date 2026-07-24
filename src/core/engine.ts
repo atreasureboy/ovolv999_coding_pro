@@ -283,19 +283,19 @@ export class ExecutionEngine {
     // (TaskPlanTool, /tasks) still work. New code should prefer the
     // store.
     this.taskGraphStore = new InMemoryTaskGraphStore()
-    // v0.3.1 (te_goal §五): emit TASK_GRAPH_CREATED on every store.create
-    // so /trace + EventStore can replay the graph lifecycle.
+    // v0.3.1 (te_goal §五 + §六.1 + §十一.14): wire TaskGraph events
+    // into BOTH the RunEventEmitter (for /trace + EventStore replay)
+    // and a hook that records node transitions on the ProgressMonitor
+    // (so node completions / failures count as progress for the stall
+    // detector). Single setEventSink call — TASK_GRAPH_CREATED is
+    // emitted on every store.create().
     this.taskGraphStore.setEventSink((evt) => {
-      this.eventEmitter.emit(evt as never)
-    })
-    // v0.3.1 (te_goal §六.1 + §十一.14): wire TaskGraph events into
-    // the ProgressMonitor so node completions / failures count as
-    // progress for the stall detector.
-    this.taskGraphStore.setEventSink((evt) => {
-      this.eventEmitter.emit(evt as never)
+      // The store emits TASK_GRAPH_CREATED which is declared on the
+      // RunEvent union. RunEventEmitter.emit accepts RunEvent directly
+      // so the original payload is accepted without a cast.
+      this.eventEmitter.emit(evt)
     })
     this.taskGraph = this.taskGraphStore.create('default')
-    this.progressMonitor.setGraphEventSink((t) => this.progressMonitor.recordTaskNodeTransition(t))
     // Wire every graph created (including future per-runId ones)
     // back into the same progress monitor.
     const wireGraph = (g: import('./runtime/taskGraph.js').TaskGraph) => {
@@ -380,40 +380,40 @@ export class ExecutionEngine {
     })
     this.modelRouter.setEventListener((evt) => {
       // Bridge Router events into RunEventEmitter for /trace + /why.
-      // RunEventEmitter.emit has its own type set; unknown event types
-      // are accepted at runtime (the typed union is enforced at the
-      // call site, not on emit). Cast is intentional and minimal.
+      // The router event payload is structurally a subtype of the
+      // RunEvent union variants; we map them field-by-field.
+      const e: import('./runtime/events.js').RunEventEmitter = this.eventEmitter
       switch (evt.type) {
         case 'MODEL_OVERRIDE_SET':
-          this.eventEmitter.emit({
+          e.emit({
             type: 'MODEL_OVERRIDE_SET',
             modelOrProfile: String(evt.payload?.modelOrProfile ?? ''),
-          } as never)
+          })
           break
         case 'MODEL_OVERRIDE_CLEARED':
-          this.eventEmitter.emit({ type: 'MODEL_OVERRIDE_CLEARED' } as never)
+          e.emit({ type: 'MODEL_OVERRIDE_CLEARED' })
           break
         case 'ROUTING_DECISION_APPLIED':
-          this.eventEmitter.emit({
+          e.emit({
             type: 'ROUTING_APPLIED',
             from: this.config.model,
             to: String(evt.payload?.selectedModel ?? ''),
             reasonCodes: [],
-          } as never)
+          })
           break
         case 'ROUTING_FALLBACK_APPLIED':
-          this.eventEmitter.emit({
+          e.emit({
             type: 'ROUTING_FALLBACK',
             from: String(evt.payload?.from ?? ''),
             to: String(evt.payload?.to ?? ''),
             error: String(evt.payload?.error ?? ''),
-          } as never)
+          })
           break
         case 'BUDGET_ALLOCATION_APPLIED':
-          this.eventEmitter.emit({
+          e.emit({
             type: 'BUDGET_ALLOCATION_APPLIED',
             allocation: evt.payload?.allocation ?? {},
-          } as never)
+          })
           break
       }
     })

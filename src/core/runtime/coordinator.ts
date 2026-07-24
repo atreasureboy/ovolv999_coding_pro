@@ -60,7 +60,6 @@ import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion } from './completionContract.js'
-import { interventionMessageForStall } from './progressMonitor.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
@@ -242,7 +241,6 @@ export class RuntimeCoordinator {
       try {
         const ws = this.deps.contextManager.getWorkingState()
         const tg = this.deps.taskGraph
-        const cm = this.deps.contextManager
         const router = this.deps.modelRouter
         const signals = collectRoutingSignals({
           userMessage,
@@ -439,7 +437,7 @@ export class RuntimeCoordinator {
                   type: 'CRITIC_INVOKED',
                   reason: modelClaimingCompletion ? 'model-claiming-completion' : 'risk-signal',
                   modelClaimingCompletion,
-                } as never)
+                })
               }
             }
             await this.deps.moduleManager.runIteration({
@@ -467,7 +465,9 @@ export class RuntimeCoordinator {
             // history just for this request, then drains the log so
             // they do NOT accumulate as user-visible history.
             const controlMessages = controlMessageLog.renderForProvider()
-            const { assistantText, finishReason, rawToolCalls, usage } =
+            // usage is consumed inside callLLM via the recordUsage
+            // callback (which feeds costTracker + modelRouter.recordCall).
+            const { assistantText, finishReason, rawToolCalls } =
               await this.callLLM(
                 effectivePrompt,
                 messages,
@@ -738,14 +738,24 @@ export class RuntimeCoordinator {
         budgetState: { remaining: 1, exceeded: false },
       })
       completionVerdict = v
-      this.deps.eventEmitter.emit({ type: 'COMPLETION_EVALUATED', verdict: v } as never)
+      // Serialize the verdict into the wire shape the event union
+      // expects (a plain object with optional arrays). The full typed
+      // verdict is preserved in the local `completionVerdict` for
+      // downstream consumers.
+      this.deps.eventEmitter.emit({
+        type: 'COMPLETION_EVALUATED',
+        verdict: serializeVerdict(v),
+      })
       if (v.status !== 'completed') {
         let detail: string
         if (v.status === 'blocked') detail = v.blockers.join('; ')
         else if (v.status === 'partial' || v.status === 'incomplete') detail = v.remaining.join('; ')
         else detail = v.reason
         renderer.warn(`Completion gate: ${v.status} — ${detail}`)
-        this.deps.eventEmitter.emit({ type: 'COMPLETION_REJECTED', verdict: v } as never)
+        this.deps.eventEmitter.emit({
+          type: 'COMPLETION_REJECTED',
+          verdict: serializeVerdict(v),
+        })
       }
     }
 
@@ -913,4 +923,34 @@ export class RuntimeCoordinator {
     }
   }
 
+}
+
+/**
+ * Serialize a CompletionVerdict to the wire shape the RunEvent
+ * union expects (a plain object with optional arrays). Consumers
+ * that need the full discriminated union read `completionVerdict`
+ * from the coordinator scope directly.
+ */
+function serializeVerdict(v: import('./completionContract.js').CompletionVerdict): {
+  status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[]
+} {
+  if (v.status === 'completed') {
+    return { status: v.status, evidence: v.evidence, reasons: v.residualRisks }
+  }
+  if (v.status === 'partial') {
+    return { status: v.status, remaining: v.remaining, evidence: v.evidence }
+  }
+  if (v.status === 'blocked') {
+    return { status: v.status, blockers: v.blockers }
+  }
+  if (v.status === 'failed') {
+    return { status: v.status, evidence: v.evidence }
+  }
+  if (v.status === 'cancelled') {
+    return { status: v.status, reasons: [v.reason] }
+  }
+  if (v.status === 'exhausted') {
+    return { status: v.status, reasons: [v.reason] }
+  }
+  return { status: v.status, remaining: v.remaining }
 }

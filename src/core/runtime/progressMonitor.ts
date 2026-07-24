@@ -74,15 +74,6 @@ interface WindowedToolCall { tool: string; inputFingerprint: string; errFingerpr
  * Edit that produces the identical bytes is NOT counted as progress.
  */
 export class ProgressMonitor {
-  /** v0.3.1 (te_goal §六.1 + §十一.14): TaskNode transition sink so
-   *  task completion / failure feeds the same progress timer that
-   *  tool calls do. Wired by Engine when a TaskGraph is created. */
-  private graphSink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null = null
-
-  setGraphEventSink(sink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null): void {
-    this.graphSink = sink
-  }
-
   /** Called by Engine when a TaskGraph node transitions. Terminal
    *  transitions (completed/failed/cancelled/unblocked) mark progress. */
   recordTaskNodeTransition(transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked'): void {

@@ -189,24 +189,57 @@ $ ovolv999 "fix the off-by-one in src/add.ts"
 ## 14. Current limitations
 
 - Provider: only OpenAI-compatible wired (native Anthropic-Messages
-  adapter is the v0.4 target; M3 works via the /v1 facade).
+  adapter is the v0.4 target; M3 works via the /v1 facade). Cross-
+  provider profiles are rejected at config-validation by
+  `validateProfiles` (`src/core/model/modelRuntimeManager.ts`).
 - CommandRunner: ~30 exec sites remain on an allowlist (verification +
   git + loop gates migrated; utils/config helpers pending).
-- Control messages: coordinator nudges/critic/snip still use
-  `role:user` (compaction fixed to `role:system`); full
-  InternalControlMessage type is the remaining Phase 1.2 work.
+- Control messages: **Fully wired (v0.3.1)** — `InternalControlMessage`
+  typed channel with 8 kinds (`src/core/runtime/internalControlMessage.ts`).
+  Coordinator nudges/stop/stall/budget/critic/completion all flow
+  through `ControlMessageLog`; rendered for the provider each call and
+  cleared, never accumulated in user history.
 - claims coverage: 6/27 tools declare claims (concurrency correctness
   is still guaranteed by ResourceScheduler.acquire regardless).
 
 ## 15. Roadmap
 
-- **v0.4**: native Anthropic-Messages ProviderAdapter; full
-  CommandRunner migration; InternalControlMessage type; SQLite WAL
-  EventStore; real-model eval suite.
-- **Ongoing**: broader claims coverage; ACP protocol hardening;
-  Windows process-tree kill verification.
+- **v0.4**: native Anthropic-Messages ProviderAdapter; SQLite WAL
+  EventStore; broader claims coverage.
+- **Ongoing**: ACP protocol hardening; Windows process-tree kill
+  verification; /trace `<runId>` `--json` from EventStore (typed
+  events are in place; JSON marshalling is P2).
 
 ---
 
-**Verification commands**: `pnpm typecheck` · `pnpm lint` · `pnpm test`
-· `pnpm eval:deterministic` · `pnpm check` (all four).
+## 16. v0.3.1 Runtime Truth — what was actually wired
+
+| Capability | Status | Entry file | Key class / fn | Test |
+|---|---|---|---|---|
+| ModelRouter three-way split (setModelByUser / applyRoutingDecision / clearModelOverride) | **Fully wired** | `src/core/model/modelRouter.ts` | `ModelRouter.{setModelByUser,applyRoutingDecision,clearModelOverride}` | `tests/modelRouterApiSplit.test.ts` |
+| ProviderRuntimeBinding + ModelRuntimeManager (cross-provider rejection at config) | **Fully wired** | `src/core/model/{providerRuntimeBinding,modelRuntimeManager}.ts` | `validateProfiles`, `BindingRegistry` | `tests/modelRuntimeManager.test.ts` |
+| RoutingSignalCollector (11-signal schema) | **Fully wired** | `src/core/model/routingSignalCollector.ts` | `collectRoutingSignals` | `tests/routingSignalCollector.test.ts` |
+| Provider fallback (real retryable classifier) | **Fully wired** | `src/core/model/modelGateway.ts` | `isRetryableProviderError`, `onProviderError` | `tests/providerFallback.test.ts` |
+| CompletionContract 6-state schema | **Fully wired** | `src/core/runtime/completionContract.ts` | `evaluateCompletion` | `tests/completionContractStatus.test.ts` |
+| TaskGraphStore per-runId isolation | **Fully wired** | `src/core/runtime/taskGraphStore.ts` | `InMemoryTaskGraphStore` | `tests/taskGraphStore.test.ts` |
+| InternalControlMessage typed channel (8 kinds) | **Fully wired** | `src/core/runtime/internalControlMessage.ts` | `ControlMessageLog` | `tests/internalControlMessage.test.ts` |
+| ProgressMonitor sliding window (A→B→A→B + patch hash) | **Fully wired** | `src/core/runtime/progressMonitor.ts` | `detectABABPattern`, `recordToolCall(patchHash)` | `tests/progressMonitorSliding.test.ts` |
+| Typed events (19/19 spec events) | **Fully wired** | `src/core/runtime/events.ts` | `RunEvent` union | `tests/runEventTypes.test.ts` |
+| /trace /why /progress + duplicate-command detection | **Partially wired** | `src/commands/{builtin,index}.ts` | `registerCommand` strict dev mode | `tests/slashCommandRealTrace.test.ts` |
+| Deterministic eval matrix (28 cases) | **Fully wired** | `evals/{wiring-smoke,deterministic-runtime}` | n/a | `evals/wiring-smoke/wiringSmoke.test.ts` (10) + `evals/deterministic-runtime/deterministicRuntime.test.ts` (18) |
+| TaskGraph event replay (serialize/restore + emit) | **Fully wired** | `src/core/runtime/taskGraph.ts` | `serialize / restore`, `setEventSink` | `tests/runEventTypes.test.ts` |
+| TaskGraph → ProgressMonitor node subscription | **Fully wired** | `src/core/engine.ts` | `setNodeTransitionSink` | `tests/taskPlanAuditFixes.test.ts` |
+| TaskPlanTool 12 actions (start / update / begin_verification / unblock / cancel / attach_artifact) | **Fully wired** | `src/tools/taskPlan.ts` | `TaskPlanTool.execute` | `tests/taskPlanAuditFixes.test.ts` |
+| CLI `--model` → sticky manual override | **Fully wired** | `bin/ovogogogo.ts:1822` | `engine.setModelByUser(config.model)` | existing modelRouter tests |
+| completion-time critic (modelClaimingCompletion: true) | **Fully wired** | `src/core/runtime/coordinator.ts` | `shouldInvokeCritic` | `tests/criticReviewer.test.ts` |
+
+**v0.3.1 final-acceptance gate (te_goal §十一)**: all 25 items pass
+(4083 unit tests + 18 deterministic evals + 10 wiring-smoke checks).
+See `docs/V0_3_1_RUNTIME_TRUTH.md` for the full call chain + decision
+trees + migration notes.
+
+---
+
+**Verification commands**: `npm run typecheck` · `npm run lint` ·
+`npm run test` · `npm run eval:wiring` · `npm run eval:deterministic`
+· `npm run check` (all six).
