@@ -42,6 +42,32 @@ export type RunEvent =
   | { type: 'RUN_COMPLETED'; result: TurnResult }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }
+  // v0.3.1 (te_goal §三.1.1 / §八) — explicit routing events so
+  // /trace + /why + EventStore can replay them faithfully instead of
+  // reconstructing intent from generic MODEL_CHANGED.
+  | { type: 'MODEL_OVERRIDE_SET'; modelOrProfile: string }
+  | { type: 'MODEL_OVERRIDE_CLEARED' }
+  | { type: 'ROUTING_DECIDED'; selectedModel: string; reasonCodes: string[]; estimatedComplexity: number }
+  | { type: 'ROUTING_APPLIED'; from: string; to: string; reasonCodes: string[] }
+  | { type: 'ROUTING_FALLBACK'; from: string; to: string; error: string }
+  | { type: 'BUDGET_ALLOCATION_APPLIED'; allocation: { maxInputTokens?: number; maxOutputTokens?: number } }
+  | { type: 'MODEL_CALL_RECORDED'; profileId: string; ok: boolean; latencyMs: number; failureReason?: string }
+  // v0.3.1 (te_goal §五 + §六 + §四): TaskGraph + critic + completion
+  // events so /trace + EventStore can replay the full decision timeline.
+  | { type: 'TASK_GRAPH_CREATED'; runId: string }
+  | { type: 'TASK_NODE_ADDED'; nodeId: string; title: string; runId: string }
+  | { type: 'TASK_NODE_STARTED'; nodeId: string; runId: string }
+  | { type: 'TASK_NODE_VERIFYING'; nodeId: string; runId: string }
+  | { type: 'TASK_NODE_COMPLETED'; nodeId: string; satisfied: string[]; runId: string }
+  | { type: 'TASK_NODE_FAILED'; nodeId: string; reason: string; runId: string }
+  | { type: 'TASK_NODE_BLOCKED'; nodeId: string; reason: string; runId: string }
+  | { type: 'PROGRESS_RECORDED'; kind: 'progress' | 'stall' | 'replan' }
+  | { type: 'REPLAN_REQUESTED'; reason: string }
+  | { type: 'CRITIC_INVOKED'; reason: string; modelClaimingCompletion: boolean }
+  | { type: 'CRITIC_COMPLETED'; verdict: string; problems: string[] }
+  | { type: 'COMPLETION_EVALUATED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
+  | { type: 'COMPLETION_REJECTED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
+  | { type: 'REVIEW_COMPLETED'; verdict: string; findings: string[] }
 
 export type RunEventType = RunEvent['type']
 

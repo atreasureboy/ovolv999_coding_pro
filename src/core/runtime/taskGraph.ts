@@ -58,8 +58,56 @@ export interface TaskGraphSnapshot {
 
 const TERMINAL: ReadonlySet<TaskNodeStatus> = new Set(['completed', 'failed', 'cancelled'])
 
+/** v0.3.1: optional event-emitter sink. When set, every graph mutation
+ *  emits a typed RunEvent so /trace + EventStore can replay history. */
+type GraphEventSink = (event: {
+  type:
+    | 'TASK_GRAPH_CREATED'
+    | 'TASK_NODE_ADDED'
+    | 'TASK_NODE_STARTED'
+    | 'TASK_NODE_VERIFYING'
+    | 'TASK_NODE_COMPLETED'
+    | 'TASK_NODE_FAILED'
+    | 'TASK_NODE_BLOCKED'
+  nodeId?: string
+  title?: string
+  reason?: string
+  satisfied?: string[]
+  runId?: string
+}) => void
+
 export class TaskGraph {
   private readonly nodes = new Map<string, TaskNode>()
+  private runId = 'default'
+  private sink: GraphEventSink | null = null
+
+  setRunId(runId: string): void {
+    this.runId = runId
+  }
+
+  setEventSink(sink: GraphEventSink | null): void {
+    this.sink = sink
+  }
+
+  private emit(event: Parameters<GraphEventSink>[0]): void {
+    this.sink?.(event)
+    // v0.3.1 (te_goal §六.1 + §十一.14): every node transition also
+    // drives the ProgressMonitor so stall detection picks up TaskGraph
+    // progress. The type-narrowing on the union makes the mapping
+    // exhaustive.
+    if (event.type === 'TASK_NODE_STARTED') this.nodeTransitionSink?.('started')
+    else if (event.type === 'TASK_NODE_VERIFYING') this.nodeTransitionSink?.('verifying')
+    else if (event.type === 'TASK_NODE_COMPLETED') this.nodeTransitionSink?.('completed')
+    else if (event.type === 'TASK_NODE_FAILED') this.nodeTransitionSink?.('failed')
+    else if (event.type === 'TASK_NODE_BLOCKED') this.nodeTransitionSink?.('blocked')
+  }
+
+  /** v0.3.1 (te_goal §六.1): sink for per-node transitions so the
+   *  ProgressMonitor sees TaskGraph progress. Wired by Engine. */
+  private nodeTransitionSink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null = null
+  setNodeTransitionSink(sink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null): void {
+    this.nodeTransitionSink = sink
+  }
 
   has(id: string): boolean {
     return this.nodes.has(id)
@@ -82,7 +130,7 @@ export class TaskGraph {
    * not exist yet — it may be added later — but a CYCLE is rejected
    * immediately since it's a planner bug that can never resolve).
    */
-  addNode(node: Omit<TaskNode, 'status' | 'artifacts' | 'attempts'> & Partial<Pick<TaskNode, 'status' | 'artifacts' | 'attempts'>>): TaskNode {
+  addNode(node: Omit<TaskNode, 'status' | 'artifacts' | 'attempts' | 'acceptanceCriteria'> & Partial<Pick<TaskNode, 'status' | 'artifacts' | 'attempts' | 'acceptanceCriteria'>>): TaskNode {
     if (this.nodes.has(node.id)) {
       throw new Error(`TaskGraph: duplicate node id "${node.id}"`)
     }
@@ -94,6 +142,7 @@ export class TaskGraph {
       status: node.status ?? 'pending',
       artifacts: node.artifacts ?? [],
       attempts: node.attempts ?? 0,
+      acceptanceCriteria: node.acceptanceCriteria ?? [],
     }
     this.nodes.set(node.id, full)
     // Eagerly check the node doesn't close a cycle through existing nodes.
@@ -101,6 +150,7 @@ export class TaskGraph {
       this.nodes.delete(node.id)
       throw new Error(`TaskGraph: adding "${node.id}" creates a dependency cycle`)
     }
+    this.emit({ type: 'TASK_NODE_ADDED', nodeId: full.id, title: full.title, runId: this.runId })
     return full
   }
 
@@ -135,11 +185,13 @@ export class TaskGraph {
     }
     n.status = 'running'
     n.attempts++
+    this.emit({ type: 'TASK_NODE_STARTED', nodeId: id, runId: this.runId })
   }
 
   markVerifying(id: string): void {
     const n = this.require(id)
     n.status = 'verifying'
+    this.emit({ type: 'TASK_NODE_VERIFYING', nodeId: id, runId: this.runId })
   }
 
   /**
@@ -154,22 +206,45 @@ export class TaskGraph {
     if (unmet.length > 0) {
       n.status = 'failed'
       n.failReason = `acceptance criteria unmet: ${unmet.join(', ')}`
+      this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason: n.failReason, runId: this.runId })
       return
     }
     n.status = 'completed'
     n.artifacts = [...n.artifacts, ...artifacts]
+    this.emit({ type: 'TASK_NODE_COMPLETED', nodeId: id, satisfied: satisfiedCriteria, runId: this.runId })
   }
 
   fail(id: string, reason: string): void {
     const n = this.require(id)
     n.status = 'failed'
     n.failReason = reason
+    this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason, runId: this.runId })
   }
 
   block(id: string, reason: string): void {
     const n = this.require(id)
     n.status = 'blocked'
     n.blockReason = reason
+    this.emit({ type: 'TASK_NODE_BLOCKED', nodeId: id, reason, runId: this.runId })
+  }
+
+  /** v0.3.1 (te_goal §五): transition a blocked node back to pending
+   *  (or ready if deps already satisfied) so it can be retried. */
+  unblock(id: string): void {
+    const n = this.require(id)
+    if (n.status !== 'blocked') {
+      throw new Error(`TaskGraph: can only unblock blocked nodes, "${id}" is ${n.status}`)
+    }
+    n.status = this.depsCompleted(n) ? 'ready' : 'pending'
+    n.blockReason = undefined
+    this.emit({ type: 'TASK_NODE_ADDED', nodeId: id, title: n.title, runId: this.runId })
+  }
+
+  /** v0.3.1 (te_goal §五): attach a named artifact to a node. The
+   *  artifact list is appended to, not replaced. */
+  attachArtifact(id: string, artifact: string): void {
+    const n = this.require(id)
+    if (!n.artifacts.includes(artifact)) n.artifacts.push(artifact)
   }
 
   /** Locally retry a failed node (eight_goal §五 — 失败节点局部重试). */
@@ -189,9 +264,11 @@ export class TaskGraph {
     n.blockReason = undefined
   }
 
-  cancel(id: string): void {
+  cancel(id: string, reason?: string): void {
     const n = this.require(id)
     n.status = 'cancelled'
+    if (reason) n.failReason = reason
+    this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason: reason ?? 'cancelled', runId: this.runId })
   }
 
   /** Every node is in a terminal state (the graph is finished). */

@@ -59,13 +59,38 @@ export const DEFAULT_THRESHOLDS: StallThresholds = {
 }
 
 interface ToolCallKey { tool: string; inputFingerprint: string }
+interface WindowedToolCall { tool: string; inputFingerprint: string; errFingerprint: string | null; patchHash: string | null; ts: number }
 
 /**
  * Records execution signals and produces snapshots + stall verdicts.
  * Pure given the recorded state — no I/O, no timers internally (the
  * caller drives iteration count + elapsed-minutes).
+ *
+ * v0.3.1 (te_goal §六.2): the legacy `lastToolCall` + `lastErrorFingerprint`
+ * detectors are augmented with a RingBuffer of recent calls so the
+ * detector can spot A→B→A→B cycles (a single alternating pattern with
+ * A≠B) and the same error repeated with different parameters. The
+ * patchHash field also tracks per-file content hashes so re-running an
+ * Edit that produces the identical bytes is NOT counted as progress.
  */
 export class ProgressMonitor {
+  /** v0.3.1 (te_goal §六.1 + §十一.14): TaskNode transition sink so
+   *  task completion / failure feeds the same progress timer that
+   *  tool calls do. Wired by Engine when a TaskGraph is created. */
+  private graphSink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null = null
+
+  setGraphEventSink(sink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null): void {
+    this.graphSink = sink
+  }
+
+  /** Called by Engine when a TaskGraph node transitions. Terminal
+   *  transitions (completed/failed/cancelled/unblocked) mark progress. */
+  recordTaskNodeTransition(transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked'): void {
+    if (transition === 'completed' || transition === 'failed' || transition === 'cancelled' || transition === 'unblocked') {
+      this.markProgress()
+    }
+  }
+
   private changedFiles = new Set<string>()
   private artifacts = new Set<string>()
   private remainingAcceptance: string[] = []
@@ -80,6 +105,13 @@ export class ProgressMonitor {
   private lastMeaningfulProgressMin = 0
   /** Set by internal detectors (changed file etc.); flushed to minutes on snapshot. */
   private pendingProgress = false
+  /** v0.3.1: sliding-window fingerprint detector. Length=8 covers A→B→A→B
+   *  patterns with margin; older entries are evicted FIFO. */
+  private readonly window: WindowedToolCall[] = []
+  private static readonly WINDOW_SIZE = 8
+  /** per-file content-hash → set of hashes seen. Used to detect when a
+   *  re-edit produces the SAME bytes (no progress) vs. new bytes. */
+  private readonly patchHashes = new Map<string, Set<string>>()
 
   constructor(private readonly thresholds: StallThresholds = DEFAULT_THRESHOLDS) {}
 
@@ -102,8 +134,17 @@ export class ProgressMonitor {
   /**
    * Record a tool call result. Detects changed files, repeated calls,
    * and consecutive identical errors — the inputs to stall detection.
+   *
+   * v0.3.1: accepts an optional `patchHash` argument. When provided
+   * and the bytes for a given file_path haven't changed, the call
+   * does NOT mark progress even if the tool reported success.
    */
-  recordToolCall(tool: string, input: Record<string, unknown>, result: { isError: boolean; content: string }): void {
+  recordToolCall(
+    tool: string,
+    input: Record<string, unknown>,
+    result: { isError: boolean; content: string },
+    patchHash?: string,
+  ): void {
     const fp = fingerprint(input)
     const key: ToolCallKey = { tool, inputFingerprint: fp }
     if (this.lastToolCall && this.lastToolCall.tool === tool && this.lastToolCall.inputFingerprint === fp) {
@@ -113,8 +154,12 @@ export class ProgressMonitor {
     }
     this.lastToolCall = key
 
+    // v0.3.1: error fingerprint uses only the message prefix (first
+    // 200 chars) so the same failure with slightly different args
+    // still counts as "same error" (root-cause pattern).
+    let errFp: string | null = null
     if (result.isError) {
-      const errFp = fingerprint({ msg: result.content.slice(0, 200) })
+      errFp = fingerprint({ msg: result.content.slice(0, 200) })
       if (errFp === this.lastErrorFingerprint) this.consecutiveErrors++
       else { this.consecutiveErrors = 1; this.lastErrorFingerprint = errFp }
     } else {
@@ -122,14 +167,54 @@ export class ProgressMonitor {
       this.lastErrorFingerprint = null
     }
 
-    // A successful Write/Edit changes a real file → meaningful progress.
+    // A successful Write/Edit changes a real file → meaningful progress,
+    // BUT only if the bytes are different from any prior edit to the
+    // same file (te_goal §六.2: "同一文件继续产生新的 patch hash
+    // 应被视为新进展").
     if (!result.isError && (tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit')) {
       const path = typeof input.file_path === 'string' ? input.file_path : ''
-      if (path && !this.changedFiles.has(path)) {
-        this.changedFiles.add(path)
-        this.markProgress()
+      if (path) {
+        if (!this.changedFiles.has(path)) {
+          this.changedFiles.add(path)
+          // Record the first hash so a later same-hash re-edit is
+          // recognised as identical and does NOT mark progress.
+          if (patchHash) {
+            const seen = new Set<string>([patchHash])
+            this.patchHashes.set(path, seen)
+          }
+          this.markProgress()
+        } else if (patchHash) {
+          const seen = this.patchHashes.get(path) ?? new Set<string>()
+          if (!seen.has(patchHash)) {
+            seen.add(patchHash)
+            this.patchHashes.set(path, seen)
+            this.markProgress()
+          }
+          // Same hash → no progress (the edit is byte-identical to a
+          // previous one — common when the model "redoes" the same fix).
+        }
       }
     }
+
+    // Maintain the sliding window. Push then evict.
+    this.window.push({ tool, inputFingerprint: fp, errFingerprint: errFp, patchHash: patchHash ?? null, ts: Date.now() })
+    while (this.window.length > ProgressMonitor.WINDOW_SIZE) this.window.shift()
+  }
+
+  /**
+   * v0.3.1: record multiple verdict fingerprints from a sub-agent
+   * (e.g. N agents that each say "this approach failed"). When all
+   * agree, the run is making no progress.
+   */
+  recordMultiAgentVerdict(fingerprints: string[]): boolean {
+    if (fingerprints.length < 2) return false
+    const first = fingerprints[0]
+    if (fingerprints.every((f) => f === first)) {
+      // All agents agree on the same failure → treat as a hard signal
+      this.consecutiveErrors = Math.max(this.consecutiveErrors, 1) + 1
+      return true
+    }
+    return false
   }
 
   /**
@@ -175,6 +260,10 @@ export class ProgressMonitor {
   /**
    * Decide whether the run is stalled. Caller passes elapsed minutes
    * + remaining budget fraction. Returns a verdict the loop acts on.
+   *
+   * v0.3.1: in addition to time-based and consecutive-error detection,
+   * this recognises A→B→A→B tool-call patterns and "same error
+   * different params" patterns via the windowed detector.
    */
   detectStall(elapsedMinutes: number, budgetRemainingFraction = 1): StallVerdict {
     const t = this.thresholds
@@ -182,6 +271,9 @@ export class ProgressMonitor {
 
     if (this.consecutiveErrors >= t.repeatedErrorLimit) {
       return { kind: 'repeated-failure', reason: `${this.consecutiveErrors} consecutive identical errors`, action: 'root-cause-subtask' }
+    }
+    if (this.detectABABPattern()) {
+      return { kind: 'repeated-failure', reason: 'A→B→A→B tool-call pattern detected (alternating repeat)', action: 'root-cause-subtask' }
     }
     if (budgetRemainingFraction < t.budgetPressureFraction) {
       return { kind: 'budget-pressure', reason: `budget remaining ${Math.round(budgetRemainingFraction * 100)}%`, action: 'narrow-scope' }
@@ -196,6 +288,27 @@ export class ProgressMonitor {
       return { kind: 'soft-stall', reason: `${this.repeatedToolCalls} repeated identical tool calls`, action: 'summarize-and-replan' }
     }
     return { kind: 'progressing' }
+  }
+
+  /**
+   * v0.3.1: A→B→A→B detector. The window holds tool fingerprints in
+   * time order. We look for two distinct fingerprints A and B such
+   * that the last >=4 entries follow A,B,A,B (or B,A,B,A). A and B
+   * must differ; the same call repeated 4× in a row is caught by
+   * `repeatedToolCalls` instead.
+   */
+  private detectABABPattern(): boolean {
+    if (this.window.length < 4) return false
+    const last4 = this.window.slice(-4)
+    const a = last4[0]
+    const b = last4[1]
+    if (a.inputFingerprint === b.inputFingerprint) return false // same-tool, not alternating
+    const expect1 = [a.inputFingerprint, b.inputFingerprint, a.inputFingerprint, b.inputFingerprint]
+    const expect2 = [b.inputFingerprint, a.inputFingerprint, b.inputFingerprint, a.inputFingerprint]
+    const got = last4.map((w) => w.inputFingerprint)
+    if (expect1.every((fp, i) => fp === got[i])) return true
+    if (expect2.every((fp, i) => fp === got[i])) return true
+    return false
   }
 }
 

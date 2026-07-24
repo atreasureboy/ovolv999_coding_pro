@@ -106,37 +106,69 @@ describe('interventionMessageForStall (Phase 4 active intervention)', () => {
 describe('CompletionContract (Phase 4)', () => {
   const base = {
     taskKind: 'mutation' as const,
-    acceptanceCriteria: ['tests pass', 'lint clean'],
-    satisfiedCriteria: [] as string[],
-    verificationExecuted: false,
-    verificationPassed: false,
-    runningChildren: 0,
-    unhandledFailures: 0,
+    modelStopped: true,
+    acceptanceCriteria: [
+      { id: 'a', description: 'tests pass', satisfied: true },
+      { id: 'b', description: 'lint clean', satisfied: true },
+    ],
+    verification: { executed: false, passed: false, failed: [] as string[] },
+    activeWorkers: [] as Array<{ id: string; status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' }>,
+    unresolvedBlockers: [] as string[],
     changedFiles: [] as string[],
+    reviewerFindings: [] as string[],
+    budgetState: { remaining: 1, exceeded: false },
   }
 
   it('blocks completion when a child worker is still running', () => {
-    const v = evaluateCompletion({ ...base, satisfiedCriteria: base.acceptanceCriteria, verificationExecuted: true, verificationPassed: true, changedFiles: ['a.ts'], runningChildren: 1 })
+    const v = evaluateCompletion({
+      ...base,
+      verification: { executed: true, passed: true, failed: [] },
+      changedFiles: ['a.ts'],
+      activeWorkers: [{ id: 'w1', status: 'running' }],
+    })
     expect(v.status).toBe('blocked')
   })
 
   it('blocks completion when verification ran but failed', () => {
-    const v = evaluateCompletion({ ...base, satisfiedCriteria: base.acceptanceCriteria, verificationExecuted: true, verificationPassed: false, changedFiles: ['a.ts'] })
+    const v = evaluateCompletion({
+      ...base,
+      verification: { executed: true, passed: false, failed: ['x'] },
+      changedFiles: ['a.ts'],
+    })
     expect(v.status).toBe('blocked')
   })
 
   it('completes only when all criteria met + verification passed', () => {
-    const v = evaluateCompletion({ ...base, satisfiedCriteria: base.acceptanceCriteria, verificationExecuted: true, verificationPassed: true, changedFiles: ['a.ts'] })
+    const v = evaluateCompletion({
+      ...base,
+      verification: { executed: true, passed: true, failed: [] },
+      changedFiles: ['a.ts'],
+    })
     expect(v.status).toBe('completed')
   })
 
   it('reports partial when some criteria remain but real changes exist', () => {
-    const v = evaluateCompletion({ ...base, satisfiedCriteria: ['tests pass'], verificationExecuted: true, verificationPassed: true, changedFiles: ['a.ts'] })
+    const v = evaluateCompletion({
+      ...base,
+      acceptanceCriteria: [
+        { id: 'a', description: 'tests pass', satisfied: true },
+        { id: 'b', description: 'lint clean', satisfied: false },
+      ],
+      verification: { executed: true, passed: true, failed: [] },
+      changedFiles: ['a.ts'],
+    })
     expect(v.status).toBe('partial')
   })
 
   it('reports incomplete when nothing changed and criteria remain', () => {
-    const v = evaluateCompletion({ ...base })
+    const v = evaluateCompletion({
+      ...base,
+      acceptanceCriteria: [
+        { id: 'a', description: 'tests pass', satisfied: false },
+        { id: 'b', description: 'lint clean', satisfied: false },
+      ],
+      changedFiles: [],
+    })
     expect(v.status).toBe('incomplete')
   })
 

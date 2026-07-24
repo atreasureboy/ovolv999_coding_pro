@@ -1819,6 +1819,20 @@ async function main(): Promise<void> {
     ? (inkRendererInstance as unknown as Renderer)
     : renderer)
 
+  // v0.3.1 (te_goal §三.1.1): an explicit --model/-m on the CLI must
+  // be recorded as a STICKY manual override. Without this call, the
+  // first auto-route would override the user's CLI choice — silently
+  // violating the documented "--model is highest priority" invariant.
+  // The same call also funnels through Engine.setModelByUser, which
+  // validates the profile's provider matches the active transport.
+  if (projectConfig?.model) {
+    try {
+      engine.setModelByUser(config.model)
+    } catch (err) {
+      renderer.warn(`Warning: --model could not be applied: ${(err as Error).message}`)
+    }
+  }
+
   // Cleanup on any exit path — must be IDEMPOTENT (signal handlers may fire
   // alongside the natural `exit` event). Order matters: save session first
   // (sync fs), then dispose engine (kills any background tasks spawned

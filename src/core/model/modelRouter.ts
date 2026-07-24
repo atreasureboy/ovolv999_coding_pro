@@ -65,6 +65,25 @@ export interface RoutingInput {
   role?: string
   /** True if the goal looks like architecture / root-cause / decision work. */
   needsArchitecture?: boolean
+  // ── v0.3.1 (te_goal §三.1.3) expanded signals ────────────────────
+  /** Per-profile health snapshot (failRate + avg latency). */
+  providerHealth?: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
+  /** Number of times routing fell back this session. */
+  previousRoutingFailures?: number
+  /** What kind of tools the model is likely to call. */
+  expectedToolRequirement?: 'none' | 'read-only' | 'mixed' | 'side-effect'
+  /** True if the change affects an exported / public surface. */
+  affectsPublicInterface?: boolean
+  /** True if the change crosses module boundaries. */
+  isCrossModule?: boolean
+  /** True if the change modifies configuration / schema. */
+  isConfigChange?: boolean
+  /** True if the goal requires root-cause analysis. */
+  requiresRootCause?: boolean
+  /** Estimated number of files the change will touch. */
+  estimatedImpactFiles?: number
+  /** Total TaskGraph node count for the run. */
+  taskGraphScale?: number
 }
 
 export interface BudgetAllocation {
@@ -99,6 +118,30 @@ interface ProfileHealth {
   ewmaLatency: number
 }
 
+/**
+ * v0.3.1 (te_goal §三.1.1): narrowed router sink. Three distinct
+ * call paths replace the legacy single setManualOverride(s) / raw
+ * route() path so auto-routing can never accidentally pin a manual
+ * override, and the manual user path always wins.
+ */
+export interface ModelSwitchSink {
+  setModelByUser(modelOrProfile: string): void
+  applyRoutingDecision(model: string, budgetAllocation?: BudgetAllocation): void
+  clearModelOverride(): void
+}
+
+export type RouterEventType =
+  | 'MODEL_OVERRIDE_SET'
+  | 'MODEL_OVERRIDE_CLEARED'
+  | 'ROUTING_DECISION_APPLIED'
+  | 'ROUTING_FALLBACK_APPLIED'
+  | 'BUDGET_ALLOCATION_APPLIED'
+
+export type RouterEventListener = (event: {
+  type: RouterEventType
+  payload?: Record<string, unknown>
+}) => void
+
 const DEFAULT_LONG_CONTEXT_THRESHOLD = 0.8
 const DEFAULT_FAILURE_ESCALATION = 2
 
@@ -109,6 +152,13 @@ export class ModelRouter {
   private lastDecision: RoutingDecision | null = null
   /** Sticky manual override (highest priority). */
   private manualOverride: string | null = null
+  /** Optional sink that performs the actual engine switch. */
+  private sink: ModelSwitchSink | null = null
+  /** Optional event listener (RunEventEmitter.emit wrapping). */
+  private listener: RouterEventListener | null = null
+  /** Last applied (post-sink) model + allocation; used for dedup so
+   *  re-applying the same routing decision doesn't spam events. */
+  private lastApplied: { model: string; allocation?: BudgetAllocation } | null = null
 
   constructor(profiles: ModelProfile[], routing: RoutingConfig = { enabled: true }) {
     this.profiles = profiles.length > 0 ? profiles : []
@@ -119,7 +169,90 @@ export class ModelRouter {
     }
   }
 
-  /** Manual override (from --model / /model). Null clears it. */
+  /**
+   * Wire the actual model-switch sink. The router NEVER mutates the
+   * engine's model directly — it asks the sink to do it. This keeps
+   * Engine the single owner of `config.model` and the single emitter
+   * of `MODEL_CHANGED`, while letting the router own the decision
+   * (manual vs auto) and emit its own structured events.
+   */
+  setSink(sink: ModelSwitchSink): void {
+    this.sink = sink
+  }
+
+  /** Wire a structured event listener (typically RunEventEmitter.emit). */
+  setEventListener(listener: RouterEventListener | null): void {
+    this.listener = listener
+  }
+
+  private emit(type: RouterEventType, payload?: Record<string, unknown>): void {
+    this.listener?.({ type, payload })
+  }
+
+  /**
+   * v0.3.1 (te_goal §三.1.1): sticky manual override entry. Accepts
+   * either a profile id (`profile-1`) or a model string (`gpt-4o`).
+   * The sink is the only path that performs the model switch so the
+   * router can never bypass Engine.setModelByUser.
+   */
+  setModelByUser(modelOrProfile: string): void {
+    const trimmed = modelOrProfile?.trim()
+    if (!trimmed) throw new Error('ModelRouter.setModelByUser: empty model/profile id')
+    // Best-effort: resolve to a profile id so the same string can later
+    // be displayed in /why and /route.
+    const profile = this.profiles.find((p) => p.id === trimmed || p.model === trimmed)
+    this.manualOverride = profile ? profile.model : trimmed
+    this.emit('MODEL_OVERRIDE_SET', { modelOrProfile: trimmed, profileId: profile?.id })
+    this.sink?.setModelByUser(profile?.model ?? trimmed)
+  }
+
+  /**
+   * v0.3.1 (te_goal §三.1.1): auto-routing entry. NEVER sets the
+   * manual override. Optionally applies a budget allocation emitted
+   * alongside the chosen model.
+   */
+  applyRoutingDecision(model: string, budgetAllocation?: BudgetAllocation): void {
+    const trimmed = model?.trim()
+    if (!trimmed) return
+    // No-op when re-applying the same decision — keeps the event stream
+    // quiet when the router is called repeatedly with no signal change.
+    if (this.lastApplied
+      && this.lastApplied.model === trimmed
+      && JSON.stringify(this.lastApplied.allocation ?? {}) === JSON.stringify(budgetAllocation ?? {})) {
+      return
+    }
+    this.lastApplied = { model: trimmed, allocation: budgetAllocation }
+    this.emit('ROUTING_DECISION_APPLIED', { selectedModel: trimmed })
+    this.sink?.applyRoutingDecision(trimmed, budgetAllocation)
+    if (budgetAllocation && (budgetAllocation.maxOutputTokens !== undefined || budgetAllocation.maxInputTokens !== undefined)) {
+      this.emit('BUDGET_ALLOCATION_APPLIED', { allocation: budgetAllocation })
+    }
+  }
+
+  /** v0.3.1 (te_goal §三.1.1): restore auto-routing after `/model auto`. */
+  clearModelOverride(): void {
+    if (this.manualOverride === null) return
+    this.manualOverride = null
+    this.emit('MODEL_OVERRIDE_CLEARED')
+    this.sink?.clearModelOverride()
+  }
+
+  /**
+   * v0.3.1 (te_goal §三.1.4): emit a structured fallback event when
+   * the router advances to the next profile in the chain. Engine
+   * drives this; the router just logs.
+   */
+  emitFallback(from: string, to: string, error: string): void {
+    this.emit('ROUTING_FALLBACK_APPLIED', { from, to, error })
+  }
+
+  /**
+   * Legacy lower-level API (kept for tests + back-compat). Sets the
+   * sticky override flag WITHOUT emitting events or calling the sink.
+   * Production callers should use setModelByUser() instead. This
+   * method is intentionally a no-op for events to avoid recursion
+   * when Engine.setModelByUser → router.setManualOverride → emit/sink.
+   */
   setManualOverride(model: string | null): void {
     this.manualOverride = model?.trim() || null
   }
@@ -157,6 +290,11 @@ export class ModelRouter {
    * The single decision function. Pure given input + current health —
    * no side effects except caching lastDecision. Callers apply the
    * selected model and emit a routing event.
+   *
+   * v0.3.1: even when a manual override is set we still refresh
+   * `lastDecision` so /route and /why can report fresh observations
+   * (signals, fallback chain, complexity) during manual turns. Only
+   * the side-effect of switching the model is skipped.
    */
   route(input: RoutingInput): RoutingDecision {
     const available = this.profiles.filter((p) => p.available)
@@ -221,6 +359,9 @@ export class ModelRouter {
     const chain = this.lastDecision?.fallbackChain ?? []
     const idx = chain.indexOf(failedModel)
     const next = idx >= 0 ? chain[idx + 1] : chain[0]
+    if (next) {
+      this.emitFallback(failedModel, next, 'provider-failure')
+    }
     return next ?? null
   }
 
@@ -274,15 +415,68 @@ export class ModelRouter {
     // Tool reliability matters for any tool-using turn.
     score += cap.toolCalling * 0.15
 
+    // v0.3.1 (te_goal §三.1.3): side-effect tool goals require high
+    // tool-calling reliability; the cheap model is acceptable for
+    // read-only/none categories but penalised for side-effect work.
+    const toolReq = input.expectedToolRequirement ?? 'mixed'
+    if (toolReq === 'side-effect') {
+      score += cap.toolCalling * 0.25
+      reasonCodes.push('side-effect-tools')
+    } else if (toolReq === 'read-only' || toolReq === 'none') {
+      // No tool pressure — cheap model is acceptable.
+    }
+
+    // Architecture / root-cause / config / cross-module / public-
+    // interface signals bump the reasoning weight slightly so the
+    // strong model is preferred for non-trivial engineering work.
+    const reasoningBonus = (
+      (input.needsArchitecture ? 0.15 : 0)
+      + (input.requiresRootCause ? 0.1 : 0)
+      + (input.isConfigChange ? 0.05 : 0)
+      + (input.isCrossModule ? 0.05 : 0)
+      + (input.affectsPublicInterface ? 0.05 : 0)
+    )
+    if (reasoningBonus > 0) {
+      score += cap.reasoning * reasoningBonus
+      reasonCodes.push('architecture-signal')
+    }
+
     // Role fit for subtask routing.
     if (input.role && p.roles.includes(input.role)) { score += 0.25; reasonCodes.push(`role:${input.role}`) }
 
-    // Health penalty: failing / slow profiles sink.
+    // Large task graphs prefer the long-context profile.
+    if ((input.taskGraphScale ?? 0) > 5 && cap.contextWindow >= 200_000) {
+      score += 0.1
+      reasonCodes.push('task-graph-large')
+    }
+
+    // Health penalty: failing / slow profiles sink. Uses the
+    // configurable failureEscalationThreshold (te_goal §三.1.4) —
+    // not the hardcoded "calls >= 3" rule.
     const h = this.health.get(p.id)
-    if (h && h.calls >= 3) {
+    const threshold = this.routing.failureEscalationThreshold ?? DEFAULT_FAILURE_ESCALATION
+    if (h && h.calls >= threshold) {
       const failRate = h.failures / h.calls
       score -= failRate * 0.6
       if (failRate > 0.3) reasonCodes.push(`unhealthy:${p.id}`)
+    }
+
+    // Per-profile health from the collector can also penalise a
+    // profile even if local recordCall has not run yet.
+    if (input.providerHealth) {
+      const remote = input.providerHealth.find((h) => h.profileId === p.id)
+      if (remote && remote.failRate > 0.3) {
+        score -= remote.failRate * 0.4
+        reasonCodes.push(`health-from-collector:${p.id}`)
+      }
+    }
+
+    // Previous routing failures amplify the health penalty so the
+    // router favours profiles that have actually succeeded recently.
+    const prevFailures = input.previousRoutingFailures ?? 0
+    if (prevFailures > 0) {
+      score -= 0.05 * prevFailures
+      reasonCodes.push('previous-routing-failures')
     }
 
     return score

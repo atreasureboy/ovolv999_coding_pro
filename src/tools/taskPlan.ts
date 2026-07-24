@@ -5,7 +5,8 @@
  * nodes → the CompletionContract gate then refuses 'completed' until
  * every node is terminal.
  *
- * Actions: add | complete | fail | block | retry | list
+ * Actions: add | start | update | begin_verification | complete |
+ *          fail | block | unblock | retry | cancel | attach_artifact | list
  * The tool is a thin wrapper over the TaskGraph engine (src/core/runtime/
  * taskGraph.ts) — all invariants (dep resolution, acceptance gate,
  * cycle rejection, retry caps) live there.
@@ -25,20 +26,29 @@ export class TaskPlanTool implements Tool {
       description:
         'Decompose a non-trivial task into a dependency-ordered plan and track each piece to completion. Use for medium/large tasks only — do NOT create a graph for trivial one-step work. ' +
         'The runtime refuses to mark the overall task completed while any node is unfinished or failed. ' +
-        'Actions: "add" (create a node), "complete" (mark done — acceptance criteria must be satisfied), "fail", "block", "retry", "list".',
+        'Actions: "add" (create a node), "start" (pending→running), "update" (edit fields), "begin_verification", "complete" (acceptance gate), "fail", "block", "unblock", "retry", "cancel", "attach_artifact", "list".',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['add', 'complete', 'fail', 'block', 'retry', 'list'], description: 'Operation to perform' },
+          action: {
+            type: 'string',
+            enum: [
+              'add', 'start', 'update', 'begin_verification', 'complete',
+              'fail', 'block', 'unblock', 'retry', 'cancel', 'attach_artifact', 'list',
+            ],
+            description: 'Operation to perform',
+          },
           id: { type: 'string', description: 'Node id (for add this is the new node id; for others, the target)' },
-          title: { type: 'string', description: 'Short title (add only)' },
-          description: { type: 'string', description: 'What this node accomplishes (add only)' },
+          title: { type: 'string', description: 'Short title (add/update only)' },
+          description: { type: 'string', description: 'What this node accomplishes (add/update only)' },
           dependencies: { type: 'array', items: { type: 'string' }, description: 'Node ids that must complete before this one (add only)' },
           acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Criteria that must hold to complete this node (add only)' },
-          resourceClaims: { type: 'array', items: { type: 'string' }, description: 'Resource keys this node touches (used to group parallel-safe nodes)' },
-          preferredRole: { type: 'string', description: 'Hint role for sub-agent delegation (e.g. "worker")' },
+          resourceClaims: { type: 'array', items: { type: 'string' }, description: 'Resource keys this node touches' },
+          preferredRole: { type: 'string', description: 'Hint role for sub-agent delegation' },
+          preferredModelProfile: { type: 'string', description: 'Hint model profile id for sub-agent delegation' },
           satisfiedCriteria: { type: 'array', items: { type: 'string' }, description: 'Criteria satisfied (complete only)' },
-          reason: { type: 'string', description: 'Failure / block reason (fail/block only)' },
+          reason: { type: 'string', description: 'Failure / block / cancel reason' },
+          artifact: { type: 'string', description: 'Artifact name to attach to the node (attach_artifact only)' },
         },
         required: ['action'],
       },
@@ -67,9 +77,33 @@ export class TaskPlanTool implements Tool {
             acceptanceCriteria: asStrArr(input.acceptanceCriteria),
             resourceClaims: asStrArr(input.resourceClaims),
             preferredRole: str(input.preferredRole) || undefined,
+            preferredModelProfile: str(input.preferredModelProfile) || undefined,
             retryPolicy: { maxAttempts: 2 },
           })
           return ok(`Added node "${id}". ${renderGraph(g)}`)
+        }
+        case 'start': {
+          const id = str(input.id)
+          g.start(id)
+          return ok(`Started "${id}". ${renderGraph(g)}`)
+        }
+        case 'update': {
+          const id = str(input.id)
+          if (!g.has(id)) return err(`node "${id}" does not exist`)
+          // Update allowed only on pending nodes; mutation after start
+          // risks invalidating the dep graph mid-run.
+          const n = g.get(id)!
+          if (n.status !== 'pending') return err(`cannot update node "${id}" in status ${n.status}`)
+          if (input.title !== undefined) n.title = str(input.title, n.title)
+          if (input.description !== undefined) n.description = str(input.description, n.description)
+          if (input.preferredRole !== undefined) n.preferredRole = str(input.preferredRole) || undefined
+          if (input.preferredModelProfile !== undefined) n.preferredModelProfile = str(input.preferredModelProfile) || undefined
+          return ok(`Updated "${id}".`)
+        }
+        case 'begin_verification': {
+          const id = str(input.id)
+          g.markVerifying(id)
+          return ok(`"${id}" → verifying.`)
         }
         case 'complete': {
           const id = str(input.id)
@@ -86,6 +120,24 @@ export class TaskPlanTool implements Tool {
         case 'block': {
           g.block(str(input.id), str(input.reason, 'blocked'))
           return ok(`Marked "${str(input.id)}" blocked. ${renderGraph(g)}`)
+        }
+        case 'unblock': {
+          g.unblock(str(input.id))
+          return ok(`Unblocked "${str(input.id)}". ${renderGraph(g)}`)
+        }
+        case 'cancel': {
+          // v0.3.1 (te_goal §五): use the engine's cancel() so the
+          // node is terminal-cancelled (unblock cannot reverse it).
+          const id = str(input.id)
+          g.cancel(id, str(input.reason, 'cancelled'))
+          return ok(`Cancelled "${id}". ${renderGraph(g)}`)
+        }
+        case 'attach_artifact': {
+          const id = str(input.id)
+          const art = str(input.artifact)
+          if (!art) return err('artifact is required for attach_artifact')
+          g.attachArtifact(id, art)
+          return ok(`Attached "${art}" to "${id}".`)
         }
         case 'retry': {
           g.retry(str(input.id))

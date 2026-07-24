@@ -47,7 +47,7 @@ import {
 } from '../queryStateMachine.js'
 import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
-import type { RoutingInput } from '../model/modelRouter.js'
+import type { RoutingInput, ModelRouter } from '../model/modelRouter.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
@@ -64,6 +64,8 @@ import { interventionMessageForStall } from './progressMonitor.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
+import { ControlMessageLog } from './internalControlMessage.js'
+import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -105,12 +107,24 @@ export interface CoordinatorDeps {
   /** Phase 3: task graph — gates completion when it has unfinished nodes. */
   taskGraph?: TaskGraph
   /**
+   * v0.3.1 (te_goal §五): the per-runId task-graph store. The
+   * Coordinator uses this to mint a fresh graph for each runId so
+   * turn N's graph does not leak into turn M.
+   */
+  taskGraphStore?: import('./taskGraphStore.js').TaskGraphStore
+  /**
    * Phase 2: per-turn adaptive model routing. Called once after boot
    * with the turn's signals; if it returns a model string, the engine
    * has switched this turn's model. Null = no change / routing off /
    * manual override in effect.
    */
   routeModel?: (input: RoutingInput) => string | null
+  /**
+   * v0.3.1 (te_goal §三.1.3): the ModelRouter handle, used by the
+   * coordinator's signal collector to read provider health. Optional —
+   * absence just means no live health signals.
+   */
+  modelRouter?: ModelRouter
   /**
    * Parent run id (e.g. a `kind='loop'` run from runLoop). When set,
    * the per-turn run records it as parentRunId for hierarchical queries.
@@ -218,30 +232,71 @@ export class RuntimeCoordinator {
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
 
     // Phase 2: adaptive model routing — one decision per turn, after
-    // boot, before the first LLM call. v0.3.1 (te_goal §三.1.3): pass
-    // REAL routing signals, not just userGoal. The router uses these to
-    // score complexity/context/budget/health and pick the right model.
+    // boot, before the first LLM call. v0.3.1 (te_goal §三.1.3): collect
+    // the FULL signal set (11+ te_goal bullets) before calling the
+    // router. Signals are derived from real runtime state (workingState,
+    // contextManager, taskGraph, budgetTracker, modelRouter health) plus
+    // static goal analysis. The collector also exposes reasonCodes so
+    // /route and /why can explain WHY the router chose what it chose.
     if (this.deps.routeModel) {
       try {
         const ws = this.deps.contextManager.getWorkingState()
-        const pm = this.deps.progressMonitor
-        const filesTouched = ws.filesRead.length + ws.filesChanged.length
-        const routed = this.deps.routeModel({
-          userGoal: userMessage,
-          repoFileCount: filesTouched * 10, // rough proxy for repo scale explored
-          filesTouched,
-          consecutiveFailures: pm?.snapshot(0).repeatedErrors ?? 0,
-          needsArchitecture:
-            /architect|refactor|redesign|root cause|migration|design decision/i.test(userMessage)
-            || filesTouched > 8, // multi-file changes hint at architecture
+        const tg = this.deps.taskGraph
+        const cm = this.deps.contextManager
+        const router = this.deps.modelRouter
+        const signals = collectRoutingSignals({
+          userMessage,
+          workingState: {
+            filesRead: [...ws.filesRead],
+            filesChanged: [...ws.filesChanged],
+            verification: { passed: [...ws.verification.passed], failed: [...ws.verification.failed] },
+            unresolved: [...ws.unresolved],
+          },
+          contextManager: {
+            contextUsageRatio: 0, // refined when budget tracker integration ships
+            budgetRemaining: 1,
+            recentFailureCount: ws.verification.failed.length,
+          },
+          taskGraph: tg ? {
+            nodeCount: tg.size(),
+            preferredRoles: tg.list().map((n: { preferredRole?: string }) => n.preferredRole ?? '').filter(Boolean),
+            hasConfigChanges: false,
+            hasCrossModuleEdits: false,
+            hasPublicInterfaceEdits: false,
+            hasRootCauseNode: false,
+          } : undefined,
+          routerHealth: router ? {
+            providerHealth: router.listProfiles().map((p: { id: string }) => {
+              const h = router.getProfileHealth(p.id)
+              return {
+                profileId: p.id,
+                failRate: h && h.calls > 0 ? h.failures / h.calls : 0,
+                avgLatencyMs: h?.ewmaLatency ?? 0,
+              }
+            }),
+            previousRoutingFailures: 0,
+          } : undefined,
         })
+        const routed = this.deps.routeModel(signalsToRoutingInput(signals))
         if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
       } catch { /* best-effort: routing must never break the turn */ }
     }
 
-    // v0.3.1 (te_goal §五): reset the TaskGraph at the start of each
-    // turn so turn 2 doesn't inherit turn 1's nodes.
-    this.deps.taskGraph?.reset()
+    // v0.3.1 (te_goal §五): mint a fresh TaskGraph per runId. The
+    // legacy `taskGraph.reset()` is replaced with `store.create(runId)`
+    // (or `store.get(runId)` on resume). Sub-runs get their own
+    // graph; turn N+1's graph never inherits turn N's nodes.
+    if (runId) {
+      const store = this.deps.taskGraphStore
+      if (store) {
+        let graph = store.get(runId)
+        if (!graph) graph = store.create(runId)
+        this.deps.taskGraph = graph
+      }
+    } else {
+      // No runId → fall back to the legacy single-graph shim.
+      this.deps.taskGraph?.reset()
+    }
 
     // P0-2 (continuation output completeness): collect EVERY assistant
     // text segment emitted during this turn — including continuation
@@ -272,6 +327,10 @@ export class RuntimeCoordinator {
     let result: TurnResult
     const turnStartMs = Date.now()
     let stallInterventionApplied = false // dedupe: one system nudge per stall episode
+    // v0.3.1 (te_goal §七): typed control messages. The provider sees
+    // a snapshot rendered for THIS call; the log is drained after the
+    // call so messages do NOT accumulate in the user-visible history.
+    const controlMessageLog = new ControlMessageLog()
 
     try {
       while (!isTerminal(state)) {
@@ -313,12 +372,17 @@ export class RuntimeCoordinator {
                 if (verdict.kind !== 'progressing') {
                   renderer.warn(`Stall detected (${verdict.kind}): ${verdict.reason} → suggested: ${verdict.action}`)
                   eventEmitter.emit({ type: 'STALL_DETECTED', kind: verdict.kind, reason: verdict.reason, action: verdict.action })
-                  // Phase 4 active intervention: inject a role:system nudge
-                  // (NOT a user message) once per stall episode to force a
-                  // strategy change. Reset when progress resumes.
-                  const nudge = interventionMessageForStall(verdict)
-                  if (nudge && !stallInterventionApplied) {
-                    messages.push(nudge)
+                  // v0.3.1 (te_goal §七): emit a typed ICM instead of
+                  // pushing a role:system string. The message is
+                  // rendered to the provider each turn via
+                  // controlMessageLog.renderForProvider(); it does not
+                  // accumulate in the user-visible history.
+                  if (!stallInterventionApplied && (verdict.kind === 'soft-stall' || verdict.kind === 'hard-stall' || verdict.kind === 'repeated-failure' || verdict.kind === 'budget-pressure')) {
+                    controlMessageLog.append({
+                      kind: 'stall_replan',
+                      level: verdict.kind === 'hard-stall' ? 'hard' : 'soft',
+                      reason: verdict.reason,
+                    })
                     stallInterventionApplied = true
                   }
                 } else {
@@ -351,14 +415,32 @@ export class RuntimeCoordinator {
             if (pmSnap) {
               const snap = pmSnap.snapshot((Date.now() - turnStartMs) / 60_000)
               const ws = this.deps.contextManager.getWorkingState()
+              // v0.3.1 (te_goal §六.3): modelClaimingCompletion must be
+              // TRUE when the model is about to emit stop_sequence
+              // (or its final completion). We detect this by the most
+              // recent assistant message having no tool calls AND the
+              // most recent raw call having finishReason='stop' or
+              // 'length'. This is the highest-value CriticTrigger.
+              let modelClaimingCompletion = false
+              const lastMsg = messages[messages.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.tool_calls || lastMsg.tool_calls.length === 0)) {
+                modelClaimingCompletion = true
+              }
               criticRequested = shouldInvokeCritic({
                 snapshot: snap,
-                modelClaimingCompletion: false,
+                modelClaimingCompletion,
                 isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
                 changedFilesCount: ws.filesChanged.length,
                 unresolvedCount: ws.unresolved.length,
                 remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
               }).invoke
+              if (criticRequested) {
+                this.deps.eventEmitter.emit({
+                  type: 'CRITIC_INVOKED',
+                  reason: modelClaimingCompletion ? 'model-claiming-completion' : 'risk-signal',
+                  modelClaimingCompletion,
+                } as never)
+              }
             }
             await this.deps.moduleManager.runIteration({
               iteration: state.iteration,
@@ -379,8 +461,21 @@ export class RuntimeCoordinator {
             // to parse its own prior tool outputs.
             const wsBlock = this.deps.contextManager.renderWorkingStateBlock()
             const effectivePrompt = wsBlock ? `${systemPrompt}\n\n${wsBlock}` : systemPrompt
-            const { assistantText, finishReason, rawToolCalls } =
-              await this.callLLM(effectivePrompt, messages, toolDefs, turnAbortController.signal)
+            // v0.3.1 (te_goal §七): render the typed control messages
+            // for this call. We pass them as a SEPARATE array; the
+            // callLLM layer prepends them to the assistant-visible
+            // history just for this request, then drains the log so
+            // they do NOT accumulate as user-visible history.
+            const controlMessages = controlMessageLog.renderForProvider()
+            const { assistantText, finishReason, rawToolCalls, usage } =
+              await this.callLLM(
+                effectivePrompt,
+                messages,
+                toolDefs,
+                turnAbortController.signal,
+                controlMessages,
+              )
+            controlMessageLog.clear()
 
             if (assistantText) {
               turnAssistantSegments.push(assistantText)
@@ -411,9 +506,13 @@ export class RuntimeCoordinator {
 
             if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
               emptyResponseCount++
-              messages.push({
-                role: 'system',
-                content: '[runtime] Your previous response was empty (no text, no tool call). Please respond with text or invoke a tool.',
+              // v0.3.1 (te_goal §七): emit a typed InternalControlMessage
+              // and let the LLM-call loop render it for the provider.
+              // The message does NOT stay in the user-visible history.
+              controlMessageLog.append({
+                kind: 'retry_empty_response',
+                retryCount: emptyResponseCount,
+                max: MAX_EMPTY_RETRIES,
               })
               state = transitionQueryState(state, { type: 'continue' })
               break
@@ -426,9 +525,10 @@ export class RuntimeCoordinator {
                 max: MAX_LENGTH_RETRIES,
                 partial_length: assistantText.length,
               })
-              messages.push({
-                role: 'system',
-                content: '[runtime] Continue your previous response from where it was cut off. Do not repeat what you already wrote — just continue.',
+              controlMessageLog.append({
+                kind: 'continue_after_length',
+                remainingTokens: turnTokenBudget - turnTokensProduced,
+                partialLength: assistantText.length,
               })
               state = transitionQueryState(state, { type: 'continue' })
               break
@@ -454,7 +554,10 @@ export class RuntimeCoordinator {
                   turn_tokens: decision.turnTokens,
                   budget: decision.budget,
                 })
-                messages.push({ role: 'system', content: `[runtime] ${decision.nudgeMessage}` })
+                controlMessageLog.append({
+                  kind: 'budget_warning',
+                  remainingPct: 1 - decision.pct,
+                })
                 state = transitionQueryState(state, { type: 'continue' })
                 break
               }
@@ -574,38 +677,91 @@ export class RuntimeCoordinator {
     // stop_sequence only means the model stopped. The real verdict comes
     // from evaluateCompletion(). taskKind drives what "done" means:
     // informational (Q&A) doesn't need changes; mutation does.
-    let completionVerdict: { status: string; blockers?: string[]; remaining?: string[] } | null = null
+    let completionVerdict: ReturnType<typeof evaluateCompletion> | null = null
+    let reviewerFindings: string[] = []
+    const ws = this.deps.contextManager.getWorkingState()
+    const hasChanges = ws.filesChanged.length > 0
+
+    // Phase 5: final Reviewer — a deterministic post-run verdict from
+    // structured state (NOT the model's self-report). Surfaces partial/
+    // blocked loudly so false-success can't hide. The Reviewer findings
+    // flow into evaluateCompletion so they can downgrade the verdict.
+    try {
+      const tg = this.deps.taskGraph
+      const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
+      const unsatisfiedFromGraph = tgSnapshot
+        ? tgSnapshot.nodes.reduce((sum, n) => sum + n.acceptanceCriteria.length, 0)
+        : 0
+      const review = reviewRun({
+        goalPresent: userMessage.trim().length > 0,
+        changedFiles: ws.filesChanged,
+        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
+        verificationPassed: ws.verification.failed.length === 0,
+        unhandledFailures: ws.verification.failed.length,
+        unresolvedBlockers: ws.unresolved.length,
+        unsatisfiedAcceptance: unsatisfiedFromGraph,
+        scopeExcessive: ws.filesChanged.length > 20,
+      })
+      reviewerFindings = review.findings
+      if (review.verdict !== 'completed') {
+        renderer.warn(`Reviewer verdict: ${review.verdict} — ${review.findings.join('; ')}`)
+      }
+    } catch { /* best-effort */ }
+
     if (result.reason === 'stop_sequence') {
-      const ws = this.deps.contextManager.getWorkingState()
-      const hasChanges = ws.filesChanged.length > 0
       // v0.3.1: only actual file changes make it a 'mutation' task.
       // Running verification alone (no changes) is informational.
       const taskKind = hasChanges ? 'mutation' : 'informational'
       const tg = this.deps.taskGraph
+      const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
+      const acceptanceCriteria = tgSnapshot
+        ? tgSnapshot.nodes.flatMap((n) =>
+          n.acceptanceCriteria.map((desc, i) => ({ id: `${n.id}::${i}`, description: desc, satisfied: n.status === 'completed' })),
+        )
+        : []
       const v = evaluateCompletion({
         taskKind,
-        acceptanceCriteria: tg && tg.size() > 0 ? tg.snapshot().nodes.flatMap((n) => n.acceptanceCriteria) : [],
-        satisfiedCriteria: [],
-        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
-        verificationPassed: ws.verification.failed.length === 0,
-        runningChildren: sharedState.activeSubtasks.size,
-        unhandledFailures: ws.verification.failed.length,
-        changedFiles: ws.filesChanged,
+        modelStopped: true,
+        acceptanceCriteria,
+        verification: {
+          executed: ws.verification.passed.length + ws.verification.failed.length > 0,
+          passed: ws.verification.failed.length === 0,
+          failed: [...ws.verification.failed],
+        },
+        taskGraph: tgSnapshot ? {
+          nodes: tgSnapshot.nodes.map((n) => ({ id: n.id, status: n.status })),
+        } : undefined,
+        activeWorkers: [...sharedState.activeSubtasks.entries()].map(([id]) => ({ id, status: 'running' as const })),
+        unresolvedBlockers: [...ws.unresolved],
+        changedFiles: [...ws.filesChanged],
+        reviewerFindings,
+        budgetState: { remaining: 1, exceeded: false },
       })
       completionVerdict = v
+      this.deps.eventEmitter.emit({ type: 'COMPLETION_EVALUATED', verdict: v } as never)
       if (v.status !== 'completed') {
-        const detail = 'blockers' in v && v.blockers ? v.blockers.join('; ')
-          : 'remaining' in v && v.remaining ? v.remaining.join('; ')
-          : v.status
+        let detail: string
+        if (v.status === 'blocked') detail = v.blockers.join('; ')
+        else if (v.status === 'partial' || v.status === 'incomplete') detail = v.remaining.join('; ')
+        else detail = v.reason
         renderer.warn(`Completion gate: ${v.status} — ${detail}`)
+        this.deps.eventEmitter.emit({ type: 'COMPLETION_REJECTED', verdict: v } as never)
       }
     }
 
     // ── ExecutionRun terminal transition (GAP-C) ──
     if (runId && registry) {
+      // Map CompletionStatus → RunStatus: exhausted/failed/cancelled are
+      // distinct terminal states; everything else non-completed maps to
+      // 'blocked' so the RunRegistry contract is preserved.
       const targetStatus: RunStatus =
         result.reason === 'stop_sequence'
-          ? (completionVerdict && completionVerdict.status !== 'completed' ? 'blocked' : 'succeeded')
+          ? (completionVerdict && completionVerdict.status === 'completed' ? 'succeeded'
+            : completionVerdict?.status === 'failed' ? 'failed'
+            : completionVerdict?.status === 'cancelled' ? 'cancelled'
+            : completionVerdict?.status === 'exhausted' ? 'blocked'
+            : completionVerdict ? 'blocked'
+            : 'failed')
         : result.reason === 'interrupted' ? 'cancelled'
         : result.reason === 'max_iterations' ? 'blocked'
         : 'failed'
@@ -618,35 +774,17 @@ export class RuntimeCoordinator {
               : 'completed',
             error: targetStatus === 'failed'
               ? (result.output || 'turn failed')
-              : targetStatus === 'blocked'
-                ? completionVerdict && completionVerdict.status !== 'completed'
-                  ? `completion ${completionVerdict.status}: ${('blockers' in completionVerdict && completionVerdict.blockers?.join('; ')) || ('remaining' in completionVerdict && completionVerdict.remaining?.join('; ')) || ''}`
-                  : 'turn hit max_iterations ceiling'
-                : undefined,
+              : targetStatus === 'cancelled'
+                ? 'user/system cancelled'
+                : targetStatus === 'blocked'
+                  ? completionVerdict
+                    ? `completion ${completionVerdict.status}: ${('blockers' in completionVerdict && completionVerdict.blockers?.join('; ')) || ('remaining' in completionVerdict && completionVerdict.remaining?.join('; ')) || ('reason' in completionVerdict && completionVerdict.reason) || ''}`
+                    : 'turn hit max_iterations ceiling'
+                  : undefined,
           })
         }
       } catch { /* best-effort: never break the turn result */ }
     }
-
-    // Phase 5: final Reviewer — a deterministic post-run verdict from
-    // structured state (NOT the model's self-report). Surfaces partial/
-    // blocked loudly so false-success can't hide. Best-effort.
-    try {
-      const ws = this.deps.contextManager.getWorkingState()
-      const review = reviewRun({
-        goalPresent: userMessage.trim().length > 0,
-        changedFiles: ws.filesChanged,
-        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
-        verificationPassed: ws.verification.failed.length === 0,
-        unhandledFailures: ws.verification.failed.length,
-        unresolvedBlockers: ws.unresolved.length,
-        unsatisfiedAcceptance: 0,
-        scopeExcessive: ws.filesChanged.length > 20,
-      })
-      if (review.verdict !== 'completed') {
-        renderer.warn(`Reviewer verdict: ${review.verdict} — ${review.findings.join('; ')}`)
-      }
-    } catch { /* best-effort */ }
 
     // ── Module onComplete hooks ──
     await this.deps.moduleManager.runComplete({
@@ -669,43 +807,109 @@ export class RuntimeCoordinator {
     messages: OpenAIMessage[],
     toolDefs: ToolDefinition[],
     turnAbortSignal: AbortSignal,
+    controlMessages: OpenAIMessage[] = [],
   ): Promise<{
     assistantText: string
     finishReason: string | null
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: this.deps.config.model })
-    const result = await this.deps.modelGateway.call(
-      {
-        systemPrompt,
-        messages,
-        toolDefs,
-        model: this.deps.config.model,
-        temperature: this.deps.config.temperature,
-        maxOutputTokens: this.deps.contextManager.effectiveMaxOutputTokens(this.deps.config.maxOutputTokens),
-        abortSignal: turnAbortSignal,
-        turnAbortController: this.deps.sharedState.currentTurnAbortController,
-      },
-      {
-        onUsage: (usage, callStartMs) => this.recordUsage(usage, callStartMs),
-        onContextOverflow: async (msgs, signal) => {
-          return this.deps.contextManager.reactiveCompact(msgs, signal)
+    const callStartMs = Date.now()
+    const modelAtStart = this.deps.config.model
+    this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
+    let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null = null
+    let providerFailed = false
+    try {
+      // v0.3.1 (te_goal §七): prepend control messages for this
+      // single call. The caller (the LLM state machine) drains the
+      // log right after; the user-visible history `messages` array
+      // is NEVER mutated.
+      const messagesForCall = controlMessages.length > 0
+        ? [...controlMessages, ...messages]
+        : messages
+      result = await this.deps.modelGateway.call(
+        {
+          systemPrompt,
+          messages: messagesForCall,
+          toolDefs,
+          model: modelAtStart,
+          temperature: this.deps.config.temperature,
+          maxOutputTokens: this.deps.contextManager.effectiveMaxOutputTokens(this.deps.config.maxOutputTokens),
+          abortSignal: turnAbortSignal,
+          turnAbortController: this.deps.sharedState.currentTurnAbortController,
         },
-      },
-    )
+        {
+          onUsage: (usage, t0) => this.recordUsage(usage, t0, modelAtStart, true),
+          onContextOverflow: async (msgs, signal) => {
+            return this.deps.contextManager.reactiveCompact(msgs, signal)
+          },
+          // v0.3.1 (te_goal §三.1.4): wire real fallback through the
+          // Router. The Router's lastDecision.fallbackChain is the
+          // source of truth; if it's exhausted, returns null and the
+          // Gateway surfaces the original error.
+          onProviderError: (failedModel, err) => {
+            providerFailed = true
+            this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
+            if (!this.deps.modelRouter) return null
+            const next = this.deps.modelRouter.nextFallback(failedModel)
+            if (next) {
+              // Apply the fallback model to the engine so the next
+              // LLM call uses it. This is an automatic (NOT manual)
+              // change so we route through applyRoutingDecision via
+              // the engine sink to keep the event stream consistent.
+              try { this.deps.modelRouter.applyRoutingDecision(next) } catch { /* best-effort */ }
+              return next
+            }
+            return null
+          },
+        },
+      )
+    } catch (err) {
+      // Record the failure against the profile even if the gateway
+      // threw (helps /models show real health after retries).
+      const durationMs = Date.now() - callStartMs
+      const router = this.deps.modelRouter
+      if (router) {
+        const binding = router.listProfiles().find((p) => p.model === modelAtStart)
+        if (binding) router.recordCall(binding.id, false, durationMs, null)
+      }
+      throw err
+    }
+
+    // Success: record against the model that actually completed (which
+    // may be the fallback if the gateway retried).
+    const durationMs = Date.now() - callStartMs
+    const router = this.deps.modelRouter
+    if (router) {
+      const finalModel = this.deps.config.model
+      const binding = router.listProfiles().find((p) => p.model === finalModel)
+      if (binding) router.recordCall(binding.id, !providerFailed, durationMs, result.usage)
+    }
     return result
   }
 
-  private recordUsage(usage: TokenUsage | null, callStartMs: number): void {
+  private recordUsage(
+    usage: TokenUsage | null,
+    callStartMs: number,
+    model: string,
+    ok: boolean,
+  ): void {
     if (usage) {
       const durationMs = Date.now() - callStartMs
-      this.deps.costTracker.addUsage(this.deps.config.model, usage, durationMs)
+      this.deps.costTracker.addUsage(model, usage, durationMs)
       this.deps.eventLog?.append('tool_call', 'llm_api', {
         input_tokens: usage.inputTokens,
         output_tokens: usage.outputTokens,
         duration_ms: durationMs,
+        model,
       })
+    }
+    // Always record against the Router even when usage is null —
+    // te_goal §三.1.4 requires health to track every call.
+    const router = this.deps.modelRouter
+    if (router) {
+      const binding = router.listProfiles().find((p) => p.model === model)
+      if (binding) router.recordCall(binding.id, ok, Date.now() - callStartMs, usage)
     }
   }
 

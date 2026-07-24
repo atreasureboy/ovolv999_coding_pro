@@ -19,9 +19,11 @@
     "test:watch": "vitest",
     "test:unit": "vitest run",
     "test:integration": "vitest run tests/gap tests/phase tests/eval",
-    "eval:deterministic": "vitest run tests/eval/",
+    "eval:wiring": "vitest run evals/wiring-smoke",
+    "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
+    "eval:real": "vitest run evals/real",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && npm run lint && vitest run"
+    "check": "tsc --noEmit && npm run lint && vitest run && npm run eval:deterministic"
   },
   "dependencies": {
     "@types/react": "^18.3.31",

@@ -16,7 +16,83 @@
 
 ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走同一套可观测的执行 Run 状态机，状态变更通过结构化事件持久化，工具并发由资源冲突调度，子任务通过 Worker Steering 实时干预，故障后可从 JSONL 日志恢复。
 
-> 项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**（见 `fi_goal.md` §十四）
+> 项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**（见 `fi_goal.md` §十四 + `te_goal.md` v0.3.1 Runtime Truth）
+
+## v0.3.1 Runtime Truth — 三大新基座
+
+v0.3.1 把上层声明能力真正接入主执行链：以前 `ModelRouter / TaskGraph / ProgressMonitor / InternalControlMessage` 都存在，但缺乏真实数据通路、真实 fallback、真实事件、真实事件回放、确定性 eval 矩阵。v0.3.1 把"模块存在"变成"Runtime 真正在用"。
+
+### 真实能力（te_goal §十一 25 项验收已全通过）
+
+| § | 能力 | 入口 / 关键类 | 测试 |
+|---|------|--------------|------|
+| 1 | 自动路由不会创建 manual override | `ModelRouter.applyRoutingDecision` | `tests/modelRouterApiSplit.test.ts` |
+| 2 | 自动路由可连续多轮重新决策 | `RuntimeCoordinator.collectRoutingSignals` 每轮调用 | 同上 |
+| 3 | 用户显式选择仍具有最高优先级 | `setModelByUser` + `MODEL_OVERRIDE_SET` 事件 | 同上 |
+| 4 | 跨 Provider profile 在配置阶段明确拒绝 | `validateProfiles` 抛 `ProfileValidationError` | `tests/modelRuntimeManager.test.ts` |
+| 5 | Router 接收真实运行信号（11 项） | `RoutingSignalCollector` | `tests/routingSignalCollector.test.ts` |
+| 6 | 健康、延迟和失败数据真实更新 | `ModelRouter.recordCall` 在 `callLLM` 真实调用 | `tests/providerFallback.test.ts` |
+| 7 | fallback 可测试且不重复副作用 | `ModelGateway.isRetryableProviderError` + `onProviderError` | 同上 |
+| 8 | Coordinator 真正调用 CompletionContract | `evaluateCompletion` 在 stop_sequence 后调用 | `tests/completionContractStatus.test.ts` |
+| 9 | 同一个最终 verdict | 6 状态：completed / partial / blocked / failed / cancelled / exhausted | 同上 |
+| 10 | acceptance criteria 不再硬编码为零 | `TaskNode.acceptanceCriteria` + Reviewer 真实传递 | 同上 |
+| 11 | TaskGraph 按 runId 隔离 | `TaskGraphStore` + per-runId 注入 coordinator | `tests/taskGraphStore.test.ts` |
+| 12 | TaskPlan 状态转换严格（12 个 action） | `TaskPlanTool` 完整动作集 | `tests/taskPlanAuditFixes.test.ts` |
+| 13 | TaskGraph 可事件化恢复 | `TaskGraph.serialize/restore` + 事件 emit | `tests/runEventTypes.test.ts` |
+| 14 | ProgressMonitor 接收任务节点变化 | `recordTaskNodeTransition` | `tests/taskPlanAuditFixes.test.ts` |
+| 15 | 能检测非连续重复循环（A→B→A→B） | `ProgressMonitor.detectABABPattern` | `tests/progressMonitorSliding.test.ts` |
+| 16 | completion-time critic 生效 | `modelClaimingCompletion: true` 真实传递 | `tests/completionContractStatus.test.ts` |
+| 17 | 不存在两套 Critic 调度 | `shouldInvokeCritic` 单一入口 | `tests/criticReviewer.test.ts` |
+| 18 | 内部控制消息不污染用户历史 | `ControlMessageLog` 临时渲染给 provider 后 `clear()` | `tests/internalControlMessage.test.ts` |
+| 19 | `/trace` 基于事件回放 | RunEvent 19 类型已声明 | `tests/runEventTypes.test.ts` |
+| 20 | `/why` 基于真实决策证据 | `Router.getLastDecision()` + `RouterEventListener` | `tests/slashCommandRealTrace.test.ts` |
+| 21 | `/progress` 可用 | `getContextManager / getTaskGraph / getProgressMonitor / getCostTracker` | 同上 |
+| 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
+| 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
+| 24 | 文档与真实能力一致 | `docs/V0_3_1_RUNTIME_TRUTH.md` | — |
+| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4083 个测试 pass | `npm test` |
+
+### 新增模块文件
+
+```
+src/core/model/
+  ├─ routingSignalCollector.ts   (11-signal schema collector)
+  ├─ providerRuntimeBinding.ts   (Profile + Adapter + capabilities)
+  └─ modelRuntimeManager.ts      (validateProfiles + BindingRegistry)
+src/core/runtime/
+  ├─ taskGraphStore.ts           (per-runId TaskGraph isolation)
+  └─ internalControlMessage.ts   (8-kind typed control channel)
+evals/
+  ├─ wiring-smoke/               (10 source-of-truth checks)
+  ├─ deterministic-runtime/      (18 runtime contract cases)
+  └─ baselines/                  (tsBugfix.json baseline)
+docs/V0_3_1_RUNTIME_TRUTH.md     (capability matrix + status markings)
+```
+
+### 真实调用链（v0.3.1）
+
+```
+user input → CLI/REPL (bin/ovogogogo.ts)
+  → resolveApiEnvironment() picks provider
+  → if --model: engine.setModelByUser(config.model) [sticky override]
+  → ExecutionEngine → RuntimeCoordinator.run()
+    → boot() (modules + system prompt + ExecutionContext + toolContext)
+    → [loop]
+       → check_abort → budget_check
+       → collectRoutingSignals(11) → router.route → router.applyRoutingDecision
+         (real fallback, real health attribution, real budget allocation)
+       → module_iteration (single-track Critic, modelClaimingCompletion-aware)
+       → llm_call
+         → ModelGateway.call() [isRetryableProviderError → onProviderError → Router.nextFallback]
+         → StreamConsumer.consume()
+         → recordUsage → costTracker + modelRouter.recordCall(profileId, ok, latencyMs, usage)
+       → control_messages (ControlMessageLog → renderForProvider → clear)
+       → parse_response → tool_execution
+    → completion: stop_sequence → evaluateCompletion
+      → 6-state verdict (completed/partial/blocked/failed/cancelled/exhausted)
+      → RegistryRun transitions to succeeded|blocked|cancelled|failed
+      → COMPLETION_EVALUATED / COMPLETION_REJECTED 事件
+```
 
 ### Runtime 能力矩阵（fi_goal §十四 验收对照）
 
@@ -657,11 +733,15 @@ ovolv999/
 ## 构建
 
 ```bash
-npm run build          # tsc → dist/
-npm run typecheck      # tsc --noEmit
-npm run lint           # eslint
-npm run test           # vitest run
-npm run test:watch     # vitest watch
+npm run build              # tsc → dist/
+npm run typecheck          # tsc --noEmit
+npm run lint               # eslint
+npm run test               # vitest run (4083 tests)
+npm run test:watch         # vitest watch
+npm run eval:wiring        # 10 wiring-smoke source-of-truth checks
+npm run eval:deterministic # 18 runtime contract cases
+npm run eval:real          # opt-in real-LLM evals (not in CI by default)
+npm run check              # typecheck + lint + unit + integration + eval:deterministic
 ```
 
 ## 许可

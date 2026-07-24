@@ -1,0 +1,14 @@
+{
+  "name": "tsBugfix",
+  "description": "Single-file TypeScript bug-fix: edit a function to satisfy tests.",
+  "version": "1",
+  "expected": {
+    "taskCompleted": true,
+    "fileFixed": true,
+    "compiles": true,
+    "falseSuccess": false,
+    "toolCalls": 2
+  },
+  "timeoutMs": 30000,
+  "notes": "Baseline for the v0.2 eval: TS single-file bugfix. The script sources a tsx compile+run harness; the test asserts the engine's runTurn produces a true success (file edited, verification passed, NOT a false-success)."
+}

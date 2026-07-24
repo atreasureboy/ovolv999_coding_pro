@@ -49,9 +49,11 @@ import { FileHistory } from './fileHistory.js'
 import { PermissionManager } from './permissionSystem.js'
 import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
-import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig } from './model/modelRouter.js'
+import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig, type BudgetAllocation } from './model/modelRouter.js'
+import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.js'
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import { TaskGraph } from './runtime/taskGraph.js'
+import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -102,6 +104,12 @@ function buildRouter(config: EngineConfig): ModelRouter {
       })
     }
     if (profiles.length > 0) {
+      // v0.3.1 (te_goal §三.1.2): reject cross-provider profiles up
+      // front so the runtime never has to swap transports. The current
+      // engine has only one OpenAI-compatible transport — multi-
+      // provider rebinding is explicitly out of scope until the
+      // ProviderRuntime abstraction lands.
+      validateProfiles({ activeProvider: config.provider ?? 'openai', profiles })
       const r = config.models?.routing ?? {}
       const routing: RoutingConfig = {
         enabled: r.enabled !== false,
@@ -132,6 +140,17 @@ export class ExecutionEngine {
    * priority). /route and /models read this.
    */
   private readonly modelRouter: ModelRouter
+  /**
+   * v0.3.1 (te_goal §三.1.2): the resolved ProviderRuntimeBinding for
+   * each profile. /models + /route read this for health attribution
+   * and cross-provider diagnostics.
+   */
+  private readonly bindingRegistry: BindingRegistry
+  /**
+   * v0.3.1 (te_goal §五): per-runId task-graph store. The legacy
+   * single shared graph is replaced; each run mints its own graph.
+   */
+  private readonly taskGraphStore: TaskGraphStore
   /**
    * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
    * result here; the coordinator queries detectStall() each iteration.
@@ -233,8 +252,56 @@ export class ExecutionEngine {
     // Phase 3/4: progress monitor + task graph must exist BEFORE
     // createTools (the TaskPlan tool receives the graph handle).
     this.modelRouter = buildRouter(this.config)
+    // v0.3.1 (te_goal §三.1.2): resolve ProviderRuntimeBindings for
+    // every profile so /models + /route can report the actual
+    // transport, baseURL, and capabilities tied to the active engine.
+    // resolveBindings reuses the engine's existing adapter (one
+    // transport) — the BindingRegistry is a read-only view, not a
+    // second router or adapter.
+    const providerAdapter = createProviderAdapter({ provider: this.config.provider, client: this.client })
+    this.bindingRegistry = new BindingRegistry(
+      this.modelRouter.listProfiles().map((profile) => ({
+        profileId: profile.id,
+        provider: this.config.provider ?? 'openai',
+        model: profile.model,
+        baseURL: this.config.baseURL,
+        apiKeyRef: this.config.provider === 'openai'
+          ? 'OPENAI_API_KEY'
+          : this.config.provider === 'minimax'
+            ? 'ANTHROPIC_AUTH_TOKEN'
+            : undefined,
+        adapter: providerAdapter,
+        capabilities: profile.capabilities,
+        roles: profile.roles,
+      })),
+    )
     this.progressMonitor = new ProgressMonitor()
-    this.taskGraph = new TaskGraph()
+    this.eventEmitter = new RunEventEmitter()
+    // v0.3.1 (te_goal §五): the TaskGraphStore is the new source of
+    // truth. The `this.taskGraph` field is kept as a back-compat shim
+    // — it points at the most-recently-created graph so legacy callers
+    // (TaskPlanTool, /tasks) still work. New code should prefer the
+    // store.
+    this.taskGraphStore = new InMemoryTaskGraphStore()
+    // v0.3.1 (te_goal §五): emit TASK_GRAPH_CREATED on every store.create
+    // so /trace + EventStore can replay the graph lifecycle.
+    this.taskGraphStore.setEventSink((evt) => {
+      this.eventEmitter.emit(evt as never)
+    })
+    // v0.3.1 (te_goal §六.1 + §十一.14): wire TaskGraph events into
+    // the ProgressMonitor so node completions / failures count as
+    // progress for the stall detector.
+    this.taskGraphStore.setEventSink((evt) => {
+      this.eventEmitter.emit(evt as never)
+    })
+    this.taskGraph = this.taskGraphStore.create('default')
+    this.progressMonitor.setGraphEventSink((t) => this.progressMonitor.recordTaskNodeTransition(t))
+    // Wire every graph created (including future per-runId ones)
+    // back into the same progress monitor.
+    const wireGraph = (g: import('./runtime/taskGraph.js').TaskGraph) => {
+      g.setNodeTransitionSink((t) => this.progressMonitor.recordTaskNodeTransition(t))
+    }
+    wireGraph(this.taskGraph)
     this.tools = config.agentFactory
       ? createTools(config.extraTools ?? [], {
            factory: config.agentFactory,
@@ -281,7 +348,9 @@ export class ExecutionEngine {
       adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
       renderer: this.renderer,
     })
-    this.modelRouter = buildRouter(this.config)
+    // NOTE: `this.modelRouter` is assigned once above (line 235). v0.3.1
+    // removed the duplicate buildRouter() that previously overwrote the
+    // router used by coordinator/tools — single-router invariant.
     this.contextManager = new ContextManager({
       client: this.client,
       model: this.config.model,
@@ -294,7 +363,60 @@ export class ExecutionEngine {
     })
     this.toolPolicy = new ToolPolicy({ agent: this.config.agent })
     this.toolRegistry = new ToolRegistry(this.renderer)
-    this.eventEmitter = new RunEventEmitter()
+    // v0.3.1 (te_goal §三.1.1): wire ModelRouter as a sink to this
+    // engine. All router-side model changes funnel through Engine's
+    // switchModel() so config.model + ContextManager + ModuleManager +
+    // sharedState + ModelGateway + RunEventEmitter stay consistent.
+    // CRITICAL: the sink here calls switchModel / applyBudgetAllocation
+    // directly (not the public setModelByUser) so the router's event
+    // emission is the one and only source of these events — no recursion.
+    this.modelRouter.setSink({
+      setModelByUser: (model: string) => this.switchModel(model),
+      applyRoutingDecision: (model: string, alloc) => {
+        this.switchModel(model)
+        if (alloc) this.applyBudgetAllocation(alloc)
+      },
+      clearModelOverride: () => { /* no engine-side state to clear */ },
+    })
+    this.modelRouter.setEventListener((evt) => {
+      // Bridge Router events into RunEventEmitter for /trace + /why.
+      // RunEventEmitter.emit has its own type set; unknown event types
+      // are accepted at runtime (the typed union is enforced at the
+      // call site, not on emit). Cast is intentional and minimal.
+      switch (evt.type) {
+        case 'MODEL_OVERRIDE_SET':
+          this.eventEmitter.emit({
+            type: 'MODEL_OVERRIDE_SET',
+            modelOrProfile: String(evt.payload?.modelOrProfile ?? ''),
+          } as never)
+          break
+        case 'MODEL_OVERRIDE_CLEARED':
+          this.eventEmitter.emit({ type: 'MODEL_OVERRIDE_CLEARED' } as never)
+          break
+        case 'ROUTING_DECISION_APPLIED':
+          this.eventEmitter.emit({
+            type: 'ROUTING_APPLIED',
+            from: this.config.model,
+            to: String(evt.payload?.selectedModel ?? ''),
+            reasonCodes: [],
+          } as never)
+          break
+        case 'ROUTING_FALLBACK_APPLIED':
+          this.eventEmitter.emit({
+            type: 'ROUTING_FALLBACK',
+            from: String(evt.payload?.from ?? ''),
+            to: String(evt.payload?.to ?? ''),
+            error: String(evt.payload?.error ?? ''),
+          } as never)
+          break
+        case 'BUDGET_ALLOCATION_APPLIED':
+          this.eventEmitter.emit({
+            type: 'BUDGET_ALLOCATION_APPLIED',
+            allocation: evt.payload?.allocation ?? {},
+          } as never)
+          break
+      }
+    })
     const toolExecutor = new ToolExecutor({
       toolRegistry: this.toolRegistry,
       toolPolicy: this.toolPolicy,
@@ -341,10 +463,17 @@ export class ExecutionEngine {
       runRegistry: this.runRegistry,
       progressMonitor: this.progressMonitor,
       taskGraph: this.taskGraph,
+      // v0.3.1 (te_goal §五): per-runId graph store
+      taskGraphStore: this.taskGraphStore,
+      // v0.3.1 (te_goal §三.1.3): expose ModelRouter to the coordinator
+      // so the signal collector can read live provider health.
+      modelRouter: this.modelRouter,
       // Phase 2: per-turn adaptive routing. The callback runs the router
       // and, when routing is enabled with no manual override and the
       // decision differs from the current model, transactionally switches
       // (setModel) for this turn. Honours --model//model override priority.
+      // v0.3.1: passes the full RoutingDecision (not just the model) so
+      // budgetAllocation.maxOutputTokens is applied.
       routeModel: (input) => {
         const router = this.modelRouter
         if (!router.isRoutingEnabled() || router.getManualOverride()) return null
@@ -353,7 +482,9 @@ export class ExecutionEngine {
           try {
             // v0.3.1: applyRoutingDecision does NOT set manual override —
             // auto-routing must remain re-routable on subsequent turns.
-            this.applyRoutingDecision(decision.selectedModel)
+            // It also applies decision.budgetAllocation so the Router's
+            // budget-pressure decision actually constrains maxOutputTokens.
+            this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation)
             return decision.selectedModel
           } catch { return null }
         }
@@ -652,18 +783,72 @@ export class ExecutionEngine {
     }
 
     setModelByUser(model: string): void {
-      this.modelRouter.setManualOverride(model)
-      this.switchModel(model)
+      this.validateModelProviderMatch(model, 'manual')
+      // v0.3.1 (te_goal §三.1.1): route through ModelRouter.setModelByUser
+      // (NOT the legacy setManualOverride) so the router is the one
+      // source of truth for the manual-override flag, emits the
+      // MODEL_OVERRIDE_SET event, and calls the sink which calls
+      // switchModel() here. No double-switch, no recursion.
+      this.modelRouter.setModelByUser(model)
     }
 
     /** Auto-routing path: switch WITHOUT setting the manual override. */
-    applyRoutingDecision(model: string): void {
+    applyRoutingDecision(model: string, budgetAllocation?: BudgetAllocation): void {
+      this.validateModelProviderMatch(model, 'auto')
       this.switchModel(model)
+      if (budgetAllocation) this.applyBudgetAllocation(budgetAllocation)
     }
 
     /** Clear the manual override, restoring auto-routing (/model auto). */
     clearModelOverride(): void {
       this.modelRouter.setManualOverride(null)
+    }
+
+    /**
+     * v0.3.1 (te_goal §三.1.2 + §三.1.4): a model whose profile declares
+     * a different provider than the active engine transport is
+     * rejected. We don't have multi-adapter switching; the engine
+     * comment at line 639-642 documents this. With no profile match
+     * (the user typed a bare model string), accept it through and
+     * let /models + audit surface the mismatch.
+     */
+    private validateModelProviderMatch(modelOrProfile: string, _path: 'manual' | 'auto'): void {
+      const router = this.modelRouter
+      const profile = router.listProfiles().find(
+        (p) => p.id === modelOrProfile || p.model === modelOrProfile,
+      )
+      if (!profile) return
+      const activeProvider = this.config.provider ?? 'openai'
+      if (profile.provider && profile.provider !== activeProvider) {
+        throw new Error(
+          `Cross-provider model switch rejected: profile "${profile.id}" ` +
+          `targets provider "${profile.provider}" but engine transport is ` +
+          `"${activeProvider}". Update config.models.profiles to match the ` +
+          `single configured provider, or restart with a different ` +
+          `--provider flag.`,
+        )
+      }
+    }
+
+    /**
+     * v0.3.1 (te_goal §三.1.4): apply a routing-decided budget
+     * allocation. We mutate maxOutputTokens only (maxInputTokens is
+     * governed by the model profile's context window, already on the
+     * active ContextManager). The latch prevents thrash — repeated
+     * identical allocations are no-ops.
+     */
+    private lastAppliedBudget: { maxOutputTokens?: number } | null = null
+    private applyBudgetAllocation(alloc: BudgetAllocation): void {
+      const next = { maxOutputTokens: alloc.maxOutputTokens }
+      if (this.lastAppliedBudget
+        && this.lastAppliedBudget.maxOutputTokens === next.maxOutputTokens) {
+        return
+      }
+      this.lastAppliedBudget = next
+      if (alloc.maxOutputTokens !== undefined) {
+        this.config.maxOutputTokens = alloc.maxOutputTokens
+        this.contextManager.onModelChanged(this.config.model)
+      }
     }
 
     private switchModel(model: string): void {
@@ -683,6 +868,12 @@ export class ExecutionEngine {
           this.moduleManager.notifyModelChanged(previousModel)
           this.sharedState.updateModelState({ model: previousModel })
         } catch { /* best-effort rollback */ }
+        // Rollback router override too — failed manual switch must not
+        // leave a sticky bad override (te_goal §三.1.1).
+        if (this.modelRouter.getManualOverride()
+          && this.modelRouter.getManualOverride() !== previousModel) {
+          this.modelRouter.setManualOverride(null)
+        }
         throw err
       }
     }
@@ -696,14 +887,38 @@ export class ExecutionEngine {
     return this.modelRouter
   }
 
+  /**
+   * v0.3.1 (te_goal §三.1.2): resolved ProviderRuntimeBindings for
+   * each profile. /models + /route use this to display the active
+   * transport, baseURL, and apiKeyRef so misconfigurations surface
+   * instead of being silently masked.
+   */
+  getBindingRegistry(): BindingRegistry {
+    return this.bindingRegistry
+  }
+
   /** Phase 4: progress/stall monitor (fed by ToolExecutor, queried each iteration). */
   getProgressMonitor(): ProgressMonitor {
     return this.progressMonitor
   }
 
+  /** v0.3.1 (te_goal §八): expose ContextManager so /progress can
+   *  render the working state (files changed, verification, etc.). */
+  getContextManager(): ContextManager {
+    return this.contextManager
+  }
+
   /** Phase 3: task-decomposition graph (empty for simple tasks). */
   getTaskGraph(): TaskGraph {
     return this.taskGraph
+  }
+
+  /**
+   * v0.3.1 (te_goal §五): the per-runId task-graph store. Use this
+   * for new code; getTaskGraph() returns the legacy default-run shim.
+   */
+  getTaskGraphStore(): TaskGraphStore {
+    return this.taskGraphStore
   }
 
   getBackgroundTaskManager(): BackgroundTaskManager {

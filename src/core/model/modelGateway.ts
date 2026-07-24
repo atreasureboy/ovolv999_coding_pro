@@ -46,6 +46,14 @@ export interface ModelGatewayCallbacks {
   onUsage?: (usage: TokenUsage | null, callStartMs: number) => void
   /** Called when a context overflow error is detected. Should compact messages and return true on success. */
   onContextOverflow?: (messages: OpenAIMessage[], abortSignal: AbortSignal) => Promise<boolean>
+  /**
+   * v0.3.1 (te_goal §三.1.4): called when the provider returns a
+   * retryable error (429/timeout/5xx). Returns the next model in the
+   * fallback chain, or null if the chain is exhausted. The gateway
+   * retries ONCE with the fallback model — it does NOT replay tools
+   * (the error occurs at stream establishment, before any tool runs).
+   */
+  onProviderError?: (failedModel: string, error: Error) => string | null
 }
 
 export class ModelGateway {
@@ -99,9 +107,10 @@ export class ModelGateway {
     let stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>
     try {
       stream = await this.adapter.stream(streamReq)
-    } catch (err: unknown) {
+    } catch (caught: unknown) {
       this.renderer.stopSpinner()
-      const errMsg = (err as Error).message || ''
+      const err = caught instanceof Error ? caught : new Error(String(caught))
+      const errMsg = err.message || ''
 
       // Reactive compaction on context-overflow — provider-agnostic
       // (detected by error-message signature across OpenAI-compatible
@@ -111,6 +120,28 @@ export class ModelGateway {
         const compacted = await callbacks.onContextOverflow(messages, abortSignal)
         if (!compacted) throw err
         stream = await this.adapter.stream(streamReq)
+      } else if (this.isRetryableProviderError(errMsg) && callbacks?.onProviderError) {
+        // v0.3.1 (te_goal §三.1.4): provider fallback at the stream
+        // ESTABLISHMENT boundary (before any tool runs). The callback
+        // supplies a fallback model from Router.nextFallback(); we
+        // re-issue the request ONCE with that model. The adapter is
+        // reused — single-transport mode; the fallback model targets
+        // the same OpenAI-compatible endpoint.
+        const fallbackResult: unknown = callbacks.onProviderError(model, err)
+        const fallbackModel: string | null = (fallbackResult && typeof (fallbackResult as { then?: unknown }).then === 'function')
+          ? await (fallbackResult as Promise<string | null>)
+          : (fallbackResult as string | null)
+        if (!fallbackModel || fallbackModel === model) throw err
+        this.renderer.warn(
+          `Provider error on "${model}" — falling back to "${fallbackModel}"`,
+        )
+        try {
+          stream = await this.adapter.stream({ ...streamReq, model: fallbackModel })
+        } catch {
+          // Fallback failed too — surface the ORIGINAL error so /why
+          // can attribute failure to the chain, not just the last hop.
+          throw err
+        }
       } else {
         throw err
       }
@@ -119,6 +150,26 @@ export class ModelGateway {
     const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
     callbacks?.onUsage?.(result.usage, callStartMs)
     return result
+  }
+
+  /**
+   * v0.3.1 (te_goal §三.1.4): classify a provider error as retryable.
+   * The OpenAI-compatible transport surfaces 429 / 5xx / timeout as
+   * Error objects whose message contains the status code or a known
+   * marker. False positives are cheap (the next attempt just fails
+   * the same way); false negatives mean the loop sits on a dead
+   * profile.
+   */
+  private isRetryableProviderError(errMsg: string): boolean {
+    return (
+      /\b429\b/.test(errMsg)
+      || /\b5\d\d\b/.test(errMsg)
+      || /\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b/.test(errMsg)
+      || /\btime[\s_-]?out\b/i.test(errMsg)
+      || /rate[\s_-]?limit/i.test(errMsg)
+      || /\bserver[\s_-]?error\b/i.test(errMsg)
+      || /\bunavailable\b/i.test(errMsg)
+    )
   }
 
   private isContextOverflowError(errMsg: string): boolean {

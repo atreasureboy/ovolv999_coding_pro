@@ -65,7 +65,31 @@ export interface Command {
 
 const registry = new Map<string, Command>()
 
+/** v0.3.1 (te_goal §八): duplicate command registrations throw in dev
+ *  mode. The legacy behaviour (silent overwrite) is preserved when
+ *  NODE_ENV === 'production' OR OVOLV999_NO_STRICT_SLASH=1. The
+ *  goal-driven mode is enabled by default in dev. */
 export function registerCommand(cmd: Command): void {
+  const isDev = process.env.NODE_ENV !== 'production' && process.env.OVOLV999_NO_STRICT_SLASH !== '1'
+  if (isDev) {
+    const existing = registry.get(cmd.name)
+    if (existing && existing.handler !== cmd.handler) {
+      throw new Error(
+        `Slash command "/${cmd.name}" is registered twice with different handlers. ` +
+        `Existing: ${existing.description ?? '(no description)'}; new: ${cmd.description ?? '(no description)'}. ` +
+        `Pick a distinct name or alias. Set OVOLV999_NO_STRICT_SLASH=1 to override.`,
+      )
+    }
+    for (const alias of cmd.aliases ?? []) {
+      const existingAlias = registry.get(alias)
+      if (existingAlias && existingAlias.handler !== cmd.handler) {
+        throw new Error(
+          `Slash command alias "/${alias}" is registered twice with different handlers. ` +
+          `Set OVOLV999_NO_STRICT_SLASH=1 to override.`,
+        )
+      }
+    }
+  }
   registry.set(cmd.name, cmd)
   for (const alias of cmd.aliases ?? []) {
     registry.set(alias, { ...cmd, name: alias })

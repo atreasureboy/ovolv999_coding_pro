@@ -128,9 +128,14 @@ registerCommand({
 // ── Phase 2: adaptive model routing ──────────────────────────────
 registerCommand({
   name: 'route',
-  description: 'Show the last model routing decision and its reasons',
-  usage: '/route',
-  handler: (_args, ctx) => {
+  description: 'Show the last model routing decision and its reasons. /route auto clears the manual override.',
+  usage: '/route [auto]',
+  handler: (args, ctx) => {
+    const trimmed = args.trim().toLowerCase()
+    if (trimmed === 'auto' || trimmed === 'clear') {
+      ctx.engine.clearModelOverride()
+      return text('Manual override cleared — auto-routing resumed.')
+    }
     const router = ctx.engine.getModelRouter()
     const d = router.getLastDecision()
     const override = router.getManualOverride()
@@ -152,6 +157,58 @@ registerCommand({
   },
 })
 
+// ── Phase 8: /progress — runtime progress + stall + budget ─────────
+registerCommand({
+  name: 'progress',
+  description: 'Show progress: meaningful changes, time-since-progress, acceptances, TaskGraph, stall risk, budget',
+  usage: '/progress',
+  handler: (_args, ctx) => {
+    const ws = ctx.engine.getContextManager().getWorkingState()
+    const tg = ctx.engine.getTaskGraph()
+    const pm = ctx.engine.getProgressMonitor()
+    const cost = ctx.engine.getCostTracker()
+    const lines: string[] = ['=== Progress ===']
+    if (ws) {
+      const changed = (ws.filesChanged ?? []).length
+      const read = (ws.filesRead ?? []).length
+      const verPassed = (ws.verification?.passed ?? []).length
+      const verFailed = (ws.verification?.failed ?? []).length
+      lines.push(
+        `Files: ${changed} changed, ${read} read`,
+        `Verification: ${verPassed} passed, ${verFailed} failed`,
+        `Unresolved: ${(ws.unresolved ?? []).length}`,
+      )
+    }
+    if (tg) {
+      const snap = tg.snapshot()
+      const s = snap.summary
+      lines.push(
+        '',
+        `TaskGraph: ${s.completed}/${s.total} completed · ${s.failed} failed · ${s.blocked} blocked · ${s.running} running · ${s.ready} ready`,
+      )
+    }
+    if (pm) {
+      const snap = pm.snapshot(0)
+      lines.push(
+        '',
+        `Iterations: ${snap.iteration}`,
+        `Minutes since last progress: ${snap.minutesSinceLastMeaningfulProgress.toFixed(1)}`,
+        `Repeated errors (consecutive): ${snap.repeatedErrors}`,
+        `Remaining acceptances: ${snap.remainingAcceptanceCriteria.length}`,
+        `Verification Δ: ${snap.verificationDelta}`,
+      )
+    }
+    if (cost) {
+      lines.push(
+        '',
+        `API calls: ${cost.getTotalAPICalls()}`,
+        `Cost: $${cost.getTotalCost().toFixed(4)}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+})
+
 registerCommand({
   name: 'models',
   description: 'List configured model profiles with health (calls/failures/latency)',
@@ -160,11 +217,17 @@ registerCommand({
     const router = ctx.engine.getModelRouter()
     const profiles = router.listProfiles()
     if (profiles.length === 0) return text('No model profiles configured.')
+    const bindingRegistry = ctx.engine.getBindingRegistry?.()
     const lines = profiles.map((p) => {
       const h = router.getProfileHealth(p.id)
       const health = h ? `${h.calls} calls, ${h.failures} fail, ${Math.round(h.ewmaLatency)}ms avg` : 'no data'
       const caps = p.capabilities
+      const binding = bindingRegistry?.get(p.id)
+      const providerLabel = binding
+        ? `provider=${binding.provider}${binding.baseURL ? ` baseURL=${binding.baseURL}` : ''}${binding.apiKeyRef ? ` key=${binding.apiKeyRef}` : ''}`
+        : `provider=${p.provider}`
       return `  ${p.available ? '' : '(disabled) '}${p.model}  [${p.id}]  roles: ${p.roles.join(',')}` +
+        `\n      ${providerLabel}` +
         `\n      reasoning=${caps.reasoning} coding=${caps.coding} ctx=${caps.contextWindow} tools=${caps.toolCalling} cost=${caps.cost} speed=${caps.speed}` +
         `\n      health: ${health}`
     })
@@ -408,9 +471,36 @@ registerCommand({
 
 registerCommand({
   name: 'model',
-  description: 'Show current model',
+  description: 'Show current model, set a sticky override, or restore auto-routing',
   aliases: ['m'],
-  handler: (_args, ctx) => text(`Current model: ${ctx.engine.getModel()}`),
+  usage: '/model [name|id|auto]',
+  handler: (args, ctx) => {
+    const trimmed = args.trim()
+    if (!trimmed) {
+      const router = ctx.engine.getModelRouter()
+      const override = router.getManualOverride()
+      const lines = [`Current model: ${ctx.engine.getModel()}`]
+      if (override) lines.push(`Manual override: ${override}  (use '/model auto' to clear)`)
+      else lines.push(`Auto-routing: enabled (use '/model <name>' to lock)`)
+      return text(lines.join('\n'))
+    }
+    if (trimmed === 'auto' || trimmed === 'clear') {
+      ctx.engine.clearModelOverride()
+      return text('Manual override cleared — auto-routing resumed.')
+    }
+    try {
+      ctx.engine.setModelByUser(trimmed)
+      const router = ctx.engine.getModelRouter()
+      const profiles = router.listProfiles()
+      const matched = profiles.find((p) => p.id === trimmed || p.model === trimmed)
+      return text(
+        `Model set by user: ${ctx.engine.getModel()}` +
+        (matched ? `  (matched profile: ${matched.id})` : '  (no matching profile — using raw string)'),
+      )
+    } catch (err) {
+      return text(`Failed to set model: ${(err as Error).message}`)
+    }
+  },
 })
 
 // ── /permissions — show permission mode ─────────────────────────────────────
@@ -570,28 +660,6 @@ registerCommand({
       return text(`✓ Restored ${file.path} to original (pre-edit) state.\n  ${versions.length} version(s) were tracked.`)
     }
     return text(`✗ Failed to restore ${file.path}. The backup may be missing.`)
-  },
-})
-
-// ── /tasks — show background tasks ──────────────────────────────────────────
-
-registerCommand({
-  name: 'tasks',
-  description: 'List background tasks',
-  aliases: ['t'],
-  handler: (_args, ctx) => {
-    const mgr = ctx.engine.getBackgroundTaskManager()
-    const tasks = mgr.listTasks()
-    if (tasks.length === 0) {
-      return text('No background tasks.')
-    }
-    // Inline formatTaskList
-    const lines = tasks.map(t => {
-      const icon = t.status === 'running' ? '\u25C6' : t.status === 'completed' ? '\u2713' : t.status === 'failed' ? '\u2717' : '\u2299'
-      const dur = t.durationMs !== null ? ' (' + (t.durationMs / 1000).toFixed(1) + 's)' : ''
-      return '  ' + icon + ' ' + t.id + ' [' + t.status + ']' + dur + ' ' + t.description
-    })
-    return text('Background tasks (' + tasks.length + '):\n' + lines.join('\n'))
   },
 })
 
@@ -1347,9 +1415,8 @@ registerCommand({
 })
 
 registerCommand({
-  name: 'models',
-  aliases: ['providers'],
-  description: 'List known LLM providers and models. Usage: /models [provider]',
+  name: 'providers',
+  description: 'List known LLM providers and their static model metadata. Usage: /providers [provider]',
   handler: (args) => {
     const { MODELS, PROVIDERS, listProviders, detectProviderFromModel, getModelInfo } =
       require('../core/providers.js') as typeof import('../core/providers.js')
@@ -1490,48 +1557,9 @@ registerCommand({
   },
 })
 
-registerCommand({
-  name: 'export',
-  description: 'Export conversation. Usage: /export [md|json|text|transcript] [filename]',
-  handler: (args, ctx) => {
-    if (ctx.history.length === 0) {
-      return text('No conversation to export.')
-    }
-
-    const parts = args.trim().split(/\s+/)
-    const formatArg = parts[0]?.toLowerCase()
-    const { exportSession, exportSessionToFile, defaultFilename } =
-      require('../utils/sessionExport.js') as typeof import('../utils/sessionExport.js')
-
-    const validFormats = ['md', 'markdown', 'json', 'text', 'transcript']
-    let format: 'markdown' | 'json' | 'text' | 'transcript'
-    let filename: string | undefined
-
-    if (formatArg && validFormats.includes(formatArg)) {
-      format = formatArg === 'md' ? 'markdown' : (formatArg as 'markdown' | 'json' | 'text' | 'transcript')
-      filename = parts[1]
-    } else if (formatArg) {
-      // Treat as filename, default to markdown
-      filename = parts[0]
-      format = 'markdown'
-    } else {
-      format = 'markdown'
-    }
-
-    filename = filename ?? defaultFilename(format)
-
-    try {
-      const path = exportSessionToFile(ctx.history, ctx.cwd, filename, { format })
-      const result = exportSession(ctx.history, { format })
-      return text(
-        `✓ Exported ${result.messageCount} messages to: ${path}\n` +
-        `Format: ${format} (${result.charCount} chars)`
-      )
-    } catch (err) {
-      return text(`Failed to export: ${(err as Error).message}`)
-    }
-  },
-})
+// v0.3.1 (te_goal §八): the second /export registration was removed
+// to keep the registry clean. The first registration (line 955) is
+// the canonical handler with secret-masking.
 
 registerCommand({
   name: 'audit',
@@ -1872,7 +1900,6 @@ registerCommand({
 
 registerCommand({
   name: 'knowledge',
-  aliases: ['kb'],
   description: 'Project knowledge base. Usage: /knowledge [add <cat> <key> <val> | search <q> | remove <key> | list | stats]',
   handler: (args, ctx) => {
     const parts = args.trim().split(/\s+/)
@@ -2318,7 +2345,7 @@ registerCommand({
 
 registerCommand({
   name: 'snippet',
-  aliases: ['snip', 'code'],
+  aliases: ['code'],
   description: 'Manage code snippets. Usage: /snippet [add|list|use|search|show|remove|fav|stats]',
   handler: (args, ctx) => {
     const {
@@ -2490,7 +2517,7 @@ registerCommand({
 
 registerCommand({
   name: 'metrics',
-  aliases: ['complexity', 'health'],
+  aliases: ['complexity'],
   description: 'Analyze code metrics and health. Usage: /metrics [file <path> | project <paths...> | health <path>]',
   handler: (args, ctx) => {
     const {
@@ -2923,125 +2950,7 @@ registerCommand({
   },
 })
 
-// ── /plugins ────────────────────────────────────────────────────────────────
-
-registerCommand({
-  name: 'plugins',
-  aliases: ['plugin'],
-  description: 'Manage plugins. Usage: /plugins [list | enable <name> | disable <name> | info <name> | install <source> | uninstall <name> | rescan]',
-  handler: (args) => {
-    const pluginMod = require('../core/pluginManager.js') as typeof import('../core/pluginManager.js')
-    const {
-      loadPlugins, enablePlugin, disablePlugin, getPlugin,
-      listPlugins, installPlugin, uninstallPlugin,
-      formatPluginList, formatPlugin,
-    } = pluginMod
-
-    const parts = args.trim().split(/\s+/)
-    const sub = parts[0] ?? 'list'
-
-    if (sub === 'list' || sub === 'ls') {
-      return text(formatPluginList(listPlugins()))
-    }
-
-    if (sub === 'enable') {
-      const name = parts[1]
-      if (!name) return text('Usage: /plugins enable <name>')
-      const p = enablePlugin(name)
-      return text(p ? `Enabled: ${name}` : `Not found: ${name}`)
-    }
-
-    if (sub === 'disable') {
-      const name = parts[1]
-      if (!name) return text('Usage: /plugins disable <name>')
-      const p = disablePlugin(name)
-      return text(p ? `Disabled: ${name}` : `Not found: ${name}`)
-    }
-
-    if (sub === 'info') {
-      const name = parts[1]
-      if (!name) return text('Usage: /plugins info <name>')
-      const p = getPlugin(name)
-      return text(p ? formatPlugin(p) : `Not found: ${name}`)
-    }
-
-    if (sub === 'install') {
-      const source = parts[1]
-      if (!source) return text('Usage: /plugins install <local-path>')
-      const result = installPlugin({ from: 'local', source })
-      return text(result.message)
-    }
-
-    if (sub === 'uninstall') {
-      const name = parts[1]
-      if (!name) return text('Usage: /plugins uninstall <name>')
-      const result = uninstallPlugin(name)
-      return text(result.message)
-    }
-
-    if (sub === 'rescan') {
-      const plugins = loadPlugins()
-      return text(`Found ${plugins.length} plugin(s)`)
-    }
-
-    return text(formatPluginList(listPlugins()))
-  },
-})
-
-// ── /dream ──────────────────────────────────────────────────────────────────
-
-registerCommand({
-  name: 'dream',
-  aliases: ['learn', 'patterns'],
-  description: 'Auto-dream and skill learning. Usage: /dream [stats | patterns | log | knowledge | skills | insight <text>]',
-  handler: (args) => {
-    const dreamMod = require('../core/autoDream.js') as typeof import('../core/autoDream.js')
-    const {
-      getPatterns, getTopPatterns, getDreamLog, getKnowledge, getExtractedSkills,
-      dream, formatPatterns, formatDreamLog, formatDreamStats,
-    } = dreamMod
-
-    const parts = args.trim().split(/\s+/)
-    const sub = parts[0] ?? 'stats'
-
-    if (sub === 'stats') {
-      return text(formatDreamStats())
-    }
-
-    if (sub === 'patterns') {
-      return text(formatPatterns(getTopPatterns(10)))
-    }
-
-    if (sub === 'log') {
-      const limit = parseInt(parts[1] ?? '10', 10)
-      return text(formatDreamLog(getDreamLog(limit)))
-    }
-
-    if (sub === 'knowledge') {
-      const kb = getKnowledge()
-      if (kb.length === 0) return text('No knowledge entries yet.')
-      const lines = kb.map(k => `Q: ${k.question}\nA: ${k.answer}`)
-      return text(lines.join('\n---\n'))
-    }
-
-    if (sub === 'skills') {
-      const skills = getExtractedSkills()
-      if (skills.length === 0) return text('No skills extracted yet.')
-      return text(skills.map(s => `${s.skillName}: ${s.description}`).join('\n'))
-    }
-
-    if (sub === 'insight') {
-      const desc = parts.slice(1).join(' ')
-      if (!desc) return text('Usage: /dream insight <description>')
-      const entry = dream('insight', 'manual', desc)
-      return text(`Recorded insight: ${entry.description}`)
-    }
-
-    return text('Usage: /dream [stats | patterns | log | knowledge | skills | insight <text>]')
-  },
-})
-
-// ── /messages ───────────────────────────────────────────────────────────────
+// ── /messages — inter-agent messaging ──────────────────────────────────────
 
 registerCommand({
   name: 'messages',
