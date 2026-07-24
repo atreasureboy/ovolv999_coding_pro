@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import {
   collectRoutingSignals,
   signalsToRoutingInput,
+  type RoutingSignals,
 } from '../src/core/model/routingSignalCollector.js'
 
 describe('RoutingSignalCollector v0.3.1', () => {
@@ -162,5 +163,53 @@ describe('RoutingSignalCollector v0.3.1', () => {
     expect(s.previousRoutingFailures).toBe(0)
     expect(s.taskGraphScale).toBe(0)
     expect(s.expectedToolRequirement).toBe('read-only') // short generic greeting under 80 chars
+  })
+
+  // ── ele_goal §6.1: exhaustiveness test ──────────────────────────
+  // If a new field is added to RoutingSignals but NOT mapped in
+  // signalsToRoutingInput (or listed in UNMAPPED), this test fails.
+  // That prevents silent signal loss when the schema grows.
+  it('signalsToRoutingInput maps every RoutingSignals field (or lists it as unmapped)', () => {
+    const sampleSignals: RoutingSignals = {
+      userGoal: 'refactor core',
+      repoFileCount: 500,
+      filesTouched: 12,
+      recentFailureCount: 2,
+      contextUsageRatio: 0.7,
+      budgetRemaining: 0.4,
+      role: 'main',
+      needsArchitecture: true,
+      providerHealth: [{ profileId: 'p1', failRate: 0.1, avgLatencyMs: 800 }],
+      previousRoutingFailures: 1,
+      expectedToolRequirement: 'side-effect',
+      affectsPublicInterface: true,
+      isCrossModule: true,
+      isConfigChange: false,
+      requiresRootCause: true,
+      estimatedImpactFiles: 8,
+      taskGraphScale: 3,
+    }
+
+    // Fields collected but NOT yet consumed by RoutingInput.
+    // Each must be justified — adding one requires a comment.
+    const UNMAPPED = new Set([
+      'providerHealth',          // consumed by ModelRouter.recordCall directly, not via RoutingInput
+      'expectedToolRequirement', // used inside the collector for heuristics; not in RoutingInput yet
+      'affectsPublicInterface',  // folded into needsArchitecture
+      'isCrossModule',           // folded into needsArchitecture
+      'isConfigChange',          // folded into needsArchitecture
+      'requiresRootCause',       // folded into needsArchitecture
+      'estimatedImpactFiles',    // folded into needsArchitecture calculation
+      'taskGraphScale',          // folded into needsArchitecture calculation
+      'recentFailureCount',      // combined into RoutingInput.consecutiveFailures (+ previousRoutingFailures)
+      'previousRoutingFailures', // combined into RoutingInput.consecutiveFailures (+ recentFailureCount)
+    ])
+
+    const allFields = Object.keys(sampleSignals)
+    const mapped = signalsToRoutingInput(sampleSignals)
+    const mappedKeys = new Set(Object.keys(mapped))
+
+    const lost = allFields.filter((f) => !mappedKeys.has(f) && !UNMAPPED.has(f))
+    expect(lost).toEqual([])
   })
 })
