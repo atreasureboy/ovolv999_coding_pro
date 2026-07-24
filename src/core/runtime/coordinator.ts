@@ -232,6 +232,10 @@ export class RuntimeCoordinator {
       } catch { /* best-effort: routing must never break the turn */ }
     }
 
+    // v0.3.1 (te_goal §五): reset the TaskGraph at the start of each
+    // turn so turn 2 doesn't inherit turn 1's nodes.
+    this.deps.taskGraph?.reset()
+
     // P0-2 (continuation output completeness): collect EVERY assistant
     // text segment emitted during this turn — including continuation
     // segments after `finish_reason='length'`, budget-continuation

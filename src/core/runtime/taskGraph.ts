@@ -236,6 +236,14 @@ export class TaskGraph {
     return g
   }
 
+  /**
+   * v0.3.1 (te_goal §五): reset the graph to empty. Called at the start
+   * of each turn so turn 2 doesn't inherit turn 1's nodes.
+   */
+  reset(): void {
+    this.nodes.clear()
+  }
+
   // ── internals ───────────────────────────────────────────────────
 
   private require(id: string): TaskNode {

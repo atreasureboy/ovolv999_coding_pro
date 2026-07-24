@@ -106,4 +106,15 @@ describe('TaskGraph (Phase 3)', () => {
     expect(s).toMatchObject({ total: 3, running: 1, ready: 1, pending: 1 })
     expect(s.done).toBe(false)
   })
+
+  it('v0.3.1: reset() clears all nodes (per-run isolation)', () => {
+    const g = new TaskGraph()
+    g.addNode(node('a'))
+    g.addNode(node('b', { dependencies: ['a'] }))
+    g.start('a'); g.complete('a')
+    expect(g.size()).toBe(2)
+    g.reset()
+    expect(g.size()).toBe(0)
+    expect(g.hasUnfinished()).toBe(false)
+  })
 })
