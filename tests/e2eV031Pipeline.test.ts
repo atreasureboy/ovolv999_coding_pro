@@ -115,18 +115,19 @@ describe('v0.3.1 end-to-end pipeline (audit pass 2)', () => {
     expect(profiles.length).toBeGreaterThan(0)
     const defaultProfile = profiles[0]
     const health = router.getProfileHealth(defaultProfile.id)
-    // Health may be tracked under the resolved profile id
-    expect(health === undefined || health.calls >= 0).toBe(true)
+    // Health may be tracked under the resolved profile id — at least
+    // one call was recorded against the default profile.
+    expect(health).toBeDefined()
+    expect(health!.calls).toBeGreaterThanOrEqual(1)
     // Run completed with a result
     expect(result).toBeDefined()
-    expect(['stop_sequence', 'error']).toContain(result.result.reason)
+    expect(result.result.reason).toBe('stop_sequence')
     // Events fired
     expect(events).toContain('RUN_STARTED')
     expect(events).toContain('MODEL_REQUESTED')
-    // The TypedEvent for COMPLETION_EVALUATED or COMPLETION_REJECTED
-    // should fire on stop_sequence
-    const sawCompletion = events.includes('COMPLETION_EVALUATED') || events.includes('COMPLETION_REJECTED')
-    expect(sawCompletion).toBe(true)
+    // v0.3.2: precise assertion — COMPLETION_EVALUATED always fires on
+    // stop_sequence (the contract evaluates whether to accept or reject).
+    expect(events).toContain('COMPLETION_EVALUATED')
     // TASK_GRAPH_CREATED was emitted
     expect(events).toContain('TASK_GRAPH_CREATED')
   })

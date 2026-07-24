@@ -243,3 +243,20 @@ trees + migration notes.
 **Verification commands**: `npm run typecheck` · `npm run lint` ·
 `npm run test` · `npm run eval:wiring` · `npm run eval:deterministic`
 · `npm run check` (all six).
+
+---
+
+## 17. v0.3.2 Runtime Object Identity — what was actually wired
+
+| Capability | Status | Entry file | Key class / fn |
+|---|---|---|---|
+| RunScopedRuntimeContext (per-run scope) | **Fully wired** | `src/core/runtime/runScopedContext.ts` | `InMemoryRunScopedRuntimeContextStore`, `RunScopedContextResolver` |
+| TaskIntent (pre-execution classification) | **Fully wired** | `src/core/runtime/taskIntent.ts` | `classifyTaskIntent` (mutation/analysis/informational) |
+| TurnOutcome (canonical result shape) | **Fully wired** | `src/core/runtime/turnOutcome.ts` | `TurnOutcome` (carries CompletionVerdict + modelCalls) |
+| CriterionEvidence (per-criterion proof) | **Fully wired** | `src/core/runtime/criterionEvidence.ts` | `InMemoryCriterionEvidenceStore` (test/command/file-change/review/manual) |
+| TaskGraphResolver (runId-based graph) | **Fully wired** | `src/tools/taskGraphResolver.ts` | `RunScopedTaskGraphResolver` (no fixed graph in TaskPlanTool) |
+| CompletionVerdict as sole truth | **Fully wired** | `src/core/runtime/completionContract.ts` | `evaluateCompletion` (single entry; coordinator, CLI, RunRegistry all use it) |
+| Single-track Critic (risk-gated) | **Fully wired** | `src/modules/critic.ts` | `onIteration` with `criticRequested` from coordinator |
+| Fallback attribution | **Fully wired** | `src/core/model/modelGateway.ts` | `onProviderError` + `MODEL_ATTEMPT_*` events |
+
+See `docs/V0_3_2_RUNTIME_OBJECT_IDENTITY.md` for the full call chain.
