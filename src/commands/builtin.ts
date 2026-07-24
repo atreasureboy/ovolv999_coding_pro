@@ -3,7 +3,13 @@
  *
  * Each command is registered at module load. Import this file once
  * in bin/ovogogogo.ts to activate all commands.
+ *
+ * This file uses lazy require() for slash-command handlers to avoid
+ * circular dependencies and eager-loading rarely-used modules. The
+ * pattern is intentional; the two lint rules below would fire on every
+ * require call. They are disabled at file scope with justification.
  */
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
 
 import { registerCommand } from './index.js'
 import type { SlashCommandContext, SlashCommandResult } from './index.js'
