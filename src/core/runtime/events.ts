@@ -68,6 +68,19 @@ export type RunEvent =
   | { type: 'COMPLETION_EVALUATED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
   | { type: 'COMPLETION_REJECTED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
   | { type: 'REVIEW_COMPLETED'; verdict: string; findings: string[] }
+  // v0.3.2 (ele_goal §Phase 3): TaskIntent classification event
+  | { type: 'TASK_INTENT_CLASSIFIED'; runId: string; intent: { kind: 'informational' | 'analysis' | 'mutation'; source: string; confidence: number } }
+  // v0.3.2 (ele_goal §Phase 7): per-attempt model call events so the
+  // fallback chain emits structured events for each hop.
+  | { type: 'MODEL_ATTEMPT_STARTED'; model: string; attemptId: number }
+  | { type: 'MODEL_ATTEMPT_FAILED'; model: string; attemptId: number; error: string; retryable: boolean }
+  | { type: 'MODEL_ATTEMPT_SUCCEEDED'; model: string; attemptId: number; latencyMs: number; usage?: { inputTokens: number; outputTokens: number } }
+  // v0.3.2 (ele_goal §Phase 9): terminal semantic events. The legacy
+  // generic RUN_COMPLETED is kept for back-compat; these typed
+  // variants are emitted after the CompletionContract evaluates.
+  | { type: 'RUN_EXECUTION_STARTED'; runId: string }
+  | { type: 'RUN_EXECUTION_STOPPED'; runId: string; stopReason: 'stop_sequence' | 'length' | 'max_iterations' | 'interrupted' | 'error' }
+  | { type: 'RUN_STATUS_TRANSITIONED'; runId: string; from: string; to: string; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
 
 export type RunEventType = RunEvent['type']
 

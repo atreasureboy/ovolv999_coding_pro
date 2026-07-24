@@ -63,9 +63,18 @@ import { evaluateCompletion } from './completionContract.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
+import type { TaskGraphStore } from './taskGraphStore.js'
 import { ControlMessageLog } from './internalControlMessage.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
+import {
+  InMemoryRunScopedRuntimeContextStore,
+  type RunScopedRuntimeContext,
+  type RunScopedRuntimeContextStore,
+  type CompletionCandidate,
+} from './runScopedContext.js'
+import { classifyTaskIntent, type TaskIntent } from './taskIntent.js'
 import { boot } from './boot.js'
+import type { TurnOutcome, ModelCallAttemptSnapshot } from './turnOutcome.js'
 
 interface StreamingToolCall {
   index: number
@@ -110,7 +119,21 @@ export interface CoordinatorDeps {
    * Coordinator uses this to mint a fresh graph for each runId so
    * turn N's graph does not leak into turn M.
    */
-  taskGraphStore?: import('./taskGraphStore.js').TaskGraphStore
+  taskGraphStore?: TaskGraphStore
+  /**
+   * v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+   * store. The Coordinator mints a fresh Context for each runId and
+   * resolves the SAME Context for the tool, completion contract, and
+   * router. Optional — absence falls back to the v0.3.1 taskGraphStore
+   * path for back-compat.
+   */
+  runContextStore?: RunScopedRuntimeContextStore
+  /**
+   * v0.3.2 (ele_goal §Phase 3): optional override of the taskKind
+   * classifier. Production uses the static-rule classifier; tests can
+   * inject a mock to make classification deterministic.
+   */
+  classifyIntent?: (userMessage: string, options: { planMode?: boolean }) => TaskIntent
   /**
    * Phase 2: per-turn adaptive model routing. Called once after boot
    * with the turn's signals; if it returns a model string, the engine
@@ -133,6 +156,17 @@ export interface CoordinatorDeps {
 
 export class RuntimeCoordinator {
   private readonly deps: CoordinatorDeps
+  /** v0.3.2 (ele_goal §Phase 7): per-turn model call attempts so
+   *  the TurnOutcome can carry the full fallback chain. */
+  private modelCallsThisRun: Array<{
+    model: string
+    startedAt: number
+    endedAt: number
+    success: boolean
+    error?: string
+    usage?: { inputTokens: number; outputTokens: number }
+    retryable: boolean
+  }> = []
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps
@@ -156,6 +190,7 @@ export class RuntimeCoordinator {
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
     // ── ExecutionRun tracking (GAP-C) ──
+    // ── ExecutionRun tracking (GAP-C) ──
     // If a registry is wired in, mint a `kind='turn'` run that
     // reflects this turn's lifecycle. The registry is optional so
     // existing call sites (and tests) that don't supply one keep
@@ -174,6 +209,16 @@ export class RuntimeCoordinator {
       try {
         registry.transition(runId, 'preparing', { phase: 'boot' })
       } catch { /* best-effort */ }
+    }
+    // v0.3.2 (ele_goal §Phase 9): lifecycle start marker. Emitted
+    // after RUN_STARTED but before the loop begins, so /trace can
+    // show "execution started" distinctly from "run started" (the
+    // latter is a logical event, the former a runtime event).
+    if (runId) {
+      this.deps.eventEmitter.emit({
+        type: 'RUN_EXECUTION_STARTED',
+        runId,
+      } as never)
     }
 
     // ── Boot Sequence ──
@@ -280,19 +325,57 @@ export class RuntimeCoordinator {
       } catch { /* best-effort: routing must never break the turn */ }
     }
 
-    // v0.3.1 (te_goal §五): mint a fresh TaskGraph per runId. The
-    // legacy `taskGraph.reset()` is replaced with `store.create(runId)`
-    // (or `store.get(runId)` on resume). Sub-runs get their own
-    // graph; turn N+1's graph never inherits turn N's nodes.
+    // v0.3.2 (ele_goal §Phase 1 + §Phase 3): mint a fresh
+    // RunScopedRuntimeContext per runId. The Context owns the taskGraph,
+    // progressMonitor, controlMessages, routingSignals, taskKind, and
+    // completionVerdict. The legacy taskGraphStore path is preserved
+    // as a back-compat shim — production should wire runContextStore.
+    let runContext: RunScopedRuntimeContext | undefined
     if (runId) {
-      const store = this.deps.taskGraphStore
-      if (store) {
-        let graph = store.get(runId)
-        if (!graph) graph = store.create(runId)
-        this.deps.taskGraph = graph
+      const ctxStore = this.deps.runContextStore
+      if (ctxStore) {
+        runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
+          parentRunId: effectiveParentRunId,
+          taskKind: 'informational', // refined below after routing
+        })
+        // Phase 3: classify intent BEFORE routing so the router
+        // can consume the intent signal.
+        const planMode = this.deps.sharedState.planModeActive
+        const intent = this.deps.classifyIntent
+          ? this.deps.classifyIntent(userMessage, { planMode })
+          : classifyTaskIntent(userMessage, { planMode })
+        runContext.taskKind = intent.kind
+        this.deps.eventEmitter.emit({
+          type: 'TASK_INTENT_CLASSIFIED',
+          runId,
+          intent: {
+            kind: intent.kind,
+            source: intent.source,
+            confidence: intent.confidence,
+          },
+        } as never)
+        // The Context's taskGraph is the source of truth.
+        this.deps.taskGraph = runContext.taskGraph
+      } else {
+        // Fallback: legacy taskGraphStore path.
+        const store = this.deps.taskGraphStore
+        if (store) {
+          let graph = store.get(runId)
+          if (!graph) graph = store.create(runId)
+          this.deps.taskGraph = graph
+        }
       }
     } else {
       // No runId → fall back to the legacy single-graph shim.
+      this.deps.taskGraph?.reset()
+    }
+
+    // Old-style TaskGraph store call (kept for tests that don't
+    // wire runContextStore). Best-effort, ignored if runContextStore
+    // already set the graph above.
+    if (runId && !this.deps.runContextStore) {
+      // already handled above
+    } else if (!runId) {
       this.deps.taskGraph?.reset()
     }
 
@@ -671,7 +754,7 @@ export class RuntimeCoordinator {
       }
     }
 
-    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
+    eventEmitter.emit({ type: 'RUN_EXECUTION_STOPPED', runId: runId ?? 'unknown', stopReason: result.reason })
 
     // ── CompletionContract gate (v0.3.1: SINGLE source of truth) ──
     // stop_sequence only means the model stopped. The real verdict comes
@@ -794,9 +877,47 @@ export class RuntimeCoordinator {
           })
         }
       } catch { /* best-effort: never break the turn result */ }
+      // v0.3.2 (ele_goal §Phase 9): emit RUN_STATUS_TRANSITIONED
+      // before the final RUN_COMPLETED so consumers can observe the
+      // exact status transition.
+      this.deps.eventEmitter.emit({
+        type: 'RUN_STATUS_TRANSITIONED',
+        runId,
+        from: 'running',
+        to: targetStatus,
+        verdict: serializeVerdict(completionVerdict ?? {
+          status: 'failed',
+          reason: 'no verdict',
+          evidence: [],
+        }),
+      } as never)
     }
 
-    // ── Module onComplete hooks ──
+    // v0.3.2 (ele_goal §Phase 9): the final RUN_COMPLETED is emitted
+    // AFTER the CompletionContract and the RunRegistry transition
+    // have both been evaluated. This ordering is required for the
+    // event-order assertion in ele_goal §Phase 0 test 5.
+    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
+
+    // ── Module onComplete hooks (v0.3.2: receives TurnOutcome) ──
+    const turnOutcome: TurnOutcome = {
+      runId: runId ?? 'unknown',
+      stopReason: result.reason,
+      completion: completionVerdict ?? {
+        status: 'failed',
+        reason: 'no verdict produced',
+        evidence: [],
+      },
+      output: result.output,
+      changedFiles: [...ws.filesChanged],
+      verification: {
+        executed: ws.verification.passed.length + ws.verification.failed.length > 0,
+        passed: ws.verification.failed.length === 0,
+        failed: [...ws.verification.failed],
+      },
+      artifacts: [],
+      modelCalls: this.modelCallsThisRun,
+    }
     await this.deps.moduleManager.runComplete({
       cwd: config.cwd,
       sessionDir: config.sessionDir,
@@ -829,6 +950,13 @@ export class RuntimeCoordinator {
     this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
     let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null = null
     let providerFailed = false
+    let attemptModel = modelAtStart
+    const attemptStartedAt = Date.now()
+    this.deps.eventEmitter.emit({
+      type: 'MODEL_ATTEMPT_STARTED',
+      model: attemptModel,
+      attemptId: this.modelCallsThisRun.length,
+    } as never)
     try {
       // v0.3.1 (te_goal §七): prepend control messages for this
       // single call. The caller (the LLM state machine) drains the
@@ -860,20 +988,59 @@ export class RuntimeCoordinator {
           onProviderError: (failedModel, err) => {
             providerFailed = true
             this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
+            // v0.3.2 (ele_goal §Phase 7): record the failed attempt
+            // before the fallback chain advances.
+            this.modelCallsThisRun.push({
+              model: failedModel,
+              startedAt: attemptStartedAt,
+              endedAt: Date.now(),
+              success: false,
+              error: err.message,
+              retryable: /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(err.message),
+            })
+            this.deps.eventEmitter.emit({
+              type: 'MODEL_ATTEMPT_FAILED',
+              model: failedModel,
+              attemptId: this.modelCallsThisRun.length - 1,
+              error: err.message,
+              retryable: /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(err.message),
+            } as never)
             if (!this.deps.modelRouter) return null
             const next = this.deps.modelRouter.nextFallback(failedModel)
             if (next) {
+              attemptModel = next
               // Apply the fallback model to the engine so the next
               // LLM call uses it. This is an automatic (NOT manual)
               // change so we route through applyRoutingDecision via
               // the engine sink to keep the event stream consistent.
               try { this.deps.modelRouter.applyRoutingDecision(next) } catch { /* best-effort */ }
+              this.deps.eventEmitter.emit({
+                type: 'MODEL_ATTEMPT_STARTED',
+                model: next,
+                attemptId: this.modelCallsThisRun.length,
+              } as never)
               return next
             }
             return null
           },
         },
       )
+      // v0.3.2 (ele_goal §Phase 7): record the successful attempt.
+      this.modelCallsThisRun.push({
+        model: attemptModel,
+        startedAt: attemptStartedAt,
+        endedAt: Date.now(),
+        success: true,
+        usage: result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : undefined,
+        retryable: false,
+      })
+      this.deps.eventEmitter.emit({
+        type: 'MODEL_ATTEMPT_SUCCEEDED',
+        model: attemptModel,
+        attemptId: this.modelCallsThisRun.length - 1,
+        latencyMs: Date.now() - attemptStartedAt,
+        usage: result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : undefined,
+      } as never)
     } catch (err) {
       // Record the failure against the profile even if the gateway
       // threw (helps /models show real health after retries).
@@ -882,6 +1049,25 @@ export class RuntimeCoordinator {
       if (router) {
         const binding = router.listProfiles().find((p) => p.model === modelAtStart)
         if (binding) router.recordCall(binding.id, false, durationMs, null)
+      }
+      // Ensure the failed attempt is recorded even if onProviderError
+      // did not fire (e.g. the error was non-retryable).
+      if (!providerFailed) {
+        this.modelCallsThisRun.push({
+          model: modelAtStart,
+          startedAt: attemptStartedAt,
+          endedAt: Date.now(),
+          success: false,
+          error: (err as Error).message,
+          retryable: false,
+        })
+        this.deps.eventEmitter.emit({
+          type: 'MODEL_ATTEMPT_FAILED',
+          model: modelAtStart,
+          attemptId: this.modelCallsThisRun.length - 1,
+          error: (err as Error).message,
+          retryable: false,
+        } as never)
       }
       throw err
     }
@@ -953,4 +1139,9 @@ function serializeVerdict(v: import('./completionContract.js').CompletionVerdict
     return { status: v.status, reasons: [v.reason] }
   }
   return { status: v.status, remaining: v.remaining }
+}
+
+
+function makeTurnOutcome(input: import("./turnOutcome.js").TurnOutcome): import("./turnOutcome.js").TurnOutcome {
+  return input
 }

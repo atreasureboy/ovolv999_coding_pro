@@ -4,7 +4,6 @@
 
 import type { Tool, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
 import type { ExecutionRunRegistry } from '../core/executionRun.js'
-import type { TaskGraph } from '../core/runtime/taskGraph.js'
 import { BashTool } from './bash.js'
 import { FileReadTool } from './fileRead.js'
 import { FileWriteTool } from './fileWrite.js'
@@ -37,6 +36,7 @@ import { DiagnosticsTool } from './diagnostics.js'
 import { ListMcpResourcesTool, ReadMcpResourceTool } from './mcpResources.js'
 import { GoalTool } from './goal.js'
 import { TaskPlanTool } from './taskPlan.js'
+import type { TaskGraphResolver } from './taskGraphResolver.js'
 
 /**
  * Wiring for the per-engine AgentTool instance.
@@ -62,8 +62,12 @@ export interface AgentWiring {
   runRegistry?: ExecutionRunRegistry
   /** Optional parent run id — links child runs into a call tree. */
   parentRunId?: string
-  /** Phase 3: shared TaskGraph for the TaskPlan tool. */
+  /** Phase 3: shared TaskGraph for the TaskPlan tool (legacy path). */
   taskGraph?: unknown
+  /** v0.3.2 (ele_goal §Phase 2): the TaskGraphResolver is the
+   *  primary path; TaskPlanTool resolves the current run's graph
+   *  via runId rather than holding a fixed reference. */
+  taskGraphResolver?: TaskGraphResolver
 }
 
 export function createTools(
@@ -113,7 +117,7 @@ export function createTools(
     new ListMcpResourcesTool(),
     new ReadMcpResourceTool(),
     new GoalTool(),
-    new TaskPlanTool(agentWiring?.taskGraph as TaskGraph | undefined),
+    new TaskPlanTool(agentWiring?.taskGraphResolver),
     ...extraTools,
   ]
 }

@@ -10,8 +10,15 @@ import { TaskPlanTool } from '../src/tools/taskPlan.js'
 import { TaskGraph } from '../src/core/runtime/taskGraph.js'
 import type { ToolContext } from '../src/core/types.js'
 
-const ctx = { cwd: '/tmp' } as unknown as ToolContext
-const tool = (g?: TaskGraph) => new TaskPlanTool(g)
+const ctx = { cwd: '/tmp', execution: { runId: 'test-run' } } as unknown as ToolContext
+const tool = (g?: TaskGraph) => {
+  // v0.3.2 (ele_goal §Phase 2): wrap the graph in a resolver so
+  // the tool gets the same TaskGraphResolver contract as production.
+  const resolver = g
+    ? { resolve: (_runId: string) => g, resolveOrNull: (_runId: string) => g }
+    : undefined
+  return new TaskPlanTool(resolver)
+}
 
 describe('TaskPlan tool (Phase 3)', () => {
   it('add creates a node the graph (and CompletionContract) can see', async () => {

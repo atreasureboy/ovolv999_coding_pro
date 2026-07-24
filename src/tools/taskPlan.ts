@@ -5,6 +5,12 @@
  * nodes → the CompletionContract gate then refuses 'completed' until
  * every node is terminal.
  *
+ * v0.3.2 (ele_goal §Phase 2): the tool no longer holds a fixed
+ * TaskGraph. It receives a TaskGraphResolver and resolves the graph
+ * for the current runId from ToolContext.execution.runId. Removing
+ * the constructor-injected graph is the single source-identity fix
+ * for TaskGraph pollution.
+ *
  * Actions: add | start | update | begin_verification | complete |
  *          fail | block | unblock | retry | cancel | attach_artifact | list
  * The tool is a thin wrapper over the TaskGraph engine (src/core/runtime/
@@ -15,6 +21,7 @@
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { str } from '../core/strings.js'
 import { TaskGraph } from '../core/runtime/taskGraph.js'
+import type { TaskGraphResolver } from './taskGraphResolver.js'
 
 export class TaskPlanTool implements Tool {
   name = 'TaskPlan'
@@ -55,12 +62,24 @@ export class TaskPlanTool implements Tool {
     },
   }
 
-  constructor(private readonly taskGraph?: TaskGraph) {}
+  constructor(private readonly resolver?: TaskGraphResolver) {}
 
-  async execute(input: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
-    const g = this.taskGraph
-    if (!g) {
-      return { content: 'TaskPlan unavailable: no task graph on this engine.', isError: true }
+  async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    // v0.3.2 (ele_goal §Phase 2): resolve the graph for the CURRENT
+    // run from the resolver. Production never falls back to a
+    // shared 'default' graph.
+    const runId = ctx.execution?.runId
+    if (!this.resolver) {
+      return err('TaskPlan unavailable: no resolver wired on this engine.')
+    }
+    if (!runId) {
+      return err('TaskPlan unavailable: no runId in ToolContext.execution. The Engine must mint a runId before invoking tools.')
+    }
+    let g: TaskGraph
+    try {
+      g = this.resolver.resolve(runId)
+    } catch (e) {
+      return err(`TaskPlan unavailable: ${(e as Error).message}`)
     }
     const action = str(input.action)
     try {

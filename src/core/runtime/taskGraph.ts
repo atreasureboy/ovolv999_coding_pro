@@ -40,6 +40,18 @@ export interface TaskNode {
   attempts: number
   blockReason?: string
   failReason?: string
+  /**
+   * v0.3.2 (ele_goal §Phase 5): per-criterion evidence. The same
+   * criterionId may have multiple evidence records (e.g. a test
+   * pass + a reviewer note). The latest "satisfied" record wins.
+   */
+  evidence?: Array<{
+    criterionId: string
+    status: 'unknown' | 'satisfied' | 'failed'
+    evidenceType: 'test' | 'command' | 'file-change' | 'review' | 'user-confirmation' | 'manual'
+    evidenceRef?: string
+    recordedAt: number
+  }>
 }
 
 export interface TaskGraphSnapshot {
@@ -212,6 +224,41 @@ export class TaskGraph {
     n.status = 'completed'
     n.artifacts = [...n.artifacts, ...artifacts]
     this.emit({ type: 'TASK_NODE_COMPLETED', nodeId: id, satisfied: satisfiedCriteria, runId: this.runId })
+  }
+
+  /**
+   * v0.3.2 (ele_goal §Phase 5): record evidence for a specific
+   * acceptance criterion. Returns true if the criterion is now
+   * satisfied (status='satisfied'). Returns false if any criterion
+   * is failed (which means the node can NOT be completed).
+   */
+  recordEvidence(id: string, evidence: NonNullable<TaskNode['evidence']>[number]): boolean {
+    const n = this.require(id)
+    if (!n.evidence) n.evidence = []
+    n.evidence.push(evidence)
+    // Latest wins per criterion.
+    const byCriterion = new Map<string, typeof evidence>()
+    for (const e of n.evidence) byCriterion.set(e.criterionId, e)
+    for (const e of byCriterion.values()) {
+      if (e.status === 'failed') return false
+    }
+    return true
+  }
+
+  /**
+   * v0.3.2: count of acceptance criteria that have an evidence
+   * record with status='satisfied'. Used by Reviewer to compute
+   * the real "unmet" count instead of treating the
+   * `satisfiedCriteria: string[]` argument as truth.
+   */
+  satisfiedEvidenceCount(id: string): number {
+    const n = this.require(id)
+    if (!n.evidence) return 0
+    const byCriterion = new Map<string, 'unknown' | 'satisfied' | 'failed'>()
+    for (const e of n.evidence) byCriterion.set(e.criterionId, e.status)
+    let n2 = 0
+    for (const s of byCriterion.values()) if (s === 'satisfied') n2++
+    return n2
   }
 
   fail(id: string, reason: string): void {

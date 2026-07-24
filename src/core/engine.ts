@@ -54,6 +54,8 @@ import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.j
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import { TaskGraph } from './runtime/taskGraph.js'
 import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
+import { InMemoryRunScopedRuntimeContextStore, type RunScopedRuntimeContextStore } from './runtime/runScopedContext.js'
+import { RunScopedTaskGraphResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -151,6 +153,12 @@ export class ExecutionEngine {
    * single shared graph is replaced; each run mints its own graph.
    */
   private readonly taskGraphStore: TaskGraphStore
+  /**
+   * v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+   * store. Owns the taskGraph, progressMonitor, controlMessages,
+   * taskKind, and completionVerdict for every run.
+   */
+  private readonly runContextStore: RunScopedRuntimeContextStore
   /**
    * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
    * result here; the coordinator queries detectStall() each iteration.
@@ -283,6 +291,23 @@ export class ExecutionEngine {
     // (TaskPlanTool, /tasks) still work. New code should prefer the
     // store.
     this.taskGraphStore = new InMemoryTaskGraphStore()
+    // v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+    // store. The Coordinator resolves the SAME Context for the tool,
+    // completion contract, and router; nothing else creates a graph
+    // out of band.
+    this.runContextStore = new InMemoryRunScopedRuntimeContextStore()
+    // v0.3.2 (ele_goal §Phase 2): emit RUN_SCOPED_CONTEXT_CREATED
+    // events for every run. The TaskGraph created inside the
+    // Context also gets its setRunId() + event sink so /trace
+    // can replay the full lifecycle.
+    this.runContextStore.setEventSink((evt) => {
+      this.eventEmitter.emit(evt as never)
+    })
+    // v0.3.2 (ele_goal §Phase 2): the TaskGraphResolver for tools
+    // that need to operate on the CURRENT run's graph. Created here
+    // so the TaskPlanTool (and any future tool) resolves the right
+    // graph via runId without holding a fixed reference.
+    const taskGraphResolver = new RunScopedTaskGraphResolver(this.runContextStore)
     // v0.3.1 (te_goal §五 + §六.1 + §十一.14): wire TaskGraph events
     // into BOTH the RunEventEmitter (for /trace + EventStore replay)
     // and a hook that records node transitions on the ProgressMonitor
@@ -309,10 +334,12 @@ export class ExecutionEngine {
            parentRenderer: renderer,
            runRegistry: this.runRegistry,
            taskGraph: this.taskGraph,
+           taskGraphResolver,
          })
       : createTools(config.extraTools ?? [], {
            runRegistry: this.runRegistry,
            taskGraph: this.taskGraph,
+           taskGraphResolver,
          })
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
@@ -465,6 +492,7 @@ export class ExecutionEngine {
       taskGraph: this.taskGraph,
       // v0.3.1 (te_goal §五): per-runId graph store
       taskGraphStore: this.taskGraphStore,
+      runContextStore: this.runContextStore,
       // v0.3.1 (te_goal §三.1.3): expose ModelRouter to the coordinator
       // so the signal collector can read live provider health.
       modelRouter: this.modelRouter,
