@@ -11,7 +11,6 @@ import {
   getStyleById,
   listStyleIds,
   getDirective,
-  type OutputStyle,
 } from '../src/core/outputStyles.js'
 
 describe('BUILT_IN_STYLES', () => {

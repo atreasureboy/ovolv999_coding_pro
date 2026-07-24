@@ -13,11 +13,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import {
   ExecutionRunRegistry,
-  type ExecutionRun,
   type CreateRunInput,
 } from '../src/core/executionRun.js'
 import {
@@ -280,7 +279,7 @@ describe('JsonlEventStore appends + reads events', () => {
   it('persists every emitted event to runs.jsonl', () => {
     const store = new JsonlEventStore(logDir)
     const registry = new ExecutionRunRegistry()
-    const bus = new ExecutionRunEventBus(registry, store)
+    new ExecutionRunEventBus(registry, store)
 
     const run = registry.create(agentRun({ goal: 'persist me' }))
     registry.transition(run.runId, 'preparing')
@@ -316,7 +315,7 @@ describe('JsonlEventStore appends + reads events', () => {
   it('skips corrupted JSONL lines on read (crash recovery)', () => {
     const store = new JsonlEventStore(logDir)
     const registry = new ExecutionRunRegistry()
-    const bus = new ExecutionRunEventBus(registry, store)
+    new ExecutionRunEventBus(registry, store)
 
     // Emit one good event.
     registry.create(agentRun())
@@ -350,7 +349,7 @@ describe('recoverRegistryFromStore reconstructs state from JSONL', () => {
   it('rebuilds a registry that matches the original terminal state', () => {
     const store = new JsonlEventStore(logDir)
     const original = new ExecutionRunRegistry()
-    const bus = new ExecutionRunEventBus(original, store)
+    new ExecutionRunEventBus(original, store)
 
     const run = original.create(agentRun({ goal: 'task A' }))
     original.transition(run.runId, 'preparing')
@@ -372,7 +371,7 @@ describe('recoverRegistryFromStore reconstructs state from JSONL', () => {
   it('rebuilds multiple runs from the same log', () => {
     const store = new JsonlEventStore(logDir)
     const original = new ExecutionRunRegistry()
-    const bus = new ExecutionRunEventBus(original, store)
+    new ExecutionRunEventBus(original, store)
 
     const a = original.create(agentRun({ goal: 'A' }))
     original.transition(a.runId, 'preparing')
@@ -397,7 +396,7 @@ describe('recoverRegistryFromStore reconstructs state from JSONL', () => {
   it('recovered registry has onEmit unplugged (no new events emitted)', () => {
     const store = new JsonlEventStore(logDir)
     const original = new ExecutionRunRegistry()
-    const bus = new ExecutionRunEventBus(original, store)
+    new ExecutionRunEventBus(original, store)
 
     const run = original.create(agentRun())
     original.transition(run.runId, 'preparing')

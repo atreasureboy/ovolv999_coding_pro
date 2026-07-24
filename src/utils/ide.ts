@@ -5,9 +5,8 @@
  * via env vars and lockfiles. Provides open-file and diff launching.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'fs'
-import { join, resolve, isAbsolute, basename, dirname } from 'path'
-import { homedir, platform } from 'os'
+import { existsSync, readFileSync } from 'fs'
+import { join, resolve, isAbsolute } from 'path'
 import { execSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────

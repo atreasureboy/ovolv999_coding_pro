@@ -45,7 +45,7 @@ import {
 } from '../src/core/workingState.js'
 import { AgentTool } from '../src/tools/agent.js'
 import { ExecutionEngine } from '../src/core/engine.js'
-import type { EngineConfig, Tool } from '../src/core/types.js'
+import type { EngineConfig } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 
 let tmp = ''

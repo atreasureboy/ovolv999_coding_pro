@@ -22,7 +22,7 @@ import {
   formatUpdateCheckResult,
   getIgnoredVersionsPath,
 } from '../src/utils/autoUpdater.js'
-import { existsSync, rmSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs'
+import { existsSync, rmSync, mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 

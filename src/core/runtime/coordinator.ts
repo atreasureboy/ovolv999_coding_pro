@@ -67,14 +67,11 @@ import type { TaskGraphStore } from './taskGraphStore.js'
 import { ControlMessageLog } from './internalControlMessage.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
 import {
-  InMemoryRunScopedRuntimeContextStore,
   type RunScopedRuntimeContext,
   type RunScopedRuntimeContextStore,
-  type CompletionCandidate,
 } from './runScopedContext.js'
 import { classifyTaskIntent, type TaskIntent } from './taskIntent.js'
 import { boot } from './boot.js'
-import type { TurnOutcome, ModelCallAttemptSnapshot } from './turnOutcome.js'
 
 interface StreamingToolCall {
   index: number
@@ -899,25 +896,6 @@ export class RuntimeCoordinator {
     // event-order assertion in ele_goal §Phase 0 test 5.
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
-    // ── Module onComplete hooks (v0.3.2: receives TurnOutcome) ──
-    const turnOutcome: TurnOutcome = {
-      runId: runId ?? 'unknown',
-      stopReason: result.reason,
-      completion: completionVerdict ?? {
-        status: 'failed',
-        reason: 'no verdict produced',
-        evidence: [],
-      },
-      output: result.output,
-      changedFiles: [...ws.filesChanged],
-      verification: {
-        executed: ws.verification.passed.length + ws.verification.failed.length > 0,
-        passed: ws.verification.failed.length === 0,
-        failed: [...ws.verification.failed],
-      },
-      artifacts: [],
-      modelCalls: this.modelCallsThisRun,
-    }
     await this.deps.moduleManager.runComplete({
       cwd: config.cwd,
       sessionDir: config.sessionDir,
@@ -1141,7 +1119,3 @@ function serializeVerdict(v: import('./completionContract.js').CompletionVerdict
   return { status: v.status, remaining: v.remaining }
 }
 
-
-function makeTurnOutcome(input: import("./turnOutcome.js").TurnOutcome): import("./turnOutcome.js").TurnOutcome {
-  return input
-}

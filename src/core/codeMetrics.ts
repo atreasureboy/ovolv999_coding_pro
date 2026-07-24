@@ -253,7 +253,7 @@ function countTODOs(content: string): number {
 
 // ── Nesting Depth ───────────────────────────────────────────────────────────
 
-function calculateMaxNesting(lines: string[], language: string): number {
+function calculateMaxNesting(lines: string[], _language: string): number {
   let maxDepth = 0
   let currentDepth = 0
 
@@ -281,7 +281,7 @@ function calculateMaxNesting(lines: string[], language: string): number {
 
 // ── Cyclomatic Complexity ───────────────────────────────────────────────────
 
-function calculateComplexity(content: string, lines: string[], language: string): number {
+function calculateComplexity(content: string, _lines: string[], _language: string): number {
   let complexity = 1 // Base
 
   const patterns = [

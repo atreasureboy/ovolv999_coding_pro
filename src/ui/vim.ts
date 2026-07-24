@@ -56,10 +56,6 @@ function isWhitespace(ch: string): boolean {
   return /\s/.test(ch)
 }
 
-function isPunctuation(ch: string): boolean {
-  return !isWordChar(ch) && !isWhitespace(ch)
-}
-
 /** Find the start of the next word from position */
 function nextWordStart(text: string, pos: number): number {
   if (pos >= text.length) return text.length

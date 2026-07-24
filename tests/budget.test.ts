@@ -7,7 +7,6 @@ import {
   formatBudgetSnapshot, applyPreset, BUDGET_PRESETS,
   getPeriodKey, getPeriodStart, getPeriodEnd,
   loadBudgetStore,
-  type BudgetType, type BudgetPeriod,
 } from '../src/core/budget.js'
 import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'

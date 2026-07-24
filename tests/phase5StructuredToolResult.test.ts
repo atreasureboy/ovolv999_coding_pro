@@ -22,7 +22,6 @@ import {
   failed,
   cancelled,
   timedOut,
-  type AnyToolResult,
 } from '../src/core/structuredToolResult.js'
 import type { ToolContext } from '../src/core/types.js'
 

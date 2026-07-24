@@ -189,7 +189,7 @@ export interface InstallResult {
 export function performUpdate(channel: UpdateChannel = 'latest'): InstallResult {
   try {
     const tag = channel === 'latest' ? '' : `@${channel}`
-    const output = execSync(`npm install -g ${PACKAGE_NAME}${tag} 2>&1`, {
+    execSync(`npm install -g ${PACKAGE_NAME}${tag} 2>&1`, {
       encoding: 'utf8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],

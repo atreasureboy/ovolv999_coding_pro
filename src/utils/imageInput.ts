@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
-import { join, extname, basename } from 'path'
+import { join, extname } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
 

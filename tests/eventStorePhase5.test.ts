@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync } from 'fs'
-import { join } from 'path'
 import { JsonlEventStore, type RunEventEnvelope } from '../src/core/executionRunEvents.js'
 
 let dir = ''

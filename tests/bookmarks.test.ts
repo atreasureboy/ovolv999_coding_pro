@@ -15,7 +15,7 @@ import {
   loadBookmarks,
   saveBookmarks,
   getBookmarksPath,
-  type BookmarkStore,
+  
 } from '../src/core/bookmarks.js'
 import { mkdtempSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
@@ -187,7 +187,7 @@ describe('Bookmark System', () => {
 
   describe('getRecentBookmarks', () => {
     it('returns sorted by last visited', async () => {
-      const bm1 = addBookmark(cwd, 'a.ts', 1, 'older')
+      addBookmark(cwd, 'a.ts', 1, 'older')
       await new Promise(r => setTimeout(r, 10))
       const bm2 = addBookmark(cwd, 'b.ts', 2, 'newer')
       await new Promise(r => setTimeout(r, 10))
@@ -269,7 +269,6 @@ describe('Bookmark System', () => {
 
   describe('formatBookmarkStats', () => {
     it('shows total count', () => {
-      const store: BookmarkStore = { bookmarks: [] }
       addBookmark(cwd, 'a.ts', 1, 'one')
       addBookmark(cwd, 'a.ts', 2, 'two')
       addBookmark(cwd, 'b.ts', 1, 'three')

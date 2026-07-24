@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import {
-  loadProfiles, saveProfiles, getProfile, addProfile, removeProfile,
+  loadProfiles, getProfile, addProfile, removeProfile,
   buildSshArgs, testConnection,
   formatProfile, formatProfileList, formatConnectionTest, formatExecResult,
   type SshProfile,

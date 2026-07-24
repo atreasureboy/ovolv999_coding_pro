@@ -57,18 +57,6 @@ function isWhitespace(s: unknown): boolean {
   return typeof s === 'string' && s.trim().length === 0
 }
 
-function stringContentLength(content: OpenAIMessage['content']): number {
-  if (typeof content === 'string') return content.length
-  if (content === null || content === undefined) return 0
-  let total = 0
-  for (const part of content) {
-    if (typeof part === 'object' && part !== null && 'text' in part) {
-      total += (part as { text: string }).text.length
-    }
-  }
-  return total
-}
-
 function headTailTruncate(text: string, maxChars: number, head: number, tail: number): string {
   if (text.length <= maxChars) return text
   const saved = text.length - (head + tail)

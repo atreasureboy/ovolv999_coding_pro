@@ -357,7 +357,6 @@ export function formatDiffStat(diff: StructuredDiff): string {
   for (const file of diff.files) {
     const name = file.newPath.padEnd(maxNameLen)
     const total = file.additions + file.deletions
-    const bar = '+'.repeat(Math.min(file.additions, 20)) + '-'.repeat(Math.min(file.deletions, 20))
     lines.push(` ${name} | ${total} \x1b[32m${'+'.repeat(Math.min(file.additions, 20))}\x1b[0m\x1b[31m${'-'.repeat(Math.min(file.deletions, 20))}\x1b[0m`)
   }
 

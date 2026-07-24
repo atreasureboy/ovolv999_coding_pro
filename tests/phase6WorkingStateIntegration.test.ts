@@ -15,10 +15,8 @@
 import { describe, it, expect } from 'vitest'
 import { ContextManager } from '../src/core/context/contextManager.js'
 import {
-  emptyWorkingState,
   addConstraint,
   addFact,
-  type WorkingState,
 } from '../src/core/workingState.js'
 
 // ── Harness ─────────────────────────────────────────────────────────────

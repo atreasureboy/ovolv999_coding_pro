@@ -11,17 +11,16 @@
  *   5. ExecutionEngine.disposeAsync() awaits the async chain.
  */
 
-import { describe, it, expect, vi } from 'vitest'
-import { ToolScheduler, partitionToolCalls } from '../src/core/toolRuntime/toolScheduler.js'
+import { describe, it, expect } from 'vitest'
+import { ToolScheduler } from '../src/core/toolRuntime/toolScheduler.js'
 import type { ToolExecutor } from '../src/core/toolRuntime/toolExecutor.js'
 import { ToolRegistry } from '../src/core/toolRuntime/toolRegistry.js'
-import { ToolPolicy } from '../src/core/toolRuntime/toolPolicy.js'
 import { SharedRuntimeState } from '../src/core/runtime/sharedState.js'
 import { ModuleManager } from '../src/core/moduleRuntime/moduleManager.js'
 import { ClaudeCodeWorkerManager } from '../src/core/claudeCodeWorkerManager.js'
 import { ContextManager } from '../src/core/context/contextManager.js'
 import type { AgentModule } from '../src/core/module.js'
-import type { Tool, OpenAIMessage } from '../src/core/types.js'
+import type { OpenAIMessage } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -58,18 +57,6 @@ function makeContextManager(model = 'gpt-4o') {
     model,
     renderer: fakeRenderer(),
   })
-}
-
-function makeExecutor({ throwOn }: { throwOn?: string } = {}): {
-  executor: ToolExecutor
-  registry: ToolRegistry
-  policy: ToolPolicy
-} {
-  const registry = new ToolRegistry(fakeRenderer())
-  const policy = new ToolPolicy({})
-  // We don't need a real executor — the scheduler calls .execute()
-  // directly. Use a stub object structurally compatible with ToolExecutor.
-  return { executor: null as never, registry, policy }
 }
 
 // Construct a ToolScheduler with a stub executor that we control.

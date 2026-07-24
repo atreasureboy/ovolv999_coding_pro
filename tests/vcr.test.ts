@@ -6,7 +6,7 @@ import {
   computeCallHash,
   createVCRFromEnv,
 } from '../src/utils/vcr.js'
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'fs'
+import { mkdtempSync, rmSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -321,7 +321,7 @@ describe('vcr', () => {
 
     it('reads VCR_MODE', () => {
       process.env.VCR_MODE = 'record'
-      const vcr = createVCRFromEnv(tmpDir)
+      const _vcr = createVCRFromEnv(tmpDir)
       expect(existsSync(tmpDir)).toBe(true)
     })
 

@@ -8,9 +8,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import {
   discoverFiles, extractDocs, formatResult, formatSection,
-  type MagicDocsOptions,
 } from '../src/core/magicDocs.js'
-import { writeFileSync, mkdirSync, rmSync, mkdtempSync, existsSync, readFileSync } from 'fs'
+import { writeFileSync, rmSync, mkdtempSync, existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 

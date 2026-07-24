@@ -27,7 +27,7 @@ export default tseslint.config(
       // refactors + over-destructuring from the lazy-require pattern.
       // Cleaned up deliberately (overlaps with dead-code audit) rather
       // than via lint-driven scatter-shot removal.
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       // consistent-type-imports: 48/52 fires are on the intentional
       // lazy `require() as typeof import('...')` slash-command loads.
       '@typescript-eslint/consistent-type-imports': 'warn',

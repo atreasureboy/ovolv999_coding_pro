@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'fs'
-import { join, resolve, extname, basename, relative, dirname } from 'path'
+import { join, resolve, extname, basename, relative } from 'path'
 import { execSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────

@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   startTimer, stopTimer, pauseTimer, resumeTimer, removeTimer, getTimer,
-  getElapsedMs, getElapsedSeconds,
+  getElapsedMs,
   getRunningTimers, getStoppedTimers, getAllTimers, getTimersByCategory,
   getTimerStats,
   formatDuration, formatTimer, formatTimerList, formatTimerStats,
-  loadTimers,
 } from '../src/core/taskTimer.js'
 import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'

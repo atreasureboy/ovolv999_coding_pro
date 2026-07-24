@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import {
   loadManifest,
   discoverPlugins,
-  getRegistry,
   resetRegistry,
   loadPlugins,
   enablePlugin,

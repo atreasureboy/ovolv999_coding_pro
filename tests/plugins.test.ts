@@ -302,7 +302,7 @@ describe('getEnabledPlugins', () => {
   })
 
   it('excludes plugins with errors', () => {
-    const pluginPath = makePluginDir(dir, 'errored', {
+    makePluginDir(dir, 'errored', {
       provides: { tools: ['missing.js'] },
     })
     const enabled = getEnabledPlugins(dir)
@@ -331,7 +331,7 @@ describe('createPluginScaffold', () => {
   })
 
   it('creates a basic plugin', () => {
-    const path = createPluginScaffold(dir, 'my-plugin')
+    createPluginScaffold(dir, 'my-plugin')
     const registry = loadPlugins(dir)
     expect(registry.plugins.size).toBe(1)
     const plugin = [...registry.plugins.values()][0]
@@ -340,7 +340,7 @@ describe('createPluginScaffold', () => {
   })
 
   it('creates plugin with tools scaffold', () => {
-    const path = createPluginScaffold(dir, 'tool-plugin', { tools: true })
+    createPluginScaffold(dir, 'tool-plugin', { tools: true })
     const registry = loadPlugins(dir)
     const plugin = [...registry.plugins.values()][0]
     expect(plugin.manifest.provides!.tools).toEqual(['tools.js'])

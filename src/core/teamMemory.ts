@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSy
 import { join, basename } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
-import { scanText, formatScanResult, type ScanResult } from '../utils/secretScanner.js'
+import { scanText, formatScanResult } from '../utils/secretScanner.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

@@ -7,8 +7,7 @@
  */
 
 import type { OpenAIMessage, ToolCall } from '../core/types.js'
-import { existsSync, readFileSync } from 'fs'
-import { join, extname } from 'path'
+import { extname } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

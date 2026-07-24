@@ -645,7 +645,7 @@ describe('estimateTextTokens — multilingual awareness', () => {
     const zwj = '👨‍👩‍👧'
     // Sanity: confirm we have > 1 code point to iterate
     let count = 0
-    for (const _ of zwj) count++ // eslint-disable-line @typescript-eslint/no-unused-vars
+    for (const _ of zwj) count++
     expect(count).toBeGreaterThan(1)
     // The heuristic cost = codePoints × 2; we don't assert the exact number
     // (Intl.Segmenter could push it either way), only that it is more than

@@ -11,7 +11,7 @@
  *   - kitty terminal notifications
  */
 
-import { exec, execSync, type ExecSyncOptions } from 'child_process'
+import { execSync, type ExecSyncOptions } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,6 @@ export function detectPlatform(): NodeJS.Platform {
  */
 export function detectBestChannel(): NotificationChannel {
   const term = process.env.TERM_PROGRAM ?? ''
-  const termName = process.env.TERM ?? ''
 
   // iTerm2
   if (term === 'iTerm.app' || process.env.ITERM_SESSION_ID) {

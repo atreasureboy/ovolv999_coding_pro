@@ -152,15 +152,6 @@ afterEach(() => {
 })
 
 /** Write a package.json whose `test` script passes. */
-function writePassingPackageJson(dir: string): void {
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({ name: 'p0-4', scripts: { test: 'node -e "process.exit(0)"' } }, null, 2),
-  )
-  // Commit so the worktree (which branches from HEAD) inherits it.
-  execSync('git add -A && git commit -m pkg', { cwd: gitRoot, stdio: 'pipe' })
-}
-
 /** Write a package.json whose `test` script FAILS (used to trip verify gate). */
 function writeFailingPackageJson(dir: string): void {
   writeFileSync(
@@ -738,7 +729,7 @@ describe('P0-5: delivery conflict → blocked + worktree preserved', () => {
     // API, so instead the child writes the OPPOSITE line than what we
     // then commit to main before the merge.
     const child = recordingChildEngine('shared.txt', 'child-change\n')
-    const tool = new AgentTool({
+    const _tool = new AgentTool({
       factory: child.factory,
       parentConfig: baseConfig({ cwd: gitRoot }),
       parentRenderer: fakeRenderer(),

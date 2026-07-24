@@ -23,7 +23,6 @@ import {
   runShellAsync,
   type Workflow,
   type WorkflowContext,
-  type WorkflowStatus,
 } from '../src/core/workflow.js'
 import { ExecutionRunRegistry } from '../src/core/executionRun.js'
 import { isStructuredResult } from '../src/core/structuredToolResult.js'

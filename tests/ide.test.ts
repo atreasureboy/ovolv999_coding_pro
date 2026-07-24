@@ -10,7 +10,6 @@ import {
   formatIDEInfo,
   listAllKnownIDEs,
   readVSCodeLockfile,
-  type IDEType,
 } from '../src/utils/ide.js'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'

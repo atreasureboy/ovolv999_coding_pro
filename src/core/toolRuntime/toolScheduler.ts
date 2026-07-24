@@ -225,7 +225,7 @@ export class ToolScheduler {
     turnNumber: number,
     messages: OpenAIMessage[],
   ): Promise<void> {
-    const { executor, renderer, eventLog, contextManager, sharedState, eventEmitter } = this.deps
+    const { renderer, eventLog, contextManager, sharedState, eventEmitter } = this.deps
 
     for (const { tc, input } of batch.calls) {
       renderer.toolStart(tc.name, input)
@@ -274,7 +274,7 @@ export class ToolScheduler {
     }
 
     for (let i = 0; i < batch.calls.length; i++) {
-      const { tc, input } = batch.calls[i]
+      const { tc } = batch.calls[i]
       const result = results[i]
       try {
         renderer.toolResult(tc.name, result.content, result.isError)
@@ -306,7 +306,7 @@ export class ToolScheduler {
     turnAbortSignal: AbortSignal,
     turnAbortController: AbortController,
   ): Promise<boolean> {
-    const { executor, renderer, eventLog, sharedState, eventEmitter } = this.deps
+    const { renderer, eventLog, sharedState, eventEmitter } = this.deps
 
     eventEmitter?.emit({ type: 'TOOL_BATCH_STARTED', count: batch.calls.length, parallel: false })
 

@@ -8,7 +8,6 @@ import {
   getGitDiff,
   getFullDiff,
   getFileDiff,
-  type StructuredDiff,
 } from '../src/ui/diffBrowser.js'
 
 describe('diffBrowser', () => {

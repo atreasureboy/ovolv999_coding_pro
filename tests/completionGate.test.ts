@@ -12,7 +12,7 @@ import { tmpdir } from 'os'
 import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { ExecutionEngine } from '../src/core/engine.js'
-import type { EngineConfig, Tool } from '../src/core/types.js'
+import type { EngineConfig } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 
 type Queued = { k: 's'; s: AsyncIterable<unknown> } | { k: 'e'; e: Error }

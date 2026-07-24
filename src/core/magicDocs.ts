@@ -74,7 +74,6 @@ export function discoverFiles(rootDir: string, include?: string[], maxFiles = 50
   const patterns = include ?? DEFAULT_INCLUDE
   const files: string[] = []
   try {
-    const excludeArg = DEFAULT_EXCLUDE.map((d) => `--not-path '${d}/**'`).join(' ')
     for (const pattern of patterns) {
       try {
         const ext = pattern.replace('**/*.', '')
@@ -376,7 +375,7 @@ function extractPatterns(files: FileContent[]): DocSection {
 
 // ── Dependencies Extractor ──────────────────────────────────────────────────
 
-function extractDependencies(files: FileContent[], rootDir: string): DocSection {
+function extractDependencies(files: FileContent[], _rootDir: string): DocSection {
   const importMap: Record<string, Set<string>> = {}
 
   for (const file of files) {

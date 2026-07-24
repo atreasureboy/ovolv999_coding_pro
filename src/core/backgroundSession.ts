@@ -377,7 +377,6 @@ export function attachToSession(id: string, pollMs = 500): AttachResult | null {
   const meta = getSession(id)
   if (!meta) return null
 
-  const logPath = getLogPath(id)
   let offset = getLogSize(id)
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -508,11 +507,11 @@ export function initChildLogCapture(): string | null {
     } catch { /* ignore disk errors */ }
   }
 
-  process.stdout.write = (data: unknown, ...rest: unknown[]): boolean => {
+  process.stdout.write = (data: unknown, ..._rest: unknown[]): boolean => {
     appendLog(data)
     return origWrite(data as string | Uint8Array)
   }
-  process.stderr.write = (data: unknown, ...rest: unknown[]): boolean => {
+  process.stderr.write = (data: unknown, ..._rest: unknown[]): boolean => {
     appendLog(data)
     return origErrWrite(data as string | Uint8Array)
   }

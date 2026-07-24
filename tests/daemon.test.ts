@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { Daemon, DaemonClient, getDaemonSocketPath, getDaemonLogPath, formatDaemonInfo, formatWorkers, type WorkerEntry } from '../src/core/daemon.js'
+import { Daemon, DaemonClient, formatDaemonInfo, formatWorkers, type WorkerEntry } from '../src/core/daemon.js'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, unlinkSync } from 'fs'
+import { existsSync } from 'fs'
 
 let testDir: string
 let socketPath: string

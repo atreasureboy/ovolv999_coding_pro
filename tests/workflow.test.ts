@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   parseWorkflow,
-  validateWorkflow,
+  
   validateStep,
   loadWorkflows,
   loadWorkflow,
@@ -374,7 +374,7 @@ describe('writeSampleWorkflow', () => {
   })
 
   it('creates a sample workflow file', () => {
-    const path = writeSampleWorkflow(dir, 'my-sample')
+    const _path = writeSampleWorkflow(dir, 'my-sample')
     const wf = loadWorkflow(dir, 'my-sample')
     expect(wf).not.toBeNull()
     expect(wf!.name).toBe('my-sample')

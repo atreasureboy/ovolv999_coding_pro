@@ -99,7 +99,7 @@ describe('System Prompt Builder', () => {
 
   describe('formatMemoryFiles', () => {
     it('formats memory files', () => {
-      const files = findMemoryFiles(cwd)
+      findMemoryFiles(cwd)
       writeFileSync(join(cwd, 'CLAUDE.md'), '# Project\nRules here')
       const found = findMemoryFiles(cwd)
       const out = formatMemoryFiles(found)

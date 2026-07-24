@@ -18,7 +18,7 @@ import {
   formatTaskDetail,
   type ScheduledTask,
 } from '../src/core/cron.js'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 

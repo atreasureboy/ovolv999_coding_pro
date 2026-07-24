@@ -5,7 +5,7 @@ import {
   formatFileMetrics, formatProjectMetrics, formatBytes,
   assessHealth, formatHealthAssessment,
 } from '../src/core/codeMetrics.js'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 

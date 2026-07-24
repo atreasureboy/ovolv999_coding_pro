@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import {
   loadUsageStats,
-  saveUsageStats,
   recordSkillUsage,
   searchSkills,
   getRecommendedSkills,

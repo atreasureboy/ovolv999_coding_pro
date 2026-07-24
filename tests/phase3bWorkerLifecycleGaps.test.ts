@@ -15,7 +15,6 @@ import { ClaudeCodeTool } from '../src/tools/claudeCode.js'
 import { ExecutionRunRegistry, isTerminalRunStatus, canTransition } from '../src/core/executionRun.js'
 import {
   buildClaudeWorkerPrompt,
-  taskDonePattern,
   taskFailedPattern,
 } from '../src/core/claudeCodeWorkerManager.js'
 

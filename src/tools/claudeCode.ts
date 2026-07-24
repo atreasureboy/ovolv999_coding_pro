@@ -12,7 +12,6 @@ import type {
   WorkerResult,
   WorkerDescriptor,
   WorkerTask,
-  DeliveryAck,
 } from '../core/workerAdapter.js'
 
 function defaultSession(input: Record<string, unknown>): string {

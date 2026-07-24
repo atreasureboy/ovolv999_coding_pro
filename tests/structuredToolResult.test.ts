@@ -18,7 +18,6 @@ import {
   type LegacyToolResult,
 } from '../src/core/structuredToolResult.js'
 import { BashTool } from '../src/tools/bash.js'
-import { spawn } from 'child_process'
 
 function bashCtx(signal?: AbortSignal) {
   return {

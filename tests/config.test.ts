@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  loadConfig, saveConfig, mergeConfig, mergeAllConfigs,
+  loadConfig, saveConfig, mergeConfig,
   validateConfig, updateConfig, resetConfig, formatConfig,
-  DEFAULT_CONFIG, getConfigPath, type ConfigSchema,
+  DEFAULT_CONFIG,
 } from '../src/core/config.js'
 import {
   migrateConfig, needsMigration, MIGRATIONS, LATEST_VERSION,
-  formatMigrationResult, getRawConfig, saveRawConfig,
+  formatMigrationResult, saveRawConfig,
 } from '../src/core/migrations.js'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'

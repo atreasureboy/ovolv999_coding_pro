@@ -2020,7 +2020,7 @@ registerCommand({
   description: 'Manage file/line bookmarks. Usage: /bookmark [add|list|search|remove|visit|stats|recent|file <path>]',
   handler: (args, ctx) => {
     const {
-      addBookmark, removeBookmark, getBookmark, visitBookmark,
+      addBookmark, removeBookmark, visitBookmark,
       getBookmarksByFile, searchBookmarks, getRecentBookmarks,
       formatBookmarkList, formatBookmarkDetail, formatBookmarkStats,
       loadBookmarks,
@@ -2102,7 +2102,7 @@ registerCommand({
   description: 'Manage token/cost budgets. Usage: /budget [set|list|remove|reset|check|preset <name>|record]',
   handler: (args, ctx) => {
     const {
-      setBudget, removeBudget, listBudgets, recordUsage, getUsage,
+      setBudget, removeBudget, listBudgets, recordUsage,
       checkBudget, checkAllBudgets, resetUsage, getBudgetSnapshot,
       formatBudgetUsage, formatBudgetSummary, formatBudgetSnapshot,
       applyPreset, BUDGET_PRESETS,
@@ -2271,7 +2271,7 @@ registerCommand({
   handler: (args, ctx) => {
     const {
       createSnapshot, removeSnapshot, getSnapshot, listSnapshots,
-      updateSnapshot, addFileToSnapshot, addTodoToSnapshot, toggleTodoInSnapshot,
+      addFileToSnapshot, addTodoToSnapshot, toggleTodoInSnapshot,
       diffSnapshots, formatSnapshot, formatSnapshotList, formatSnapshotDiff,
     } = require('../core/workspace.js') as typeof import('../core/workspace.js')
 
@@ -2661,7 +2661,7 @@ registerCommand({
   name: 'goal',
   aliases: ['goals'],
   description: 'Manage autonomous goals. Usage: /goal [list | create <objective> | show <id> | complete <id> | fail <id> <reason>]',
-  handler: (args, ctx) => {
+  handler: (args, _ctx) => {
     const {
       createGoal, getGoal, listGoals, startGoal, completeGoal, failGoal, pauseGoal, resumeGoal,
       addSubtask, updateSubtask, getProgress, formatGoal, formatGoalList, deleteGoal,
@@ -2758,7 +2758,7 @@ registerCommand({
   description: 'Export session transcript. Usage: /transcript [markdown|json|text] [stats]',
   handler: (args, ctx) => {
     const transcriptModule = require('../core/sessionTranscript.js') as typeof import('../core/sessionTranscript.js')
-    const { buildTranscript, formatTranscript, exportTranscript, getTranscriptStats, formatStats } = transcriptModule
+    const { buildTranscript, exportTranscript, getTranscriptStats, formatStats } = transcriptModule
 
     const parts = args.trim().split(/\s+/)
     const formatArg = parts[0] ?? 'markdown'
@@ -2799,7 +2799,7 @@ registerCommand({
   description: 'Set reasoning effort level. Usage: /effort [minimal|low|medium|high|maximum]',
   handler: (args) => {
     const {
-      setEffort, cycleEffort, getCurrentEffort, getEffortPrompt, formatEffort, formatEffortList,
+      setEffort, cycleEffort, getEffortPrompt, formatEffort, formatEffortList,
     } = require('../core/effort.js') as typeof import('../core/effort.js')
 
     const parts = args.trim().split(/\s+/)
@@ -2810,7 +2810,7 @@ registerCommand({
     }
 
     if (level === 'cycle' || level === 'next') {
-      const next = cycleEffort()
+      cycleEffort()
       return text(`Effort: ${formatEffort()}\n\nPrompt: ${getEffortPrompt()}`)
     }
 
@@ -2944,7 +2944,7 @@ registerCommand({
   description: 'Manage daemon mode. Usage: /daemon [status | start | stop | workers]',
   handler: () => {
     const daemonModule = require('../core/daemon.js') as typeof import('../core/daemon.js')
-    const { isDaemonRunning, DaemonClient, getDaemonSocketPath, formatDaemonInfo } = daemonModule
+    const { isDaemonRunning, getDaemonSocketPath } = daemonModule
 
     return text('Daemon control requires running ovolv999 --daemon. Socket: ' + getDaemonSocketPath() + '\nRunning: ' + isDaemonRunning())
   },
@@ -3005,7 +3005,7 @@ registerCommand({
     }
 
     if (sub === 'off' || sub === 'disable') {
-      const cfg = sandbox.updateConfig({ enabled: false })
+      sandbox.updateConfig({ enabled: false })
       sandbox.invalidateProfileCache()
       return text('Sandbox disabled.')
     }

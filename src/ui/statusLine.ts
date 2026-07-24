@@ -4,7 +4,7 @@
  * Rich status bar showing model, tokens, cost, git branch, mode, and more.
  */
 
-import { stripAnsi, ansiLength, padRight, truncate, ANSI } from '../utils/ansi.js'
+import { ansiLength, truncate, ANSI } from '../utils/ansi.js'
 import { getActiveTheme } from './theme.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────

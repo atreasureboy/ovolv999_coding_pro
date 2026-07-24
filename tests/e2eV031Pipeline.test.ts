@@ -15,11 +15,9 @@
  *   - CompletionContract 6-state verdict reaches the RunRegistry
  *   - recordCall updated ModelRouter health
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import OpenAI from 'openai'
 import { ExecutionEngine } from '../src/core/engine.js'
-import { TaskGraph } from '../src/core/runtime/taskGraph.js'
-import { InMemoryTaskGraphStore } from '../src/core/runtime/taskGraphStore.js'
 
 /**
  * A scripted OpenAI-compatible client that returns two streaming

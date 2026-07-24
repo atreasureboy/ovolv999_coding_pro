@@ -9,8 +9,6 @@ import {
   estimateSnipSavings,
   formatSnipResult,
   SNIP_TOOL_RESULT_MAX_CHARS,
-  SNIP_HEAD_CHARS,
-  SNIP_TAIL_CHARS,
 } from '../src/core/snipCompact.js'
 import type { OpenAIMessage } from '../src/core/types.js'
 

@@ -14,7 +14,7 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
-import { join, basename } from 'path'
+import { join } from 'path'
 import { homedir } from 'os'
 
 // ── Types ───────────────────────────────────────────────────────────────────

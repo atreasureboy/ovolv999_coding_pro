@@ -9,7 +9,7 @@
  *   - duplicate command registration throws in dev mode
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { registerCommand, listCommands, clearRegistry, getCommand, dispatchSlashCommand } from '../src/commands/index.js'
+import { registerCommand, listCommands, getCommand, dispatchSlashCommand } from '../src/commands/index.js'
 // Importing the built-in commands so getCommand('model') / 'route' / etc.
 // resolve to real handlers in the unit-test process.
 import '../src/commands/builtin.js'

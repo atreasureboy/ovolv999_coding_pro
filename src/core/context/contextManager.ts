@@ -20,7 +20,6 @@ import type { OpenAIMessage, ToolDefinition, IHookRunner } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
 import {
-  maybeCompact,
   maybeCompactWithInvariants,
   microCompact,
   maybeTimeBasedMicroCompact,
@@ -40,7 +39,6 @@ import {
   recordFileRead,
   recordFileChange,
   recordVerification,
-  resolveUnresolved,
   serializeWorkingState,
   type WorkingState,
 } from '../workingState.js'

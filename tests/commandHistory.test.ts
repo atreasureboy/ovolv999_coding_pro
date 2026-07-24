@@ -13,7 +13,6 @@ import {
   getGlobalHistoryPath,
   getProjectHistoryPath,
   type HistoryStore,
-  type HistoryEntryType,
 } from '../src/core/commandHistory.js'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'

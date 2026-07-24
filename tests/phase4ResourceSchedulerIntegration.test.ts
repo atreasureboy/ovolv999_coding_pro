@@ -22,7 +22,6 @@ import { SharedRuntimeState } from '../src/core/runtime/sharedState.js'
 import { ContextManager } from '../src/core/context/contextManager.js'
 import {
   ResourceScheduler,
-  ResourceConflictError,
 } from '../src/core/resourceScheduler.js'
 import type { ResourceClaim } from '../src/core/executionRun.js'
 import type { Tool, OpenAIMessage, ToolResult } from '../src/core/types.js'
@@ -40,7 +39,7 @@ function fakeRenderer(): Renderer {
     'compactStart', 'compactDone', 'contextWarning',
     'agentStart', 'agentDone', 'agentSummary', 'agentHeartbeat',
   ]) {
-    r[k] = (...a: unknown[]) => undefined
+    r[k] = (..._a: unknown[]) => undefined
   }
   return r as unknown as Renderer
 }
@@ -197,7 +196,7 @@ describe('P1-2: ToolScheduler acquires + releases claims around execute', () => 
       (input) => [{ type: 'file', key: String(input.path), access: 'write' }],
       async () => { executed = true; return { content: 'should not run', isError: false } },
     )
-    const { scheduler } = makeScheduler({
+    makeScheduler({
       tools: [tool],
       resourceScheduler: rs,
       // Use very short timeout so we don't hang the test.

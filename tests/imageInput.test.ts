@@ -9,9 +9,8 @@ import {
   storeImage,
   getClipboardImagePath,
 } from '../src/utils/imageInput.js'
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs'
+import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
-import { homedir } from 'os'
 import { tmpdir } from 'os'
 
 const TMP = join(tmpdir(), 'ovolv999-test-images')

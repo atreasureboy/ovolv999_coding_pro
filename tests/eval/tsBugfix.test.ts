@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { ExecutionEngine } from '../../src/core/engine.js'
-import type { EngineConfig, Tool } from '../../src/core/types.js'
+import type { EngineConfig } from '../../src/core/types.js'
 import type { Renderer } from '../../src/ui/renderer.js'
 
 // ── Fake provider: a scripted OpenAI-shaped stream ────────────────

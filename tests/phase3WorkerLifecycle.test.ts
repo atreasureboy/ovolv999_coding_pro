@@ -17,7 +17,6 @@ import { describe, it, expect } from 'vitest'
 import { ClaudeCodeTool } from '../src/tools/claudeCode.js'
 import { AgentTool } from '../src/tools/agent.js'
 import { ExecutionRunRegistry, isTerminalRunStatus } from '../src/core/executionRun.js'
-import type { WorkerAdapter, WorkerStatus } from '../src/core/workerAdapter.js'
 
 // ── Stubs ──────────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import {
   getSessionsDir, getMetadataPath, getLogPath, getExitPath,
   generateSessionId, saveMetadata, loadMetadata, updateMetadata,
   isPidAlive, refreshSessionStatus,
-  startBackgroundSession, stopSession, listSessions, getSession,
+  startBackgroundSession, stopSession, listSessions,
   readSessionLogs, getLogSize, attachToSession,
   removeSession, cleanStaleSessions,
   formatSessionList, formatSessionDetail,
@@ -20,7 +20,6 @@ import {
 import { existsSync, rmSync, mkdirSync, writeFileSync, mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { homedir } from 'os'
 
 let testHome: string
 let origHome: string | undefined

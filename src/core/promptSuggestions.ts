@@ -14,7 +14,7 @@
 
 import { execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
-import { join, extname, resolve } from 'path'
+import { join, extname } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

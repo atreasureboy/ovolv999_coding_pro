@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Writable, Readable } from 'stream'
+import { Readable } from 'stream'
 import {
   ACPServer,
   parseMessage,
