@@ -118,7 +118,11 @@ export function loadManifest(pluginPath: string): PluginManifest | null {
   const pkgPath = join(pluginPath, 'package.json')
   if (existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+        name?: string; version?: string; description?: string
+        author?: string; homepage?: string; main?: string
+        ovolv999?: Record<string, unknown>; plugin?: Record<string, unknown>
+      }
       // Only treat as plugin if it has ovolv999 field or name starts with ovolv999-plugin-
       const pluginField = pkg.ovolv999 ?? pkg.plugin
       if (pluginField) {

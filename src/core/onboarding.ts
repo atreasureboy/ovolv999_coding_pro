@@ -132,11 +132,24 @@ export function analyzeProject(rootDir: string): ProjectOverview {
 
 // ── Package.json ────────────────────────────────────────────────────────────
 
-function readPackageJson(root: string): any {
+interface PackageJson {
+  name?: string
+  version?: string
+  description?: string
+  scripts?: Record<string, string>
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  type?: string
+  main?: string
+  bin?: Record<string, string>
+}
+
+function readPackageJson(root: string): PackageJson | null {
   const path = join(root, 'package.json')
   if (!existsSync(path)) return null
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return JSON.parse(readFileSync(path, 'utf8')) as PackageJson
   } catch {
     return null
   }
