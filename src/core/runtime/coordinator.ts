@@ -272,13 +272,50 @@ export class RuntimeCoordinator {
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
 
-    // Phase 2: adaptive model routing — one decision per turn, after
-    // boot, before the first LLM call. v0.3.1 (te_goal §三.1.3): collect
-    // the FULL signal set (11+ te_goal bullets) before calling the
-    // router. Signals are derived from real runtime state (workingState,
-    // contextManager, taskGraph, budgetTracker, modelRouter health) plus
-    // static goal analysis. The collector also exposes reasonCodes so
-    // /route and /why can explain WHY the router chose what it chose.
+    // v0.3.2 P1-1 fix: create RunScopedRuntimeContext + classify TaskIntent
+    // BEFORE routing so the router can consume the intent signal and the
+    // scoped taskGraph. (Previously routing ran first — the router never
+    // saw the intent or the per-run graph.)
+    let runContext: RunScopedRuntimeContext | undefined
+    if (runId) {
+      const ctxStore = this.deps.runContextStore
+      if (ctxStore) {
+        runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
+          parentRunId: effectiveParentRunId,
+          taskKind: 'informational',
+        })
+        const planMode = this.deps.sharedState.planModeActive
+        const intent = this.deps.classifyIntent
+          ? this.deps.classifyIntent(userMessage, { planMode })
+          : classifyTaskIntent(userMessage, { planMode })
+        runContext.taskKind = intent.kind
+        this.deps.eventEmitter.emit({
+          type: 'TASK_INTENT_CLASSIFIED',
+          runId,
+          intent: {
+            kind: intent.kind,
+            source: intent.source,
+            confidence: intent.confidence,
+          },
+        } as never)
+        // The Context's taskGraph is the source of truth.
+        this.deps.taskGraph = runContext.taskGraph
+      } else {
+        const store = this.deps.taskGraphStore
+        if (store) {
+          let graph = store.get(runId)
+          if (!graph) graph = store.create(runId)
+          this.deps.taskGraph = graph
+        }
+      }
+    } else {
+      this.deps.taskGraph?.reset()
+    }
+
+    // Phase 2: adaptive model routing — runs AFTER context creation so
+    // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
+    // derived from real runtime state (workingState, contextManager,
+    // taskGraph, modelRouter health).
     if (this.deps.routeModel) {
       try {
         const ws = this.deps.contextManager.getWorkingState()
@@ -320,60 +357,6 @@ export class RuntimeCoordinator {
         const routed = this.deps.routeModel(signalsToRoutingInput(signals))
         if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
       } catch { /* best-effort: routing must never break the turn */ }
-    }
-
-    // v0.3.2 (ele_goal §Phase 1 + §Phase 3): mint a fresh
-    // RunScopedRuntimeContext per runId. The Context owns the taskGraph,
-    // progressMonitor, controlMessages, routingSignals, taskKind, and
-    // completionVerdict. The legacy taskGraphStore path is preserved
-    // as a back-compat shim — production should wire runContextStore.
-    let runContext: RunScopedRuntimeContext | undefined
-    if (runId) {
-      const ctxStore = this.deps.runContextStore
-      if (ctxStore) {
-        runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
-          parentRunId: effectiveParentRunId,
-          taskKind: 'informational', // refined below after routing
-        })
-        // Phase 3: classify intent BEFORE routing so the router
-        // can consume the intent signal.
-        const planMode = this.deps.sharedState.planModeActive
-        const intent = this.deps.classifyIntent
-          ? this.deps.classifyIntent(userMessage, { planMode })
-          : classifyTaskIntent(userMessage, { planMode })
-        runContext.taskKind = intent.kind
-        this.deps.eventEmitter.emit({
-          type: 'TASK_INTENT_CLASSIFIED',
-          runId,
-          intent: {
-            kind: intent.kind,
-            source: intent.source,
-            confidence: intent.confidence,
-          },
-        } as never)
-        // The Context's taskGraph is the source of truth.
-        this.deps.taskGraph = runContext.taskGraph
-      } else {
-        // Fallback: legacy taskGraphStore path.
-        const store = this.deps.taskGraphStore
-        if (store) {
-          let graph = store.get(runId)
-          if (!graph) graph = store.create(runId)
-          this.deps.taskGraph = graph
-        }
-      }
-    } else {
-      // No runId → fall back to the legacy single-graph shim.
-      this.deps.taskGraph?.reset()
-    }
-
-    // Old-style TaskGraph store call (kept for tests that don't
-    // wire runContextStore). Best-effort, ignored if runContextStore
-    // already set the graph above.
-    if (runId && !this.deps.runContextStore) {
-      // already handled above
-    } else if (!runId) {
-      this.deps.taskGraph?.reset()
     }
 
     // P0-2 (continuation output completeness): collect EVERY assistant
@@ -789,9 +772,12 @@ export class RuntimeCoordinator {
     } catch { /* best-effort */ }
 
     if (result.reason === 'stop_sequence') {
-      // v0.3.1: only actual file changes make it a 'mutation' task.
-      // Running verification alone (no changes) is informational.
-      const taskKind = hasChanges ? 'mutation' : 'informational'
+      // v0.3.2 P0-2 fix: use the pre-classified TaskIntent (runContext.taskKind)
+      // as the authoritative task kind — NOT re-derived from hasChanges. A
+      // mutation task that failed to produce changes must still be treated
+      // as mutation (→ blocked), not silently reclassified as informational.
+      // Falls back to the hasChanges heuristic only when no context exists.
+      const taskKind = runContext?.taskKind ?? (hasChanges ? 'mutation' : 'informational')
       const tg = this.deps.taskGraph
       const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
       const acceptanceCriteria = tgSnapshot
@@ -905,6 +891,14 @@ export class RuntimeCoordinator {
     })
 
     config.hookRunner?.runOnComplete?.(result)
+
+    // v0.3.2 P0-1 fix: release the per-run context to prevent unbounded
+    // memory growth. Every turn mints a RunScopedRuntimeContext (with
+    // TaskGraph + ProgressMonitor + ControlMessageLog); without close()
+    // the store's internal Map grows forever.
+    if (runId) {
+      try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
+    }
 
     return { result, newHistory: messages }
   }
