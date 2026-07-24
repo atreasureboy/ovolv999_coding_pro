@@ -144,10 +144,10 @@ export function extractToolSequence(messages: OpenAIMessage[]): ToolCallEntry[] 
     if (msg.role !== 'assistant' || !msg.tool_calls) continue
     for (const call of msg.tool_calls) {
       const name = call.function?.name ?? 'unknown'
-      let summary = ''
+      let summary: string
 
       try {
-        const args = call.function?.arguments ? JSON.parse(call.function.arguments) : {}
+        const args = (call.function?.arguments ? JSON.parse(call.function.arguments) : {}) as Record<string, unknown>
         summary = summarizeToolCall(name, args)
       } catch {
         summary = ''
@@ -162,26 +162,44 @@ export function extractToolSequence(messages: OpenAIMessage[]): ToolCallEntry[] 
 
 function summarizeToolCall(name: string, args: Record<string, unknown>): string {
   switch (name) {
-    case 'Read':
-      return String(args.file_path ?? args.path ?? '')
-    case 'Write':
-      return String(args.file_path ?? args.path ?? '')
-    case 'Edit':
-      return String(args.file_path ?? args.path ?? '')
-    case 'Bash':
-      return String(args.command ?? '').slice(0, 60)
-    case 'Grep':
-      return String(args.pattern ?? '')
-    case 'Glob':
-      return String(args.pattern ?? '')
-    case 'Agent':
-      return String(args.description ?? args.prompt ?? '').slice(0, 60)
+    case 'Read': {
+      const value = (args.file_path ?? args.path ?? '') as string
+      return String(value)
+    }
+    case 'Write': {
+      const value = (args.file_path ?? args.path ?? '') as string
+      return String(value)
+    }
+    case 'Edit': {
+      const value = (args.file_path ?? args.path ?? '') as string
+      return String(value)
+    }
+    case 'Bash': {
+      const value = (args.command ?? '') as string
+      return String(value).slice(0, 60)
+    }
+    case 'Grep': {
+      const value = (args.pattern ?? '') as string
+      return String(value)
+    }
+    case 'Glob': {
+      const value = (args.pattern ?? '') as string
+      return String(value)
+    }
+    case 'Agent': {
+      const value = (args.description ?? args.prompt ?? '') as string
+      return String(value).slice(0, 60)
+    }
     case 'TodoWrite':
       return `${(args.todos as unknown[] ?? []).length} items`
-    case 'WebFetch':
-      return String(args.url ?? '').slice(0, 60)
-    case 'WebSearch':
-      return String(args.query ?? '').slice(0, 60)
+    case 'WebFetch': {
+      const value = (args.url ?? '') as string
+      return String(value).slice(0, 60)
+    }
+    case 'WebSearch': {
+      const value = (args.query ?? '') as string
+      return String(value).slice(0, 60)
+    }
     default:
       return ''
   }

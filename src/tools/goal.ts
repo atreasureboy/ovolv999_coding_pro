@@ -25,6 +25,7 @@ import {
   formatGoal,
   formatGoalList,
 } from '../core/goals.js'
+import type { Goal, GoalStatus } from '../core/goals.js'
 
 export class GoalTool implements Tool {
   name = 'Goal'
@@ -119,7 +120,7 @@ Use this for multi-step objectives that span many turns.`,
 
         case 'get': {
           const goal = getGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: formatGoal(goal), isError: false })
         }
 
@@ -137,57 +138,57 @@ Use this for multi-step objectives that span many turns.`,
             priority: input.priority as Goal['priority'] | undefined,
             tags: input.tags as string[] | undefined,
           })
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: formatGoal(goal), isError: false })
         }
 
         case 'delete': {
           const deleted = deleteGoal(input.goal_id as string)
           return Promise.resolve({
-            content: deleted ? `Deleted goal: ${input.goal_id}` : `Goal not found: ${input.goal_id}`,
+            content: deleted ? `Deleted goal: ${String(input.goal_id)}` : `Goal not found: ${String(input.goal_id)}`,
             isError: !deleted,
           })
         }
 
         case 'start': {
           const goal = startGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Started goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'complete': {
           const goal = completeGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Completed goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'fail': {
           const goal = failGoal(input.goal_id as string, input.reason as string | undefined)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Failed goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'pause': {
           const goal = pauseGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Paused goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'resume': {
           const goal = resumeGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Resumed goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'retry': {
           const goal = retryGoal(input.goal_id as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Retrying goal:\n${formatGoal(goal)}`, isError: false })
         }
 
         case 'add_subtask': {
           const st = addSubtask(input.goal_id as string, input.description as string)
-          if (!st) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+          if (!st) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
           return Promise.resolve({ content: `Added subtask: ${st.description}`, isError: false })
         }
 
@@ -204,7 +205,7 @@ Use this for multi-step objectives that span many turns.`,
           const st = getNextSubtask(input.goal_id as string)
           if (!st) {
             const goal = getGoal(input.goal_id as string)
-            if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
+            if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
             const progress = getProgress(input.goal_id as string)
             return Promise.resolve({
               content: `No pending subtasks. Progress: ${progress?.done}/${progress?.total}`,
@@ -216,8 +217,8 @@ Use this for multi-step objectives that span many turns.`,
 
         case 'add_context': {
           const goal = addContext(input.goal_id as string, input.note as string)
-          if (!goal) return Promise.resolve({ content: `Goal not found: ${input.goal_id}`, isError: true })
-          return Promise.resolve({ content: `Added context note to goal ${input.goal_id}`, isError: false })
+          if (!goal) return Promise.resolve({ content: `Goal not found: ${String(input.goal_id)}`, isError: true })
+          return Promise.resolve({ content: `Added context note to goal ${String(input.goal_id)}`, isError: false })
         }
 
         default:
@@ -232,6 +233,4 @@ Use this for multi-step objectives that span many turns.`,
   }
 }
 
-type Goal = import('../core/goals.js').Goal
-type GoalStatus = import('../core/goals.js').GoalStatus
 type SubTaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'failed'

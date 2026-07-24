@@ -65,6 +65,7 @@ import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
 import { RunEventEmitter } from './runtime/events.js'
 import { ExecutionRunRegistry, isTerminalRunStatus } from './executionRun.js'
+import type { WorkerAdapter } from './workerAdapter.js'
 import { ResourceScheduler } from './resourceScheduler.js'
 import {
   ExecutionRunEventBus,
@@ -323,7 +324,7 @@ export class ExecutionEngine {
     this.taskGraph = this.taskGraphStore.create('default')
     // Wire every graph created (including future per-runId ones)
     // back into the same progress monitor.
-    const wireGraph = (g: import('./runtime/taskGraph.js').TaskGraph) => {
+    const wireGraph = (g: TaskGraph) => {
       g.setNodeTransitionSink((t) => this.progressMonitor.recordTaskNodeTransition(t))
     }
     wireGraph(this.taskGraph)
@@ -409,33 +410,41 @@ export class ExecutionEngine {
       // Bridge Router events into RunEventEmitter for /trace + /why.
       // The router event payload is structurally a subtype of the
       // RunEvent union variants; we map them field-by-field.
-      const e: import('./runtime/events.js').RunEventEmitter = this.eventEmitter
+      const e: RunEventEmitter = this.eventEmitter
       switch (evt.type) {
-        case 'MODEL_OVERRIDE_SET':
+        case 'MODEL_OVERRIDE_SET': {
+          const modelOrProfile = (evt.payload?.modelOrProfile ?? '') as string
           e.emit({
             type: 'MODEL_OVERRIDE_SET',
-            modelOrProfile: String(evt.payload?.modelOrProfile ?? ''),
+            modelOrProfile: String(modelOrProfile),
           })
           break
+        }
         case 'MODEL_OVERRIDE_CLEARED':
           e.emit({ type: 'MODEL_OVERRIDE_CLEARED' })
           break
-        case 'ROUTING_DECISION_APPLIED':
+        case 'ROUTING_DECISION_APPLIED': {
+          const selectedModel = (evt.payload?.selectedModel ?? '') as string
           e.emit({
             type: 'ROUTING_APPLIED',
             from: this.config.model,
-            to: String(evt.payload?.selectedModel ?? ''),
+            to: String(selectedModel),
             reasonCodes: [],
           })
           break
-        case 'ROUTING_FALLBACK_APPLIED':
+        }
+        case 'ROUTING_FALLBACK_APPLIED': {
+          const from = (evt.payload?.from ?? '') as string
+          const to = (evt.payload?.to ?? '') as string
+          const error = (evt.payload?.error ?? '') as string
           e.emit({
             type: 'ROUTING_FALLBACK',
-            from: String(evt.payload?.from ?? ''),
-            to: String(evt.payload?.to ?? ''),
-            error: String(evt.payload?.error ?? ''),
+            from: String(from),
+            to: String(to),
+            error: String(error),
           })
           break
+        }
         case 'BUDGET_ALLOCATION_APPLIED':
           e.emit({
             type: 'BUDGET_ALLOCATION_APPLIED',
@@ -614,10 +623,10 @@ export class ExecutionEngine {
     if (pending.length === 0) return { reattached: 0, lost: 0 }
 
     // Find WorkerAdapter tools.
-    const adapters: import('./workerAdapter.js').WorkerAdapter[] = []
+    const adapters: WorkerAdapter[] = []
     for (const tool of this.tools) {
       if (typeof (tool as { reattach?: unknown }).reattach === 'function') {
-        adapters.push(tool as unknown as import('./workerAdapter.js').WorkerAdapter)
+        adapters.push(tool as unknown as WorkerAdapter)
       }
     }
 
@@ -716,6 +725,7 @@ export class ExecutionEngine {
     try {
       // Lazy require to avoid importing tmux at module load on hosts
       // that never enter the multi-pane path.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { tmuxLayout } = require('../../ui/tmuxLayout.js') as {
         tmuxLayout: { destroy: () => void }
       }

@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
+import { stripAnsi } from '../utils/ansi.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -126,22 +127,24 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
       color = 'magenta'
       break
 
-    case 'git':
+    case 'git': {
       if (!ctx.gitBranch) return ''
       const dirty = ctx.gitDirty ? '*' : ''
       text = `${ctx.gitBranch}${dirty}`
       color = ctx.gitDirty ? 'yellow' : 'green'
       break
+    }
 
-    case 'cwd':
+    case 'cwd': {
       const cwd = ctx.cwd ?? ''
       const home = homedir()
       text = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd
       text = text.split('/').pop() || text
       color = 'blue'
       break
+    }
 
-    case 'tokens':
+    case 'tokens': {
       if (ctx.tokenCount === undefined) return ''
       const count = ctx.tokenCount > 1000 ? `${(ctx.tokenCount / 1000).toFixed(1)}k` : String(ctx.tokenCount)
       text = `${count} tok`
@@ -150,6 +153,7 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
         color = pct > 80 ? 'red' : pct > 60 ? 'yellow' : 'green'
       }
       break
+    }
 
     case 'cost':
       if (ctx.cost === undefined) return ''
@@ -162,12 +166,13 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
       text = `${ctx.messageCount} msg`
       break
 
-    case 'duration':
+    case 'duration': {
       if (ctx.duration === undefined) return ''
       const min = Math.floor(ctx.duration / 60000)
       const sec = Math.floor((ctx.duration % 60000) / 1000)
       text = min > 0 ? `${min}m${sec}s` : `${sec}s`
       break
+    }
 
     case 'context':
       if (ctx.contextPercent === undefined) return ''
@@ -193,12 +198,13 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
       color = 'cyan'
       break
 
-    case 'budget':
+    case 'budget': {
       if (ctx.budgetUsed === undefined) return ''
       const budgetPct = ctx.budgetLimit ? (ctx.budgetUsed / ctx.budgetLimit) * 100 : 0
       text = `${budgetPct.toFixed(0)}% budget`
       color = budgetPct > 90 ? 'red' : budgetPct > 70 ? 'yellow' : 'green'
       break
+    }
 
     case 'session':
       if (!ctx.sessionId) return ''
@@ -206,7 +212,7 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
       color = 'dim'
       break
 
-    case 'diagnostics':
+    case 'diagnostics': {
       const parts: string[] = []
       if (ctx.errorCount && ctx.errorCount > 0) parts.push(`${ctx.errorCount}E`)
       if (ctx.warningCount && ctx.warningCount > 0) parts.push(`${ctx.warningCount}W`)
@@ -214,6 +220,7 @@ function renderSegment(segment: StatusSegment, ctx: StatusLineContext): string {
       text = parts.join(' ')
       color = ctx.errorCount && ctx.errorCount > 0 ? 'red' : 'yellow'
       break
+    }
 
     case 'custom':
       return label ?? ''
@@ -245,7 +252,7 @@ export function renderStatusLine(ctx: StatusLineContext, config?: StatusLineConf
     if (!rendered) continue
 
     // Check if it fits
-    const strippedLen = rendered.replace(/\x1b\[[0-9;]*m/g, '').length
+    const strippedLen = stripAnsi(rendered).length
     if (totalWidth + strippedLen + 3 > maxWidth && segments.length > 0) break
 
     segments.push(rendered)

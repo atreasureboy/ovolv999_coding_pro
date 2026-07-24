@@ -250,7 +250,7 @@ function analyzeDependencies(root: string): DependencyInfo {
 
 // ── Test Setup ──────────────────────────────────────────────────────────────
 
-function analyzeTestSetup(root: string, pkg: any): TestSetup {
+function analyzeTestSetup(root: string, pkg: PackageJson | null): TestSetup {
   // Check for test frameworks in package.json
   if (pkg) {
     const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) }
@@ -417,7 +417,7 @@ function detectPrimaryLanguage(stats: CodeStats): string {
   return map[ext] ?? 'Unknown'
 }
 
-function detectFramework(pkg: any, deps: DependencyInfo): string | null {
+function detectFramework(pkg: PackageJson | null, deps: DependencyInfo): string | null {
   if (!pkg) return null
   const all = { ...deps.production, ...deps.development }
   if (all.react) return 'React'
@@ -430,7 +430,7 @@ function detectFramework(pkg: any, deps: DependencyInfo): string | null {
   return null
 }
 
-function detectConventions(root: string, pkg: any): string[] {
+function detectConventions(root: string, pkg: PackageJson | null): string[] {
   const conventions: string[] = []
 
   if (existsSync(join(root, '.editorconfig'))) conventions.push('EditorConfig defined')
@@ -460,7 +460,7 @@ function findKeyFiles(root: string): string[] {
   return keyFiles.filter(f => existsSync(join(root, f)))
 }
 
-function detectBuildSystem(root: string, pkg: any): string | null {
+function detectBuildSystem(root: string, pkg: PackageJson | null): string | null {
   if (pkg?.scripts?.build) return 'npm build'
   if (existsSync(join(root, 'Makefile'))) return 'make'
   if (existsSync(join(root, 'webpack.config.js'))) return 'webpack'

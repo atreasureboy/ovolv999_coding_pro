@@ -142,7 +142,7 @@ export class WorktreeManager {
       const msg = (err as Error).message
       // Clean up partial directory if git failed after creating it
       try { rmSync(wtPath, { recursive: true, force: true }) } catch { /* best-effort */ }
-      throw new Error(`Failed to create worktree: ${msg}`)
+      throw new Error(`Failed to create worktree: ${msg}`, { cause: err })
     }
 
     const info: WorktreeInfo = {
@@ -197,7 +197,7 @@ export class WorktreeManager {
           stdio: 'pipe',
         })
       } catch (err) {
-        throw new Error(`Merge failed for branch ${info.branch}: ${(err as Error).message}`)
+        throw new Error(`Merge failed for branch ${info.branch}: ${(err as Error).message}`, { cause: err })
       }
     }
 
@@ -301,23 +301,25 @@ After creating a worktree, file paths returned to the agent will reference the i
     },
   }
 
-  async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const name = String(input.name ?? '')
-    const baseBranch = input.base_branch ? String(input.base_branch) : undefined
+  execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const nameInput = (input.name ?? '') as string
+    const name = String(nameInput)
+    const baseBranchInput = input.base_branch as string | undefined
+    const baseBranch = baseBranchInput ? String(baseBranchInput) : undefined
 
     if (!name) {
-      return { content: 'Worktree name is required', isError: true }
+      return Promise.resolve({ content: 'Worktree name is required', isError: true })
     }
 
     try {
       const mgr = getWorktreeManager(ctx.cwd)
       const info = mgr.createWorktree(name, baseBranch)
-      return {
+      return Promise.resolve({
         content: `Created worktree "${name}"\nPath: ${info.path}\nBranch: ${info.branch} (based on ${info.baseBranch})`,
         isError: false,
-      }
+      })
     } catch (err) {
-      return { content: `Failed to create worktree: ${(err as Error).message}`, isError: true }
+      return Promise.resolve({ content: `Failed to create worktree: ${(err as Error).message}`, isError: true })
     }
   }
 }
@@ -358,9 +360,11 @@ If only one worktree is active, you can omit \`name\`.`,
     },
   }
 
-  async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const name = input.name ? String(input.name) : ''
-    const action = (input.action ? String(input.action) : 'merge') as 'merge' | 'discard'
+  execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const nameInput = input.name as string | undefined
+    const name = nameInput ? String(nameInput) : ''
+    const actionInput = input.action as string | undefined
+    const action = (actionInput ? String(actionInput) : 'merge') as 'merge' | 'discard'
     const deleteBranch = input.delete_branch !== false
 
     try {
@@ -371,21 +375,21 @@ If only one worktree is active, you can omit \`name\`.`,
       if (name) {
         const info = mgr.getWorktree(name)
         if (!info) {
-          return { content: `Worktree "${name}" not found.`, isError: true }
+          return Promise.resolve({ content: `Worktree "${name}" not found.`, isError: true })
         }
         const diffStats = mgr.getDiffStats(name)
         const merge = action === 'merge'
         mgr.removeWorktree(name, { merge, deleteBranch })
         const verb = merge ? 'merged into base' : 'discarded'
-        return {
+        return Promise.resolve({
           content: `Worktree "${name}" ${verb}.\n${diffStats ? `Changes:\n${diffStats}` : '(no changes)'}`,
           isError: false,
-        }
+        })
       }
 
       // No name specified — auto-resolve
       if (list.length === 0) {
-        return { content: 'No active worktrees to exit.', isError: false }
+        return Promise.resolve({ content: 'No active worktrees to exit.', isError: false })
       }
       if (list.length === 1) {
         const only = list[0]
@@ -393,17 +397,17 @@ If only one worktree is active, you can omit \`name\`.`,
         const merge = action === 'merge'
         mgr.removeWorktree(only.name, { merge, deleteBranch })
         const verb = merge ? 'merged into base' : 'discarded'
-        return {
+        return Promise.resolve({
           content: `Worktree "${only.name}" ${verb}.\n${diffStats ? `Changes:\n${diffStats}` : '(no changes)'}`,
           isError: false,
-        }
+        })
       }
-      return {
+      return Promise.resolve({
         content: `Multiple worktrees active. Specify name:\n${list.map(w => `  ${w.name} (${w.branch})`).join('\n')}`,
         isError: false,
-      }
+      })
     } catch (err) {
-      return { content: `Failed to exit worktree: ${(err as Error).message}`, isError: true }
+      return Promise.resolve({ content: `Failed to exit worktree: ${(err as Error).message}`, isError: true })
     }
   }
 }
@@ -421,18 +425,18 @@ export class ListWorktreesTool implements Tool {
     },
   }
 
-  async execute(_input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  execute(_input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const mgr = getWorktreeManager(ctx.cwd)
     const list = mgr.listWorktrees()
     if (list.length === 0) {
-      return { content: 'No active worktrees.', isError: false }
+      return Promise.resolve({ content: 'No active worktrees.', isError: false })
     }
     const lines = list.map(w =>
       `  ${w.name.padEnd(20)} ${w.branch.padEnd(30)} ${w.path}`,
     )
-    return {
+    return Promise.resolve({
       content: `Active worktrees (${list.length}):\n${lines.join('\n')}`,
       isError: false,
-    }
+    })
   }
 }

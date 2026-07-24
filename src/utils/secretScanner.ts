@@ -76,7 +76,7 @@ const PATTERNS: SecretPattern[] = [
   // Anthropic API keys
   {
     name: 'Anthropic API key',
-    regex: /\bsk-ant-[a-zA-Z0-9_\-]{20,}\b/g,
+    regex: /\bsk-ant-[a-zA-Z0-9_-]{20,}\b/g,
     mask: maskKey,
   },
   // AWS access keys
@@ -94,25 +94,25 @@ const PATTERNS: SecretPattern[] = [
   // Slack tokens
   {
     name: 'Slack token',
-    regex: /\bxox[abpr]-[a-zA-Z0-9\-]{10,}\b/g,
+    regex: /\bxox[abpr]-[a-zA-Z0-9-]{10,}\b/g,
     mask: maskKey,
   },
   // Google API keys
   {
     name: 'Google API key',
-    regex: /\bAIza[a-zA-Z0-9_\-]{35,}\b/g,
+    regex: /\bAIza[a-zA-Z0-9_-]{35,}\b/g,
     mask: maskKey,
   },
   // JWT tokens (eyJ prefix — base64-encoded JSON header)
   {
     name: 'JWT token',
-    regex: /\beyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]*\b/g,
+    regex: /\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]*\b/g,
     mask: (m) => m.slice(0, 10) + '...' + (m.length > 20 ? m.slice(-4) : ''),
   },
   // Bearer tokens in Authorization headers
   {
     name: 'Bearer token',
-    regex: /\bBearer\s+[a-zA-Z0-9_\-\.=]{20,}/gi,
+    regex: /\bBearer\s+[a-zA-Z0-9_\-.=]{20,}/gi,
     mask: (m) => 'Bearer ' + maskKey(m.replace(/^Bearer\s+/i, '')),
   },
   // Private keys (PEM format)
@@ -126,7 +126,7 @@ const PATTERNS: SecretPattern[] = [
   // (those are handled by specific patterns above)
   {
     name: 'Generic API key assignment',
-    regex: /(?:api[_-]?key|apikey|token|secret|password|passwd)["']?\s*[:=]\s*["']?(?!(?:sk-ant-|sk-|AKIA|gh[opsr]_|github_pat_|xox[abpr]-|AIza|eyJ))(?=[a-zA-Z0-9_\-\/+]{16,})[a-zA-Z0-9_\-\/+]{16,}["']?/gi,
+    regex: /(?:api[_-]?key|apikey|token|secret|password|passwd)["']?\s*[:=]\s*["']?(?!(?:sk-ant-|sk-|AKIA|gh[opsr]_|github_pat_|xox[abpr]-|AIza|eyJ))(?=[a-zA-Z0-9_\-/+]{16,})[a-zA-Z0-9_\-/+]{16,}["']?/gi,
     mask: (m) => {
       const eqIndex = m.search(/[:=]/)
       if (eqIndex < 0) return '***REDACTED***'
