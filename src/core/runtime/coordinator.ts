@@ -565,35 +565,34 @@ export class RuntimeCoordinator {
 
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
-    // ── CompletionContract gate (eight_goal Phase 4 §六) ──
-    // A model `stop_sequence` does NOT automatically mean the Run
-    // succeeded. CONSERVATIVELY block only on POSITIVE failure evidence
-    // (failed verification commands, or child subtasks still running) —
-    // never on mere "no changes", since a Q&A turn legitimately produces
-    // none. This catches false-success (model declares done while
-    // verification is red / workers outstanding) without breaking normal
-    // turns. result.reason is unchanged; only the Run status is gated.
-    let completionBlockers: string[] = []
+    // ── CompletionContract gate (v0.3.1: SINGLE source of truth) ──
+    // stop_sequence only means the model stopped. The real verdict comes
+    // from evaluateCompletion(). taskKind drives what "done" means:
+    // informational (Q&A) doesn't need changes; mutation does.
+    let completionVerdict: { status: string; blockers?: string[]; remaining?: string[] } | null = null
     if (result.reason === 'stop_sequence') {
       const ws = this.deps.contextManager.getWorkingState()
-      const failedVerifications = ws.verification.failed.length
-      const runningChildren = sharedState.activeSubtasks.size
-      if (failedVerifications > 0) {
-        completionBlockers = [...completionBlockers, `${failedVerifications} failed verification command(s): ${ws.verification.failed.slice(0, 3).join(', ')}`]
-      }
-      if (runningChildren > 0) {
-        completionBlockers = [...completionBlockers, `${runningChildren} child subtask(s) still running`]
-      }
-      // Phase 3: a non-empty TaskGraph with unfinished nodes blocks
-      // completion — the model can't declare done while planned work
-      // remains. Hard failures (failed/blocked nodes) also block.
+      const hasChanges = ws.filesChanged.length > 0
+      // v0.3.1: only actual file changes make it a 'mutation' task.
+      // Running verification alone (no changes) is informational.
+      const taskKind = hasChanges ? 'mutation' : 'informational'
       const tg = this.deps.taskGraph
-      if (tg && tg.size() > 0 && tg.hasUnfinished()) {
-        const snap = tg.snapshot().summary
-        completionBlockers = [...completionBlockers, `TaskGraph unfinished: ${snap.completed}/${snap.total} done, ${snap.failed} failed, ${snap.blocked} blocked, ${snap.running + snap.ready + snap.pending} active`]
-      }
-      if (completionBlockers.length > 0) {
-        renderer.warn(`Completion gate: marking Run blocked despite stop_sequence — ${completionBlockers.join('; ')}`)
+      const v = evaluateCompletion({
+        taskKind,
+        acceptanceCriteria: tg && tg.size() > 0 ? tg.snapshot().nodes.flatMap((n) => n.acceptanceCriteria) : [],
+        satisfiedCriteria: [],
+        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
+        verificationPassed: ws.verification.failed.length === 0,
+        runningChildren: sharedState.activeSubtasks.size,
+        unhandledFailures: ws.verification.failed.length,
+        changedFiles: ws.filesChanged,
+      })
+      completionVerdict = v
+      if (v.status !== 'completed') {
+        const detail = 'blockers' in v && v.blockers ? v.blockers.join('; ')
+          : 'remaining' in v && v.remaining ? v.remaining.join('; ')
+          : v.status
+        renderer.warn(`Completion gate: ${v.status} — ${detail}`)
       }
     }
 
@@ -601,7 +600,7 @@ export class RuntimeCoordinator {
     if (runId && registry) {
       const targetStatus: RunStatus =
         result.reason === 'stop_sequence'
-          ? (completionBlockers.length > 0 ? 'blocked' : 'succeeded')
+          ? (completionVerdict && completionVerdict.status !== 'completed' ? 'blocked' : 'succeeded')
         : result.reason === 'interrupted' ? 'cancelled'
         : result.reason === 'max_iterations' ? 'blocked'
         : 'failed'
@@ -610,13 +609,13 @@ export class RuntimeCoordinator {
         if (run && !isTerminalRunStatus(run.status)) {
           registry.transition(runId, targetStatus, {
             phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted'
-              : completionBlockers.length > 0 ? 'completion-gate-blocked'
+              : completionVerdict && completionVerdict.status !== 'completed' ? `completion-${completionVerdict.status}`
               : 'completed',
             error: targetStatus === 'failed'
               ? (result.output || 'turn failed')
               : targetStatus === 'blocked'
-                ? completionBlockers.length > 0
-                  ? `completion gate: ${completionBlockers.join('; ')}`
+                ? completionVerdict && completionVerdict.status !== 'completed'
+                  ? `completion ${completionVerdict.status}: ${('blockers' in completionVerdict && completionVerdict.blockers?.join('; ')) || ('remaining' in completionVerdict && completionVerdict.remaining?.join('; ')) || ''}`
                   : 'turn hit max_iterations ceiling'
                 : undefined,
           })

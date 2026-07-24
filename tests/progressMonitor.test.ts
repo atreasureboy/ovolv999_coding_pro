@@ -105,6 +105,7 @@ describe('interventionMessageForStall (Phase 4 active intervention)', () => {
 
 describe('CompletionContract (Phase 4)', () => {
   const base = {
+    taskKind: 'mutation' as const,
     acceptanceCriteria: ['tests pass', 'lint clean'],
     satisfiedCriteria: [] as string[],
     verificationExecuted: false,

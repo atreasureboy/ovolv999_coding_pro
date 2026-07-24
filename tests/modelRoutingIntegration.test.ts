@@ -79,4 +79,28 @@ describe('ModelRouter main-path integration (Phase 2)', () => {
     await e.runTurn('refactor the whole architecture now', [])
     expect(e.getModel()).toBe('haiku')
   })
+
+  it('v0.3.1: auto-routing does NOT create a manual override (stays re-routable)', async () => {
+    const { e } = makeEngine('haiku', PROFILES)
+    await e.runTurn('refactor the architecture', [])
+    expect(e.getModel()).toBe('sonnet') // routed to strong
+    // CRITICAL: no manual override set — next turn can re-route
+    expect(e.getModelRouter().getManualOverride()).toBeNull()
+    // A trivial follow-up re-routes to cheap (override not sticky)
+    await e.runTurn('list files', [])
+    expect(e.getModel()).toBe('haiku')
+    expect(e.getModelRouter().getManualOverride()).toBeNull()
+  })
+
+  it('v0.3.1: clearModelOverride restores auto-routing after manual pin', async () => {
+    const { e } = makeEngine('haiku', PROFILES)
+    e.setModelByUser('sonnet') // manual pin
+    expect(e.getModelRouter().getManualOverride()).toBe('sonnet')
+    await e.runTurn('list files', [])
+    expect(e.getModel()).toBe('sonnet') // override held
+    e.clearModelOverride()
+    expect(e.getModelRouter().getManualOverride()).toBeNull()
+    await e.runTurn('list files', [])
+    expect(e.getModel()).toBe('haiku') // auto-routing restored
+  })
 })

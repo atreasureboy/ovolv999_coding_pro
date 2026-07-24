@@ -80,8 +80,8 @@ describe('CompletionContract main-path gate (Phase 4)', () => {
     const run = e.getRunRegistry().list({ kind: 'turn' })[0]
     // The gate MUST block: verification.failed has 1 entry (exit-1 bash).
     expect(run.status).toBe('blocked')
-    expect(run.phase).toBe('completion-gate-blocked')
-    expect(run.error).toMatch(/completion gate/)
+    expect(run.phase).toMatch(/completion-blocked/)
+    expect(run.error).toMatch(/completion/i)
     // WorkingState corroborates the failure.
     expect(e.getProgressMonitor().snapshot(0).changedFiles).toEqual([]) // no files changed
   })

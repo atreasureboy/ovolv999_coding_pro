@@ -351,7 +351,9 @@ export class ExecutionEngine {
         const decision = router.route(input)
         if (decision.selectedModel && decision.selectedModel !== this.config.model) {
           try {
-            this.setModel(decision.selectedModel)
+            // v0.3.1: applyRoutingDecision does NOT set manual override —
+            // auto-routing must remain re-routable on subsequent turns.
+            this.applyRoutingDecision(decision.selectedModel)
             return decision.selectedModel
           } catch { return null }
         }
@@ -639,34 +641,51 @@ export class ExecutionEngine {
    * (or restart). That is explicitly out of scope until Phase 8
    * (Provider Capability Abstraction) lands.
    */
+    /**
+     * v0.3.1 (te_goal §三.1.1): split manual vs auto model switching.
+     * setModel / setModelByUser set the sticky override (CLI --model,
+     * /model). applyRoutingDecision does NOT — otherwise one auto-route
+     * locks the model forever and subsequent turns never re-route.
+     */
     setModel(model: string): void {
-    if (this.config.model === model) return
-    const previousModel = this.config.model
-    // Phase 2: a manual setModel is the sticky routing override.
-    this.modelRouter.setManualOverride(model)
-    try {
-      this.config.model = model
-      this.contextManager.onModelChanged(model)
-      this.moduleManager.notifyModelChanged(model)
-      this.modelGateway.resetStreamUsageLatch()
-      // P2-4: update shared RuntimeModelState + notify subscribers.
-      this.sharedState.updateModelState({ model })
-      // P2-5: emit structured event.
-      this.eventEmitter.emit({
-        type: 'MODEL_CHANGED',
-        from: previousModel,
-        to: model,
-      })
-    } catch (err) {
-      this.config.model = previousModel
-      try {
-        this.contextManager.onModelChanged(previousModel)
-        this.moduleManager.notifyModelChanged(previousModel)
-        this.sharedState.updateModelState({ model: previousModel })
-      } catch { /* best-effort rollback */ }
-      throw err
+      this.setModelByUser(model)
     }
-  }
+
+    setModelByUser(model: string): void {
+      this.modelRouter.setManualOverride(model)
+      this.switchModel(model)
+    }
+
+    /** Auto-routing path: switch WITHOUT setting the manual override. */
+    applyRoutingDecision(model: string): void {
+      this.switchModel(model)
+    }
+
+    /** Clear the manual override, restoring auto-routing (/model auto). */
+    clearModelOverride(): void {
+      this.modelRouter.setManualOverride(null)
+    }
+
+    private switchModel(model: string): void {
+      if (this.config.model === model) return
+      const previousModel = this.config.model
+      try {
+        this.config.model = model
+        this.contextManager.onModelChanged(model)
+        this.moduleManager.notifyModelChanged(model)
+        this.modelGateway.resetStreamUsageLatch()
+        this.sharedState.updateModelState({ model })
+        this.eventEmitter.emit({ type: 'MODEL_CHANGED', from: previousModel, to: model })
+      } catch (err) {
+        this.config.model = previousModel
+        try {
+          this.contextManager.onModelChanged(previousModel)
+          this.moduleManager.notifyModelChanged(previousModel)
+          this.sharedState.updateModelState({ model: previousModel })
+        } catch { /* best-effort rollback */ }
+        throw err
+      }
+    }
 
   getCostTracker(): CostTracker {
     return this.costTracker

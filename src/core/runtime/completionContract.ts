@@ -15,6 +15,8 @@
  */
 
 export interface CompletionInput {
+  /** v0.3.1 (te_goal §四): task kind drives what "done" means. */
+  taskKind: 'informational' | 'analysis' | 'mutation'
   /** User-stated acceptance criteria (from WorkingState / goal). */
   acceptanceCriteria: string[]
   /** Criteria already satisfied (marked off during the run). */
@@ -59,10 +61,17 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
   }
   if (blockers.length > 0) return { status: 'blocked', blockers }
 
-  // No blocker. Distinguish completed vs partial vs incomplete.
+  // v0.3.1: informational tasks (Q&A, explanation) don't require file
+  // changes — modelStopped + no failures is a legitimate completion.
+  if (input.taskKind === 'informational') {
+    if (input.acceptanceCriteria.length === 0 || unsatisfied.length === 0) {
+      return { status: 'completed', evidence, residualRisks: residual }
+    }
+    return { status: 'partial', evidence, remaining: unsatisfied, residualRisks: residual }
+  }
+
+  // mutation / analysis: require evidence of work.
   if (input.acceptanceCriteria.length === 0) {
-    // No explicit criteria: require verification (if any ran) to pass +
-    // at least one changed file or explicit satisfied mark.
     if (input.verificationExecuted && !input.verificationPassed) {
       return { status: 'blocked', blockers: ['verification failed'] }
     }
@@ -74,7 +83,6 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
   }
 
   if (unsatisfied.length === 0) {
-    // All criteria met. Verification must have run (or be N/A) + passed.
     if (input.verificationExecuted && !input.verificationPassed) {
       return { status: 'blocked', blockers: ['all criteria claimed but verification failed'] }
     }
@@ -82,7 +90,6 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
     return { status: 'completed', evidence, residualRisks: residual }
   }
 
-  // Some criteria remain.
   if (input.changedFiles.length === 0) {
     return { status: 'incomplete', remaining: unsatisfied }
   }
