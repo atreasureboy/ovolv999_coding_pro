@@ -20,7 +20,7 @@
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { str } from '../core/strings.js'
-import { TaskGraph } from '../core/runtime/taskGraph.js'
+import type { TaskGraph } from '../core/runtime/taskGraph.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
 
 export class TaskPlanTool implements Tool {
