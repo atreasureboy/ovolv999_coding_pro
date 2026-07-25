@@ -1592,6 +1592,10 @@ registerCommand({
       loadPlugins, formatPluginList, enablePlugin, disablePlugin, createPluginScaffold,
     } = require('../core/plugins.js') as typeof import('../core/plugins.js')
 
+    // v0.3.3: register built-in plugins so /plugins shows them.
+    const { initBuiltinPlugins } = require('../core/builtinPlugins.js') as typeof import('../core/builtinPlugins.js')
+    initBuiltinPlugins()
+
     if (subcommand === 'list' || subcommand === '' || !subcommand) {
       const home = require('os').homedir() as string
       const registry = loadPlugins(ctx.cwd, home)
