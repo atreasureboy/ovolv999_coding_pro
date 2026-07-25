@@ -40,6 +40,7 @@ export type RunEvent =
   | { type: 'MAX_ITERATIONS_REACHED'; maxIterations: number }
   | { type: 'STALL_DETECTED'; kind: string; reason: string; action: string }
   | { type: 'RUN_COMPLETED'; result: TurnResult }
+  | { type: 'RUN_TERMINATED'; status: string; result: TurnResult }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }
   // v0.3.1 (te_goal §三.1.1 / §八) — explicit routing events so

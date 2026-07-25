@@ -911,10 +911,11 @@ export class RuntimeCoordinator {
       result.completionReasons = reasons as string[] | undefined
     }
 
-    // v0.3.2 (ele_goal §Phase 9): the final RUN_COMPLETED is emitted
-    // AFTER the CompletionContract and the RunRegistry transition
-    // have both been evaluated. This ordering is required for the
-    // event-order assertion in ele_goal §Phase 0 test 5.
+    // v0.3.4 (mimo_goal §Phase 11): emit a status-specific terminal event.
+    // RUN_COMPLETED is kept for backward compat but the authoritative
+    // terminal signal is RUN_TERMINATED { status }.
+    const terminalStatus = result.completionStatus ?? (result.reason === 'error' ? 'failed' : 'completed')
+    eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
     await this.deps.moduleManager.runComplete({
