@@ -58,7 +58,7 @@ export function classifyTaskIntent(userMessage: string, options: {
   explicitKind?: TaskKind
   explicitAcceptanceCriteria?: AcceptanceCriterion[]
   expectedVerification?: VerificationRequirement[]
-}): TaskIntent {
+} = {}): TaskIntent {
   const text = userMessage.toLowerCase()
   const explicit = options.explicitKind
   const planMode = options.planMode ?? false
@@ -93,23 +93,14 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  // Static-rule layer per ele_goal §Phase 3 minimum rules.
-  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up)\b/
-  const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan)\b/
-  const informationalKeywords = /\b(what|why|how|when|where|who|explain|summarize|describe|tell me|show|list|find|locate|search|hello|hi)\b/
+  // v0.3.3 (tha_goal §Phase 3): bilingual (EN + ZH) keyword matching.
+  // Mutation keywords: 修复/修改/实现/增加/新增/删除/重构/迁移/替换/优化代码/补充测试/改造/接入/完善
+  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/
+  // Analysis keywords: 审计/分析/检查/评估/设计/给出方案/研究/对比/解释架构
+  const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证)/
+  // Informational keywords: 解释/说明/回答/总结/翻译/查询
+  const informationalKeywords = /\b(what|why|how|when|where|who|explain|summarize|describe|tell me|show|list|find|locate|search|hello|hi)\b|(解释|说明|回答|总结|翻译|查询|是什么|怎么做|为什么)/
 
-  if (mutationKeywords.test(text)) {
-    return {
-      kind: 'mutation',
-      requestedOutcomes: extractOutcomes(userMessage),
-      explicitAcceptanceCriteria: explicitCriteria,
-      requiresWorkspaceChange: true,
-      expectedVerification: options.expectedVerification ?? defaultVerificationForMutation(),
-      confidence: 0.6,
-      source: 'keyword',
-      userMessage,
-    }
-  }
   if (analysisKeywords.test(text)) {
     return {
       kind: 'analysis',
@@ -117,6 +108,18 @@ export function classifyTaskIntent(userMessage: string, options: {
       explicitAcceptanceCriteria: explicitCriteria,
       requiresWorkspaceChange: false,
       expectedVerification: options.expectedVerification ?? [],
+      confidence: 0.6,
+      source: 'keyword',
+      userMessage,
+    }
+  }
+  if (mutationKeywords.test(text)) {
+    return {
+      kind: 'mutation',
+      requestedOutcomes: extractOutcomes(userMessage),
+      explicitAcceptanceCriteria: explicitCriteria,
+      requiresWorkspaceChange: true,
+      expectedVerification: options.expectedVerification ?? defaultVerificationForMutation(),
       confidence: 0.6,
       source: 'keyword',
       userMessage,
@@ -135,14 +138,18 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  // Default: low-confidence informational. Caller should fall back
-  // to a classifier model if available.
+  // v0.3.3 (tha_goal §Phase 3): fail-closed default. When confidence is
+  // too low to classify, prefer 'mutation' over 'informational' — a
+  // mutation task misclassified as informational silently bypasses the
+  // completion gate's change-evidence requirement. The cost of a false
+  // mutation (unnecessary verification) is far lower than a false
+  // informational (false success on an unmodified workspace).
   return {
-    kind: 'informational',
+    kind: 'mutation',
     requestedOutcomes: extractOutcomes(userMessage),
     explicitAcceptanceCriteria: explicitCriteria,
-    requiresWorkspaceChange: false,
-    expectedVerification: [],
+    requiresWorkspaceChange: true,
+    expectedVerification: options.expectedVerification ?? defaultVerificationForMutation(),
     confidence: 0.3,
     source: 'static-rule',
     userMessage,

@@ -124,7 +124,7 @@ describe('v0.3.1 edge cases (audit pass 2)', () => {
     expect(v.status).toBe('incomplete')
   })
 
-  it('CompletionContract analysis kind with no criteria + no changes: incomplete', () => {
+  it('CompletionContract analysis kind with no criteria + no changes: completed (v0.3.3: analysis needs no patches)', () => {
     const v = evaluateCompletion({
       taskKind: 'analysis',
       modelStopped: true,
@@ -136,7 +136,7 @@ describe('v0.3.1 edge cases (audit pass 2)', () => {
       reviewerFindings: [],
       budgetState: { remaining: 1, exceeded: false },
     })
-    expect(v.status).toBe('incomplete')
+    expect(v.status).toBe('completed')
   })
 
   it('validateProfiles: empty profile array passes', () => {

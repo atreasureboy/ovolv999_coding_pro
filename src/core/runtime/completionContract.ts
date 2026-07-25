@@ -174,8 +174,9 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
   }
   if (blockers.length > 0) return { status: 'blocked', blockers }
 
-  // ── informational Q&A: no file changes required ─────────────────
-  if (input.taskKind === 'informational') {
+  // ── informational + analysis: no file changes required ──────────
+  // v0.3.3: analysis (audit/review/verify) produces findings, not patches.
+  if (input.taskKind === 'informational' || input.taskKind === 'analysis') {
     if (criteria.length === 0 || unsatisfied.length === 0) {
       return { status: 'completed', evidence, residualRisks: residual }
     }
