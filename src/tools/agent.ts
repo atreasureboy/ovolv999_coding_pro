@@ -939,7 +939,12 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       //     merge conflict            → blocked   (worktree PRESERVED)
       //   worker ok + verify ok +
       //     delivery ok               → succeeded
+      // v0.3.4 (mimo_goal §Phase 2): the worker failed if the LLM turn
+      // errored OR if the completion status from the outcome is not
+      // 'completed'. Previously only reason === 'error' was checked, which
+      // let 'blocked'/'partial' child runs be treated as worker success.
       const workerFailed = result.reason === 'error'
+        || (result.completionStatus !== undefined && result.completionStatus !== 'completed')
       let verifyOutcome: { ran: boolean; passed: boolean } = { ran: false, passed: true }
       let deliveryOutcome:
         | { status: 'delivered'; branch: string }

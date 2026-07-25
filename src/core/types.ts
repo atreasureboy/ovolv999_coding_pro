@@ -32,7 +32,7 @@ export interface ToolCall {
  * in tests that don't model background work.
  */
 export interface ChildEngineLike {
-  runTurn: (msg: string, history: never[]) => Promise<{ result: { output: string; reason: string } }>
+  runTurn: (msg: string, history: never[]) => Promise<{ result: { output: string; reason: string; completionStatus?: string } }>
   abort: () => void
   /**
    * Tear down engine-owned side effects (background tasks, transient
