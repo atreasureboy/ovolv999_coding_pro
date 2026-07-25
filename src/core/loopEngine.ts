@@ -16,7 +16,7 @@
  * 6. Otherwise → next iteration (up to MAX_ITERS)
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { runCommandSync } from './commandRunner.js'
 import type { ExecutionEngine } from './engine.js'
@@ -155,11 +155,21 @@ export async function runLoop(
   }
 
   for (let iter = 1; iter <= maxIters; iter++) {
-    // Check for DONE/PARKED flags
-    if (existsSync(join(loopDir, 'DONE.flag'))) {
-      renderer.success('DONE flag detected — loop completed successfully')
-      finishLoopRun('succeeded')
-      return
+    // v0.3.3 (tha_goal §5.2): only trust DRIVER-written DONE.flag.
+    // If a model wrote DONE.flag during a turn, rename it — the driver
+    // must independently verify acceptance before completing.
+    const donePath = join(loopDir, 'DONE.flag')
+    if (existsSync(donePath)) {
+      const content = tryRead(donePath)
+      if (!content.includes('DRIVER_VERIFIED')) {
+        // Model-written DONE — security event, rename and continue.
+        try { renameSync(donePath, join(loopDir, 'DONE.flag.rejected')) } catch { /* best-effort */ }
+        renderer.warn('WARNING: model-created DONE.flag detected and rejected. Only the Driver may complete.')
+      } else {
+        renderer.success('DONE flag (driver-verified) detected — loop completed')
+        finishLoopRun('succeeded')
+        return
+      }
     }
     if (existsSync(join(loopDir, 'PARKED.flag'))) {
       renderer.warn('PARKED flag detected — loop paused')
@@ -206,6 +216,40 @@ ${goal}
 ACCEPTANCE.md:
 ${acceptanceRaw || '(none — propose one based on GOAL)'}`
 
+    // v0.3.3 (tha_goal §5.1): re-read acceptance EACH iteration (it may
+    // have been updated since the last turn). Do NOT trust a cached copy.
+    const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
+    const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
+
+    // v0.3.3 (tha_goal §5.2): check for model's CANDIDATE_DONE signal.
+    // If present, the model claims completion — the Driver MUST verify
+    // independently before accepting.
+    const candidateDonePath = join(loopDir, 'CANDIDATE_DONE.flag')
+    if (existsSync(candidateDonePath)) {
+      renderer.info('Model signalled CANDIDATE_DONE — Driver verifying acceptance...')
+      try { unlinkSync(candidateDonePath) } catch { /* best-effort */ }
+      // Run acceptance checks ourselves (don't trust the agent)
+      if (acceptanceItemsFresh.length === 0) {
+        renderer.warn('CANDIDATE_DONE rejected — no acceptance criteria defined')
+      } else {
+        let candidatePassed = true
+        for (const item of acceptanceItemsFresh) {
+          const result = runAcceptance(item.command, cwd)
+          if (!result.passed) { candidatePassed = false; break }
+        }
+        if (candidatePassed) {
+          const gates = runQualityGates(cwd)
+          if (gates.passed) {
+            renderer.success('\n✓ Driver-verified all acceptance + quality gates — DONE!')
+            writeFileSync(donePath, `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
+            finishLoopRun('succeeded')
+            return
+          }
+        }
+        renderer.warn('CANDIDATE_DONE rejected — acceptance or gates failed')
+      }
+    }
+
     // Run engine turn
     const startMs = Date.now()
     try {
@@ -221,10 +265,18 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     }
 
     // Run acceptance checks ourselves (don't trust the agent's self-assessment)
+    // v0.3.3: uses the FRESH acceptance items re-read this iteration.
     renderer.info('\n--- Acceptance checks ---')
     let allPassed = true
     const results: AcceptanceResult[] = []
-    for (const item of acceptanceItems) {
+
+    // v0.3.3 (tha_goal §5.1): empty acceptance → blocked, not pass.
+    if (acceptanceItemsFresh.length === 0) {
+      renderer.warn('No acceptance criteria defined — cannot verify completion')
+      allPassed = false
+    }
+
+    for (const item of acceptanceItemsFresh) {
       const result = runAcceptance(item.command, cwd)
       results.push({ ...item, ...result })
       const icon = result.passed ? '✓' : '✗'
@@ -244,7 +296,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
 
     if (allPassed && gates.passed) {
       renderer.success('\n✓ All acceptance checks passed + quality gates green — DONE!')
-      writeFileSync(join(loopDir, 'DONE.flag'), `completed at iteration ${iter}\n`, 'utf8')
+      writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
       finishLoopRun('succeeded')
       return
     }

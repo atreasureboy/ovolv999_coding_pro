@@ -155,8 +155,8 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
     writeFileSync(join(loopDir, 'GOAL.md'), 'Prove the loop works\n')
     writeFileSync(join(loopDir, 'ACCEPTANCE.md'), '')
     writeFileSync(join(loopDir, 'STATE.md'), 'idle')
-    // Pre-create DONE.flag so the loop exits at iteration 1 immediately.
-    writeFileSync(join(loopDir, 'DONE.flag'), 'pre-set\n')
+    // Pre-create DONE.flag (v0.3.3: must contain DRIVER_VERIFIED marker)
+    writeFileSync(join(loopDir, 'DONE.flag'), 'DRIVER_VERIFIED pre-set\n')
 
     const { c, e } = makeEngine(logDir)
     // runLoop imports runLoop from the source — but the engine config
