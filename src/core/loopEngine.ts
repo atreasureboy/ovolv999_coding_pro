@@ -114,6 +114,33 @@ export async function runLoop(
     return
   }
 
+  // v0.3.3 (tha_goal §5.4): stale lock recovery. Check for a loop.lock
+  // from a previous run; if the PID is dead, remove it and continue.
+  const lockPath = join(loopDir, 'loop.lock')
+  if (existsSync(lockPath)) {
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number; ts: number }
+      if (lock.pid !== process.pid) {
+        // Check if the PID is still alive
+        let alive = false
+        try { process.kill(lock.pid, 0); alive = true } catch { alive = false }
+        if (alive) {
+          renderer.error(`Another loop is running (PID ${lock.pid}). Remove ${lockPath} if stale.`)
+          return
+        }
+        // Stale lock — PID is dead, safe to take over
+        renderer.warn(`Stale loop.lock detected (PID ${lock.pid} not running). Removing.`)
+        try { unlinkSync(lockPath) } catch { /* best-effort */ }
+      }
+    } catch {
+      // Corrupt lock file — remove and continue
+      renderer.warn('Corrupt loop.lock detected. Removing.')
+      try { unlinkSync(lockPath) } catch { /* best-effort */ }
+    }
+  }
+  // Acquire the lock
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, ts: Date.now() }), 'utf8')
+
   const goal = tryRead(join(loopDir, 'GOAL.md'))
   const acceptanceRaw = tryRead(join(loopDir, 'ACCEPTANCE.md'))
   const acceptanceItems = parseAcceptance(acceptanceRaw)
@@ -145,6 +172,8 @@ export async function runLoop(
       }).runId
     : undefined
   const finishLoopRun = (status: 'succeeded' | 'failed' | 'cancelled', err?: string) => {
+    // v0.3.3 §15: release the lock on every exit path
+    try { if (existsSync(lockPath)) unlinkSync(lockPath) } catch { /* best-effort */ }
     if (!loopRunId || !registry) return
     try {
       const r = registry.get(loopRunId)
