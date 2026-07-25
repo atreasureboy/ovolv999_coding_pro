@@ -10,7 +10,6 @@ import { join } from 'path'
 import { classifyTaskIntent } from '../src/core/runtime/taskIntent.js'
 import { evaluateCompletion } from '../src/core/runtime/completionContract.js'
 import { TaskGraph } from '../src/core/runtime/taskGraph.js'
-import { ProgressMonitor } from '../src/core/runtime/progressMonitor.js'
 import { InMemoryRunScopedRuntimeContextStore } from '../src/core/runtime/runScopedContext.js'
 
 let tmp = ''
