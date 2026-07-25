@@ -395,7 +395,10 @@ export class RuntimeCoordinator {
     // v0.3.1 (te_goal §七): typed control messages. The provider sees
     // a snapshot rendered for THIS call; the log is drained after the
     // call so messages do NOT accumulate in the user-visible history.
-    const controlMessageLog = new ControlMessageLog()
+    // v0.3.3 (tha_goal §十二.2/3): use the per-run ControlMessageLog
+    // from RunScopedRuntimeContext when available — NOT a local instance.
+    // This ensures all components share the same control-message channel.
+    const controlMessageLog = runContext?.controlMessages ?? new ControlMessageLog()
 
     try {
       while (!isTerminal(state)) {
