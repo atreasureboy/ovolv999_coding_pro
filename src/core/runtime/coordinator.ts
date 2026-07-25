@@ -60,6 +60,7 @@ import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion, type CompletionVerdict } from './completionContract.js'
+import type { TurnOutcome, CompletionStatus, ModelCallAttempt } from './turnOutcome.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
@@ -181,7 +182,7 @@ export class RuntimeCoordinator {
     history: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
     opts?: { parentRunId?: string },
-  ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
+  ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[]; outcome: TurnOutcome }> {
     const { config, renderer, eventLog, sharedState, eventEmitter } = this.deps
 
     // v0.3.3 (tha_goal §十二.6): clear per-run state so consecutive turns
@@ -926,8 +927,51 @@ export class RuntimeCoordinator {
 
     config.hookRunner?.runOnComplete?.(result)
 
+    // v0.3.4 (mimo_goal §Phase 1): construct the canonical TurnOutcome.
+    // All consumers (CLI, Hook, Module, AgentTool, Loop, Eval) read from
+    // completion.status — no more guessing from reason === 'stop_sequence'.
+    const wsFinal = this.deps.contextManager.getWorkingState()
+    const status: CompletionStatus =
+      result.reason === 'error' ? 'failed'
+      : result.reason === 'interrupted' ? 'cancelled'
+      : result.reason === 'max_iterations' ? 'exhausted'
+      : (result.completionStatus as CompletionStatus) ?? 'completed'
+    const outcome: TurnOutcome = {
+      runId: runId ?? 'unknown',
+      stopReason: result.reason === 'interrupted' ? 'cancelled'
+        : result.reason === 'max_iterations' ? 'max_iterations'
+        : result.reason === 'error' ? 'error'
+        : 'stop_sequence',
+      completion: {
+        status,
+        reasons: result.completionReasons ?? [],
+        evidence: [],
+        requiredNextActions: [],
+      },
+      output: result.output,
+      changedFiles: [...wsFinal.filesChanged],
+      artifacts: [],
+      verification: {
+        executed: wsFinal.verification.passed.length + wsFinal.verification.failed.length > 0,
+        passed: wsFinal.verification.failed.length === 0,
+        failed: [...wsFinal.verification.failed],
+      },
+      modelAttempts: this.modelCallsThisRun.map((a) => ({
+        profileId: a.model,
+        model: a.model,
+        startedAt: a.startedAt,
+        endedAt: a.endedAt,
+        status: a.success ? 'succeeded' as const : 'failed' as const,
+        usage: a.usage,
+        error: a.error,
+      })),
+      // Deprecated compat
+      stopped: result.stopped,
+      reason: result.reason,
+    }
+
     // v0.3.3: close() is now in the finally block (covers ALL exit paths).
-    return { result, newHistory: messages }
+    return { result, newHistory: messages, outcome }
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

@@ -227,10 +227,12 @@ Execute one iteration:
 2. DO — make real changes (Edit/Write/Bash), commit each logical unit
 3. REVIEW — use Agent tool with explore type to review your changes
 4. CHECK — run quality gates (tsc --noEmit, eslint, vitest) + acceptance checks
-5. ACT — if all acceptance passes + quality gates green: write .loop/DONE.flag
+5. ACT — if all acceptance passes + quality gates green: write .loop/CANDIDATE_DONE.flag
    Otherwise: rewrite .loop/STATE.md with progress, append .loop/HISTORY.md
 
 Rules:
+- You MUST NOT create .loop/DONE.flag. Only the external Supervisor may do that.
+- To signal completion, create .loop/CANDIDATE_DONE.flag. The Supervisor will independently verify.
 - Never block waiting for human confirmation — proceed with best judgment
 - If stuck 3 iterations on same issue: write .loop/PARKED.flag with reason
 - Always commit changes with descriptive messages
