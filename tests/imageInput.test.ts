@@ -185,8 +185,8 @@ describe('imageInput', () => {
   describe('getClipboardImagePath', () => {
     it('returns null when no clipboard tool available', () => {
       const result = getClipboardImagePath()
-      // In test environment, likely returns null
-      expect(result === null || typeof result === 'string').toBe(true)
+      // In test environment, likely returns null (string if clipboard has an image)
+      expect(result === null || typeof result === 'string').toBeTruthy()
     })
   })
 })

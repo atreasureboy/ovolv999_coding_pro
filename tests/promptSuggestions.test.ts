@@ -260,7 +260,7 @@ describe('promptSuggestions', () => {
       const ctx = baseCtx({})
       for (const rule of ALL_PROMPT_RULES) {
         const result = rule(ctx)
-        expect(result === null || typeof result === 'object').toBe(true)
+        expect(result === null || typeof result === 'object').toBeTruthy()
       }
     })
   })

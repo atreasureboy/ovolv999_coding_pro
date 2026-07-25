@@ -746,6 +746,14 @@ export class RuntimeCoordinator {
         sharedState.softAbortRequested = false
         sharedState.softAbortOwner = null
       }
+      // v0.3.3 audit fix: close the RunScopedRuntimeContext in the
+      // FINALLY block so boot errors, late throws (hook/module/EventStore)
+      // and any other exit path all release the context. Without this,
+      // the store's internal Map leaks a TaskGraph + ProgressMonitor +
+      // ControlMessageLog per failed turn (tha_goal §十二.5/§Phase 7.23).
+      if (runId) {
+        try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
+      }
     }
 
     eventEmitter.emit({ type: 'RUN_EXECUTION_STOPPED', runId: runId ?? 'unknown', stopReason: result.reason })
@@ -918,14 +926,7 @@ export class RuntimeCoordinator {
 
     config.hookRunner?.runOnComplete?.(result)
 
-    // v0.3.2 P0-1 fix: release the per-run context to prevent unbounded
-    // memory growth. Every turn mints a RunScopedRuntimeContext (with
-    // TaskGraph + ProgressMonitor + ControlMessageLog); without close()
-    // the store's internal Map grows forever.
-    if (runId) {
-      try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
-    }
-
+    // v0.3.3: close() is now in the finally block (covers ALL exit paths).
     return { result, newHistory: messages }
   }
 

@@ -108,7 +108,8 @@ describe('GAP-D: per-input ResourceClaim declarations', () => {
       //   write+exclusive → conflict, write+write → conflict,
       //   read+read → no conflict.
       // So at least ONE of (read, write) must be write/exclusive.
-      expect(read[0].access === 'write' || write[0].access === 'write').toBe(true)
+      const accesses = [read[0].access, write[0].access]
+      expect(accesses).toContain('write')
     })
   })
 })

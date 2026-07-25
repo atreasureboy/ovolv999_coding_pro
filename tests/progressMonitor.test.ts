@@ -32,7 +32,8 @@ describe('ProgressMonitor + StallDetector (Phase 4)', () => {
     m.recordToolCall('Bash', { command: 'npm test' }, err('fail 1')) // same input
     m.recordToolCall('Bash', { command: 'npm test' }, err('fail 1')) // same input
     const v = m.detectStall(1)
-    expect(v.kind === 'soft-stall' || v.kind === 'repeated-failure').toBe(true)
+    // 3 identical Bash failures → must be one of the stall verdicts
+    expect(['soft-stall', 'repeated-failure']).toContain(v.kind)
   })
 
   it('escalates consecutive identical errors to root-cause subtask', () => {

@@ -107,6 +107,7 @@ describe('notifier', () => {
       })
       // Should have attempted the channel and fallen back
       expect(result).toBeDefined()
+      expect(typeof result.success).toBe('boolean')
     })
 
     it('handles auto channel', () => {

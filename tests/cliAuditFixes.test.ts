@@ -567,7 +567,8 @@ describe('CLI #9: /doctor MiniMax + /rewind honesty', () => {
       const isNoEdits = /No file edits tracked/.test(rewind.value)
       const isUnsupported = /not supported/i.test(rewind.value)
       const pointsToUndo = /\/undo/.test(rewind.value)
-      expect(isNoEdits || isUnsupported || pointsToUndo).toBe(true)
+      // The rewind message must match at least one expected pattern.
+      expect([isNoEdits, isUnsupported, pointsToUndo]).toContain(true)
     }
   })
 })

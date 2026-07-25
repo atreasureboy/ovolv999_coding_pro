@@ -141,7 +141,9 @@ describe('BashTool — abort signal + process-group cleanup', () => {
     // the child-pid line).
     const markerExists = await fileExists('/tmp/bash-abort-test-marker')
     const childPid = extractPid(result.content, 'child-pid=')
-    expect(markerExists || childPid !== null).toBe(true)
+    // At least one signal proves the child was running: either it left a
+    // marker file, or we captured its PID before it was killed.
+    expect(markerExists || childPid !== null).toBeTruthy()
 
     // The backgrounded subprocess must be dead (Z state counts as gone).
     if (childPid !== null) {

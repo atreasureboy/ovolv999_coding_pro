@@ -124,8 +124,9 @@ describe('daemon', () => {
     it('times out on slow response', async () => {
       const client = new DaemonClient(socketPath)
       const res = await client.send({ action: 'ping' }, 1)
-      // Should still respond quickly, but test path exists
-      expect(res.ok === true || res.ok === false).toBe(true)
+      // Should still respond quickly with a well-formed result
+      expect(res).toBeDefined()
+      expect(typeof res.ok).toBe('boolean')
     })
   })
 
