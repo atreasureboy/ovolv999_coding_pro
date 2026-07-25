@@ -177,6 +177,10 @@ export class RuntimeCoordinator {
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
     const { config, renderer, eventLog, sharedState, eventEmitter } = this.deps
 
+    // v0.3.3 (tha_goal §十二.6): clear per-run state so consecutive turns
+    // don't accumulate stale model-call attempts from prior turns.
+    this.modelCallsThisRun = []
+
     // P1-2 fix: resolve the effective parentRunId ONCE. A per-turn
     // override (opts.parentRunId, e.g. from runLoop's kind='loop' run)
     // takes precedence over the static deps.parentRunId. This threads
