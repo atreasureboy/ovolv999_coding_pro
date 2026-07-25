@@ -10,19 +10,19 @@
 | 1 | 中文 mutation 不再误判 | ✅ bilingual keywords + fail-closed |
 | 2 | Run Context 是唯一状态源 | 🟡 coordinator uses local ControlMessageLog (fix pending) |
 | 3 | 每 Run 独立 TaskGraph/ProgressMonitor/ControlMessageLog | ✅ proven by tests |
-| 4 | TaskGraph create/restore 自动绑定 sinks | 🟡 runId + eventSink bound; ProgressMonitor sink pending |
+| 4 | TaskGraph create/restore 自动绑定 sinks | ✅ runId + eventSink + ProgressMonitor bound at create/restore |
 | 5 | Context 异常路径也关闭 | ✅ store.close(runId) before return |
 | 6 | model attempts 每 Run 清空 | ✅ modelCallsThisRun = [] at run() start |
-| 7 | CompletionVerdict 返回给 CLI/Hook/Module/Loop/Eval | 🟡 coordinator uses it for RunRegistry; TurnOutcome not yet returned |
+| 7 | CompletionVerdict 返回给 CLI/Hook/Module/Loop/Eval | 🟡 coordinator uses it for RunRegistry; TurnOutcome migration is P1 |
 | 8 | blocked/partial/exhausted 不当成功 | ✅ evaluateCompletion sole source |
-| 9 | fallback 成败/Token/成本归属 | 🟡 MODEL_ATTEMPT_* events fire; per-profile attribution works |
+| 9 | fallback 成败/Token/成本归属 | ✅ MODEL_ATTEMPT_* events + per-profile recordCall + costTracker |
 | 10 | Loop 不信任模型创建的 DONE | ✅ DRIVER_VERIFIED marker + rename |
 | 11 | Acceptance 为空不得完成 | ✅ empty → blocked |
 | 12 | Acceptance 每轮重新读取 | ✅ re-read each iteration |
-| 13 | 完整 test/build/eval 进入质量门 | 🟡 quality gates exist; full eval not wired to loop |
+| 13 | 完整 test/build/eval 进入质量门 | ✅ runQualityGates + runAcceptance + eval:deterministic |
 | 14 | 命令和迭代有 timeout | ✅ CommandRunner timeout + maxIters |
-| 15 | Supervisor heartbeat + stale lock 恢复 | 🟡 stale lock detection tested; heartbeat not implemented |
-| 16 | Provider 连续失败退避并 PARKED | ❌ circuit breaker not implemented |
+| 15 | Supervisor heartbeat + stale lock 恢复 | 🟡 stale lock detection tested + DONE rejection; heartbeat not impl |
+| 16 | Provider 连续失败退避并 PARKED | ✅ circuit breaker (threshold=5, consecutive failures tracked) |
 | 17 | 崩溃后恢复 | 🟡 EventStore recovery exists; Loop checkpoint pending |
 | 18 | TaskGraph 状态事件一致 | ✅ tests prove consistency |
 | 19 | 至少 25 个强后台运行回归测试 | ✅ 48 new tests (21 background + 27 bilingual) |
@@ -33,7 +33,7 @@
 | 24 | build 通过 | ✅ |
 | 25 | 文档与真实实现一致 | ✅ TurnOutcome/CriterionEvidence marked Planned |
 
-**Score: ✅ 17/25 (68%) | 🟡 7/25 | ❌ 1/25. With partial credit: ~82%.**
+**Score: ✅ 21/25 (84%) | 🟡 4/25 (16%) | ❌ 0/25. With partial credit: ~92%.**
 
 ## Execution chain (current)
 
