@@ -183,23 +183,6 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
     return { status: 'partial', evidence, remaining: unsatisfied.map((u) => u.description), residualRisks: residual }
   }
 
-  // ── analysis: requires evidence but not patch ────────────────────
-  if (input.taskKind === 'analysis') {
-    if (criteria.length === 0) {
-      if (input.changedFiles.length === 0 && satisfiedSet.size === 0) {
-        residual.push('no analysis output produced')
-        return { status: 'incomplete', remaining: ['produce an analysis artefact'] }
-      }
-      return { status: 'completed', evidence, residualRisks: residual }
-    }
-    if (unsatisfied.length === 0) {
-      return { status: 'completed', evidence, residualRisks: residual }
-    }
-    if (input.changedFiles.length === 0) {
-      return { status: 'incomplete', remaining: unsatisfied.map((u) => u.description) }
-    }
-    return { status: 'partial', evidence, remaining: unsatisfied.map((u) => u.description), residualRisks: residual }
-  }
 
   // ── mutation: requires changes + satisfied acceptance ───────────
   if (criteria.length === 0) {
