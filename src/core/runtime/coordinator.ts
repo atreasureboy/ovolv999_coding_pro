@@ -164,6 +164,13 @@ export class RuntimeCoordinator {
     usage?: { inputTokens: number; outputTokens: number }
     retryable: boolean
   }> = []
+  /**
+   * v0.3.3 (tha_goal §十六): Provider circuit breaker. Tracks consecutive
+   * provider failures across turns; when the threshold is exceeded, further
+   * LLM calls are refused to stop burning tokens on a dead endpoint.
+   */
+  private consecutiveProviderFailures = 0
+  private static readonly CIRCUIT_BREAKER_THRESHOLD = 5
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps
@@ -924,6 +931,15 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
+    // v0.3.3 (tha_goal §十六): circuit breaker — if the provider has
+    // failed consecutively beyond the threshold, refuse to call. This
+    // stops unattended loops from burning tokens on a dead endpoint.
+    if (this.consecutiveProviderFailures >= RuntimeCoordinator.CIRCUIT_BREAKER_THRESHOLD) {
+      throw new Error(
+        `Provider circuit breaker OPEN: ${this.consecutiveProviderFailures} consecutive failures. ` +
+        `Refusing LLM call to stop token burn. Check provider health or restart.`,
+      )
+    }
     const callStartMs = Date.now()
     const modelAtStart = this.deps.config.model
     this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
@@ -1020,6 +1036,8 @@ export class RuntimeCoordinator {
         latencyMs: Date.now() - attemptStartedAt,
         usage: result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : undefined,
       } as never)
+      // v0.3.3 §十六: success resets the circuit breaker.
+      this.consecutiveProviderFailures = 0
     } catch (err) {
       // Record the failure against the profile even if the gateway
       // threw (helps /models show real health after retries).
@@ -1048,6 +1066,8 @@ export class RuntimeCoordinator {
           retryable: false,
         } as never)
       }
+      // v0.3.3 §十六: increment circuit breaker on failure.
+      this.consecutiveProviderFailures++
       throw err
     }
 
