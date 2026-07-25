@@ -414,4 +414,12 @@ export interface TurnResult {
    */
   reason: 'max_iterations' | 'stop_sequence' | 'error' | 'interrupted'
   output: string
+  /**
+   * v0.3.3 (tha_goal §十二.7): the structured completion verdict from
+   * evaluateCompletion(). Carries the authoritative status (completed /
+   * partial / blocked / incomplete) that CLI, Hook, Module, Loop and
+   * Eval should use instead of guessing from `reason`.
+   */
+  completionStatus?: string
+  completionReasons?: string[]
 }

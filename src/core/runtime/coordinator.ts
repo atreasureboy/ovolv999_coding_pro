@@ -890,6 +890,18 @@ export class RuntimeCoordinator {
       } as never)
     }
 
+    // v0.3.3 (tha_goal §十二.7): attach the completion verdict to the
+    // TurnResult so CLI, Hook, Module, Loop and Eval can consume it.
+    if (completionVerdict) {
+      result.completionStatus = completionVerdict.status
+      const reasons =
+        'reasons' in completionVerdict ? completionVerdict.reasons
+        : 'blockers' in completionVerdict ? completionVerdict.blockers
+        : 'remaining' in completionVerdict ? completionVerdict.remaining
+        : undefined
+      result.completionReasons = reasons as string[] | undefined
+    }
+
     // v0.3.2 (ele_goal §Phase 9): the final RUN_COMPLETED is emitted
     // AFTER the CompletionContract and the RunRegistry transition
     // have both been evaluated. This ordering is required for the
