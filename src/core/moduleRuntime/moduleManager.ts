@@ -238,10 +238,11 @@ export class ModuleManager {
     cwd: string
     sessionDir?: string
     turnResult: TurnResult
+    outcome?: import('../runtime/turnOutcome.js').TurnOutcome
     messages: OpenAIMessage[]
     eventLog?: EventLog
   }): Promise<void> {
-    const { cwd, sessionDir, turnResult, messages, eventLog } = params
+    const { cwd, sessionDir, turnResult, outcome, messages, eventLog } = params
 
     for (const module of this.modules) {
       try {
@@ -249,6 +250,7 @@ export class ModuleManager {
           cwd,
           sessionDir,
           turnResult,
+          outcome,
           messages,
           eventLog,
         })

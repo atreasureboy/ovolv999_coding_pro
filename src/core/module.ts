@@ -14,6 +14,7 @@
 
 import type OpenAI from 'openai'
 import type { Tool, ToolContext, ToolResult, OpenAIMessage, TurnResult, EngineConfig } from './types.js'
+import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { EventLog } from './eventLog.js'
 
 /** Context passed to module factories — provides shared dependencies */
@@ -66,6 +67,8 @@ export interface ModuleRunContext {
   cwd: string
   sessionDir?: string
   turnResult: TurnResult
+  /** v0.3.4: the canonical TurnOutcome with completion.status */
+  outcome?: TurnOutcome
   messages: OpenAIMessage[]
   eventLog?: EventLog
 }

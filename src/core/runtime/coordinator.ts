@@ -913,26 +913,8 @@ export class RuntimeCoordinator {
       result.completionReasons = reasons as string[] | undefined
     }
 
-    // v0.3.4 (mimo_goal §Phase 11): emit a status-specific terminal event.
-    // RUN_COMPLETED is kept for backward compat but the authoritative
-    // terminal signal is RUN_TERMINATED { status }.
-    const terminalStatus = result.completionStatus ?? (result.reason === 'error' ? 'failed' : 'completed')
-    eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
-    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
-
-    await this.deps.moduleManager.runComplete({
-      cwd: config.cwd,
-      sessionDir: config.sessionDir,
-      turnResult: result,
-      messages,
-      eventLog,
-    })
-
-    config.hookRunner?.runOnComplete?.(result)
-
-    // v0.3.4 (mimo_goal §Phase 1): construct the canonical TurnOutcome.
-    // All consumers (CLI, Hook, Module, AgentTool, Loop, Eval) read from
-    // completion.status — no more guessing from reason === 'stop_sequence'.
+    // v0.3.4 (mimo_goal §Phase 1): construct the canonical TurnOutcome
+    // BEFORE module/hook completion so they receive it.
     const wsFinal = this.deps.contextManager.getWorkingState()
     const status: CompletionStatus =
       result.reason === 'error' ? 'failed'
@@ -972,6 +954,22 @@ export class RuntimeCoordinator {
       stopped: result.stopped,
       reason: result.reason,
     }
+
+    // v0.3.4 (mimo_goal §Phase 11): emit a status-specific terminal event.
+    const terminalStatus = status
+    eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
+    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
+
+    await this.deps.moduleManager.runComplete({
+      cwd: config.cwd,
+      sessionDir: config.sessionDir,
+      turnResult: result,
+      outcome,
+      messages,
+      eventLog,
+    })
+
+    config.hookRunner?.runOnComplete?.(result)
 
     // v0.3.3: close() is now in the finally block (covers ALL exit paths).
     return { result, newHistory: messages, outcome }
