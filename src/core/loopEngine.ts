@@ -120,6 +120,33 @@ function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
   return { passed: allPassed, results }
 }
 
+/**
+ * v0.3.4 (mimo_goal §Phase 8): Full quality gates run only when fast gates
+ * pass AND the model claims completion. Includes test + eval + build —
+ * the heavyweight commands that are too slow for every iteration.
+ */
+function runFullGates(cwd: string): { passed: boolean; results: string[] } {
+  const results: string[] = []
+  let allPassed = true
+
+  const commands = [
+    { name: 'test', cmd: 'npx vitest run 2>&1' },
+    { name: 'build', cmd: 'npm run build 2>&1' },
+  ]
+
+  for (const { name, cmd } of commands) {
+    const result = runAcceptance(cmd, cwd, getTimeoutMs(name))
+    if (result.passed) {
+      results.push(`✓ ${name}`)
+    } else {
+      results.push(`✗ ${name}: ${result.output.slice(0, 200)}`)
+      allPassed = false
+    }
+  }
+
+  return { passed: allPassed, results }
+}
+
 /** Run the autonomous loop */
 export async function runLoop(
   engine: ExecutionEngine,
@@ -328,8 +355,8 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
           if (!result.passed) { candidatePassed = false; break }
         }
         if (candidatePassed) {
-          const gates = runQualityGates(cwd)
-          if (gates.passed) {
+          const candidateGates = runQualityGates(cwd)
+          if (candidateGates.passed) {
             renderer.success('\n✓ Driver-verified all acceptance + quality gates — DONE!')
             writeFileSync(donePath, `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
             finishLoopRun('succeeded')
@@ -379,26 +406,44 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       }
     }
 
-    // Run quality gates
-    renderer.info('\n--- Quality gates ---')
-    const gates = runQualityGates(cwd)
-    for (const r of gates.results) {
+    // Run quality gates — v0.3.4 (mimo_goal §Phase 8): split into fast/full
+    renderer.info('\n--- Quality gates (fast) ---')
+    const fastGates = runQualityGates(cwd)
+    for (const r of fastGates.results) {
       renderer.info(`  ${r}`)
     }
 
+    // v0.3.4 (mimo_goal §Phase 7): Driver-side hash verification before DONE.
+    // Re-read the contracts NOW (after the model turn) and verify the hashes
+    // match what was embedded in the prompt. If they changed mid-turn, the
+    // model may have operated on stale criteria — reject DONE.
+    const goalHashPostTurn = hashContract(tryRead(join(loopDir, 'GOAL.md')))
+    const acceptanceHashPostTurn = hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md')))
+    const contractChanged = goalHashPostTurn !== goalHashThisIter || acceptanceHashPostTurn !== acceptanceHashThisIter
+
     // v0.3.4 (mimo_goal §Phase 3): the joint completion gate.
-    // ALL conditions must be met — TurnOutcome status, acceptance, gates.
     const completionStatus = lastOutcome?.completion?.status
     const modelClaimsDone = completionStatus === 'completed'
-    if (allPassed && gates.passed) {
-      if (!modelClaimsDone && completionStatus) {
-        // Gates pass but model outcome is NOT completed — don't DONE.
+    if (allPassed && fastGates.passed) {
+      if (contractChanged) {
+        renderer.warn(`\n⚠ Contract changed during turn (goal/acceptance hash mismatch). Not completing — re-run with updated criteria.`)
+      } else if (!modelClaimsDone && completionStatus) {
         renderer.warn(`\n⚠ Gates pass but model outcome is '${completionStatus}' — not completing.`)
       } else {
-        renderer.success('\n✓ All acceptance checks passed + quality gates green — DONE!')
-        writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
-        finishLoopRun('succeeded')
-        return
+        // Full gates only when fast pass + model claims done + contract stable
+        renderer.info('\n--- Quality gates (full) ---')
+        const fullGates = runFullGates(cwd)
+        for (const r of fullGates.results) {
+          renderer.info(`  ${r}`)
+        }
+        if (fullGates.passed) {
+          renderer.success('\n✓ All acceptance + fast + full gates green — DONE!')
+          writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
+          finishLoopRun('succeeded')
+          return
+        } else {
+          renderer.warn(`\n⚠ Full gates failed — not completing.`)
+        }
       }
     } else if (completionStatus === 'exhausted') {
       renderer.warn(`\n⚠ Model exhausted — saving state and parking.`)
@@ -407,7 +452,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       return
     }
 
-    renderer.warn(`\n⏳ Not done yet — ${results.filter(r => !r.passed).length} acceptance failed, gates ${gates.passed ? 'green' : 'red'}`)
+    renderer.warn(`\n⏳ Not done yet — ${results.filter(r => !r.passed).length} acceptance failed, gates ${fastGates.passed ? 'green' : 'red'}`)
 
     // v0.3.4 §Phase 6: save checkpoint after each iteration for crash recovery
     try {
