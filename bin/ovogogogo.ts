@@ -670,11 +670,13 @@ async function runPlanMode(
 
     const startMs = Date.now()
     try {
-      const { result, newHistory } = await engine.runTurn(task, history)
+      const { result, newHistory, outcome } = await engine.runTurn(task, history)
       history.length = 0
       history.push(...trimHistoryForNextTurn(newHistory))
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-      renderer.info(`Done in ${elapsed}s · ${result.reason}`)
+      // v0.3.4: display the authoritative completion status, not just stop reason
+      const statusDisplay = outcome?.completion?.status ?? result.reason
+      renderer.info(`Done in ${elapsed}s · ${statusDisplay}${result.completionReasons?.length ? ' (' + result.completionReasons.join('; ') + ')' : ''}`)
     } catch (err: unknown) {
       renderer.error(`Execution error: ${(err as Error).message}`)
     }

@@ -252,6 +252,9 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
     const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
 
+    // v0.3.4: declare before try block so it's visible in the completion gate
+    let lastOutcome: { completion: { status: string } } | undefined
+
     // v0.3.3 (tha_goal §5.2): check for model's CANDIDATE_DONE signal.
     // If present, the model claims completion — the Driver MUST verify
     // independently before accepting.
@@ -288,9 +291,11 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       // and every grandchild Agent/Worker run it spawns — links back
       // to the kind='loop' run in the Run tree. Previously runTurn
       // accepted no parentRunId, orphaning all loop turns.
-      const { result } = await engine.runTurn(prompt, [], undefined, { parentRunId: loopRunId })
+      const { result, outcome: turnOutcome } = await engine.runTurn(prompt, [], undefined, { parentRunId: loopRunId })
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-      renderer.info(`Iteration ${iter} done in ${elapsed}s · ${result.reason}`)
+      const statusDisplay = turnOutcome?.completion?.status ?? result.reason
+      renderer.info(`Iteration ${iter} done in ${elapsed}s · ${statusDisplay}`)
+      lastOutcome = turnOutcome
     } catch (err: unknown) {
       renderer.error(`Iteration ${iter} error: ${(err as Error).message}`)
     }
@@ -325,10 +330,24 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       renderer.info(`  ${r}`)
     }
 
+    // v0.3.4 (mimo_goal §Phase 3): the joint completion gate.
+    // ALL conditions must be met — TurnOutcome status, acceptance, gates.
+    const completionStatus = lastOutcome?.completion?.status
+    const modelClaimsDone = completionStatus === 'completed'
     if (allPassed && gates.passed) {
-      renderer.success('\n✓ All acceptance checks passed + quality gates green — DONE!')
-      writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
-      finishLoopRun('succeeded')
+      if (!modelClaimsDone && completionStatus) {
+        // Gates pass but model outcome is NOT completed — don't DONE.
+        renderer.warn(`\n⚠ Gates pass but model outcome is '${completionStatus}' — not completing.`)
+      } else {
+        renderer.success('\n✓ All acceptance checks passed + quality gates green — DONE!')
+        writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
+        finishLoopRun('succeeded')
+        return
+      }
+    } else if (completionStatus === 'exhausted') {
+      renderer.warn(`\n⚠ Model exhausted — saving state and parking.`)
+      writeFileSync(join(loopDir, 'PARKED.flag'), `exhausted at iteration ${iter}\n`, 'utf8')
+      finishLoopRun('failed', 'exhausted')
       return
     }
 

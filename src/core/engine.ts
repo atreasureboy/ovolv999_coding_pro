@@ -125,6 +125,8 @@ function buildRouter(config: EngineConfig): ModelRouter {
   return routerFromSingleModel(config.model, config.provider ?? 'openai')
 }
 
+import type { TurnOutcome } from './runtime/turnOutcome.js'
+
 export class ExecutionEngine {
   private client: OpenAI
   private config: EngineConfig
@@ -765,7 +767,7 @@ export class ExecutionEngine {
     history: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
     opts?: { parentRunId?: string },
-  ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[] }> {
+  ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[]; outcome: TurnOutcome }> {
     if (this._turnInFlight) {
       throw new Error(
         'ExecutionEngine.runTurn rejected: another turn is already in progress on this engine instance. ' +
