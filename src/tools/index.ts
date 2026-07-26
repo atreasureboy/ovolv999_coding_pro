@@ -68,6 +68,8 @@ export interface AgentWiring {
    *  primary path; TaskPlanTool resolves the current run's graph
    *  via runId rather than holding a fixed reference. */
   taskGraphResolver?: TaskGraphResolver
+  /** v0.3.5: per-run evidence resolver for anti-false-success. */
+  evidenceResolver?: import('./taskGraphResolver.js').RunScopedEvidenceResolver
 }
 
 export function createTools(
@@ -117,7 +119,7 @@ export function createTools(
     new ListMcpResourcesTool(),
     new ReadMcpResourceTool(),
     new GoalTool(),
-    new TaskPlanTool(agentWiring?.taskGraphResolver),
+    new TaskPlanTool(agentWiring?.taskGraphResolver, agentWiring?.evidenceResolver),
     ...extraTools,
   ]
 }

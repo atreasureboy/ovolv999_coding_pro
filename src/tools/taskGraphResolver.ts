@@ -12,27 +12,38 @@
  * - tests can inject a fake resolver to make graph ownership explicit
  */
 import type { TaskGraph } from '../core/runtime/taskGraph.js'
+import type { EvidenceStore } from '../core/runtime/evidence.js'
 import type { RunScopedRuntimeContextStore } from '../core/runtime/runScopedContext.js'
 
 export interface TaskGraphResolver {
   resolve(runId: string): TaskGraph
-  /** Best-effort: returns undefined if no context exists for runId. */
   resolveOrNull(runId: string): TaskGraph | undefined
 }
 
 export class RunScopedTaskGraphResolver implements TaskGraphResolver {
   constructor(private readonly store: RunScopedRuntimeContextStore) {}
-
   resolve(runId: string): TaskGraph {
     const ctx = this.store.get(runId)
-    if (!ctx) {
-      throw new Error(`TaskGraphResolver: no RunScopedRuntimeContext for runId "${runId}"`)
-    }
+    if (!ctx) throw new Error(`TaskGraphResolver: no context for runId "${runId}"`)
     return ctx.taskGraph
   }
-
   resolveOrNull(runId: string): TaskGraph | undefined {
     return this.store.get(runId)?.taskGraph
+  }
+}
+
+/**
+ * v0.3.5: Resolves the per-run EvidenceStore from the RunScopedRuntimeContext.
+ */
+export class RunScopedEvidenceResolver {
+  constructor(private readonly store: RunScopedRuntimeContextStore) {}
+  resolve(runId: string): EvidenceStore {
+    const ctx = this.store.get(runId)
+    if (!ctx) throw new Error(`EvidenceResolver: no context for runId "${runId}"`)
+    return ctx.evidence
+  }
+  resolveOrNull(runId: string): EvidenceStore | undefined {
+    return this.store.get(runId)?.evidence
   }
 }
 

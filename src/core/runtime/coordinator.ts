@@ -346,7 +346,11 @@ export class RuntimeCoordinator {
             unresolved: [...ws.unresolved],
           },
           contextManager: {
-            contextUsageRatio: 0, // refined when budget tracker integration ships
+            // v0.3.5: do NOT fabricate values. The collector applies its
+            // own defaults (0/1) when the source has no data — we pass
+            // the documented "no data" values here rather than pretending
+            // we measured them.
+            contextUsageRatio: 0,
             budgetRemaining: 1,
             recentFailureCount: ws.verification.failed.length,
           },

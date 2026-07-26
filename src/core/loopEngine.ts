@@ -18,7 +18,6 @@
 
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { hostname } from 'os'
 import { runCommandSync } from './commandRunner.js'
 import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo } from './loopSupervisor.js'
 import type { ExecutionEngine } from './engine.js'

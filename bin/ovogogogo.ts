@@ -104,7 +104,11 @@ import {
 } from '../src/core/sessionManager.js'
 import type { AgentChildEngineFactory } from '../src/core/types.js'
 
-const VERSION = '0.1.0'
+// v0.3.5: single version source — read from package.json at build time.
+// All CLI/checkpoint/telemetry/banner display uses this constant.
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url)
+const VERSION = (require('../package.json') as { version: string }).version
 
 // ─────────────────────────────────────────────────────────────
 // Shared prompt router — single source of truth for stdin reads.

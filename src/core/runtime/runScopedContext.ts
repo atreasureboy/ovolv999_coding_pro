@@ -15,6 +15,7 @@
  */
 import { TaskGraph } from './taskGraph.js'
 import { ProgressMonitor } from './progressMonitor.js'
+import { EvidenceStore } from './evidence.js'
 import { ControlMessageLog } from './internalControlMessage.js'
 import type { RoutingSignals } from '../model/routingSignalCollector.js'
 import type { CompletionVerdict } from './completionContract.js'
@@ -36,6 +37,8 @@ export interface RunScopedRuntimeContext {
   taskGraph: TaskGraph
   progressMonitor: ProgressMonitor
   controlMessages: ControlMessageLog
+  /** v0.3.5: per-run evidence store for anti-false-success. */
+  evidence: EvidenceStore
   routingSignals?: RoutingSignals
   completionCandidate?: CompletionCandidate
   completionVerdict?: CompletionVerdict
@@ -104,6 +107,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       taskGraph: new TaskGraph(),
       progressMonitor: new ProgressMonitor(),
       controlMessages: new ControlMessageLog(),
+      evidence: new EvidenceStore(),
       startedAt: Date.now(),
     }
     // v0.3.2: the graph inside the Context is a fresh TaskGraph;
@@ -130,6 +134,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       taskGraph: graph,
       progressMonitor: new ProgressMonitor(),
       controlMessages: new ControlMessageLog(),
+      evidence: new EvidenceStore(),
       routingSignals: snapshot.routingSignals,
       completionCandidate: snapshot.completionCandidate,
       completionVerdict: snapshot.completionVerdict,

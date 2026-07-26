@@ -55,7 +55,7 @@ import { ProgressMonitor } from './runtime/progressMonitor.js'
 import type { TaskGraph } from './runtime/taskGraph.js'
 import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
 import { InMemoryRunScopedRuntimeContextStore, type RunScopedRuntimeContextStore } from './runtime/runScopedContext.js'
-import { RunScopedTaskGraphResolver } from '../tools/taskGraphResolver.js'
+import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
@@ -311,6 +311,7 @@ export class ExecutionEngine {
     // so the TaskPlanTool (and any future tool) resolves the right
     // graph via runId without holding a fixed reference.
     const taskGraphResolver = new RunScopedTaskGraphResolver(this.runContextStore)
+    const evidenceResolver = new RunScopedEvidenceResolver(this.runContextStore)
     // v0.3.1 (te_goal §五 + §六.1 + §十一.14): wire TaskGraph events
     // into BOTH the RunEventEmitter (for /trace + EventStore replay)
     // and a hook that records node transitions on the ProgressMonitor
@@ -338,11 +339,13 @@ export class ExecutionEngine {
            runRegistry: this.runRegistry,
            taskGraph: this.taskGraph,
            taskGraphResolver,
+           evidenceResolver,
          })
       : createTools(config.extraTools ?? [], {
            runRegistry: this.runRegistry,
            taskGraph: this.taskGraph,
            taskGraphResolver,
+           evidenceResolver,
          })
     this.eventLog = config.eventLog
     this.costTracker = new CostTracker()
