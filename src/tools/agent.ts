@@ -969,7 +969,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           const icon = verifyResult.passed ? '✓' : '✗'
           verifySection = `\n\n---\n[Verify Gate] ${icon}\n${verifyResult.output}`
           verifyOutcome = { ran: true, passed: verifyResult.passed }
-          context.eventLog?.append('invoke_completed', agentLabel, {
+
+      context.eventLog?.append('invoke_completed', agentLabel, {
             description,
             verified: true,
             verification_passed: verifyResult.passed,
@@ -1088,6 +1089,15 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         delivery: deliveryOutcome,
         retryable: deliveryOutcome.status === 'conflict',
       })
+
+      // v0.3.4 (mimo_goal §Phase 2): emit structured agent completion events
+      // so /trace and EventStore can replay the acceptance/rejection decision.
+      context.eventLog?.append('agent_completion', agentLabel, {
+        description,
+        final_status: finalStatus,
+        delivery: deliveryOutcome.status,
+        accepted: finalStatus === 'succeeded',
+      }, [agentLabel, finalStatus === 'succeeded' ? 'success' : 'error'])
 
       const worktreeOutcomeLegacy =
         deliveryOutcome.status === 'delivered' ? { branch: deliveryOutcome.branch, merged: true }

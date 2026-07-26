@@ -41,6 +41,11 @@ export type RunEvent =
   | { type: 'STALL_DETECTED'; kind: string; reason: string; action: string }
   | { type: 'RUN_COMPLETED'; result: TurnResult }
   | { type: 'RUN_TERMINATED'; status: string; result: TurnResult }
+  | { type: 'AGENT_COMPLETION_ACCEPTED'; runId: string; description: string }
+  | { type: 'AGENT_COMPLETION_REJECTED'; runId: string; description: string; reason: string }
+  | { type: 'AGENT_MERGE_STARTED'; runId: string; branch: string }
+  | { type: 'AGENT_MERGE_COMPLETED'; runId: string; branch: string }
+  | { type: 'AGENT_WORKTREE_PRESERVED'; runId: string; branch: string; reason: string }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }
   // v0.3.1 (te_goal §三.1.1 / §八) — explicit routing events so

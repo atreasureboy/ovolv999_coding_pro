@@ -250,6 +250,13 @@ export async function runLoop(
     // Read current state
     const state = tryRead(join(loopDir, 'STATE.md'))
 
+    // v0.3.4 (mimo_goal §Phase 7): re-read + hash contracts for prompt↔driver
+    // consistency, BEFORE building the prompt.
+    const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
+    const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
+    const acceptanceHashThisIter = hashContract(acceptanceRawFresh)
+    const goalHashThisIter = hashContract(goal)
+
     // Construct prompt
     const prompt = `You are executing LOOP autonomous iteration ${iter}/${maxIters}.
 
@@ -260,6 +267,8 @@ Read these files in order:
 - .loop/skills/CONVENTIONS.md (project conventions)
 - .loop/skills/COMMANDS.md (build/test/lint commands)
 - .loop/skills/PITFALLS.md (known pitfalls)
+
+Contract hash (for verification): goal=${goalHashThisIter} acceptance=${acceptanceHashThisIter}
 
 Execute one iteration:
 1. PLAN — read state, decide what to do this iteration
@@ -286,11 +295,7 @@ ${goal}
 ACCEPTANCE.md:
 ${acceptanceRaw || '(none — propose one based on GOAL)'}`
 
-    // v0.3.3 (tha_goal §5.1): re-read acceptance EACH iteration (it may
-    // have been updated since the last turn). Do NOT trust a cached copy.
-    const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
-    const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
-
+    // v0.3.4: acceptance re-read moved up before prompt construction (§Phase 7)
     // v0.3.4: declare before try block so it's visible in the completion gate
     let lastOutcome: { completion: { status: string } } | undefined
 
