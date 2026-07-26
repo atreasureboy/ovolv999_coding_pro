@@ -172,6 +172,8 @@ export class RuntimeCoordinator {
    */
   private consecutiveProviderFailures = 0
   private static readonly CIRCUIT_BREAKER_THRESHOLD = 5
+  private static readonly MAX_BACKOFF_MS = 60_000
+  private lastProviderFailureAt = 0
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps
@@ -989,14 +991,24 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    // v0.3.3 (tha_goal §十六): circuit breaker — if the provider has
-    // failed consecutively beyond the threshold, refuse to call. This
-    // stops unattended loops from burning tokens on a dead endpoint.
+    // v0.3.4 (mimo_goal §Phase 9): circuit breaker with exponential backoff.
+    // After consecutive failures, delay before retrying (not a tight loop).
     if (this.consecutiveProviderFailures >= RuntimeCoordinator.CIRCUIT_BREAKER_THRESHOLD) {
       throw new Error(
         `Provider circuit breaker OPEN: ${this.consecutiveProviderFailures} consecutive failures. ` +
         `Refusing LLM call to stop token burn. Check provider health or restart.`,
       )
+    }
+    // Exponential backoff: 1 failure → no delay; 2 → ~2s; 3 → ~4s + jitter
+    if (this.consecutiveProviderFailures >= 2) {
+      const baseMs = Math.min(
+        RuntimeCoordinator.MAX_BACKOFF_MS,
+        Math.pow(2, this.consecutiveProviderFailures) * 1000,
+      )
+      const jitter = Math.floor(Math.random() * 500)
+      const delayMs = baseMs + jitter
+      this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${this.consecutiveProviderFailures})`)
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
     }
     const callStartMs = Date.now()
     const modelAtStart = this.deps.config.model
@@ -1126,6 +1138,7 @@ export class RuntimeCoordinator {
       }
       // v0.3.3 §十六: increment circuit breaker on failure.
       this.consecutiveProviderFailures++
+      this.lastProviderFailureAt = Date.now()
       throw err
     }
 

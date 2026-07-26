@@ -60,16 +60,32 @@ function parseAcceptance(content: string): Array<{ id: string; command: string }
   return items
 }
 
-function runAcceptance(command: string, cwd: string): { passed: boolean; output: string } {
-  // Phase 1: route through CommandRunner for unified timeout / output
-  // limits / structured result. These acceptance commands run during
-  // autonomous LOOP iterations — they MUST be bounded.
+/**
+ * v0.3.4 (mimo_goal §Phase 8): configurable timeouts per command type.
+ * Defaults are generous — a full test suite can legitimately take 30 min.
+ */
+const GATE_TIMEOUTS: Record<string, number> = {
+  typecheck: 5 * 60_000,    // 5 min
+  lint: 5 * 60_000,          // 5 min
+  test: 15 * 60_000,         // 15 min
+  'full test': 30 * 60_000,  // 30 min
+  eval: 30 * 60_000,         // 30 min
+  build: 15 * 60_000,        // 15 min
+  default: 5 * 60_000,       // 5 min (NOT 60s)
+}
+
+function getTimeoutMs(gateName: string): number {
+  return GATE_TIMEOUTS[gateName.toLowerCase()] ?? GATE_TIMEOUTS.default
+}
+
+function runAcceptance(command: string, cwd: string, timeoutMs?: number): { passed: boolean; output: string } {
+  // v0.3.4: timeout is configurable per gate type, default 5 min (not 60s)
   const res = runCommandSync({
     executable: command,
     args: [],
     cwd,
     shell: true,
-    timeoutMs: 60_000,
+    timeoutMs: timeoutMs ?? GATE_TIMEOUTS.default,
   })
   const output = ((res.stdout ?? '') + (res.stderr ?? '')).trim().slice(0, 500)
   if (res.exitCode === 0 && !res.timedOut && !res.cancelled) {
@@ -88,7 +104,7 @@ function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
   ]
 
   for (const { name, cmd } of commands) {
-    const result = runAcceptance(cmd, cwd)
+    const result = runAcceptance(cmd, cwd, getTimeoutMs(name))
     if (result.passed) {
       results.push(`✓ ${name}`)
     } else {
@@ -291,7 +307,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       } else {
         let candidatePassed = true
         for (const item of acceptanceItemsFresh) {
-          const result = runAcceptance(item.command, cwd)
+          const result = runAcceptance(item.command, cwd, getTimeoutMs(item.id))
           if (!result.passed) { candidatePassed = false; break }
         }
         if (candidatePassed) {
@@ -336,7 +352,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     }
 
     for (const item of acceptanceItemsFresh) {
-      const result = runAcceptance(item.command, cwd)
+      const result = runAcceptance(item.command, cwd, getTimeoutMs(item.id))
       results.push({ ...item, ...result })
       const icon = result.passed ? '✓' : '✗'
       renderer.info(`  ${icon} ${item.id}: ${item.command}`)
