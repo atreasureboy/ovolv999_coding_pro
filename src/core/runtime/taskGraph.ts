@@ -211,6 +211,7 @@ export class TaskGraph {
 
   markVerifying(id: string): void {
     const n = this.require(id)
+    this.assertTransition(n.status, 'verifying', id)
     n.status = 'verifying'
     this.emit({ type: 'TASK_NODE_VERIFYING', nodeId: id, runId: this.runId })
   }
@@ -224,6 +225,7 @@ export class TaskGraph {
    */
   complete(id: string, satisfiedCriteria?: string[], artifacts: string[] = []): void {
     const n = this.require(id)
+    this.assertTransition(n.status, 'completed', id)
     // v0.3.5: if satisfiedCriteria is explicitly passed (legacy path),
     // still do the string-match check. If omitted (evidence path),
     // trust the caller (TaskPlanTool verified via EvidenceStore).
@@ -278,6 +280,7 @@ export class TaskGraph {
 
   fail(id: string, reason: string): void {
     const n = this.require(id)
+    this.assertTransition(n.status, 'failed', id)
     n.status = 'failed'
     n.failReason = reason
     this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason, runId: this.runId })
@@ -285,6 +288,7 @@ export class TaskGraph {
 
   block(id: string, reason: string): void {
     const n = this.require(id)
+    this.assertTransition(n.status, 'blocked', id)
     n.status = 'blocked'
     n.blockReason = reason
     this.emit({ type: 'TASK_NODE_BLOCKED', nodeId: id, reason, runId: this.runId })
@@ -331,6 +335,7 @@ export class TaskGraph {
 
   cancel(id: string, reason?: string): void {
     const n = this.require(id)
+    this.assertTransition(n.status, 'cancelled', id)
     n.status = 'cancelled'
     if (reason) n.failReason = reason
     this.emit({ type: 'TASK_NODE_CANCELLED', nodeId: id, reason: reason ?? 'cancelled', runId: this.runId })
@@ -389,6 +394,25 @@ export class TaskGraph {
   }
 
   // ── internals ───────────────────────────────────────────────────
+
+  // v0.3.5: state transition validation — rejects invalid jumps.
+  private static VALID_TRANSITIONS: Record<string, Set<string>> = {
+    pending: new Set(['ready', 'running', 'failed', 'blocked', 'cancelled']),
+    ready: new Set(['running', 'failed', 'blocked', 'cancelled']),
+    running: new Set(['verifying', 'completed', 'failed', 'blocked', 'cancelled']),
+    verifying: new Set(['completed', 'failed', 'blocked', 'cancelled']),
+    blocked: new Set(['pending', 'cancelled']),
+    failed: new Set(['pending', 'blocked', 'cancelled']),
+    completed: new Set(), // terminal
+    cancelled: new Set(), // terminal
+  }
+
+  private assertTransition(from: TaskNodeStatus, to: TaskNodeStatus, id: string): void {
+    const allowed = TaskGraph.VALID_TRANSITIONS[from]
+    if (!allowed || !allowed.has(to)) {
+      throw new Error(`TaskGraph: invalid transition "${from}" → "${to}" for node "${id}"`)
+    }
+  }
 
   private require(id: string): TaskNode {
     const n = this.nodes.get(id)

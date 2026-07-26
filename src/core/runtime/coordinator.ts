@@ -314,8 +314,8 @@ export class RuntimeCoordinator {
             confidence: intent.confidence,
           },
         } as never)
-        // The Context's taskGraph is the source of truth.
-        this.deps.taskGraph = runContext.taskGraph
+        // v0.3.5: do NOT write back to this.deps.taskGraph (shared mutable
+        // global). Use the runContext's graph via a local variable instead.
       } else {
         const store = this.deps.taskGraphStore
         if (store) {
@@ -328,6 +328,10 @@ export class RuntimeCoordinator {
       this.deps.taskGraph?.reset()
     }
 
+    // v0.3.5: resolve the current TaskGraph from the per-run context
+    // (preferred) or legacy deps (fallback for tests without context).
+    const currentGraph = runContext?.taskGraph ?? this.deps.taskGraph
+
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
     // derived from real runtime state (workingState, contextManager,
@@ -335,7 +339,7 @@ export class RuntimeCoordinator {
     if (this.deps.routeModel) {
       try {
         const ws = this.deps.contextManager.getWorkingState()
-        const tg = this.deps.taskGraph
+        const tg = currentGraph
         const router = this.deps.modelRouter
         const signals = collectRoutingSignals({
           userMessage,
@@ -781,7 +785,7 @@ export class RuntimeCoordinator {
     // blocked loudly so false-success can't hide. The Reviewer findings
     // flow into evaluateCompletion so they can downgrade the verdict.
     try {
-      const tg = this.deps.taskGraph
+      const tg = currentGraph
       const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
       const unsatisfiedFromGraph = tgSnapshot
         ? tgSnapshot.nodes.flatMap((n) =>
@@ -812,7 +816,7 @@ export class RuntimeCoordinator {
       // as mutation (→ blocked), not silently reclassified as informational.
       // Falls back to the hasChanges heuristic only when no context exists.
       const taskKind = runContext?.taskKind ?? (hasChanges ? 'mutation' : 'informational')
-      const tg = this.deps.taskGraph
+      const tg = currentGraph
       const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
       const acceptanceCriteria = tgSnapshot
         ? tgSnapshot.nodes.flatMap((n) =>

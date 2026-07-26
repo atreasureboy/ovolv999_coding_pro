@@ -48,7 +48,8 @@ describe('TaskPlan tool (Phase 3)', () => {
     const g = new TaskGraph()
     const t = tool(g)
     await t.execute({ action: 'add', id: 'a', acceptanceCriteria: ['x'] }, ctx)
-    // v0.3.5: complete_node without evidence store → graph.complete(id) with no criteria check
+    // v0.3.5: node must be started before completing (state transition validation)
+    await t.execute({ action: 'start', id: 'a' }, ctx)
     const r = await t.execute({ action: 'complete_node', id: 'a' }, ctx)
     expect(g.get('a')!.status).toBe('completed')
     expect(r.isError).toBe(false)
