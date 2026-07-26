@@ -784,16 +784,19 @@ export class RuntimeCoordinator {
       const tg = this.deps.taskGraph
       const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
       const unsatisfiedFromGraph = tgSnapshot
-        ? tgSnapshot.nodes.reduce((sum, n) => sum + n.acceptanceCriteria.length, 0)
-        : 0
+        ? tgSnapshot.nodes.flatMap((n) =>
+          n.acceptanceCriteria.map((desc) => `${n.id}: ${desc}`))
+        : []
       const review = reviewRun({
+        taskKind: runContext?.taskKind ?? 'informational',
         goalPresent: userMessage.trim().length > 0,
         changedFiles: ws.filesChanged,
         verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
         verificationPassed: ws.verification.failed.length === 0,
         unhandledFailures: ws.verification.failed.length,
         unresolvedBlockers: ws.unresolved.length,
-        unsatisfiedAcceptance: unsatisfiedFromGraph,
+        unsatisfiedCriteria: unsatisfiedFromGraph,
+        staleEvidence: [],
         scopeExcessive: ws.filesChanged.length > 20,
       })
       reviewerFindings = review.findings

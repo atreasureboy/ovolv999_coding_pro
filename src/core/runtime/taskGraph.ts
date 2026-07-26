@@ -83,10 +83,17 @@ type GraphEventSink = (event: {
     | 'TASK_NODE_COMPLETED'
     | 'TASK_NODE_FAILED'
     | 'TASK_NODE_BLOCKED'
+    | 'TASK_NODE_UNBLOCKED'
+    | 'TASK_NODE_RETRIED'
+    | 'TASK_NODE_CANCELLED'
+    | 'TASK_EVIDENCE_RECORDED'
+    | 'TASK_EVIDENCE_INVALIDATED'
+    | 'TASK_ARTIFACT_ATTACHED'
   nodeId?: string
   title?: string
   reason?: string
   satisfied?: string[]
+  artifact?: string
   runId?: string
 }) => void
 
@@ -292,14 +299,16 @@ export class TaskGraph {
     }
     n.status = this.depsCompleted(n) ? 'ready' : 'pending'
     n.blockReason = undefined
-    this.emit({ type: 'TASK_NODE_ADDED', nodeId: id, title: n.title, runId: this.runId })
+    this.emit({ type: 'TASK_NODE_UNBLOCKED', nodeId: id, runId: this.runId })
+    this.nodeTransitionSink?.('unblocked')
   }
 
   /** v0.3.1 (te_goal §五): attach a named artifact to a node. The
    *  artifact list is appended to, not replaced. */
-  attachArtifact(id: string, artifact: string): void {
+   attachArtifact(id: string, artifact: string): void {
     const n = this.require(id)
     if (!n.artifacts.includes(artifact)) n.artifacts.push(artifact)
+    this.emit({ type: 'TASK_ARTIFACT_ATTACHED', nodeId: id, artifact, runId: this.runId })
   }
 
   /** Locally retry a failed node (eight_goal §五 — 失败节点局部重试). */
@@ -317,13 +326,14 @@ export class TaskGraph {
     n.status = 'pending'
     n.failReason = undefined
     n.blockReason = undefined
+    this.emit({ type: 'TASK_NODE_RETRIED', nodeId: id, runId: this.runId })
   }
 
   cancel(id: string, reason?: string): void {
     const n = this.require(id)
     n.status = 'cancelled'
     if (reason) n.failReason = reason
-    this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason: reason ?? 'cancelled', runId: this.runId })
+    this.emit({ type: 'TASK_NODE_CANCELLED', nodeId: id, reason: reason ?? 'cancelled', runId: this.runId })
   }
 
   /** Every node is in a terminal state (the graph is finished). */

@@ -56,24 +56,24 @@ describe('Adaptive Critic trigger (Phase 5)', () => {
 
 describe('Final Reviewer (Phase 5)', () => {
   it('blocks on unhandled failures / failed verification / unresolved blockers', () => {
-    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: false, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedAcceptance: 0, scopeExcessive: false }).verdict).toBe('blocked')
-    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: false, verificationPassed: false, unhandledFailures: 2, unresolvedBlockers: 0, unsatisfiedAcceptance: 0, scopeExcessive: false }).verdict).toBe('blocked')
-    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 1, unsatisfiedAcceptance: 0, scopeExcessive: false }).verdict).toBe('blocked')
+    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: false, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation', scopeExcessive: false }).verdict).toBe('blocked')
+    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: false, verificationPassed: false, unhandledFailures: 2, unresolvedBlockers: 0, unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation', scopeExcessive: false }).verdict).toBe('blocked')
+    expect(reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 1, unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation', scopeExcessive: false }).verdict).toBe('blocked')
   })
 
   it('partial when acceptance unmet but no hard blocker', () => {
-    const r = reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedAcceptance: 2, scopeExcessive: false })
+    const r = reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedCriteria: ['c1','c2'], staleEvidence: [], taskKind: 'mutation', scopeExcessive: false })
     expect(r.verdict).toBe('partial')
   })
 
   it('completed when verification passed + no gaps', () => {
-    const r = reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedAcceptance: 0, scopeExcessive: false })
+    const r = reviewRun({ goalPresent: true, changedFiles: ['a'], verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation', scopeExcessive: false })
     expect(r.verdict).toBe('completed')
   })
 
   it('flags excessive scope without blocking', () => {
-    const r = reviewRun({ goalPresent: true, changedFiles: Array.from({ length: 30 }, (_, i) => `f${i}`), verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedAcceptance: 0, scopeExcessive: true })
+    const r = reviewRun({ goalPresent: true, changedFiles: Array.from({ length: 30 }, (_, i) => `f${i}`), verificationExecuted: true, verificationPassed: true, unhandledFailures: 0, unresolvedBlockers: 0, unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation', scopeExcessive: true })
     expect(r.verdict).toBe('completed')
-    expect(r.findings.some((f) => f.includes('excessive'))).toBe(true)
+    expect(r.residualRisks.some((f) => f.includes('excessive'))).toBe(true)
   })
 })

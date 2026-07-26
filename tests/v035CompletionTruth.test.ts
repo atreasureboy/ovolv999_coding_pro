@@ -268,7 +268,7 @@ describe('v0.3.5 Reviewer consistency', () => {
       verificationPassed: false,
       unhandledFailures: 0,
       unresolvedBlockers: 0,
-      unsatisfiedAcceptance: 0,
+      unsatisfiedCriteria: [], staleEvidence: [], taskKind: 'mutation',
       scopeExcessive: false,
     })
     expect(r.verdict).not.toBe('completed')
