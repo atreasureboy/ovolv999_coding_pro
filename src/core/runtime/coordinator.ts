@@ -970,6 +970,8 @@ export class RuntimeCoordinator {
     })
 
     config.hookRunner?.runOnComplete?.(result)
+    // v0.3.4 (mimo_goal §Phase 1): Hook receives the full TurnOutcome
+    config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
 
     // v0.3.3: close() is now in the finally block (covers ALL exit paths).
     return { result, newHistory: messages, outcome }

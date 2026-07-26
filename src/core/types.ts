@@ -262,6 +262,8 @@ export interface IHookRunner {
   runOnError?(error: Error, context: { turnNumber: number; lastToolName?: string }): HookResult[]
   /** Called when a run completes (any reason: stop, max_iterations, error, interrupted) */
   runOnComplete?(result: TurnResult): HookResult[]
+  /** v0.3.4: Called with the full TurnOutcome (carries completion.status) */
+  runOnCompleteWithOutcome?(result: TurnResult, outcome?: import('./runtime/turnOutcome.js').TurnOutcome): HookResult[]
   /** Called after context compaction (auto-summary of older messages) */
   runOnContextOverflow?(tokensBefore: number, tokensAfter: number): HookResult[]
 }

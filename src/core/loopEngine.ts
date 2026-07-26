@@ -38,6 +38,10 @@ interface LoopConfig {
   cwd: string
   loopDir: string
   maxIters: number
+  /** v0.3.4: resume from checkpoint if available (default true) */
+  resume?: boolean
+  /** v0.3.4: discard checkpoint and start fresh */
+  restart?: boolean
 }
 
 function tryRead(path: string): string {
@@ -158,12 +162,20 @@ export async function runLoop(
   let loopIteration = 1
   let consecutiveProviderFailures = 0
 
-  // Try restore from checkpoint
-  const restoredCp = checkpointMgr.load()
-  if (restoredCp) {
-    loopIteration = restoredCp.iteration + 1
-    consecutiveProviderFailures = restoredCp.consecutiveProviderFailures
-    renderer.info(`Resumed from checkpoint: iteration ${loopIteration}, ${consecutiveProviderFailures} prior provider failures.`)
+  // v0.3.4 (mimo_goal §Phase 6): resume/restart checkpoint support
+  const shouldResume = config.resume !== false // default: try resume
+  const shouldRestart = config.restart === true
+  let restoredCp: import('./loopSupervisor.js').LoopCheckpoint | null = null
+  if (shouldRestart) {
+    checkpointMgr.clear()
+    renderer.info('Checkpoint discarded (--restart).')
+  } else if (shouldResume) {
+    restoredCp = checkpointMgr.load()
+    if (restoredCp) {
+      loopIteration = restoredCp.iteration + 1
+      consecutiveProviderFailures = restoredCp.consecutiveProviderFailures
+      renderer.info(`Resumed from checkpoint: iteration ${loopIteration}, ${consecutiveProviderFailures} prior provider failures.`)
+    }
   }
 
   // Start heartbeat
@@ -222,7 +234,7 @@ export async function runLoop(
     } catch { /* best-effort */ }
   }
 
-  for (let iter = 1; iter <= maxIters; iter++) {
+  for (let iter = loopIteration; iter <= maxIters; iter++) {
     // v0.3.3 (tha_goal §5.2): only trust DRIVER-written DONE.flag.
     // If a model wrote DONE.flag during a turn, rename it — the driver
     // must independently verify acceptance before completing.

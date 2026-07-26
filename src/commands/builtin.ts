@@ -22,7 +22,7 @@ import type { PermissionMode } from '../core/permissionSystem.js'
 import { saveProjectSettings } from '../config/settings.js'
 import { estimateTokens, calculateContextState, microCompact } from '../core/compact.js'
 import type { OpenAIMessage } from '../core/types.js'
-import { existsSync, writeFileSync } from 'fs'
+import { existsSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { homedir } from 'os'
@@ -3369,6 +3369,71 @@ registerCommand({
         lines.push(`  ${r.id}: ${r.name} — ${r.reason}`)
       }
     }
+    return text(lines.join('\n'))
+  },
+})
+
+// ── v0.3.4 (mimo_goal §Phase 5): /loop-status ───────────────────
+registerCommand({
+  name: 'loop-status',
+  description: 'Show the current Loop Supervisor status: lease, heartbeat, iteration, checkpoint',
+  usage: '/loop-status',
+  handler: (_args, ctx) => {
+    const loopDir = join(ctx.cwd, '.loop')
+    const lines: string[] = ['=== Loop Supervisor Status ===']
+
+    // Lease
+    const lockPath = join(loopDir, 'loop.lock')
+    if (existsSync(lockPath)) {
+      try {
+        const lock = JSON.parse(readFileSync(lockPath, 'utf8'))
+        lines.push(`Lease: HELD by PID ${lock.pid} on ${lock.hostname ?? 'unknown'}`)
+        lines.push(`  owner: ${lock.ownerToken?.slice(0, 8) ?? 'unknown'}...`)
+        lines.push(`  created: ${lock.createdAt ?? 'unknown'}`)
+        const hbAge = lock.heartbeatAt ? Math.round((Date.now() - new Date(lock.heartbeatAt).getTime()) / 1000) : -1
+        lines.push(`  heartbeat: ${hbAge >= 0 ? hbAge + 's ago' : 'unknown'}`)
+        if (lock.heartbeat) {
+          lines.push(`  iteration: ${lock.heartbeat.iteration ?? '?'}`)
+          lines.push(`  phase: ${lock.heartbeat.phase ?? '?'}`)
+          lines.push(`  circuit: ${lock.heartbeat.circuitStatus ?? '?'}`)
+        }
+        // Check if stale
+        if (hbAge > 120) {
+          lines.push(`  ⚠ STALE (heartbeat > 120s) — safe to take over`)
+        }
+      } catch {
+        lines.push('Lease: CORRUPT')
+      }
+    } else {
+      lines.push('Lease: none (no active loop)')
+    }
+
+    // Checkpoint
+    const cpPath = join(loopDir, 'checkpoint.json')
+    if (existsSync(cpPath)) {
+      try {
+        const cp = JSON.parse(readFileSync(cpPath, 'utf8'))
+        lines.push('', `Checkpoint: iteration ${cp.iteration}, phase ${cp.phase}`)
+        lines.push(`  sequence: ${cp.sequence}`)
+        lines.push(`  goalHash: ${cp.goalHash ?? 'n/a'}`)
+        lines.push(`  acceptanceHash: ${cp.acceptanceHash ?? 'n/a'}`)
+        lines.push(`  providerFailures: ${cp.consecutiveProviderFailures ?? 0}`)
+        lines.push(`  updated: ${cp.updatedAt ?? 'unknown'}`)
+      } catch {
+        lines.push('Checkpoint: CORRUPT (try checkpoint.previous.json)')
+      }
+    } else {
+      lines.push('Checkpoint: none')
+    }
+
+    // Flags
+    const flags = ['DONE.flag', 'CANDIDATE_DONE.flag', 'PARKED.flag', 'DONE.flag.rejected']
+    for (const f of flags) {
+      if (existsSync(join(loopDir, f))) {
+        lines.push(`Flag: ${f} EXISTS`)
+      }
+    }
+
     return text(lines.join('\n'))
   },
 })
