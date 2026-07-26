@@ -166,14 +166,16 @@ export class RuntimeCoordinator {
     retryable: boolean
   }> = []
   /**
-   * v0.3.3 (tha_goal §十六): Provider circuit breaker. Tracks consecutive
-   * provider failures across turns; when the threshold is exceeded, further
-   * LLM calls are refused to stop burning tokens on a dead endpoint.
+   * v0.3.3+ (tha_goal §十六 + mimo_goal §Phase 9): Provider circuit breaker
+   * with three states: CLOSED (normal), OPEN (block all), HALF_OPEN (one probe).
    */
   private consecutiveProviderFailures = 0
   private static readonly CIRCUIT_BREAKER_THRESHOLD = 5
   private static readonly MAX_BACKOFF_MS = 60_000
+  private static readonly HALF_OPEN_COOLDOWN_MS = 30_000
   private lastProviderFailureAt = 0
+  private circuitState: 'closed' | 'open' | 'half-open' = 'closed'
+  private halfOpenProbeInFlight = false
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps
@@ -991,16 +993,35 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    // v0.3.4 (mimo_goal §Phase 9): circuit breaker with exponential backoff.
-    // After consecutive failures, delay before retrying (not a tight loop).
-    if (this.consecutiveProviderFailures >= RuntimeCoordinator.CIRCUIT_BREAKER_THRESHOLD) {
-      throw new Error(
-        `Provider circuit breaker OPEN: ${this.consecutiveProviderFailures} consecutive failures. ` +
-        `Refusing LLM call to stop token burn. Check provider health or restart.`,
-      )
+    // v0.3.4 (mimo_goal §Phase 9): three-state circuit breaker.
+    //
+    // CLOSED: normal operation. Failures increment the counter.
+    // OPEN: threshold exceeded → block all calls. After cooldown, transition
+    //       to HALF_OPEN automatically.
+    // HALF_OPEN: allow exactly ONE probe request. If it succeeds → CLOSED.
+    //            If it fails → back to OPEN with renewed cooldown.
+    const now = Date.now()
+    if (this.circuitState === 'open') {
+      const sinceFailure = now - this.lastProviderFailureAt
+      if (sinceFailure >= RuntimeCoordinator.HALF_OPEN_COOLDOWN_MS) {
+        this.circuitState = 'half-open'
+        this.halfOpenProbeInFlight = false
+        this.deps.renderer.info?.('Provider circuit breaker: OPEN → HALF_OPEN (probing)')
+      } else {
+        throw new Error(
+          `Provider circuit breaker OPEN: ${this.consecutiveProviderFailures} consecutive failures. ` +
+          `Cooldown: ${Math.round((RuntimeCoordinator.HALF_OPEN_COOLDOWN_MS - sinceFailure) / 1000)}s remaining.`,
+        )
+      }
+    }
+    if (this.circuitState === 'half-open') {
+      if (this.halfOpenProbeInFlight) {
+        throw new Error('Provider circuit breaker HALF_OPEN: probe already in flight.')
+      }
+      this.halfOpenProbeInFlight = true
     }
     // Exponential backoff: 1 failure → no delay; 2 → ~2s; 3 → ~4s + jitter
-    if (this.consecutiveProviderFailures >= 2) {
+    if (this.consecutiveProviderFailures >= 2 && this.circuitState === 'closed') {
       const baseMs = Math.min(
         RuntimeCoordinator.MAX_BACKOFF_MS,
         Math.pow(2, this.consecutiveProviderFailures) * 1000,
@@ -1108,6 +1129,12 @@ export class RuntimeCoordinator {
       } as never)
       // v0.3.3 §十六: success resets the circuit breaker.
       this.consecutiveProviderFailures = 0
+      // v0.3.4 §Phase 9: success in half-open → close the circuit.
+      if (this.circuitState === 'half-open') {
+        this.circuitState = 'closed'
+        this.halfOpenProbeInFlight = false
+        this.deps.renderer.info?.('Provider circuit breaker: HALF_OPEN → CLOSED (probe succeeded)')
+      }
     } catch (err) {
       // Record the failure against the profile even if the gateway
       // threw (helps /models show real health after retries).
@@ -1139,6 +1166,16 @@ export class RuntimeCoordinator {
       // v0.3.3 §十六: increment circuit breaker on failure.
       this.consecutiveProviderFailures++
       this.lastProviderFailureAt = Date.now()
+      // v0.3.4 §Phase 9: if half-open probe failed → back to open.
+      // If threshold reached → open the circuit.
+      if (this.circuitState === 'half-open') {
+        this.circuitState = 'open'
+        this.halfOpenProbeInFlight = false
+        this.deps.renderer.warn?.('Provider circuit breaker: HALF_OPEN → OPEN (probe failed)')
+      } else if (this.consecutiveProviderFailures >= RuntimeCoordinator.CIRCUIT_BREAKER_THRESHOLD) {
+        this.circuitState = 'open'
+        this.deps.renderer.warn?.(`Provider circuit breaker: CLOSED → OPEN (${this.consecutiveProviderFailures} failures)`)
+      }
       throw err
     }
 

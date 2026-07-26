@@ -219,6 +219,30 @@ export async function runLoop(
 
   renderer.info(`Loop mode: ${maxIters} max iterations · ${acceptanceItems.length} acceptance checks`)
 
+  // v0.3.4 (mimo_goal §Phase 12): signal handlers for graceful shutdown.
+  // On SIGINT/SIGTERM: save final checkpoint + release lease + exit.
+  const signalHandler = (_sig: string) => {
+    renderer.warn(`\n⚠ Signal received — saving checkpoint and shutting down.`)
+    try {
+      checkpointMgr.save({
+        schemaVersion: 1, sequence: Date.now(), taskId, branch: 'main', worktree: cwd,
+        iteration: loopIteration, phase: 'interrupted',
+        goalHash: hashContract(goal),
+        acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
+        changedFiles: [], consecutiveNoProgress: 0,
+        consecutiveProviderFailures, consecutiveCommandFailures: 0,
+        createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+    } catch { /* best-effort */ }
+    leaseMgr.stopHeartbeat()
+    leaseMgr.release()
+    finishLoopRun('cancelled', 'interrupted by signal')
+    process.exit(130)
+  }
+  process.on('SIGINT', signalHandler)
+  process.on('SIGTERM', signalHandler)
+
   // ── ExecutionRun tracking (GAP-C: kind='loop') ──
   // When the engine exposes a registry (i.e. `executionRunLogDir`
   // was set), the entire loop is wrapped in a `kind='loop'` run
@@ -472,4 +496,8 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
 
   renderer.warn(`\nMax iterations (${maxIters}) reached. Check .loop/STATE.md for status.`)
   finishLoopRun('failed', `max iterations (${maxIters}) reached`)
+
+  // v0.3.4: clean up signal handlers
+  process.off('SIGINT', signalHandler)
+  process.off('SIGTERM', signalHandler)
 }

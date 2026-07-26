@@ -1091,13 +1091,28 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       })
 
       // v0.3.4 (mimo_goal §Phase 2): emit structured agent completion events
-      // so /trace and EventStore can replay the acceptance/rejection decision.
+      // through BOTH the EventLog (for /trace replay) and the Registry's
+      // event bus (for real-time subscribers).
+      const accepted = finalStatus === 'succeeded'
       context.eventLog?.append('agent_completion', agentLabel, {
         description,
         final_status: finalStatus,
         delivery: deliveryOutcome.status,
-        accepted: finalStatus === 'succeeded',
-      }, [agentLabel, finalStatus === 'succeeded' ? 'success' : 'error'])
+        accepted,
+      }, [agentLabel, accepted ? 'success' : 'error'])
+
+      // Emit through the registry's onEmit hook (if wired to EventBus)
+      if (this.runRegistry?.onEmit && runId) {
+        try {
+          const run = this.runRegistry.get(runId)
+          this.runRegistry.onEmit({
+            kind: 'transition',
+            run: run ?? { runId, kind: 'agent' as const, status: finalStatus, goal: description, workspace: { cwd: context.cwd } } as never,
+            from: 'running',
+            to: finalStatus,
+          })
+        } catch { /* best-effort */ }
+      }
 
       const worktreeOutcomeLegacy =
         deliveryOutcome.status === 'delivered' ? { branch: deliveryOutcome.branch, merged: true }
