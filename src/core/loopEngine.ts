@@ -18,7 +18,9 @@
 
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { join } from 'path'
+import { hostname } from 'os'
 import { runCommandSync } from './commandRunner.js'
+import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo } from './loopSupervisor.js'
 import type { ExecutionEngine } from './engine.js'
 import type { Renderer } from '../ui/renderer.js'
 import { isTerminalRunStatus } from './executionRun.js'
@@ -114,41 +116,51 @@ export async function runLoop(
     return
   }
 
-  // v0.3.3 (tha_goal §5.4): stale lock recovery. Check for a loop.lock
-  // from a previous run; if the PID is dead, remove it and continue.
-  const lockPath = join(loopDir, 'loop.lock')
-  if (existsSync(lockPath)) {
-    try {
-      const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number; ts: number }
-      if (lock.pid !== process.pid) {
-        // Check if the PID is still alive
-        let alive = false
-        try { process.kill(lock.pid, 0); alive = true } catch { alive = false }
-        if (alive) {
-          renderer.error(`Another loop is running (PID ${lock.pid}). Remove ${lockPath} if stale.`)
-          return
-        }
-        // Stale lock — PID is dead, safe to take over
-        renderer.warn(`Stale loop.lock detected (PID ${lock.pid} not running). Removing.`)
-        try { unlinkSync(lockPath) } catch { /* best-effort */ }
-      }
-    } catch {
-      // Corrupt lock file — remove and continue
-      renderer.warn('Corrupt loop.lock detected. Removing.')
-      try { unlinkSync(lockPath) } catch { /* best-effort */ }
-    }
-  }
-  // Acquire the lock
-  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, ts: Date.now() }), 'utf8')
-
+  // Read goal early — needed for taskId before lease acquisition
   const goal = tryRead(join(loopDir, 'GOAL.md'))
   const acceptanceRaw = tryRead(join(loopDir, 'ACCEPTANCE.md'))
-  const acceptanceItems = parseAcceptance(acceptanceRaw)
 
   if (!goal) {
     renderer.error('GOAL.md not found or empty')
     return
   }
+
+  // v0.3.4 (mimo_goal §Phase 4-6): Durable lease + heartbeat + checkpoint.
+  const taskId = goal.split('\n').find((l) => l.trim())?.slice(0, 60) || 'loop-task'
+  const leaseMgr = new LoopLeaseManager(loopDir)
+  const checkpointMgr = new CheckpointManager(loopDir)
+  try {
+    leaseMgr.acquire(taskId, cwd)
+  } catch {
+    const taken = leaseMgr.tryTakeover(taskId, cwd)
+    if (!taken) {
+      renderer.error('Another loop is running and its lease is still fresh. Remove loop.lock if stale.')
+      return
+    }
+    renderer.info('Stale lease taken over.')
+  }
+  let loopIteration = 1
+  let consecutiveProviderFailures = 0
+
+  // Try restore from checkpoint
+  const restoredCp = checkpointMgr.load()
+  if (restoredCp) {
+    loopIteration = restoredCp.iteration + 1
+    consecutiveProviderFailures = restoredCp.consecutiveProviderFailures
+    renderer.info(`Resumed from checkpoint: iteration ${loopIteration}, ${consecutiveProviderFailures} prior provider failures.`)
+  }
+
+  // Start heartbeat
+  leaseMgr.startHeartbeat((): HeartbeatInfo => ({
+    iteration: loopIteration,
+    phase: 'executing',
+    lastProgressAt: new Date().toISOString(),
+    workerCount: 0,
+    circuitStatus: consecutiveProviderFailures >= 5 ? 'open' : 'closed',
+    checkpointSequence: restoredCp?.sequence ?? 0,
+  }))
+
+  const acceptanceItems = parseAcceptance(acceptanceRaw)
 
   renderer.info(`Loop mode: ${maxIters} max iterations · ${acceptanceItems.length} acceptance checks`)
 
@@ -172,8 +184,19 @@ export async function runLoop(
       }).runId
     : undefined
   const finishLoopRun = (status: 'succeeded' | 'failed' | 'cancelled', err?: string) => {
-    // v0.3.3 §15: release the lock on every exit path
-    try { if (existsSync(lockPath)) unlinkSync(lockPath) } catch { /* best-effort */ }
+    // v0.3.4: save final checkpoint + stop heartbeat + release lease
+    try {
+      checkpointMgr.save({
+        schemaVersion: 1, sequence: Date.now(), taskId, branch: 'main', worktree: cwd,
+        iteration: loopIteration, phase: status, goalHash: hashContract(goal),
+        acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
+        changedFiles: [], consecutiveNoProgress: 0,
+        consecutiveProviderFailures, consecutiveCommandFailures: 0,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      })
+    } catch { /* best-effort */ }
+    leaseMgr.stopHeartbeat()
+    leaseMgr.release()
     if (!loopRunId || !registry) return
     try {
       const r = registry.get(loopRunId)
@@ -352,6 +375,21 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     }
 
     renderer.warn(`\n⏳ Not done yet — ${results.filter(r => !r.passed).length} acceptance failed, gates ${gates.passed ? 'green' : 'red'}`)
+
+    // v0.3.4 §Phase 6: save checkpoint after each iteration for crash recovery
+    try {
+      checkpointMgr.save({
+        schemaVersion: 1, sequence: Date.now(), taskId, branch: 'main', worktree: cwd,
+        iteration: iter, phase: 'iteration-complete',
+        goalHash: hashContract(goal),
+        acceptanceHash: hashContract(acceptanceRawFresh),
+        changedFiles: [], consecutiveNoProgress: 0,
+        consecutiveProviderFailures, consecutiveCommandFailures: 0,
+        createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+    } catch { /* best-effort */ }
+    loopIteration = iter + 1
   }
 
   renderer.warn(`\nMax iterations (${maxIters}) reached. Check .loop/STATE.md for status.`)
