@@ -64,6 +64,8 @@ export interface TaskGraphSnapshot {
     running: number
     ready: number
     pending: number
+    verifying: number
+    cancelled: number
     done: boolean
   }
 }
@@ -207,23 +209,29 @@ export class TaskGraph {
   }
 
   /**
-   * Complete a node. Refuses if its declared acceptance criteria are
-   * unsatisfied (eight_goal §五.9 — verification failure must not be
-   * masked as completed). Caller passes the satisfied criteria; if any
-   * declared criterion is missing, the node goes to 'failed' instead.
+   * Complete a node. v0.3.5: the caller (TaskPlanTool) MUST verify
+   * acceptance criteria via EvidenceStore BEFORE calling this — the
+   * graph itself no longer does string-match verification. The old
+   * satisfiedCriteria parameter is kept for backward compat but
+   * deprecated; new code calls complete(id) after evidence check.
    */
-  complete(id: string, satisfiedCriteria: string[] = [], artifacts: string[] = []): void {
+  complete(id: string, satisfiedCriteria?: string[], artifacts: string[] = []): void {
     const n = this.require(id)
-    const unmet = n.acceptanceCriteria.filter((c) => !satisfiedCriteria.includes(c))
-    if (unmet.length > 0) {
-      n.status = 'failed'
-      n.failReason = `acceptance criteria unmet: ${unmet.join(', ')}`
-      this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason: n.failReason, runId: this.runId })
-      return
+    // v0.3.5: if satisfiedCriteria is explicitly passed (legacy path),
+    // still do the string-match check. If omitted (evidence path),
+    // trust the caller (TaskPlanTool verified via EvidenceStore).
+    if (satisfiedCriteria !== undefined) {
+      const unmet = n.acceptanceCriteria.filter((c) => !satisfiedCriteria.includes(c))
+      if (unmet.length > 0) {
+        n.status = 'failed'
+        n.failReason = `acceptance criteria unmet: ${unmet.join(', ')}`
+        this.emit({ type: 'TASK_NODE_FAILED', nodeId: id, reason: n.failReason, runId: this.runId })
+        return
+      }
     }
     n.status = 'completed'
     n.artifacts = [...n.artifacts, ...artifacts]
-    this.emit({ type: 'TASK_NODE_COMPLETED', nodeId: id, satisfied: satisfiedCriteria, runId: this.runId })
+    this.emit({ type: 'TASK_NODE_COMPLETED', nodeId: id, satisfied: satisfiedCriteria ?? [], runId: this.runId })
   }
 
   /**
@@ -334,17 +342,19 @@ export class TaskGraph {
   }
 
   snapshot(): TaskGraphSnapshot {
-    const counts = { total: 0, completed: 0, failed: 0, blocked: 0, running: 0, ready: 0, pending: 0, done: false }
+    const counts = { total: 0, completed: 0, failed: 0, blocked: 0, running: 0, ready: 0, pending: 0, verifying: 0, cancelled: 0, done: false }
     for (const n of this.list()) {
       counts.total++
       if (n.status === 'completed') counts.completed++
       else if (n.status === 'failed') counts.failed++
       else if (n.status === 'blocked') counts.blocked++
       else if (n.status === 'running') counts.running++
+      else if (n.status === 'verifying') counts.verifying++
+      else if (n.status === 'cancelled') counts.cancelled++
       else if (n.status === 'pending' && this.depsCompleted(n)) counts.ready++
       else if (n.status === 'pending') counts.pending++
     }
-    counts.done = counts.total > 0 && counts.completed + counts.failed + counts.blocked === counts.total
+    counts.done = counts.total > 0 && counts.completed + counts.failed + counts.cancelled === counts.total
     return { nodes: this.list(), summary: { ...counts, done: counts.done } }
   }
 

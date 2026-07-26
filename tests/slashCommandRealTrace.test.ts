@@ -101,18 +101,16 @@ describe('Slash commands v0.3.1', () => {
   it('duplicate command registration throws when strict mode is on', () => {
     process.env.OVOLV999_NO_STRICT_SLASH = '0' // ensure strict
     delete process.env.OVOLV999_NO_STRICT_SLASH
-    // The handler must be DIFFERENT from any prior registration of
-    // this name. builtin.ts already registered 'tasks' with the
-    // TaskGraph handler; we add a different one to trigger throw.
+    // v0.3.5: 'tasks' was renamed to 'plan'; test with 'plan' instead
     expect(() => {
-      registerCommand({ name: 'tasks', description: 'override', handler: () => ({ type: 'noop' }) })
+      registerCommand({ name: 'plan', description: 'override', handler: () => ({ type: 'noop' }) })
     }).toThrow(/registered twice/)
   })
 
   it('listCommands dedupes by name', () => {
     const cmds = listCommands()
-    const tasks = cmds.filter((c) => c.name === 'tasks')
-    expect(tasks.length).toBe(1)
+    const plan = cmds.filter((c) => c.name === 'plan')
+    expect(plan.length).toBe(1)
   })
 
   it('dispatchSlashCommand routes /model auto through to the engine', async () => {

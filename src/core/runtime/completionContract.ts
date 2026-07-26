@@ -193,6 +193,11 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
       residual.push('no acceptance criteria declared and no changes produced — cannot evidence completion')
       return { status: 'incomplete', remaining: ['produce a verifiable change or declare acceptance criteria'] }
     }
+    // v0.3.5: mutation with changes but no verification -> partial, not completed
+    if (input.changedFiles.length > 0 && !input.verification.executed) {
+      residual.push("mutation task with file changes but no verification executed")
+      return { status: 'partial', evidence, remaining: ['execute verification (typecheck/test/lint)'], residualRisks: residual }
+    }
     return { status: 'completed', evidence, residualRisks: residual }
   }
 

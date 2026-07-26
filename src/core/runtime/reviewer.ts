@@ -47,6 +47,13 @@ export function reviewRun(input: ReviewInput): ReviewResult {
     return { verdict: 'partial', findings }
   }
 
+  // v0.3.5: if files were changed but verification was NOT executed,
+  // this is a mutation task without proof — return partial, not completed.
+  if (input.changedFiles.length > 0 && !input.verificationExecuted) {
+    findings.push('files changed but no verification executed — cannot confirm correctness')
+    return { verdict: 'partial', findings }
+  }
+
   // No changes and no goal → can't evidence completion.
   if (input.changedFiles.length === 0 && input.goalPresent) {
     findings.push('no changes produced for a stated goal')
@@ -55,7 +62,6 @@ export function reviewRun(input: ReviewInput): ReviewResult {
 
   // Excessive scope flags for review but doesn't block.
   if (input.scopeExcessive) findings.push(`scope looks excessive (${input.changedFiles.length} files) — verify necessity`)
-  if (!input.verificationExecuted) findings.push('verification was not executed')
 
   return { verdict: 'completed', findings }
 }

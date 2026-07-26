@@ -22,6 +22,11 @@ import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/type
 import { str } from '../core/strings.js'
 import type { TaskGraph } from '../core/runtime/taskGraph.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
+import type { EvidenceStore } from '../core/runtime/evidence.js'
+
+export interface EvidenceResolver {
+  resolve(runId: string): EvidenceStore
+}
 
 export class TaskPlanTool implements Tool {
   name = 'TaskPlan'
@@ -33,15 +38,16 @@ export class TaskPlanTool implements Tool {
       description:
         'Decompose a non-trivial task into a dependency-ordered plan and track each piece to completion. Use for medium/large tasks only — do NOT create a graph for trivial one-step work. ' +
         'The runtime refuses to mark the overall task completed while any node is unfinished or failed. ' +
-        'Actions: "add" (create a node), "start" (pending→running), "update" (edit fields), "begin_verification", "complete" (acceptance gate), "fail", "block", "unblock", "retry", "cancel", "attach_artifact", "list".',
+        'IMPORTANT: You CANNOT declare criteria satisfied by text. You must record real evidence (command results) via record_evidence, then call complete_node — the system verifies automatically. ' +
+        'Actions: "add", "start", "update", "begin_verification", "record_evidence", "complete_node", "fail", "block", "unblock", "retry", "cancel", "attach_artifact", "list".',
       parameters: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
             enum: [
-              'add', 'start', 'update', 'begin_verification', 'complete',
-              'fail', 'block', 'unblock', 'retry', 'cancel', 'attach_artifact', 'list',
+              'add', 'start', 'update', 'begin_verification', 'record_evidence',
+              'complete_node', 'fail', 'block', 'unblock', 'retry', 'cancel', 'attach_artifact', 'list',
             ],
             description: 'Operation to perform',
           },
@@ -52,29 +58,32 @@ export class TaskPlanTool implements Tool {
           acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Criteria that must hold to complete this node (add only)' },
           resourceClaims: { type: 'array', items: { type: 'string' }, description: 'Resource keys this node touches' },
           preferredRole: { type: 'string', description: 'Hint role for sub-agent delegation' },
-          preferredModelProfile: { type: 'string', description: 'Hint model profile id for sub-agent delegation' },
-          satisfiedCriteria: { type: 'array', items: { type: 'string' }, description: 'Criteria satisfied (complete only)' },
           reason: { type: 'string', description: 'Failure / block / cancel reason' },
-          artifact: { type: 'string', description: 'Artifact name to attach to the node (attach_artifact only)' },
+          artifact: { type: 'string', description: 'Artifact name to attach (attach_artifact only)' },
+          evidence_kind: { type: 'string', enum: ['command_result', 'test_result', 'build_result', 'file_change', 'artifact', 'analysis_result'], description: 'Type of evidence (record_evidence only)' },
+          evidence_summary: { type: 'string', description: 'Short summary of what the evidence shows (record_evidence only)' },
+          evidence_command: { type: 'string', description: 'The command that was run (record_evidence only)' },
+          evidence_exit_code: { type: 'number', description: 'Exit code of the command (record_evidence only)' },
+          evidence_criterion_id: { type: 'string', description: 'Which acceptance criterion this evidence supports (record_evidence only)' },
         },
         required: ['action'],
       },
     },
   }
 
-  constructor(private readonly resolver?: TaskGraphResolver) {}
+  constructor(
+    private readonly resolver?: TaskGraphResolver,
+    private readonly evidenceResolver?: EvidenceResolver,
+  ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    // v0.3.2 (ele_goal §Phase 2): resolve the graph for the CURRENT
-    // run from the resolver. Production never falls back to a
-    // shared 'default' graph.
     const runId = ctx.execution?.runId
     if (!this.resolver) {
       return err('TaskPlan unavailable: no resolver wired on this engine.')
     }
     if (!runId) {
-      return err('TaskPlan unavailable: no runId in ToolContext.execution. The Engine must mint a runId before invoking tools.')
+      return err('TaskPlan unavailable: no runId in ToolContext.execution.')
     }
     let g: TaskGraph
     try {
@@ -82,6 +91,12 @@ export class TaskPlanTool implements Tool {
     } catch (e) {
       return err(`TaskPlan unavailable: ${(e as Error).message}`)
     }
+    // v0.3.5: resolve the per-run EvidenceStore
+    let evidence: EvidenceStore | undefined
+    try {
+      evidence = this.evidenceResolver?.resolve(runId)
+    } catch { /* evidence optional in tests */ }
+
     const action = str(input.action)
     try {
       switch (action) {
@@ -97,7 +112,6 @@ export class TaskPlanTool implements Tool {
             acceptanceCriteria: asStrArr(input.acceptanceCriteria),
             resourceClaims: asStrArr(input.resourceClaims),
             preferredRole: str(input.preferredRole) || undefined,
-            preferredModelProfile: str(input.preferredModelProfile) || undefined,
             retryPolicy: { maxAttempts: 2 },
           })
           return ok(`Added node "${id}". ${renderGraph(g)}`)
@@ -110,14 +124,10 @@ export class TaskPlanTool implements Tool {
         case 'update': {
           const id = str(input.id)
           if (!g.has(id)) return err(`node "${id}" does not exist`)
-          // Update allowed only on pending nodes; mutation after start
-          // risks invalidating the dep graph mid-run.
           const n = g.get(id)!
           if (n.status !== 'pending') return err(`cannot update node "${id}" in status ${n.status}`)
           if (input.title !== undefined) n.title = str(input.title, n.title)
           if (input.description !== undefined) n.description = str(input.description, n.description)
-          if (input.preferredRole !== undefined) n.preferredRole = str(input.preferredRole) || undefined
-          if (input.preferredModelProfile !== undefined) n.preferredModelProfile = str(input.preferredModelProfile) || undefined
           return ok(`Updated "${id}".`)
         }
         case 'begin_verification': {
@@ -125,12 +135,47 @@ export class TaskPlanTool implements Tool {
           g.markVerifying(id)
           return ok(`"${id}" → verifying.`)
         }
-        case 'complete': {
+        case 'record_evidence': {
           const id = str(input.id)
-          g.complete(id, asStrArr(input.satisfiedCriteria))
+          if (!g.has(id)) return err(`node "${id}" does not exist`)
+          if (!evidence) return err('EvidenceStore not available on this engine.')
+          const kind = str(input.evidence_kind) as 'command_result' | 'test_result' | 'build_result' | 'file_change' | 'artifact' | 'analysis_result'
+          if (!kind) return err('evidence_kind is required for record_evidence')
+          const ev = evidence.record({
+            runId,
+            nodeId: id,
+            criterionId: str(input.evidence_criterion_id) || undefined,
+            kind,
+            summary: str(input.evidence_summary, '(no summary)'),
+            source: 'tool_execution',
+            command: str(input.evidence_command) || undefined,
+            exitCode: typeof input.evidence_exit_code === 'number' ? input.evidence_exit_code : undefined,
+          })
+          return ok(`Recorded evidence ${ev.id} (${kind}) for "${id}". Exit: ${ev.exitCode ?? 'n/a'}`)
+        }
+        case 'complete_node': {
+          const id = str(input.id)
+          if (!g.has(id)) return err(`node "${id}" does not exist`)
+          const node = g.get(id)!
+          // v0.3.5: system computes criterion satisfaction from evidence.
+          // The model CANNOT pass satisfiedCriteria — the system decides.
+          if (evidence && node.acceptanceCriteria.length > 0) {
+            const criteria = node.acceptanceCriteria.map((desc, i) => ({ id: `${id}::${i}`, description: desc }))
+            const states = evidence.computeAllCriteria(id, criteria)
+            const unsatisfied = states.filter((s) => s.status !== 'satisfied' && s.status !== 'waived')
+            if (unsatisfied.length > 0) {
+              const detail = unsatisfied.map((s) => `  ✗ [${s.status}] ${s.description}`).join('\n')
+              return err(`Cannot complete "${id}" — ${unsatisfied.length} criteria not satisfied:\n${detail}\nRecord evidence (record_evidence) for each criterion.`)
+            }
+            // All satisfied — complete with evidence-backed proof
+            g.complete(id)
+          } else {
+            // No criteria or no evidence store — fall back to direct complete
+            g.complete(id)
+          }
           const n = g.get(id)!
           return ok(n.status === 'completed'
-            ? `Completed "${id}". ${renderGraph(g)}`
+            ? `Completed "${id}" (evidence-verified). ${renderGraph(g)}`
             : `Could not complete "${id}" → ${n.status}: ${n.failReason ?? ''}`)
         }
         case 'fail': {
@@ -146,8 +191,6 @@ export class TaskPlanTool implements Tool {
           return ok(`Unblocked "${str(input.id)}". ${renderGraph(g)}`)
         }
         case 'cancel': {
-          // v0.3.1 (te_goal §五): use the engine's cancel() so the
-          // node is terminal-cancelled (unblock cannot reverse it).
           const id = str(input.id)
           g.cancel(id, str(input.reason, 'cancelled'))
           return ok(`Cancelled "${id}". ${renderGraph(g)}`)

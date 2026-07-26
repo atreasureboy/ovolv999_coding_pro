@@ -244,11 +244,12 @@ registerCommand({
   },
 })
 
-// ── Phase 3: task graph ──────────────────────────────────────────
+// ── Phase 3: task graph (renamed from /tasks to /plan for clarity) ──
 registerCommand({
-  name: 'tasks',
-  description: 'Show the task graph: nodes, dependencies, status, blockers',
-  usage: '/tasks',
+  name: 'plan',
+  description: 'Show the task plan graph: nodes, dependencies, status, blockers',
+  usage: '/plan',
+  aliases: ['plan-tree'],
   handler: (_args, ctx) => {
     const g = ctx.engine.getTaskGraph()
     const snap = g.snapshot()

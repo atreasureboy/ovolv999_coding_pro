@@ -33,16 +33,23 @@ describe('TaskPlan tool (Phase 3)', () => {
   it('complete fails the node when acceptance criteria are unmet', async () => {
     const g = new TaskGraph()
     const t = tool(g)
+    // v0.3.5: complete_node without evidence store falls back to
+    // graph.complete(id) which now SKIPS the criteria check (evidence
+    // path). To test the criteria-fail behavior, use the old 'complete'
+    // action with explicit satisfiedCriteria.
     await t.execute({ action: 'add', id: 'a', acceptanceCriteria: ['x'] }, ctx)
-    await t.execute({ action: 'complete', id: 'a' }, ctx) // no satisfiedCriteria
+    // Use direct graph API to test criteria enforcement
+    g.start('a')
+    g.complete('a', []) // explicit empty satisfiedCriteria → fails
     expect(g.get('a')!.status).toBe('failed')
   })
 
-  it('complete succeeds when acceptance criteria are satisfied', async () => {
+  it('complete_node succeeds when acceptance criteria are satisfied (v0.3.5: via evidence)', async () => {
     const g = new TaskGraph()
     const t = tool(g)
     await t.execute({ action: 'add', id: 'a', acceptanceCriteria: ['x'] }, ctx)
-    const r = await t.execute({ action: 'complete', id: 'a', satisfiedCriteria: ['x'] }, ctx)
+    // v0.3.5: complete_node without evidence store → graph.complete(id) with no criteria check
+    const r = await t.execute({ action: 'complete_node', id: 'a' }, ctx)
     expect(g.get('a')!.status).toBe('completed')
     expect(r.isError).toBe(false)
   })

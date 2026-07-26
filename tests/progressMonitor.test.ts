@@ -173,10 +173,14 @@ describe('CompletionContract (Phase 4)', () => {
     expect(v.status).toBe('incomplete')
   })
 
-  it('with no declared criteria requires a verifiable change', () => {
+  it('with no declared criteria requires a verifiable change + verification (v0.3.5)', () => {
     const v = evaluateCompletion({ ...base, acceptanceCriteria: [], changedFiles: [] })
     expect(v.status).toBe('incomplete')
+    // v0.3.5: changedFiles without verification → partial (not completed)
     const v2 = evaluateCompletion({ ...base, acceptanceCriteria: [], changedFiles: ['a.ts'] })
-    expect(v2.status).toBe('completed')
+    expect(v2.status).toBe('partial')
+    // changedFiles + verification passed → completed
+    const v3 = evaluateCompletion({ ...base, acceptanceCriteria: [], changedFiles: ['a.ts'], verification: { executed: true, passed: true, failed: [] } })
+    expect(v3.status).toBe('completed')
   })
 })

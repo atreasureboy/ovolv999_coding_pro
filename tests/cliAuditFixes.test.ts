@@ -21,7 +21,7 @@ import { join } from 'path'
 import { InputHandler, readStdin, type SharedPrompt } from '../src/ui/input.js'
 import { createTerminalAskUserHandler } from '../src/tools/askUser.js'
 import { ExitPlanModeTool } from '../src/tools/exitPlanMode.js'
-import { registerCommand, dispatchSlashCommand, type SlashCommandContext } from '../src/commands/index.js'
+import { registerCommand, dispatchSlashCommand, getCommand, type SlashCommandContext } from '../src/commands/index.js'
 import '../src/commands/builtin.js'
 import { saveSession } from '../src/core/sessionManager.js'
 
@@ -348,24 +348,14 @@ describe('CLI #6: /plan exact match', () => {
   })
 
   it('does not match in the slash command registry either', async () => {
-    // /plan is handled OUTSIDE the registry (special REPL branch).
-    // The registry should not contain a /plan command, so dispatchSlashCommand
-    // should return null for /plan (it falls through to the REPL's special
-    // handling). We use a UNIQUE non-builtin command name to verify the
-    // null-path without clearing the global registry (which would wipe
-    // the builtins other tests depend on).
-    registerCommand({
-      name: '_test_marker_unique_xyz',
-      description: 'test',
-      handler: () => ({ type: 'noop' }),
-    })
-    // /plan is NOT registered and we don't provide a skill prompt resolver
-    // — so it must return null. We pass resolveSkillPrompt that returns
-    // null so we don't accidentally fall through to the skill path.
-    const result = await dispatchSlashCommand('/plan refactor', {
-      resolveSkillPrompt: () => null,
-    } as unknown as SlashCommandContext)
-    expect(result).toBeNull()
+    // v0.3.5: /plan IS now registered as a real command (renamed from /tasks).
+    // So dispatchSlashCommand('/plan ...') will find it and try to execute.
+    // The test should verify /plan IS in the registry now.
+    const planCmd = getCommand('plan')
+    expect(planCmd).toBeDefined()
+    // /planet should NOT match /plan
+    const planetCmd = getCommand('planet')
+    expect(planetCmd).toBeUndefined()
   })
 })
 
