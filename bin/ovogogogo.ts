@@ -680,7 +680,9 @@ async function runPlanMode(
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
       // v0.3.4: display the authoritative completion status, not just stop reason
       const statusDisplay = outcome?.completion?.status ?? result.reason
-      renderer.info(`Done in ${elapsed}s · ${statusDisplay}${result.completionReasons?.length ? ' (' + result.completionReasons.join('; ') + ')' : ''}`)
+      const summary = `Done in ${elapsed}s · ${statusDisplay}${result.completionReasons?.length ? ' (' + result.completionReasons.join('; ') + ')' : ''}`
+      if (statusDisplay === 'completed') renderer.success(summary)
+      else renderer.info(summary)
     } catch (err: unknown) {
       renderer.error(`Execution error: ${(err as Error).message}`)
     }
@@ -870,7 +872,11 @@ async function runRepl(
         // is owned by runWithDeadline and cleared in our finally —
         // NOT cancelled via setImmediate, which would fire on the
         // next tick and silently turn the 10-minute cap into a no-op.
-        let result: { result: { reason: string; output: string }; newHistory: OpenAIMessage[] }
+        let result: {
+          result: { reason: string; output: string }
+          newHistory: OpenAIMessage[]
+          outcome?: { completion: { status: string } }
+        }
         let deadlineExceeded = false
         const dl = runWithDeadline(
           () => engine.runTurn(currentPrompt, currentHistory),
@@ -978,7 +984,9 @@ async function runRepl(
 
         // Normal finish (stop / max_iterations / error)
         const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-        renderer.info(`Done in ${elapsed}s · ${result.result.reason}`)
+        const status = result.outcome?.completion.status ?? result.result.reason
+        if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
+        else renderer.info(`Done in ${elapsed}s · ${status}`)
         break
       }
     } catch (err: unknown) {
@@ -1217,6 +1225,7 @@ async function runSingleTask(
 
   const startMs = Date.now()
   let result: { reason: string; output: string }
+  let completionStatus: string | undefined
   let deadlineExceeded = false
   const dl = runWithDeadline(
     () => engine.runTurn(task, resumedHistory ?? historyRef),
@@ -1231,6 +1240,7 @@ async function runSingleTask(
   try {
     const out = await dl.promise
     result = out.result
+    completionStatus = out.outcome?.completion.status
     // CRITICAL: take the engine's `newHistory`, trim it for next-turn
     // budget, and write it back into the caller's `historyRef` so the
     // /continue and /resume flows see THIS turn. The previous
@@ -1273,7 +1283,9 @@ async function runSingleTask(
   }
 
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-  renderer.info(`Done in ${elapsed}s · ${result.reason}`)
+  const status = completionStatus ?? result.reason
+  if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
+  else renderer.info(`Done in ${elapsed}s · ${status}`)
 
   // Persist the final history so --continue / --resume can pick it up.
   // saveOnExit (set by main() for single-shot mode) covers most cases,

@@ -41,6 +41,18 @@ beforeEach(() => { tmp = mkdtempSync(`${tmpdir}/v034e2e-`) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
 describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () => {
+  it('treats a conversational question as completed without mutation warnings', async () => {
+    const c = new FakeOpenAI()
+    const warnings: string[] = []
+    const renderer = fakeRenderer()
+    renderer.warn = (message: string) => { warnings.push(message) }
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs') }), renderer, c as unknown as never)
+    const { outcome } = await e.runTurn('你是谁', [])
+    expect(outcome.completion.status).toBe('completed')
+    expect(e.getLastRunContext()?.taskKind).toBe('informational')
+    expect(warnings).toEqual([])
+  })
+
   it('§7: TurnResult carries completionStatus for Hook/Module consumption', async () => {
     const logDir = join(tmp, 'logs')
     const c = new FakeOpenAI()

@@ -119,10 +119,10 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
     expect(v.status).toBe('completed')
   })
 
-  // ── §9: fail-closed default ──────────────────────────────────────
-  it('§9: ambiguous goal defaults to mutation (fail-closed)', () => {
+  // ── §9: ambiguous intent ─────────────────────────────────────────
+  it('§9: ambiguous goal defaults to informational without mutation warnings', () => {
     const intent = classifyTaskIntent('do something with the stuff')
-    expect(intent.kind).toBe('mutation')
+    expect(intent.kind).toBe('informational')
     expect(intent.confidence).toBeLessThan(0.5)
   })
 

@@ -135,10 +135,18 @@ export class Renderer {
   // ── Banner ────────────────────────────────────────────────
 
   banner(version: string, model: string): void {
+    const innerWidth = Math.min(Math.max(this.width - 6, 46), 62)
+    const brand = '◆ OVOLV999'
+    const versionLabel = `v${version}`
+    const topFill = '─'.repeat(Math.max(3, innerWidth - brand.length - versionLabel.length - 3))
+    const runtimeLabel = 'AUTONOMOUS CODING RUNTIME'
+    const bottomFill = '─'.repeat(Math.max(3, innerWidth - runtimeLabel.length - 1))
+    const modelLine = `  ${model}  ● ONLINE`
+    const modelFill = ' '.repeat(Math.max(1, innerWidth - modelLine.length))
     this.w('\n')
-    this.w(`  ${C.bcyan}◆${R} ${B}${C.white}ovolv999${R} ${D}${C.gray}${version}${R}\n`)
-    this.w(`    ${C.bcyan}${model}${R} ${D}${C.gray}· autonomous coding runtime${R}\n`)
-    this.w(`  ${D}${C.gray}${'─'.repeat(Math.min(this.width - 4, 52))}${R}\n`)
+    this.w(`  ${C.bpurple}╭─${R}${B}${C.bcyan}${brand}${R}${C.bpurple}─${topFill}${R}${D}${C.gray}${versionLabel}${R}${C.bpurple}─╮${R}\n`)
+    this.w(`  ${C.bpurple}│${R}${C.bcyan}${B}  ${model}${R}  ${C.bgreen}● ONLINE${R}${modelFill}${C.bpurple}│${R}\n`)
+    this.w(`  ${C.bpurple}╰${bottomFill}${R}${D}${C.gray} ${runtimeLabel}${R}${C.bpurple}─╯${R}\n`)
   }
 
   // ── User message ──────────────────────────────────────────
@@ -343,7 +351,12 @@ export class Renderer {
   // ── Status ────────────────────────────────────────────────
 
   info(msg: string): void {
-    this.w(`  ${D}${C.gray}· ${msg}${R}\n`)
+    const match = /^(\S+)(\s+)(.*)$/.exec(msg)
+    if (!match) {
+      this.w(`  ${C.bpurple}◇${R} ${D}${C.gray}${msg}${R}\n`)
+      return
+    }
+    this.w(`  ${C.bpurple}◇${R} ${C.bcyan}${match[1].toUpperCase().padEnd(11)}${R}${D}${C.gray}${match[3]}${R}\n`)
   }
 
   success(msg: string): void {

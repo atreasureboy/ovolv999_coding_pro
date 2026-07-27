@@ -1,6 +1,6 @@
 /**
  * v0.3.3 (background autonomy contract §Phase 3) bilingual TaskIntent tests.
- * Verifies Chinese keyword classification + fail-closed default.
+ * Verifies Chinese keyword classification + low-confidence defaults.
  */
 import { describe, it, expect } from 'vitest'
 import { classifyTaskIntent } from '../src/core/runtime/taskIntent.js'
@@ -61,15 +61,18 @@ describe('TaskIntent bilingual classification (background autonomy contract §Ph
     })
   })
 
-  describe('Fail-closed default (background autonomy contract)', () => {
-    it('ambiguous goal defaults to mutation (NOT informational)', () => {
+  describe('Low-confidence defaults', () => {
+    it('ambiguous goal defaults to informational', () => {
       const intent = classifyTaskIntent('do the thing')
-      expect(intent.kind).toBe('mutation')
+      expect(intent.kind).toBe('informational')
       expect(intent.confidence).toBeLessThan(0.5)
     })
-    it('empty-ish goal defaults to mutation', () => {
+    it('unknown text defaults to informational', () => {
       const intent = classifyTaskIntent('xyz qwerty')
-      expect(intent.kind).toBe('mutation')
+      expect(intent.kind).toBe('informational')
+    })
+    it('classifies a Chinese identity question as informational', () => {
+      expect(classifyTaskIntent('你是谁').kind).toBe('informational')
     })
   })
 

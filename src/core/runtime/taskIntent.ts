@@ -95,11 +95,11 @@ export function classifyTaskIntent(userMessage: string, options: {
 
   // v0.3.3 (background autonomy contract §Phase 3): bilingual (EN + ZH) keyword matching.
   // Mutation keywords: 修复/修改/实现/增加/新增/删除/重构/迁移/替换/优化代码/补充测试/改造/接入/完善
-  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/
+  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up|polish|redesign)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善|美化|重新设计|调整界面|升级界面|改进界面)/
   // Analysis keywords: 审计/分析/检查/评估/设计/给出方案/研究/对比/解释架构
   const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证)/
   // Informational keywords: 解释/说明/回答/总结/翻译/查询
-  const informationalKeywords = /\b(what|why|how|when|where|who|explain|summarize|describe|tell me|show|list|find|locate|search|hello|hi)\b|(解释|说明|回答|总结|翻译|查询|是什么|怎么做|为什么)/
+  const informationalKeywords = /\b(what|why|how|when|where|who|explain|summarize|describe|tell me|show|list|find|locate|search|hello|hi)\b|(解释|说明|回答|总结|翻译|查询|是什么|怎么做|为什么|你是谁|谁是|什么是|如何|多少|哪里|哪个|哪些)/
 
   if (analysisKeywords.test(text)) {
     return {
@@ -138,18 +138,12 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  // v0.3.3 (background autonomy contract §Phase 3): fail-closed default. When confidence is
-  // too low to classify, prefer 'mutation' over 'informational' — a
-  // mutation task misclassified as informational silently bypasses the
-  // completion gate's change-evidence requirement. The cost of a false
-  // mutation (unnecessary verification) is far lower than a false
-  // informational (false success on an unmodified workspace).
   return {
-    kind: 'mutation',
+    kind: 'informational',
     requestedOutcomes: extractOutcomes(userMessage),
     explicitAcceptanceCriteria: explicitCriteria,
-    requiresWorkspaceChange: true,
-    expectedVerification: options.expectedVerification ?? defaultVerificationForMutation(),
+    requiresWorkspaceChange: false,
+    expectedVerification: options.expectedVerification ?? [],
     confidence: 0.3,
     source: 'static-rule',
     userMessage,
