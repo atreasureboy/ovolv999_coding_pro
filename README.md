@@ -516,6 +516,16 @@ ovolv999 "任务描述"
 
 Loop 模式按照 `PLAN → DO → REVIEW → CHECK → ACT` 周期持续推进任务，并通过独立验收命令、质量门禁、租约、心跳和 checkpoint 决定继续、恢复或完成。
 
+在交互界面中可以像使用 `/goal` 一样直接启动：
+
+```text
+/loop 全面审计并修复当前项目
+/loop continue
+/loop restart
+/loop status
+/loop init 只创建契约但暂不执行
+```
+
 ```bash
 # 1. 在目标项目中生成 .loop/ 契约；已有文件不会被覆盖
 ovolv999 --cwd /my/project --loop-init "完成迁移并通过全部验证"

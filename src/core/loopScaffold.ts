@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 export interface LoopScaffoldResult {
@@ -65,4 +65,23 @@ export function initializeLoopWorkspace(cwd: string, goal: string): LoopScaffold
   writeMissing(join(skillsDir, 'PITFALLS.md'), '# Pitfalls\n\n- Record project-specific hazards discovered during the loop.\n', created, preserved)
 
   return { created, preserved, acceptanceCount: commands.length }
+}
+
+export function setLoopGoal(cwd: string, goal: string): LoopScaffoldResult {
+  const result = initializeLoopWorkspace(cwd, goal)
+  const loopDir = join(cwd, '.loop')
+  writeFileSync(join(loopDir, 'GOAL.md'), `# Goal\n\n${goal.trim()}\n`, 'utf8')
+  writeFileSync(join(loopDir, 'STATE.md'), '# State\n\nNot started.\n', 'utf8')
+  for (const name of [
+    'checkpoint.json',
+    'checkpoint.previous.json',
+    'DONE.flag',
+    'CANDIDATE_DONE.flag',
+    'PARKED.flag',
+    'DONE.flag.rejected',
+  ]) {
+    const path = join(loopDir, name)
+    if (existsSync(path)) unlinkSync(path)
+  }
+  return result
 }

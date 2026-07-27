@@ -13,6 +13,7 @@
 
 import { render } from 'ink'
 import { createElement } from 'react'
+import { join } from 'path'
 import type { UIStore } from './store.js'
 import type { ExecutionEngine } from '../../core/engine.js'
 import type { OpenAIMessage } from '../../core/types.js'
@@ -34,6 +35,7 @@ export interface InkReplOptions {
   cwd: string
   resumedHistory?: OpenAIMessage[]
   maxContextTokens: number
+  loopMaxIters: number
 }
 
 export async function runInkRepl(opts: InkReplOptions): Promise<void> {
@@ -55,6 +57,21 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
     },
     runPrompt: (prompt: string) => {
       void runOneTurn(prompt)
+    },
+    runLoop: async ({ restart }) => {
+      const { runLoop } = await import('../../core/loopEngine.js')
+      store.setRunning(true)
+      try {
+        await runLoop(engine, opts.inkRenderer, {
+          cwd: opts.cwd,
+          loopDir: join(opts.cwd, '.loop'),
+          maxIters: opts.loopMaxIters,
+          restart,
+        })
+      } finally {
+        store.setRunning(false)
+        store.setSpinner(false)
+      }
     },
     getSkillsText: () => {
       if (opts.skills.length === 0) return 'No skills available.'

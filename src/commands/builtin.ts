@@ -14,7 +14,7 @@
    @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument,
    @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return */
 
-import { registerCommand } from './index.js'
+import { getCommand, registerCommand } from './index.js'
 import type { SlashCommandContext, SlashCommandResult } from './index.js'
 import { listCommands } from './index.js'
 import { getCurrentMode, setCurrentMode, cycleMode, getAllModes, type Mode } from '../core/modes.js'
@@ -3375,6 +3375,48 @@ registerCommand({
 })
 
 // ── v0.3.4 (durable supervisor contract §Phase 5): /loop-status ───────────────────
+registerCommand({
+  name: 'loop',
+  description: 'Start or manage an autonomous Loop. Usage: /loop <goal> | continue | restart | status | init <goal>',
+  usage: '/loop <goal> | /loop continue | /loop restart | /loop status | /loop init <goal>',
+  handler: async (args, ctx) => {
+    const input = args.trim()
+    if (input === 'status') {
+      const status = getCommand('loop-status')
+      return status ? await status.handler('', ctx) : text('Loop status is unavailable.')
+    }
+    if (input.startsWith('init ')) {
+      const goal = input.slice(5).trim()
+      if (!goal) return text('Usage: /loop init <goal>')
+      const { initializeLoopWorkspace } = await import('../core/loopScaffold.js')
+      const result = initializeLoopWorkspace(ctx.cwd, goal)
+      return text(
+        `Loop workspace ready · ${result.created.length} created · ${result.preserved.length} preserved\n` +
+        'Review .loop/GOAL.md and .loop/ACCEPTANCE.md, then run /loop continue.',
+      )
+    }
+    if (!ctx.runLoop) return text('Loop execution is unavailable in this interface.')
+    if (input === 'continue' || input === '') {
+      if (!existsSync(join(ctx.cwd, '.loop', 'GOAL.md'))) {
+        return text('Usage: /loop <goal>\nExample: /loop audit and fix the current project')
+      }
+      await ctx.runLoop({})
+      return { type: 'noop' }
+    }
+    if (input === 'restart') {
+      if (!existsSync(join(ctx.cwd, '.loop', 'GOAL.md'))) {
+        return text('No Loop goal exists. Start one with /loop <goal>.')
+      }
+      await ctx.runLoop({ restart: true })
+      return { type: 'noop' }
+    }
+    const { setLoopGoal } = await import('../core/loopScaffold.js')
+    setLoopGoal(ctx.cwd, input)
+    await ctx.runLoop({ restart: true })
+    return { type: 'noop' }
+  },
+})
+
 registerCommand({
   name: 'loop-status',
   description: 'Show the current Loop Supervisor status: lease, heartbeat, iteration, checkpoint',

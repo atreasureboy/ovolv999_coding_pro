@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { initializeLoopWorkspace } from '../src/core/loopScaffold.js'
+import { initializeLoopWorkspace, setLoopGoal } from '../src/core/loopScaffold.js'
 
 const roots: string[] = []
 
@@ -38,5 +38,19 @@ describe('loop workspace scaffold', () => {
 
     expect(result.preserved.some(path => path.endsWith('GOAL.md'))).toBe(true)
     expect(readFileSync(join(cwd, '.loop', 'GOAL.md'), 'utf8')).toContain('Custom goal')
+  })
+
+  it('starts a new interactive goal and clears stale runtime state', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'ovolv-loop-new-goal-'))
+    roots.push(cwd)
+    initializeLoopWorkspace(cwd, 'Old goal')
+    writeFileSync(join(cwd, '.loop', 'checkpoint.json'), '{}')
+    writeFileSync(join(cwd, '.loop', 'PARKED.flag'), 'stale')
+
+    setLoopGoal(cwd, 'New autonomous goal')
+
+    expect(readFileSync(join(cwd, '.loop', 'GOAL.md'), 'utf8')).toContain('New autonomous goal')
+    expect(existsSync(join(cwd, '.loop', 'checkpoint.json'))).toBe(false)
+    expect(existsSync(join(cwd, '.loop', 'PARKED.flag'))).toBe(false)
   })
 })

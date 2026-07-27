@@ -722,6 +722,7 @@ async function runRepl(
   consolidate?: { config: EngineConfig; semanticMemory: SemanticMemory; episodicMemory: EpisodicMemory },
   sessionDir?: string,
   resumedHistory?: OpenAIMessage[],
+  loopMaxIters = 12,
 ): Promise<void> {
   const history: OpenAIMessage[] = resumedHistory ? [...resumedHistory] : []
 
@@ -1115,6 +1116,20 @@ async function runRepl(
         },
         runPrompt: (p: string) => {
           pendingPrompt = p
+        },
+        runLoop: async ({ restart }) => {
+          const { runLoop } = await import('../src/core/loopEngine.js')
+          running = true
+          try {
+            await runLoop(engine, renderer, {
+              cwd,
+              loopDir: join(cwd, '.loop'),
+              maxIters: loopMaxIters,
+              restart,
+            })
+          } finally {
+            running = false
+          }
         },
         getSkillsText,
         getSessionsText,
@@ -1974,13 +1989,14 @@ async function main(): Promise<void> {
       sessionDir,
       resumedHistory,
       maxContextTokens: maxCtxTokens,
+      loopMaxIters,
     })
     return
   }
 
   await runRepl(engine, planConfig, renderer, cwd, skills, hookRunner, {
     config, semanticMemory, episodicMemory,
-  }, sessionDir, resumedHistory)
+  }, sessionDir, resumedHistory, loopMaxIters)
 }
 
 /**

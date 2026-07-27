@@ -288,6 +288,8 @@ export async function runLoop(
     } catch { /* best-effort */ }
     leaseMgr.stopHeartbeat()
     leaseMgr.release()
+    process.off('SIGINT', signalHandler)
+    process.off('SIGTERM', signalHandler)
     if (!loopRunId || !registry) return
     try {
       const r = registry.get(loopRunId)
