@@ -515,13 +515,13 @@ export class Renderer {
 
   // ── REPL ──────────────────────────────────────────────────
 
-  writePrompt(): void {
+  writePrompt(): string {
     this.flushStartup()
     const inner = Math.min(Math.max(this.width - 6, 58), 90)
     const label = ' ask ovolv999 '
     const line = '─'.repeat(Math.max(8, inner - label.length - 1))
     this.w(`\n  ${C.slate}╭─${R}${C.electric}${label}${R}${C.slate}${line}╮${R}\n`)
-    this.w(`  ${C.slate}│${R} ${C.gold}›${R} `)
+    return `  ${C.slate}│${R} ${C.gold}›${R} `
   }
 
   closePrompt(): void {

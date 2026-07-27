@@ -1000,9 +1000,9 @@ async function runRepl(
   }
 
   while (true) {
-    renderer.writePrompt()
+    const promptPrefix = renderer.writePrompt()
     slashSuggester.attach()
-    const { text, eof } = await input.readLine('')
+    const { text, eof } = await input.readLine(promptPrefix)
     slashSuggester.detach()
     renderer.closePrompt()
 
