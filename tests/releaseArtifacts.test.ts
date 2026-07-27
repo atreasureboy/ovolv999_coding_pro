@@ -34,7 +34,7 @@ describe('release artifacts', () => {
     const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
     const release = readFileSync(resolve(root, '.github/workflows/release.yml'), 'utf8')
     expect(ci).toContain('runs-on: ubuntu-latest')
-    expect(ci).toContain('macos-latest, windows-latest')
+    expect(ci).toContain('ubuntu-latest, macos-latest, windows-latest')
     expect(ci).toContain('node: [20, 22]')
     expect(release).toContain('Verify tag matches package version')
     expect(release).toContain('npm publish --provenance --access public')
