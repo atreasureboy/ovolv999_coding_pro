@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process'
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const output = execFileSync(npmCommand, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+const npmCli = process.env.npm_execpath
+if (!npmCli) {
+  throw new Error('npm_execpath is unavailable; run package verification through npm')
+}
+const output = execFileSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
   encoding: 'utf8',
 })
 const [pack] = JSON.parse(output)
