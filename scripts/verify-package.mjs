@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 
-const output = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const output = execFileSync(npmCommand, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
   encoding: 'utf8',
 })
 const [pack] = JSON.parse(output)
