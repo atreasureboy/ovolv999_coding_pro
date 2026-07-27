@@ -86,7 +86,18 @@ export function formatMessagesForCritic(messages: OpenAIMessage[]): string {
  * or the correction string if it did.
  */
 export function parseCriticOutput(output: string): string | null {
-  const trimmed = output.trim()
+  const trimmed = output
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .trim()
   if (!trimmed || /^ok[.!]?$/i.test(trimmed)) return null
-  return trimmed
+  const lines = trimmed
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^\[(?:ISSUE|FIX)\]\s+\S/i.test(line))
+    .slice(0, 6)
+  return lines.some((line) => /^\[ISSUE\]/i.test(line))
+    && lines.some((line) => /^\[FIX\]/i.test(line))
+    ? lines.join('\n')
+    : null
 }

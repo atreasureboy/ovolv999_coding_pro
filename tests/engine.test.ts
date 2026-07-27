@@ -249,14 +249,20 @@ describe('parseCriticOutput', () => {
     expect(parseCriticOutput('')).toBeNull()
   })
 
-  it('returns the output for non-OK responses', () => {
-    const output = '[问题] 重复劳动\n[纠正] 换个策略'
+  it('returns structured issue and fix pairs', () => {
+    const output = '[ISSUE] repeated work\n[FIX] change strategy'
     expect(parseCriticOutput(output)).toBe(output)
   })
 
-  it('trims whitespace from response', () => {
-    const output = '[问题] something'
-    expect(parseCriticOutput('  ' + output + '  ')).toBe(output)
+  it('removes hidden reasoning and rejects malformed residue', () => {
+    expect(parseCriticOutput('<think>private chain of thought</think>\nOK')).toBeNull()
+    expect(parseCriticOutput('<think>private chain of thought</think>\nContinue with npm.')).toBeNull()
+    expect(parseCriticOutput('<think>unterminated private chain of thought')).toBeNull()
+  })
+
+  it('keeps only bounded structured feedback', () => {
+    const output = '<think>private</think>\n[ISSUE] stale context\n[FIX] use current turn\nuntrusted filler'
+    expect(parseCriticOutput(output)).toBe('[ISSUE] stale context\n[FIX] use current turn')
   })
 })
 

@@ -53,7 +53,16 @@ export class CriticModule implements AgentModule {
     // behaviour — no tokens wasted on healthy runs.
     if (ctx.iteration % CRITIC_INTERVAL !== 0 && !ctx.criticRequested) return
 
-    const recent = ctx.messages.slice(-CRITIC_CONTEXT_MESSAGES)
+    let currentTurnStart = -1
+    for (let index = ctx.messages.length - 1; index >= 0; index--) {
+      if (ctx.messages[index]?.role === 'user') {
+        currentTurnStart = index
+        break
+      }
+    }
+    const recent = ctx.messages
+      .slice(Math.max(0, currentTurnStart))
+      .slice(-CRITIC_CONTEXT_MESSAGES)
     if (recent.length < 4) return
 
     try {

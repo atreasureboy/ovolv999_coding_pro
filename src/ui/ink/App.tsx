@@ -47,6 +47,16 @@ function estimateTokens(messages: OpenAIMessage[]): number {
   return Math.ceil(chars / 4)
 }
 
+export function safeTerminalWidth(columns: number | undefined): number {
+  return Math.max(20, (columns || 80) - 1)
+}
+
+export function reasoningPreview(text: string, width: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  const available = Math.max(12, width - 6)
+  return normalized.length > available ? `${normalized.slice(0, available - 1)}…` : normalized
+}
+
 // ── Streaming cursor — blinking block at end of streaming text ──
 
 function StreamingCursor(): React.ReactElement {
@@ -245,6 +255,7 @@ export function App({
 
   const tokens = estimateTokens(history)
   const contextPct = maxContextTokens > 0 ? tokens / maxContextTokens : 0
+  const terminalWidth = safeTerminalWidth(stdout.columns)
   const committedMessages = state.messages.filter((message) => message.id <= state.committedThroughId)
   const liveMessages = state.messages.filter((message) => message.id > state.committedThroughId)
   const staticItems: Array<
@@ -269,7 +280,7 @@ export function App({
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <Box width={Math.max(20, stdout.columns || 80)} flexDirection="column">
+    <Box width={terminalWidth} flexDirection="column">
       <Static items={staticItems}>
         {(item) => item.kind === 'banner' ? (
           <Banner
@@ -279,7 +290,7 @@ export function App({
             cwd={cwd}
             gitBranch={getGitBranch(cwd)}
             contextWindow={maxContextTokens}
-            terminalWidth={Math.max(20, stdout.columns || 80)}
+            terminalWidth={terminalWidth}
           />
         ) : (
           <MessageRow key={item.id} msg={item.message} />
@@ -302,10 +313,9 @@ export function App({
 
       {/* Reasoning / thinking display */}
       {state.streamingReasoning ? (
-        <Box marginLeft={2} flexDirection="column">
-          <Text dimColor italic>
-            {state.streamingReasoning.split('\n').slice(0, 6).join('\n')}
-            {state.streamingReasoning.split('\n').length > 6 ? '\n...' : ''}
+        <Box marginLeft={2} height={1}>
+          <Text dimColor italic wrap="truncate-end">
+            {reasoningPreview(state.streamingReasoning, terminalWidth)}
           </Text>
         </Box>
       ) : null}
@@ -352,7 +362,7 @@ export function App({
 
       {/* Input or "running..." indicator */}
       {state.running || store.hasOverlay() || showHelp ? (
-        <Box width={Math.max(20, stdout.columns || 80)} marginTop={1}>
+        <Box width={terminalWidth} marginTop={1}>
           <Text dimColor italic>  (turn in progress — ESC to interrupt)</Text>
         </Box>
       ) : (
@@ -365,7 +375,7 @@ export function App({
             history={inputHistory.current}
             cwd={cwd}
             onCopy={handleCopy}
-            terminalWidth={Math.max(20, stdout.columns || 80)}
+            terminalWidth={terminalWidth}
           />
         </Box>
       )}

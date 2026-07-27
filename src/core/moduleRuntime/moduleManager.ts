@@ -188,10 +188,6 @@ export class ModuleManager {
       })
       if (iterResult?.injectMessage) {
         const msg = iterResult.injectMessage
-        const lines = msg.split('\n').filter(l => l.trim())
-        for (const line of lines) {
-          this.renderer.warn(`[${module.name}] ${line}`)
-        }
         this.eventLog?.append('module_flag', module.name, {
           message: msg.slice(0, 500),
           iteration,
