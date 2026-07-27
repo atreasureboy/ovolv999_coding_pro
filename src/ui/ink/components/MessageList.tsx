@@ -21,15 +21,16 @@ function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
   switch (msg.type) {
     case 'user':
       return (
-        <Box marginTop={1} borderStyle="round" borderColor="#63B3ED" paddingX={1}>
-          <Text color="#63B3ED">› </Text>
-          <Text>{msg.text}</Text>
+        <Box marginTop={1} paddingX={1}>
+          <Text color="#C9A86A">❯ </Text>
+          <Text bold>{msg.text}</Text>
         </Box>
       )
 
     case 'assistant':
       return (
-        <Box marginTop={1} paddingLeft={1} borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor="#A78BFA" flexDirection="column">
+        <Box marginTop={1} paddingX={1}>
+          <Text color="#A78BFA">● </Text>
           <Markdown>{msg.text}</Markdown>
         </Box>
       )

@@ -144,7 +144,9 @@ export function App({
       try {
         const result = await runTurn(expandedText, history, images.length > 0 ? images : undefined)
         setHistory(result.newHistory)
-        store.addInfo(`Done · ${result.reason}`)
+        const elapsed = ((Date.now() - turnStartTime.current) / 1000).toFixed(1)
+        if (result.reason === 'stop_sequence') store.addSuccess(`Done in ${elapsed}s`)
+        else store.addInfo(`Stopped in ${elapsed}s · ${result.reason.replaceAll('_', ' ')}`)
       } catch (err: unknown) {
         const error = err as Error
         if (error.name !== 'AbortError') {

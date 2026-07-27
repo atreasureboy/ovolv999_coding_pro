@@ -133,8 +133,11 @@ export function PromptInput({
 
   const handleSubmit = useCallback(() => {
     if (showMenu && menuEntries.length > 0) {
-      autocomplete()
-      return
+      const selected = menuEntries[Math.min(menuSelected, menuEntries.length - 1)]
+      if (text !== `/${selected.name}`) {
+        autocomplete()
+        return
+      }
     }
     if (fileContext.active && fileSuggestions.length > 0) {
       autocompleteFile()
@@ -328,7 +331,7 @@ export function PromptInput({
           })}
         </Box>
       ) : (
-        <Box width={terminalWidth} borderStyle="round" borderColor="#63B3ED" paddingX={1}>
+        <Box width={terminalWidth} borderStyle="round" borderColor="#7D8590" paddingX={1}>
           <Box width={2} flexShrink={0}>
             <Text color="#C9A86A">›</Text>
           </Box>

@@ -46,7 +46,7 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
   return (
     <Box justifyContent="space-between" marginTop={1} borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderColor="gray">
       <Box gap={1}>
-        <Text color="#68D391">◆</Text>
+        <Text color="#63B3ED">◆</Text>
         <Text color="#C9A86A">{model}</Text>
         {gitBranch ? <Text dimColor>{gitBranch}</Text> : null}
         {planMode ? <Text color="blueBright">PLAN</Text> : null}

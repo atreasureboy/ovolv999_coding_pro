@@ -3,7 +3,6 @@
  */
 
 import { Text, Box } from 'ink'
-import { BRAND_LOGO_ROWS } from '../brand.js'
 
 export interface BannerProps {
   version: string
@@ -28,39 +27,22 @@ export function Banner({ version, model, cwd, gitBranch, contextWindow }: Banner
     : ''
 
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text bold color="#63B3ED">{BRAND_LOGO_ROWS.slice(0, 2).join('\n')}</Text>
-      <Text bold color="#A78BFA">{BRAND_LOGO_ROWS.slice(2, 4).join('\n')}</Text>
-      <Text bold color="#C9A86A">{BRAND_LOGO_ROWS[4]}</Text>
+    <Box flexDirection="column" marginBottom={1} paddingX={1}>
       <Box justifyContent="space-between">
         <Box gap={1}>
-          <Text bold color="#E8E3DA">◆ OVOLV999</Text>
-          <Text dimColor>AUTONOMOUS DEVELOPER ENVIRONMENT</Text>
-          <Text dimColor>· v{version}</Text>
+          <Text bold color="#63B3ED">◆ ovolv999</Text>
+          <Text dimColor>developer agent</Text>
         </Box>
-        <Text color="#68D391">● ONLINE</Text>
+        <Box>
+          <Text color="#C9A86A">{model}</Text>
+          <Text dimColor> · v{version}</Text>
+        </Box>
       </Box>
-      <Box borderStyle="round" borderColor="#7D8590" paddingX={1} flexDirection="column">
-        <Box>
-          <Box width="50%">
-            <Text color="#63B3ED">WORKSPACE  </Text>
-            <Text>{cwd ? shortenPath(cwd) : '—'}</Text>
-          </Box>
-          <Box width="50%">
-            <Text color="#C9A86A">RUNTIME  </Text>
-            <Text>{model}</Text>
-          </Box>
-        </Box>
-        <Box>
-          <Box width="50%">
-            <Text color="#A78BFA">SOURCE     </Text>
-            <Text>{gitBranch ?? 'no git'}</Text>
-          </Box>
-          <Box width="50%">
-            <Text color="#68D391">CONTEXT  </Text>
-            <Text>{ctxStr ? `${ctxStr} tokens` : '—'}</Text>
-          </Box>
-        </Box>
+      <Box gap={1}>
+        <Text dimColor>{cwd ? shortenPath(cwd) : '—'}</Text>
+        <Text color="#7D8590">·</Text>
+        <Text color="#A78BFA">{gitBranch ?? 'no git'}</Text>
+        {ctxStr ? <Text dimColor>· {ctxStr} context</Text> : null}
       </Box>
     </Box>
   )
