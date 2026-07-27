@@ -1,5 +1,5 @@
 /**
- * Adaptive Critic trigger (eight_goal Phase 5 §七).
+ * Adaptive Critic trigger (adaptive runtime contract Phase 5 §七).
  *
  * Replaces fixed every-N-turns critic invocation with RISK-GATED
  * triggering. The fixed-interval critic wastes tokens on healthy runs
@@ -45,7 +45,7 @@ export interface CriticTriggerDecision {
 
 /**
  * Decide whether to invoke the critic this iteration. Returns invoke=true
- * on any of the eight_goal §七 risk conditions. Cheap runs (no signal)
+ * on any of the adaptive runtime contract §七 risk conditions. Cheap runs (no signal)
  * return invoke=false → no tokens spent.
  */
 export function shouldInvokeCritic(s: CriticSignals): CriticTriggerDecision {

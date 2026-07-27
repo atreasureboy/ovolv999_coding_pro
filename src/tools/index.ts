@@ -55,7 +55,7 @@ export interface AgentWiring {
   parentConfig?: EngineConfig
   parentRenderer?: unknown
   /**
-   * Optional ExecutionRun registry (fi_goal.md §三). When supplied,
+   * Optional ExecutionRun registry (runtime architecture contract §三). When supplied,
    * AgentTool and ClaudeCodeTool create child runs for every
    * delegation so observers can track them uniformly. When omitted,
    * both tools behave exactly as before (no registry integration).
@@ -65,7 +65,7 @@ export interface AgentWiring {
   parentRunId?: string
   /** Phase 3: shared TaskGraph for the TaskPlan tool (legacy path). */
   taskGraph?: unknown
-  /** v0.3.2 (ele_goal §Phase 2): the TaskGraphResolver is the
+  /** v0.3.2 (run-scoped runtime contract §Phase 2): the TaskGraphResolver is the
    *  primary path; TaskPlanTool resolves the current run's graph
    *  via runId rather than holding a fixed reference. */
   taskGraphResolver?: TaskGraphResolver

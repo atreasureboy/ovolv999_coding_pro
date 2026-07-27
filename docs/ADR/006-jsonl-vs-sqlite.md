@@ -20,7 +20,7 @@ Option 1 now, with option 2 as a swappable backend behind the
 (run-state + event commit together) and idempotent eventId dedup. SQLite
 is deferred until JSONL genuinely can't support a need (TaskGraph
 queries, large histories) — and only if its native dep doesn't hurt
-installation (eight_goal §八).
+installation.
 
 ## Rejected
 Option 3 — recovery is a headline capability. Option 2 immediately —

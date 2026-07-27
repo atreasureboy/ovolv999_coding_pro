@@ -1,5 +1,5 @@
 /**
- * v0.3.1 CompletionContract 6-state contract (te_goal §四).
+ * v0.3.1 CompletionContract 6-state contract (runtime truth contract §四).
  *
  * Verifies that evaluateCompletion produces every required status:
  *   completed | partial | blocked | failed | cancelled | exhausted
@@ -103,7 +103,7 @@ describe('CompletionContract v0.3.1 — 6 statuses', () => {
   })
 
   it('produces exhausted BEFORE blockers are evaluated', () => {
-    // te_goal §四.10: max iterations → exhausted, not blocked.
+    // runtime truth contract §四.10: max iterations → exhausted, not blocked.
     const v = evaluateCompletion({
       ...base,
       iterationsUsed: 5,

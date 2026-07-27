@@ -1,5 +1,5 @@
 /**
- * ProviderRuntimeBinding (v0.3.1, te_goal §三.1.2).
+ * ProviderRuntimeBinding (v0.3.1, runtime truth contract §三.1.2).
  *
  * A binding is the resolved, runtime form of a ModelProfile: it carries
  * the profile id, the active transport, the model name, the endpoint,
@@ -12,7 +12,7 @@
  * The current implementation is "single-transport mode": all profiles
  * must target the same provider as the engine. The ModelRuntimeManager
  * rejects cross-provider profiles at config-validation time so the
- * runtime never has to swap transports. te_goal.md §三.1.2 explicitly
+ * runtime never has to swap transports. runtime truth contract §三.1.2 explicitly
  * allows this fallback ("配置验证阶段拒绝不同 Provider 的 profile").
  */
 import type { ProviderAdapter } from './providerAdapter.js'

@@ -1,5 +1,5 @@
 /**
- * InternalControlMessage (v0.3.1, te_goal §七).
+ * InternalControlMessage (v0.3.1, runtime truth contract §七).
  *
  * Runtime control signals that must NOT be conflated with the user's
  * conversation history. Today the codebase uses free-form

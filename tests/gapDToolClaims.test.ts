@@ -1,5 +1,5 @@
 /**
- * GAP-D: tool ResourceClaim declarations (fi_goal §五).
+ * GAP-D: tool ResourceClaim declarations (runtime contract §五).
  *
  * Verifies the 6 core file/shell tools (Read, Write, Edit, Bash, Grep,
  * Glob) declare per-input `claims` builders on their ToolMetadata.

@@ -1,5 +1,5 @@
 /**
- * Phase 3 (five_goal §六 P0-6, P0-8):
+ * Phase 3 (runtime invariants §六 P0-6, P0-8):
  *
  * P0-6: `wait:false` must NOT mark the run as 'succeeded'. A dispatched-
  *       but-unverified task is still in flight — the run stays non-

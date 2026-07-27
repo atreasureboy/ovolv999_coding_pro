@@ -1,7 +1,7 @@
 /**
  * P0-4 regression: parallel modifying agents share the parent cwd.
  *
- * Invariant (fi_goal.md §P0-4): a task that mutates state MUST run
+ * Invariant (runtime architecture contract §P0-4): a task that mutates state MUST run
  * inside an isolated git worktree on a dedicated branch. Read-only
  * tasks (the default) MAY share the parent cwd. The Runtime decides
  * isolation based on the orchestrator-supplied `modifies_state` flag
@@ -12,7 +12,7 @@
  * same working tree, and a sub-agent that broke the build would
  * pollute the parent's workspace before the verify gate could catch
  * it. The existing EnterWorktree/ExitWorktree TOOLS were decorative —
- * the sub-agent had to invoke them itself, which fi_goal.md §P0-4
+ * the sub-agent had to invoke them itself, which runtime architecture contract §P0-4
  * explicitly forbids ("should not be decided by the sub-model").
  *
  * Post-fix: AgentTool auto-creates a worktree when modifies_state:true,
@@ -421,7 +421,7 @@ describe('P0-4.D: parallel modifying tasks get distinct worktrees', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// P0-3 (five_goal §四): worktree creation MUST be fail-closed.
+// P0-3 (runtime invariants §四): worktree creation MUST be fail-closed.
 // Previously the test asserted a "graceful fallback to parent cwd"
 // behavior — that is now EXPLICITLY FORBIDDEN. A modify task whose
 // worktree cannot be created must NOT start the sub-agent and must
@@ -606,7 +606,7 @@ describe('P0-4.G: merge artifacts are observable', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// P0-4 (five_goal §四): task_mode enum replaces modifies_state boolean.
+// P0-4 (runtime invariants §四): task_mode enum replaces modifies_state boolean.
 // LLMs forgetting to set modifies_state:true would silently bypass
 // isolation. An explicit task_mode:'modify' value (and a default
 // verify gate) closes the loophole.
@@ -710,7 +710,7 @@ describe('P0-4: task_mode:"modify" enforces isolation + verify default', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// P0-5 (five_goal §五): merge conflict → 'blocked' (NOT 'failed').
+// P0-5 (runtime invariants §五): merge conflict → 'blocked' (NOT 'failed').
 // The sub-agent's work was sound; only the merge against a moved base
 // failed. The worktree + branch must be PRESERVED so a parent agent
 // (or human) can resolve the conflicts.

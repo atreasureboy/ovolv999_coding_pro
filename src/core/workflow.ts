@@ -116,7 +116,7 @@ export interface StepResult {
  * WorkflowRunResult is retained for back-compat, but `status`
  * distinguishes "all steps clean" from "completed with soft
  * failures via continueOnError" — the two MUST NOT be equivalent
- * per five_goal §十一 P1-11.
+ * per runtime invariants §十一 P1-11.
  */
 export type WorkflowStatus =
   | 'succeeded'

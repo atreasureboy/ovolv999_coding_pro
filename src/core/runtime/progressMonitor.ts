@@ -1,5 +1,5 @@
 /**
- * ProgressMonitor + StallDetector (eight_goal Phase 4).
+ * ProgressMonitor + StallDetector (adaptive runtime contract Phase 4).
  *
  * The long-running-autonomy guard layer. The model alone cannot be
  * trusted to notice it has stalled ("两小时后提前宣布完成", "反复搜索但
@@ -8,7 +8,7 @@
  * verdicts, so the loop can intervene (replan / escalate / block)
  * instead of pretending success.
  *
- * Meaningful progress (eight_goal §六) — only these reset the stall
+ * Meaningful progress (adaptive runtime contract §六) — only these reset the stall
  * timer:
  *   - a new file changed / a real patch produced
  *   - verification delta improved (fewer failing tests / errors)
@@ -66,7 +66,7 @@ interface WindowedToolCall { tool: string; inputFingerprint: string; errFingerpr
  * Pure given the recorded state — no I/O, no timers internally (the
  * caller drives iteration count + elapsed-minutes).
  *
- * v0.3.1 (te_goal §六.2): the legacy `lastToolCall` + `lastErrorFingerprint`
+ * v0.3.1 (runtime truth contract §六.2): the legacy `lastToolCall` + `lastErrorFingerprint`
  * detectors are augmented with a RingBuffer of recent calls so the
  * detector can spot A→B→A→B cycles (a single alternating pattern with
  * A≠B) and the same error repeated with different parameters. The
@@ -160,7 +160,7 @@ export class ProgressMonitor {
 
     // A successful Write/Edit changes a real file → meaningful progress,
     // BUT only if the bytes are different from any prior edit to the
-    // same file (te_goal §六.2: "同一文件继续产生新的 patch hash
+    // same file (runtime truth contract §六.2: "同一文件继续产生新的 patch hash
     // 应被视为新进展").
     if (!result.isError && (tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit')) {
       const path = typeof input.file_path === 'string' ? input.file_path : ''

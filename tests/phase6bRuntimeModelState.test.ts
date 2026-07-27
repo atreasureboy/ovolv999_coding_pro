@@ -1,5 +1,5 @@
 /**
- * Phase 6b (five_goal §十三 P2-4/P2-5): RuntimeModelState shared object.
+ * Phase 6b (runtime invariants §十三 P2-4/P2-5): RuntimeModelState shared object.
  *
  *   - SharedRuntimeState.modelState is the canonical model source.
  *   - updateModelState() bumps version + notifies subscribers.

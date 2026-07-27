@@ -1,5 +1,5 @@
 /**
- * Deterministic Coding Eval (eight_goal Phase 6).
+ * Deterministic Coding Eval (adaptive runtime contract Phase 6).
  *
  * One real end-to-end task: fix a one-line bug in a TypeScript file.
  * The agent trajectory is scripted (a Fake Provider emits the Edit

@@ -1,5 +1,5 @@
 /**
- * RoutingSignalCollector (v0.3.1, te_goal §三.1.3).
+ * RoutingSignalCollector (v0.3.1, runtime truth contract §三.1.3).
  *
  * The single source of truth for "what does the Router know about this
  * turn?" before it scores profiles. Without this collector, callers
@@ -11,7 +11,7 @@
  *
  * Pure (no I/O) — deterministic given inputs. Unit-testable.
  *
- * Signals te_goal.md §1.3 explicitly requires (bullets 1..11):
+ * Signals runtime truth contract §1.3 explicitly requires (bullets 1..11):
  *   userGoal
  *   repoFileCount
  *   filesTouched
@@ -25,7 +25,7 @@
  *   previous routing failures
  *   expected tool requirement
  *
- * Plus the secondary signals te_goal §1.3 calls "should combine":
+ * Plus the secondary signals runtime truth contract §1.3 calls "should combine":
  *   - estimated impact files
  *   - affects public interface
  *   - is cross-module
@@ -50,7 +50,7 @@ export interface RoutingSignals {
   previousRoutingFailures: number
   // expected tool requirement
   expectedToolRequirement: 'none' | 'read-only' | 'mixed' | 'side-effect'
-  // secondary signals (te_goal §1.3 second paragraph)
+  // secondary signals (runtime truth contract §1.3 second paragraph)
   affectsPublicInterface: boolean
   isCrossModule: boolean
   isConfigChange: boolean
@@ -138,7 +138,7 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
 
   // Static analysis — combine keyword evidence with task-graph
   // evidence so a single keyword match isn't a license to charge
-  // "architecture" complexity (te_goal §1.3 second paragraph).
+  // "architecture" complexity (runtime truth contract §1.3 second paragraph).
   const keywordArchitecture = ARCHITECTURE_KEYWORDS.test(goal)
   const keywordConfig = CONFIG_CHANGE_KEYWORDS.test(goal)
   const keywordCrossModule = CROSS_MODULE_KEYWORDS.test(goal)
@@ -155,7 +155,7 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
   // Estimated impact: number of files expected to change.
   const estimatedImpactFiles = ws ? ws.filesChanged.length + Math.min(filesTouched, 12) : Math.min(goal.length / 240, 12)
 
-  // Multi-file signal that hints at architecture work (te_goal §1.3).
+  // Multi-file signal that hints at architecture work (runtime truth contract §1.3).
   const manyFiles = filesTouched > 8 || estimatedImpactFiles > 8
 
   return {

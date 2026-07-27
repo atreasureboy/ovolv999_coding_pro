@@ -1,8 +1,8 @@
 /**
- * v0.3.1 deterministic-runtime eval (te_goal §九).
+ * Deterministic runtime evaluation suite.
  *
  * 10 cases that exercise the runtime's contract WITHOUT requiring
- * a real LLM. Each case targets a specific te_goal §十一 acceptance
+ * a real LLM. Each case targets a specific runtime acceptance
  * invariant; the full set covers model-routing isolation, completion
  * semantics, fallback chains, internal control message separation,
  * and TaskGraph isolation.

@@ -1,5 +1,5 @@
 /**
- * WorkingState tests (fi_goal.md §七 Phase 6 / Round 8).
+ * WorkingState tests (runtime architecture contract §七 Phase 6 / Round 8).
  */
 
 import { describe, it, expect } from 'vitest'

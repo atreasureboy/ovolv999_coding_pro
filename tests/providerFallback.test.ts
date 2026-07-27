@@ -1,5 +1,5 @@
 /**
- * v0.3.1 Provider fallback (te_goal §三.1.4).
+ * v0.3.1 Provider fallback (runtime truth contract §三.1.4).
  *
  * Verifies:
  *   - 429 / 5xx / timeout errors trigger onProviderError

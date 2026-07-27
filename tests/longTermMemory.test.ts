@@ -1,5 +1,5 @@
 /**
- * LongTermMemory tests (fi_goal.md §八 Phase 7 / Round 9).
+ * LongTermMemory tests (runtime architecture contract §八 Phase 7 / Round 9).
  *
  * Verifies the six spec'd gates:
  *   R1 verification, R2 source marking, R3 commit binding,

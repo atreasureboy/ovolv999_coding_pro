@@ -1,5 +1,5 @@
 /**
- * TaskGraphStore (v0.3.1, te_goal §五).
+ * TaskGraphStore (v0.3.1, runtime truth contract §五).
  *
  * The runtime previously kept a single shared TaskGraph and reset it at
  * the start of every turn — a coarse way to stop turn 1's nodes from
@@ -29,7 +29,7 @@ export interface TaskGraphStore {
 
 export class InMemoryTaskGraphStore implements TaskGraphStore {
   private readonly graphs = new Map<string, TaskGraph>()
-  /** v0.3.1 (te_goal §五): optional event sink for graph lifecycle. */
+  /** v0.3.1 (runtime truth contract §五): optional event sink for graph lifecycle. */
   private sink: ((event: { type: 'TASK_GRAPH_CREATED'; runId: string }) => void) | null = null
 
   setEventSink(sink: ((event: { type: 'TASK_GRAPH_CREATED'; runId: string }) => void) | null): void {

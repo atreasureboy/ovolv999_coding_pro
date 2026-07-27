@@ -2,7 +2,7 @@
  * ModelGateway — owns the model I/O boundary of the run loop. Extracted
  * from engine.ts to isolate model communication from iteration logic.
  *
- * Phase 1 (six_goal §四): ModelGateway no longer touches the OpenAI SDK
+ * Phase 1 (provider-runtime contract §四): ModelGateway no longer touches the OpenAI SDK
  * directly. ALL provider-specific behaviour (request shape, streaming
  * transport, stream_options probing) lives behind a ProviderAdapter.
  * ModelGateway is now provider-agnostic: it builds a ProviderStreamRequest,
@@ -47,7 +47,7 @@ export interface ModelGatewayCallbacks {
   /** Called when a context overflow error is detected. Should compact messages and return true on success. */
   onContextOverflow?: (messages: OpenAIMessage[], abortSignal: AbortSignal) => Promise<boolean>
   /**
-   * v0.3.1 (te_goal §三.1.4): called when the provider returns a
+   * v0.3.1 (runtime truth contract §三.1.4): called when the provider returns a
    * retryable error (429/timeout/5xx). Returns the next model in the
    * fallback chain, or null if the chain is exhausted. The gateway
    * retries ONCE with the fallback model — it does NOT replay tools
@@ -121,7 +121,7 @@ export class ModelGateway {
         if (!compacted) throw err
         stream = await this.adapter.stream(streamReq)
       } else if (this.isRetryableProviderError(errMsg) && callbacks?.onProviderError) {
-        // v0.3.1 (te_goal §三.1.4): provider fallback at the stream
+        // v0.3.1 (runtime truth contract §三.1.4): provider fallback at the stream
         // ESTABLISHMENT boundary (before any tool runs). The callback
         // supplies a fallback model from Router.nextFallback(); we
         // re-issue the request ONCE with that model. The adapter is
@@ -153,7 +153,7 @@ export class ModelGateway {
   }
 
   /**
-   * v0.3.1 (te_goal §三.1.4): classify a provider error as retryable.
+   * v0.3.1 (runtime truth contract §三.1.4): classify a provider error as retryable.
    * The OpenAI-compatible transport surfaces 429 / 5xx / timeout as
    * Error objects whose message contains the status code or a known
    * marker. False positives are cheap (the next attempt just fails

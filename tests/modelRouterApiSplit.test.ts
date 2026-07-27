@@ -1,5 +1,5 @@
 /**
- * v0.3.1 ModelRouter API split (te_goal §三.1.1).
+ * v0.3.1 ModelRouter API split (runtime truth contract §三.1.1).
  *
  * Verifies:
  *   - setModelByUser / applyRoutingDecision / clearModelOverride are

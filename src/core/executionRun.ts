@@ -1,5 +1,5 @@
 /**
- * ExecutionRun — unified run state machine (fi_goal.md §三 Phase 2).
+ * ExecutionRun — unified run state machine (runtime architecture contract §三 Phase 2).
  *
  * Goal: every unit of work the runtime dispatches on behalf of a user
  * (a model turn, a sub-agent, a Claude Code worker task, a background

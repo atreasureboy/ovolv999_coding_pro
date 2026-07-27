@@ -1,5 +1,5 @@
 /**
- * ExecutionContext (five_goal.md §三 P0-2).
+ * ExecutionContext (runtime invariants.md §三 P0-2).
  *
  * Per-turn execution context dynamically propagated through ToolContext.
  * Replaces the older "parentRunId stored in Tool constructor" pattern,

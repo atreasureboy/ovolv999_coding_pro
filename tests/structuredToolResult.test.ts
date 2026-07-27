@@ -1,5 +1,5 @@
 /**
- * Structured ToolResult tests (fi_goal.md §六 Phase 5 / GAP-A).
+ * Structured ToolResult tests (runtime architecture contract §六 Phase 5 / GAP-A).
  */
 
 import { describe, it, expect } from 'vitest'

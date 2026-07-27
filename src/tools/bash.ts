@@ -83,7 +83,7 @@ export interface BashInput {
   description?: string
   follow_mode?: boolean   // Stream output to user's tmux pane for spectator view
   /**
-   * P1-5 (five_goal §九): Exit codes the caller explicitly considers
+   * P1-5 (runtime invariants §九): Exit codes the caller explicitly considers
    * successful. Default [0]. Use this when invoking commands that
    * conventionally use non-zero exits for benign reasons
    * (e.g. grep -l returning 1 when no match, or test scripts that
@@ -295,7 +295,7 @@ export class BashTool implements Tool {
       MAX_TIMEOUT_MS,
     )
 
-    // P1-5 (five_goal §九): explicit allow-list of exit codes the
+    // P1-5 (runtime invariants §九): explicit allow-list of exit codes the
     // caller treats as success. Default is just [0]. Validated to a
     // finite integer array — malformed input falls back to [0].
     const acceptableExitCodes: Set<number> = Array.isArray(acceptable_exit_codes)
@@ -416,7 +416,7 @@ export class BashTool implements Tool {
   /**
    * Run a foreground command, returning once it exits or is cancelled.
    *
-   * Contract (fi_goal.md §六 Phase 5 — non-zero exit must NOT be success):
+   * Contract (runtime architecture contract §六 Phase 5 — non-zero exit must NOT be success):
    *  - exit code 0          → isError=false, status='success', content = stdout/stderr
    *  - non-zero exit code   → isError=true,  status='failed',  content = "Exit code: N\n..."
    *  - internal timeout     → isError=true,  status='timed_out', content = "Command timed out..."
@@ -781,7 +781,7 @@ export class BashTool implements Tool {
           settle({
             content: truncateOutput(prefix + combined, MAX_OUTPUT_LENGTH),
             isError: false,
-            // Structured fields (fi_goal §六 Phase 5). The legacy
+            // Structured fields (runtime contract §六 Phase 5). The legacy
             // isError:false is preserved for backward-compat; downstream
             // consumers that opt into the structured shape read .status.
             status: 'success',
@@ -808,7 +808,7 @@ export class BashTool implements Tool {
           return
         }
 
-        // P1-5 (five_goal §九): non-zero exit. By default this is a
+        // P1-5 (runtime invariants §九): non-zero exit. By default this is a
         // failure (status='failed', isError=true). When the caller
         // explicitly allow-listed the exit code via acceptable_exit_codes,
         // treat it as success instead — e.g. `grep -l` returns 1 when

@@ -1,5 +1,5 @@
 /**
- * Phase 7 (five_goal §十六): fault injection tests for the 6 missing
+ * Phase 7 (runtime invariants §十六): fault injection tests for the 6 missing
  * scenarios not covered by gapLFaultInjection.test.ts.
  *
  *   FI-1  Worktree creation failure → Agent blocked (not fallback to cwd)

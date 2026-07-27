@@ -1,5 +1,5 @@
 /**
- * TaskGraph (eight_goal Phase 3) — a lightweight task-decomposition DAG.
+ * TaskGraph (adaptive runtime contract Phase 3) — a lightweight task-decomposition DAG.
  *
  * NOT a generic workflow engine. Built for real coding tasks: decompose a
  * goal into nodes with dependencies, compute which nodes are ready /
@@ -7,7 +7,7 @@
  * terminal state. The model (or a planner) populates the graph; the
  * Runtime owns its state machine + invariants.
  *
- * Invariants (eight_goal §五.8/§五.9):
+ * Invariants (adaptive runtime contract §五.8/§五.9):
  *   - a node with unmet dependencies is NOT ready (status stays pending)
  *   - a node whose verification failed is 'failed', never 'completed'
  *   - the graph is "done" only when every node is terminal
@@ -41,7 +41,7 @@ export interface TaskNode {
   blockReason?: string
   failReason?: string
   /**
-   * v0.3.2 (ele_goal §Phase 5): per-criterion evidence. The same
+   * v0.3.2 (run-scoped runtime contract §Phase 5): per-criterion evidence. The same
    * criterionId may have multiple evidence records (e.g. a test
    * pass + a reviewer note). The latest "satisfied" record wins.
    */
@@ -112,7 +112,7 @@ export class TaskGraph {
 
   private emit(event: Parameters<GraphEventSink>[0]): void {
     this.sink?.(event)
-    // v0.3.1 (te_goal §六.1 + §十一.14): every node transition also
+    // v0.3.1 (runtime truth contract §六.1 + §十一.14): every node transition also
     // drives the ProgressMonitor so stall detection picks up TaskGraph
     // progress. The type-narrowing on the union makes the mapping
     // exhaustive.
@@ -123,7 +123,7 @@ export class TaskGraph {
     else if (event.type === 'TASK_NODE_BLOCKED') this.nodeTransitionSink?.('blocked')
   }
 
-  /** v0.3.1 (te_goal §六.1): sink for per-node transitions so the
+  /** v0.3.1 (runtime truth contract §六.1): sink for per-node transitions so the
    *  ProgressMonitor sees TaskGraph progress. Wired by Engine. */
   private nodeTransitionSink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null = null
   setNodeTransitionSink(sink: ((transition: 'started' | 'verifying' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unblocked') => void) | null): void {
@@ -244,7 +244,7 @@ export class TaskGraph {
   }
 
   /**
-   * v0.3.2 (ele_goal §Phase 5): record evidence for a specific
+   * v0.3.2 (run-scoped runtime contract §Phase 5): record evidence for a specific
    * acceptance criterion. Returns true if the criterion is now
    * satisfied (status='satisfied'). Returns false if any criterion
    * is failed (which means the node can NOT be completed).
@@ -294,7 +294,7 @@ export class TaskGraph {
     this.emit({ type: 'TASK_NODE_BLOCKED', nodeId: id, reason, runId: this.runId })
   }
 
-  /** v0.3.1 (te_goal §五): transition a blocked node back to pending
+  /** v0.3.1 (runtime truth contract §五): transition a blocked node back to pending
    *  (or ready if deps already satisfied) so it can be retried. */
   unblock(id: string): void {
     const n = this.require(id)
@@ -307,7 +307,7 @@ export class TaskGraph {
     this.nodeTransitionSink?.('unblocked')
   }
 
-  /** v0.3.1 (te_goal §五): attach a named artifact to a node. The
+  /** v0.3.1 (runtime truth contract §五): attach a named artifact to a node. The
    *  artifact list is appended to, not replaced. */
    attachArtifact(id: string, artifact: string): void {
     const n = this.require(id)
@@ -315,7 +315,7 @@ export class TaskGraph {
     this.emit({ type: 'TASK_ARTIFACT_ATTACHED', nodeId: id, artifact, runId: this.runId })
   }
 
-  /** Locally retry a failed node (eight_goal §五 — 失败节点局部重试). */
+  /** Locally retry a failed node (adaptive runtime contract §五 — 失败节点局部重试). */
   retry(id: string): void {
     const n = this.require(id)
     if (n.status !== 'failed' && n.status !== 'blocked') {
@@ -373,7 +373,7 @@ export class TaskGraph {
     return { nodes: this.list(), summary: { ...counts, done: counts.done } }
   }
 
-  /** Serialise for event-log persistence / recovery (eight_goal §五.10). */
+  /** Serialise for event-log persistence / recovery (adaptive runtime contract §五.10). */
   serialize(): string {
     return JSON.stringify([...this.nodes.values()])
   }
@@ -386,7 +386,7 @@ export class TaskGraph {
   }
 
   /**
-   * v0.3.1 (te_goal §五): reset the graph to empty. Called at the start
+   * v0.3.1 (runtime truth contract §五): reset the graph to empty. Called at the start
    * of each turn so turn 2 doesn't inherit turn 1's nodes.
    */
   reset(): void {

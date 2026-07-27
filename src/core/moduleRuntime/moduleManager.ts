@@ -47,7 +47,7 @@ export interface ModuleBootOutput {
  * dependencies (or whose dependencies were filtered out) land in
  * layer 0.
  *
- * Cyclic dependencies are a hard error (five_goal §十二 P2-1):
+ * Cyclic dependencies are a hard error (runtime invariants §十二 P2-1):
  * the function THROWS, which propagates through boot() and aborts
  * engine startup. This prevents a broken module graph from booting
  * in a partially-initialised state.

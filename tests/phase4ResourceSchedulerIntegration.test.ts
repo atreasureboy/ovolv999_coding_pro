@@ -1,5 +1,5 @@
 /**
- * Phase 4 (five_goal §八 P1-1, P1-2, P1-3):
+ * Phase 4 (runtime invariants §八 P1-1, P1-2, P1-3):
  *
  * ResourceScheduler integration into ToolScheduler. Previously the
  * scheduler was optional / standalone — tools declared claims but

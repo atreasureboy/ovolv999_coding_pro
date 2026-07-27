@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 4-6): Durable Loop Lease + Heartbeat + Checkpoint.
+ * v0.3.4 (durable supervisor contract §Phase 4-6): Durable Loop Lease + Heartbeat + Checkpoint.
  *
  * Replaces the simple PID lock with a lease-based lock that includes
  * heartbeat, owner token, process fingerprint, and atomic creation.

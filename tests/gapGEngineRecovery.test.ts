@@ -58,9 +58,9 @@ function makeConfig(logDir?: string) {
 // GAP-G: ExecutionEngine startup recovery
 // ─────────────────────────────────────────────────────────────────────
 describe('GAP-G: engine startup recovery', () => {
-  it('constructs without executionRunLogDir (five_goal P0-1: registry still exists, only EventStore absent)', () => {
+  it('constructs without executionRunLogDir (runtime invariants P0-1: registry still exists, only EventStore absent)', () => {
     const engine = new ExecutionEngine(makeConfig(), noopRenderer)
-    // five_goal P0-1: the registry is ALWAYS present; only the
+    // runtime invariants P0-1: the registry is ALWAYS present; only the
     // persistent EventStore is optional.
     expect(engine.getRunRegistry()).toBeDefined()
     expect(engine.getRunEventBus()).toBeDefined()

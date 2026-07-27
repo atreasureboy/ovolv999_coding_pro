@@ -64,7 +64,7 @@ export class ContextManager {
   private resolvedContextWindow: number | null = null
   private pendingSnipCount: number | null = null
   /**
-   * P1-6 (five_goal §十): structured task state. Updated deterministically
+   * P1-6 (runtime invariants §十): structured task state. Updated deterministically
    * from tool events via applyToolEvent() and re-rendered into every
    * system prompt via renderWorkingStateBlock(). Lives OUTSIDE the
    * message log so compaction cannot silently drop constraints /
@@ -111,7 +111,7 @@ export class ContextManager {
     this.resolvedContextWindow = null
   }
 
-  // ── WorkingState (P1-6, P1-7 / five_goal §十) ────────────────────────
+  // ── WorkingState (P1-6, P1-7 / runtime invariants §十) ────────────────────────
   //
   // The WorkingState is the structured long-term memory. It is:
   //   - updated deterministically from tool events via applyToolEvent()
@@ -143,7 +143,7 @@ export class ContextManager {
   }
 
   /**
-   * P1-6 (five_goal §十): apply a deterministic state update from a
+   * P1-6 (runtime invariants §十): apply a deterministic state update from a
    * completed tool call. Rules:
    *
    *   Read success     → filesRead += path
@@ -181,7 +181,7 @@ export class ContextManager {
       const passed = !result.isError && (exitCode === undefined || exitCode === 0)
       s = recordVerification(s, cmd, passed)
       if (!passed) {
-        // five_goal §十: 测试失败 → unresolved 添加失败摘要
+        // runtime invariants §十: 测试失败 → unresolved 添加失败摘要
         s = { ...s, unresolved: [...s.unresolved, `Bash failed (exit ${exitCode ?? '?'}): ${cmd.slice(0, 120)}`] }
       } else {
         // Resolve any prior unresolved entries for THIS command (any
@@ -196,7 +196,7 @@ export class ContextManager {
       }
     } else if ((toolName === 'Agent' || toolName === 'ClaudeCode') &&
                result.status === 'blocked') {
-      // five_goal §四: Agent/Worker blocked → unresolved
+      // runtime invariants §四: Agent/Worker blocked → unresolved
       s = {
         ...s,
         unresolved: [...s.unresolved, `${toolName} blocked: ${(result.content ?? '').slice(0, 120)}`],

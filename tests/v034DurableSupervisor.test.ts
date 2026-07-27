@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 12) durable supervisor regression tests.
+ * v0.3.4 (durable supervisor contract §Phase 12) durable supervisor regression tests.
  * Tests the LoopLeaseManager, CheckpointManager, TurnOutcome construction,
  * and contract hashing.
  */

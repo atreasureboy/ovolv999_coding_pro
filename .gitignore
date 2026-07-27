@@ -33,6 +33,9 @@ hydra.restore
 resume.cfg
 *.restore
 .codex
+.loop/
+.opencode/
+.ovogo/settings.json
 
 # Scan findings (contain target data)
 .ovogo/findings/
@@ -79,6 +82,5 @@ coverage/
 .nyc_output/
 .claude/
 
-# Read-only reference sources (reverse-engineered Claude Code, not part of this project)
+# Read-only reference sources (not part of this project)
 /claude-code/
-/loop-kit/

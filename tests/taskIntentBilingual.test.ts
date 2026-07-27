@@ -1,11 +1,11 @@
 /**
- * v0.3.3 (tha_goal §Phase 3) bilingual TaskIntent tests.
+ * v0.3.3 (background autonomy contract §Phase 3) bilingual TaskIntent tests.
  * Verifies Chinese keyword classification + fail-closed default.
  */
 import { describe, it, expect } from 'vitest'
 import { classifyTaskIntent } from '../src/core/runtime/taskIntent.js'
 
-describe('TaskIntent bilingual classification (tha_goal §Phase 3)', () => {
+describe('TaskIntent bilingual classification (background autonomy contract §Phase 3)', () => {
   describe('Chinese mutation keywords', () => {
     const cases = [
       '修复 src/a.ts 的 bug',
@@ -61,7 +61,7 @@ describe('TaskIntent bilingual classification (tha_goal §Phase 3)', () => {
     })
   })
 
-  describe('Fail-closed default (tha_goal)', () => {
+  describe('Fail-closed default (background autonomy contract)', () => {
     it('ambiguous goal defaults to mutation (NOT informational)', () => {
       const intent = classifyTaskIntent('do the thing')
       expect(intent.kind).toBe('mutation')

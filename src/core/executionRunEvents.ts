@@ -1,5 +1,5 @@
 /**
- * ExecutionRun event system (fi_goal.md §四 Phase 3 / Round 5).
+ * ExecutionRun event system (runtime architecture contract §四 Phase 3 / Round 5).
  *
  * Layered on top of ExecutionRunRegistry (Phase 2). Every state
  * transition emits a typed event envelope:
@@ -77,7 +77,7 @@ export type CoreRunEventType =
   | 'run.failed'
 
 /**
- * Subsystem-emitted event types (fi_goal.md §四). These are not
+ * Subsystem-emitted event types (runtime architecture contract §四). These are not
  * fired by the registry; subsystems call the bus's emit helpers
  * (emitToolRequested, emitArtifactCreated, etc.).
  */
@@ -150,7 +150,7 @@ function eventTypeForTransition(from: RunStatus, to: RunStatus): CoreRunEventTyp
  export interface EventStore {
   append(event: RunEventEnvelope): void
   /**
-   * Phase 5 (six_goal §五.1): atomically persist multiple events in a
+   * Phase 5 (provider-runtime contract §五.1): atomically persist multiple events in a
    * single durable write, so a run-state transition and its
    * corresponding event commit together (crash between them can't leave
    * the log with an event but no state, or vice-versa). Implementations
@@ -228,7 +228,7 @@ export class JsonlEventStore implements EventStore {
         // Real crash recovery must be robust to this.
       }
     }
-    // Phase 5 (six_goal §五.3): idempotent replay — if the same eventId
+    // Phase 5 (provider-runtime contract §五.3): idempotent replay — if the same eventId
     // appears more than once (re-apply after a partial recovery, or a
     // duplicated batch), keep the LAST occurrence so replay is safe.
     const seen = new Map<string, RunEventEnvelope>()
@@ -322,7 +322,7 @@ export class ExecutionRunEventBus {
     return this.store ? this.store.readAll() : []
   }
 
-  // ── Subsystem emitters (fi_goal.md §四) ─────────────────────────────
+  // ── Subsystem emitters (runtime architecture contract §四) ─────────────────────────────
   //
   // The registry only emits run.* events for state transitions.
   // Subsystems that need to publish tool / artifact / verification

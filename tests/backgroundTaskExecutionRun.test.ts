@@ -1,5 +1,5 @@
 /**
- * ExecutionRun × BackgroundTaskManager integration (fi_goal.md §三 Round 4).
+ * ExecutionRun × BackgroundTaskManager integration (runtime architecture contract §三 Round 4).
  *
  * Verifies that when an ExecutionRunRegistry is wired into
  * BackgroundTaskManager via options.runRegistry, every task creates

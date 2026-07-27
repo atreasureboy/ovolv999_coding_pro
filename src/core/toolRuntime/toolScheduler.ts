@@ -2,7 +2,7 @@
  * ToolScheduler — partitions tool calls into batches and executes them
  * with correct concurrency semantics.
  *
- * Responsibilities (from replan.md §5.7):
+ * Responsibilities (from architecture plan §5.7):
  *   - Partition tool calls into safe (parallel) and stateful (serial) batches
  *   - Execute parallel batches via Promise.all
  *   - Execute serial batches one at a time
@@ -48,13 +48,13 @@ export interface ToolBatch {
 }
 
 /**
- * Partition tool calls into batches for execution (six_goal §六 / Phase 3).
+ * Partition tool calls into batches for execution (provider-runtime contract §六 / Phase 3).
  *
  * ResourceScheduler is the SOLE authority for concurrency: a tool call
  * may join a parallel batch ONLY IF it declares resource claims (via
  * `metadata.claims`) AND those claims don't pairwise-conflict with the
  * claims already accumulated in the batch. A tool that declares no
- * claims defaults to SERIAL (six_goal §六.3: "没有声明资源的工具默认
+ * claims defaults to SERIAL (provider-runtime contract §六.3: "没有声明资源的工具默认
  * 串行执行") — it cannot be proven conflict-free, so it runs alone.
  *
  * This replaces the old name-based `LEGACY_CONCURRENCY_SAFE_TOOLS`
@@ -69,7 +69,7 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): Too
 
   for (const call of calls) {
     const tool = findTool(call.tc.name)
-    // six_goal §六.3: only claim-declaring tools may parallelise.
+    // provider-runtime contract §六.3: only claim-declaring tools may parallelise.
     const claims = tool?.metadata?.claims ? tool.metadata.claims(call.input) : []
     const parallelizable = claims.length > 0
     const last = batches[batches.length - 1]
@@ -105,7 +105,7 @@ export interface ToolSchedulerDeps {
   eventEmitter?: RunEventEmitter
   claimSoftAbort: (controller: AbortController) => boolean
   /**
-   * P1-1 (five_goal §八): ResourceScheduler for per-input resource
+   * P1-1 (runtime invariants §八): ResourceScheduler for per-input resource
    * claims. When supplied, each tool execution is wrapped in
    * acquire/release so two tools touching the same file or git ref
    * serialize rather than race. Omit to disable (legacy behavior).
@@ -152,7 +152,7 @@ export class ToolScheduler {
   }
 
   /**
-   * P1-1/P1-2 (five_goal §八): acquire resource claims for a single
+   * P1-1/P1-2 (runtime invariants §八): acquire resource claims for a single
    * tool call before execution, release them in finally. Returns the
    * lease (or null if the scheduler is disabled or the tool makes no
    * claim) plus the wrapped execute call.
@@ -239,7 +239,7 @@ export class ToolScheduler {
     // eventLog.append throwing on bad input) does not leak entries
     // in activeToolCalls for the rest of the process lifetime.
     //
-    // P1-1/P1-2 (five_goal §八): each tool call is now wrapped in
+    // P1-1/P1-2 (runtime invariants §八): each tool call is now wrapped in
     // acquire/release of its declared ResourceClaims. Atomic acquire
     // guarantees no partial-lock leak; release runs in finally inside
     // executeWithClaims even on throw.

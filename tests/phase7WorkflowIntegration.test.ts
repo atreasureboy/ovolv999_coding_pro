@@ -1,5 +1,5 @@
 /**
- * Phase 7 (five_goal.md §十一 P1-9 / P1-10 / P1-11).
+ * Phase 7 (runtime invariants.md §十一 P1-9 / P1-10 / P1-11).
  *
  * Verifies the workflow layer's integration with ExecutionRun and
  * the new async shell step:

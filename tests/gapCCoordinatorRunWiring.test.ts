@@ -129,13 +129,13 @@ describe('GAP-C.1: successful turn records run lifecycle', () => {
 // ─────────────────────────────────────────────────────────────────────
 // GAP-C.2: no registry when executionRunLogDir is unset → back-compat
 // ─────────────────────────────────────────────────────────────────────
-describe('GAP-C.2: registry always present (five_goal P0-1)', () => {
+describe('GAP-C.2: registry always present (runtime invariants P0-1)', () => {
   it('exposes a registry even without executionRunLogDir and runs the turn', async () => {
     const { c, e } = makeEngine()
     c.push(stopStream('hi'))
     const result = await e.runTurn('hello', [])
     expect(result.result.reason).toBe('stop_sequence')
-    // five_goal P0-1: registry is ALWAYS present; only the EventStore
+    // runtime invariants P0-1: registry is ALWAYS present; only the EventStore
     // (persistence) is optional.
     expect(e.getRunRegistry()).toBeDefined()
     expect(e.getRunEventBus()).toBeDefined()
@@ -150,7 +150,7 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
     const logDir = join(tmp, 'logs')
     const loopDir = join(tmp, '.loop')
     mkdirSync(loopDir, { recursive: true })
-    // Write the loop-kit files required by runLoop.
+    // Write the autonomous-loop files required by runLoop.
     const { writeFileSync } = await import('fs')
     writeFileSync(join(loopDir, 'GOAL.md'), 'Prove the loop works\n')
     writeFileSync(join(loopDir, 'ACCEPTANCE.md'), '')

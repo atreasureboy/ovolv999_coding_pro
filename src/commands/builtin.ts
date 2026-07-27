@@ -1567,7 +1567,7 @@ registerCommand({
   },
 })
 
-// v0.3.1 (te_goal §八): the second /export registration was removed
+// v0.3.1 (runtime truth contract §八): the second /export registration was removed
 // to keep the registry clean. The first registration (line 955) is
 // the canonical handler with secret-masking.
 
@@ -3374,7 +3374,7 @@ registerCommand({
   },
 })
 
-// ── v0.3.4 (mimo_goal §Phase 5): /loop-status ───────────────────
+// ── v0.3.4 (durable supervisor contract §Phase 5): /loop-status ───────────────────
 registerCommand({
   name: 'loop-status',
   description: 'Show the current Loop Supervisor status: lease, heartbeat, iteration, checkpoint',

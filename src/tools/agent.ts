@@ -235,7 +235,7 @@ function extractMergeConflicts(repoCwd: string): string[] {
  * WorktreeManager.removeWorktree({merge:true}) here because that helper
  * blindly deletes the worktree + branch even when the merge fails —
  * we need fine-grained control so we can PRESERVE both on conflict
- * (five_goal §五: "保留 Worktree；保留分支；不删除成果").
+ * (runtime invariants §五: "保留 Worktree；保留分支；不删除成果").
  */
 function attemptMerge(
   repoCwd: string,
@@ -293,7 +293,7 @@ export interface AgentToolWiring {
   parentConfig?: EngineConfig
   parentRenderer?: unknown
   /**
-   * Optional ExecutionRun registry (fi_goal.md §三 Phase 2). When
+   * Optional ExecutionRun registry (runtime architecture contract §三 Phase 2). When
    * supplied, every Agent invocation creates a child ExecutionRun,
    * walks it through queued → preparing → running → verifying →
    * succeeded/failed, and exposes it via the registry so UI / logs /
@@ -333,7 +333,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    */
   private readonly steerQueue = new Map<string, string[]>()
   /**
-   * Phase 4 (six_goal §七.2): runId → abort trigger for each running
+   * Phase 4 (provider-runtime contract §七.2): runId → abort trigger for each running
    * in-process child engine. Populated when a child run starts so
    * `cancel(runId)` can ACTUALLY terminate the child (call its
    * `abort()`), not merely transition the registry status. Cleared in
@@ -410,7 +410,7 @@ export class AgentTool implements Tool, WorkerAdapter {
     this.steerQueue.delete(runId)
   }
 
-  // ── WorkerAdapter lifecycle (five_goal §六 P0-8) ──────────────────
+  // ── WorkerAdapter lifecycle (runtime invariants §六 P0-8) ──────────────────
   //
   // AgentTool's children are synchronous (await runTurn), so most
   // lifecycle ops are stubs that reflect that limitation: there is no
@@ -587,7 +587,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       ? (input.task_mode === 'modify' ? 'modify' : 'read_only')
       : (input.modifies_state === true ? 'modify' : 'read_only')
     const taskMode: 'read_only' | 'modify' = inputMode
-    // P0-4 (five_goal §六.2): modify mode FORCES verify=true. The
+    // P0-4 (runtime invariants §六.2): modify mode FORCES verify=true. The
     // model's verify:false input is IGNORED for modify tasks — only
     // the host config or a trusted human interface can skip
     // verification on a task that will be auto-merged to the base
@@ -664,7 +664,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     mainRenderer.agentStart(description, agentLabel)
     const agentStartTime = Date.now()
 
-    // ── ExecutionRun lifecycle (fi_goal.md §三 Phase 2) ───────────────
+    // ── ExecutionRun lifecycle (runtime architecture contract §三 Phase 2) ───────────────
     // When a registry is wired in, this Agent invocation creates a
     // child run and walks it through the canonical state machine so
     // UI / logs / cancel / state queries can observe every sub-agent
@@ -673,7 +673,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const registry = this.runRegistry
     let runId: string | undefined
     if (registry) {
-      // five_goal P0-2: prefer the per-turn ExecutionContext.runId
+      // runtime invariants P0-2: prefer the per-turn ExecutionContext.runId
       // (dynamic — different every turn) over the static constructor
       // parentRunId (a deprecated back-compat fallback). Tools MUST
       // NOT cache parentRunId across calls.
@@ -736,7 +736,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       ? Renderer.forFile(paneSlot.logFile)
       : (parentRenderer as Renderer)
 
-    // ── P0-3 (five_goal §四): Worktree isolation MUST be fail-closed ──
+    // ── P0-3 (runtime invariants §四): Worktree isolation MUST be fail-closed ──
     // For modify tasks the Runtime creates an isolated git worktree
     // BEFORE spawning the sub-agent. If creation fails (no git repo,
     // disk full, path clash, etc.) the sub-agent is NOT started and
@@ -922,7 +922,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       const { result } = await childEngine.runTurn(delegatedPrompt, [])
       const durationMs = Date.now() - agentStartTime
 
-      // ── P0-5 (five_goal §五): three-phase outcome split ───────────────
+      // ── P0-5 (runtime invariants §五): three-phase outcome split ───────────────
       // Each phase is tracked independently so a merge conflict does NOT
       // get masked by `failed = workerFailed || verificationFailed` and
       // leave the orchestrator unable to tell "sub-agent crashed" apart
@@ -939,7 +939,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       //     merge conflict            → blocked   (worktree PRESERVED)
       //   worker ok + verify ok +
       //     delivery ok               → succeeded
-      // v0.3.4 (mimo_goal §Phase 2): the worker failed if the LLM turn
+      // v0.3.4 (durable supervisor contract §Phase 2): the worker failed if the LLM turn
       // errored OR if the completion status from the outcome is not
       // 'completed'. Previously only reason === 'error' was checked, which
       // let 'blocked'/'partial' child runs be treated as worker success.
@@ -1019,7 +1019,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           // WorktreeManager.removeWorktree({merge:true})) so we can
           // capture the conflict list and PRESERVE the branch + worktree
           // on failure. The shared helper deletes the branch even when
-          // the merge fails, which violates five_goal §五 P0-5
+          // the merge fails, which violates runtime invariants §五 P0-5
           // ("保留 Worktree；保留分支；不删除成果").
           const mergeRes = attemptMerge(context.cwd, capturedBranch)
           if (mergeRes.ok) {
@@ -1090,7 +1090,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         retryable: deliveryOutcome.status === 'conflict',
       })
 
-      // v0.3.4 (mimo_goal §Phase 2): emit structured agent completion events
+      // v0.3.4 (durable supervisor contract §Phase 2): emit structured agent completion events
       // through BOTH the EventLog (for /trace replay) and the Registry's
       // event bus (for real-time subscribers).
       const accepted = finalStatus === 'succeeded'

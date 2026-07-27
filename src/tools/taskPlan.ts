@@ -1,11 +1,11 @@
 /**
- * TaskPlan tool (eight_goal Phase 3) — lets the model decompose a task
+ * TaskPlan tool (adaptive runtime contract Phase 3) — lets the model decompose a task
  * into the TaskGraph and walk nodes through their lifecycle. This is
  * what makes the TaskGraph LIVE in a real run: the model plans → adds
  * nodes → the CompletionContract gate then refuses 'completed' until
  * every node is terminal.
  *
- * v0.3.2 (ele_goal §Phase 2): the tool no longer holds a fixed
+ * v0.3.2 (run-scoped runtime contract §Phase 2): the tool no longer holds a fixed
  * TaskGraph. It receives a TaskGraphResolver and resolves the graph
  * for the current runId from ToolContext.execution.runId. Removing
  * the constructor-injected graph is the single source-identity fix

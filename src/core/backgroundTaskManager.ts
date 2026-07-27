@@ -230,7 +230,7 @@ export interface BackgroundTaskManagerOptions {
   /** Per-task log file rotation cap. Default 10MB. */
   maxOutputFileBytes?: number
   /**
-   * Optional ExecutionRun registry (fi_goal.md §三 Round 4). When
+   * Optional ExecutionRun registry (runtime architecture contract §三 Round 4). When
    * supplied, every background task creates a child run with
    * kind='shell_task' and walks it through queued → preparing →
    * running → succeeded/failed/cancelled so observers can track

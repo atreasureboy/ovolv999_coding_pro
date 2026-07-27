@@ -1,5 +1,5 @@
 /**
- * ModelRouter (eight_goal Phase 2) — adaptive, config-driven model
+ * ModelRouter (adaptive runtime contract Phase 2) — adaptive, config-driven model
  * selection. The single place that decides which model a turn uses.
  *
  * NOT a keyword `if/else`. Selection is a transparent multi-criteria
@@ -10,7 +10,7 @@
  * fallback chain. Every decision emits reasonCodes so `/route` and
  * `/why` can explain it from structured data, not a model hallucination.
  *
- * Priority (eight_goal §四.1): a manual `--model` / `/model` override
+ * Priority (adaptive runtime contract §四.1): a manual `--model` / `/model` override
  * ALWAYS wins and is sticky. Auto-routing is opt-out (`routing.enabled`).
  * Provider fallback (§四.8) advances the chain on 429/timeout/error and
  * ONLY re-issues the LLM call — never replays side-effectful tools,
@@ -65,7 +65,7 @@ export interface RoutingInput {
   role?: string
   /** True if the goal looks like architecture / root-cause / decision work. */
   needsArchitecture?: boolean
-  // ── v0.3.1 (te_goal §三.1.3) expanded signals ────────────────────
+  // ── v0.3.1 (runtime truth contract §三.1.3) expanded signals ────────────────────
   /** Per-profile health snapshot (failRate + avg latency). */
   providerHealth?: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
   /** Number of times routing fell back this session. */
@@ -119,7 +119,7 @@ interface ProfileHealth {
 }
 
 /**
- * v0.3.1 (te_goal §三.1.1): narrowed router sink. Three distinct
+ * v0.3.1 (runtime truth contract §三.1.1): narrowed router sink. Three distinct
  * call paths replace the legacy single setManualOverride(s) / raw
  * route() path so auto-routing can never accidentally pin a manual
  * override, and the manual user path always wins.
@@ -190,7 +190,7 @@ export class ModelRouter {
   }
 
   /**
-   * v0.3.1 (te_goal §三.1.1): sticky manual override entry. Accepts
+   * v0.3.1 (runtime truth contract §三.1.1): sticky manual override entry. Accepts
    * either a profile id (`profile-1`) or a model string (`gpt-4o`).
    * The sink is the only path that performs the model switch so the
    * router can never bypass Engine.setModelByUser.
@@ -207,7 +207,7 @@ export class ModelRouter {
   }
 
   /**
-   * v0.3.1 (te_goal §三.1.1): auto-routing entry. NEVER sets the
+   * v0.3.1 (runtime truth contract §三.1.1): auto-routing entry. NEVER sets the
    * manual override. Optionally applies a budget allocation emitted
    * alongside the chosen model.
    */
@@ -229,7 +229,7 @@ export class ModelRouter {
     }
   }
 
-  /** v0.3.1 (te_goal §三.1.1): restore auto-routing after `/model auto`. */
+  /** v0.3.1 (runtime truth contract §三.1.1): restore auto-routing after `/model auto`. */
   clearModelOverride(): void {
     if (this.manualOverride === null) return
     this.manualOverride = null
@@ -238,7 +238,7 @@ export class ModelRouter {
   }
 
   /**
-   * v0.3.1 (te_goal §三.1.4): emit a structured fallback event when
+   * v0.3.1 (runtime truth contract §三.1.4): emit a structured fallback event when
    * the router advances to the next profile in the chain. Engine
    * drives this; the router just logs.
    */
@@ -300,7 +300,7 @@ export class ModelRouter {
     const available = this.profiles.filter((p) => p.available)
     const reasonCodes: string[] = []
 
-    // 1) Manual override always wins (eight_goal §四.1).
+    // 1) Manual override always wins (adaptive runtime contract §四.1).
     if (this.manualOverride) {
       const match = available.find((p) => p.model === this.manualOverride)
         ?? available.find((p) => p.id === this.manualOverride)
@@ -404,7 +404,7 @@ export class ModelRouter {
     // the cost advantage (cap.cost, 1=cheapest) weighs in more. This is
     // what makes "list files" route to the cheap model and "redesign the
     // architecture" route to the strong one — otherwise capability scores
-    // dominate and the strong model always wins. (eight_goal §四 默认策略.)
+    // dominate and the strong model always wins. (adaptive runtime contract §四 默认策略.)
     score += (1 - complexity) * cap.cost * 0.8
 
     // Long-context pressure → want a big window.
@@ -420,7 +420,7 @@ export class ModelRouter {
     // Tool reliability matters for any tool-using turn.
     score += cap.toolCalling * 0.15
 
-    // v0.3.1 (te_goal §三.1.3): side-effect tool goals require high
+    // v0.3.1 (runtime truth contract §三.1.3): side-effect tool goals require high
     // tool-calling reliability; the cheap model is acceptable for
     // read-only/none categories but penalised for side-effect work.
     const toolReq = input.expectedToolRequirement ?? 'mixed'
@@ -456,7 +456,7 @@ export class ModelRouter {
     }
 
     // Health penalty: failing / slow profiles sink. Uses the
-    // configurable failureEscalationThreshold (te_goal §三.1.4) —
+    // configurable failureEscalationThreshold (runtime truth contract §三.1.4) —
     // not the hardcoded "calls >= 3" rule.
     const h = this.health.get(p.id)
     const threshold = this.routing.failureEscalationThreshold ?? DEFAULT_FAILURE_ESCALATION

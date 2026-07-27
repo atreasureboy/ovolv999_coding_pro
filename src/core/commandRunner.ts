@@ -1,5 +1,5 @@
 /**
- * CommandRunner (six_goal Phase 2) — the single abstraction for running
+ * CommandRunner (provider-runtime contract Phase 2) — the single abstraction for running
  * external commands. Business logic must NOT call exec/execSync/spawn
  * directly; it goes through runCommand(), which uniformly provides:
  *
@@ -16,7 +16,7 @@
  *
  * Today the underlying transport is node's spawn; that is the ONE
  * legitimate direct-spawn site. Sites still using exec/execSync are
- * listed in docs/V0_2_RUNTIME_INTEGRITY.md §5 (allowlist) and migrate
+ * listed in the runtime command allowlist and migrate
  * here incrementally — runVerification (agent.ts) is the first.
  */
 

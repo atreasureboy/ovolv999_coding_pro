@@ -1,5 +1,5 @@
 /**
- * GAP-L: fault-injection tests (fi_goal §十二 robustness).
+ * GAP-L: fault-injection tests (runtime contract §十二 robustness).
  *
  * Each test forces a specific failure mode and verifies the system
  * degrades gracefully instead of crashing, hanging, or corrupting

@@ -1,5 +1,5 @@
 /**
- * v0.3.1 ModelRuntimeManager (te_goal §三.1.2).
+ * v0.3.1 ModelRuntimeManager (runtime truth contract §三.1.2).
  *
  * Verifies:
  *   - validateProfiles accepts same-provider profiles

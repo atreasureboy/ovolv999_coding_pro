@@ -1,5 +1,5 @@
 /**
- * v0.3.1 ProgressMonitor sliding window (te_goal §六.2).
+ * v0.3.1 ProgressMonitor sliding window (runtime truth contract §六.2).
  *
  * Verifies:
  *   - A→B→A→B pattern triggers a repeated-failure verdict

@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 12) additional integration tests.
+ * v0.3.4 (durable supervisor contract §Phase 12) additional integration tests.
  * Tests TurnOutcome propagation, terminal events, and lease lifecycle.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -40,7 +40,7 @@ let tmp = ''
 beforeEach(() => { tmp = mkdtempSync(`${tmpdir}/v034e2e-`) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-describe('v0.3.4 TurnOutcome e2e (mimo_goal §Phase 12)', () => {
+describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () => {
   it('§7: TurnResult carries completionStatus for Hook/Module consumption', async () => {
     const logDir = join(tmp, 'logs')
     const c = new FakeOpenAI()

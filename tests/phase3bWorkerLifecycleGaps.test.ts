@@ -1,5 +1,5 @@
 /**
- * Phase 3b (five_goal §六 GAP 5.1-5.6):
+ * Phase 3b (runtime invariants §六 GAP 5.1-5.6):
  *
  * Tests the NEW lifecycle capabilities added on top of phase3WorkerLifecycle:
  *   GAP 5.1 — capture/wait/send/stop resolve via runId (not input.session)

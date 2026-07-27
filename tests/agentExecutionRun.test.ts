@@ -1,5 +1,5 @@
 /**
- * ExecutionRun × AgentTool integration (fi_goal.md §三 Phase 2, Round 2).
+ * ExecutionRun × AgentTool integration (runtime architecture contract §三 Phase 2, Round 2).
  *
  * Verifies that when an ExecutionRunRegistry is wired into AgentTool,
  * every invocation creates a child run, walks it through the canonical

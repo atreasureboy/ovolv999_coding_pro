@@ -1,5 +1,5 @@
 /**
- * Phase 5 (five_goal §九 P1-4, P1-5):
+ * Phase 5 (runtime invariants §九 P1-4, P1-5):
  *
  * P1-4: StructuredToolResult is the unified internal shape. The legacy
  *       {content, isError} survives only as a provider-message

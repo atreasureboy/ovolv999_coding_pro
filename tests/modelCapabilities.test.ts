@@ -1,5 +1,5 @@
 /**
- * ModelCapabilities tests (fi_goal.md §九 Phase 8 / Round 10).
+ * ModelCapabilities tests (runtime architecture contract §九 Phase 8 / Round 10).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'

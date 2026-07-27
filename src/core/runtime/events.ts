@@ -1,7 +1,7 @@
 /**
  * RunEvent — typed internal event protocol for the agent runtime.
  *
- * Design (from replan.md §4):
+ * Design (from architecture plan §4):
  *   - Event is an internal runtime protocol, NOT just a log format.
  *   - State transitions are dispatched as typed events.
  *   - EventLog, Renderer, Hooks can subscribe to these events.
@@ -48,7 +48,7 @@ export type RunEvent =
   | { type: 'AGENT_WORKTREE_PRESERVED'; runId: string; branch: string; reason: string }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }
-  // v0.3.1 (te_goal §三.1.1 / §八) — explicit routing events so
+  // v0.3.1 (runtime truth contract §三.1.1 / §八) — explicit routing events so
   // /trace + /why + EventStore can replay them faithfully instead of
   // reconstructing intent from generic MODEL_CHANGED.
   | { type: 'MODEL_OVERRIDE_SET'; modelOrProfile: string }
@@ -58,7 +58,7 @@ export type RunEvent =
   | { type: 'ROUTING_FALLBACK'; from: string; to: string; error: string }
   | { type: 'BUDGET_ALLOCATION_APPLIED'; allocation: { maxInputTokens?: number; maxOutputTokens?: number } }
   | { type: 'MODEL_CALL_RECORDED'; profileId: string; ok: boolean; latencyMs: number; failureReason?: string }
-  // v0.3.1 (te_goal §五 + §六 + §四): TaskGraph + critic + completion
+  // v0.3.1 (runtime truth contract §五 + §六 + §四): TaskGraph + critic + completion
   // events so /trace + EventStore can replay the full decision timeline.
   | { type: 'TASK_GRAPH_CREATED'; runId: string }
   | { type: 'TASK_NODE_ADDED'; nodeId: string; title: string; runId: string }
@@ -74,14 +74,14 @@ export type RunEvent =
   | { type: 'COMPLETION_EVALUATED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
   | { type: 'COMPLETION_REJECTED'; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
   | { type: 'REVIEW_COMPLETED'; verdict: string; findings: string[] }
-  // v0.3.2 (ele_goal §Phase 3): TaskIntent classification event
+  // v0.3.2 (run-scoped runtime contract §Phase 3): TaskIntent classification event
   | { type: 'TASK_INTENT_CLASSIFIED'; runId: string; intent: { kind: 'informational' | 'analysis' | 'mutation'; source: string; confidence: number } }
-  // v0.3.2 (ele_goal §Phase 7): per-attempt model call events so the
+  // v0.3.2 (run-scoped runtime contract §Phase 7): per-attempt model call events so the
   // fallback chain emits structured events for each hop.
   | { type: 'MODEL_ATTEMPT_STARTED'; model: string; attemptId: number }
   | { type: 'MODEL_ATTEMPT_FAILED'; model: string; attemptId: number; error: string; retryable: boolean }
   | { type: 'MODEL_ATTEMPT_SUCCEEDED'; model: string; attemptId: number; latencyMs: number; usage?: { inputTokens: number; outputTokens: number } }
-  // v0.3.2 (ele_goal §Phase 9): terminal semantic events. The legacy
+  // v0.3.2 (run-scoped runtime contract §Phase 9): terminal semantic events. The legacy
   // generic RUN_COMPLETED is kept for back-compat; these typed
   // variants are emitted after the CompletionContract evaluates.
   | { type: 'RUN_EXECUTION_STARTED'; runId: string }

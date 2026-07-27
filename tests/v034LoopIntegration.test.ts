@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 12) loopEngine integration tests.
+ * v0.3.4 (durable supervisor contract §Phase 12) loopEngine integration tests.
  * Tests the REAL loopEngine path with a FakeEngine to verify:
  * - TurnOutcome drives completion decisions
  * - blocked outcome prevents DONE even when gates pass
@@ -22,7 +22,7 @@ function setupLoopDir(loopDir: string, opts: { goal?: string; acceptance?: strin
   writeFileSync(join(loopDir, 'STATE.md'), 'idle\n')
 }
 
-describe('v0.3.4 loopEngine integration (mimo_goal §Phase 12)', () => {
+describe('v0.3.4 loopEngine integration (durable supervisor contract §Phase 12)', () => {
   it('§3: blocked outcome prevents DONE even when acceptance passes', async () => {
     const loopDir = join(tmp, '.loop')
     setupLoopDir(loopDir)

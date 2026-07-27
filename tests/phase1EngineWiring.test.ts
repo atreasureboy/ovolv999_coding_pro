@@ -1,5 +1,5 @@
 /**
- * Phase 1 (five_goal §一/§二): Engine dependency assembly audit.
+ * Phase 1 (runtime invariants §一/§二): Engine dependency assembly audit.
  *
  * Verifies that the Engine constructor wires ALL infrastructure in
  * the correct order:

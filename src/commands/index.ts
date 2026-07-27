@@ -65,7 +65,7 @@ export interface Command {
 
 const registry = new Map<string, Command>()
 
-/** v0.3.1 (te_goal §八): duplicate command registrations throw in dev
+/** v0.3.1 (runtime truth contract §八): duplicate command registrations throw in dev
  *  mode. The legacy behaviour (silent overwrite) is preserved when
  *  NODE_ENV === 'production' OR OVOLV999_NO_STRICT_SLASH=1. The
  *  goal-driven mode is enabled by default in dev. */

@@ -16,13 +16,13 @@
 
 ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走同一套可观测的执行 Run 状态机，状态变更通过结构化事件持久化，工具并发由资源冲突调度，子任务通过 Worker Steering 实时干预，故障后可从 JSONL 日志恢复。
 
-> 项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**（见 `fi_goal.md` §十四 + `te_goal.md` v0.3.1 Runtime Truth）
+项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**。
 
-## v0.3.1 Runtime Truth — 三大新基座
+## 运行时核心能力
 
-v0.3.1 把上层声明能力真正接入主执行链：以前 `ModelRouter / TaskGraph / ProgressMonitor / InternalControlMessage` 都存在，但缺乏真实数据通路、真实 fallback、真实事件、真实事件回放、确定性 eval 矩阵。v0.3.1 把"模块存在"变成"Runtime 真正在用"。
+`ModelRouter`、`TaskGraph`、`ProgressMonitor` 和 `InternalControlMessage` 均接入主执行链，具备真实数据通路、fallback、结构化事件、事件回放和确定性测试覆盖。
 
-### 真实能力（te_goal §十一 25 项验收已全通过）
+### 能力矩阵
 
 | § | 能力 | 入口 / 关键类 | 测试 |
 |---|------|--------------|------|
@@ -49,8 +49,8 @@ v0.3.1 把上层声明能力真正接入主执行链：以前 `ModelRouter / Tas
 | 21 | `/progress` 可用 | `getContextManager / getTaskGraph / getProgressMonitor / getCostTracker` | 同上 |
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
 | 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
-| 24 | 文档与真实能力一致 | `docs/V0_3_1_RUNTIME_TRUTH.md` | — |
-| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4083 个测试 pass | `npm test` |
+| 24 | 文档与真实能力一致 | `README.md` + `docs/ADR/` | — |
+| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4228 个测试 pass | `npm test` |
 
 ### 新增模块文件
 
@@ -66,7 +66,6 @@ evals/
   ├─ wiring-smoke/               (10 source-of-truth checks)
   ├─ deterministic-runtime/      (18 runtime contract cases)
   └─ baselines/                  (tsBugfix.json baseline)
-docs/V0_3_1_RUNTIME_TRUTH.md     (capability matrix + status markings)
 ```
 
 ### 真实调用链（v0.3.1）
@@ -94,7 +93,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
       → COMPLETION_EVALUATED / COMPLETION_REJECTED 事件
 ```
 
-### Runtime 能力矩阵（fi_goal §十四 验收对照）
+### Runtime 验收矩阵
 
 | § | 验收要点 | 实现位置 | 测试 |
 |---|---------|---------|------|
@@ -736,7 +735,7 @@ ovolv999/
 npm run build              # tsc → dist/
 npm run typecheck          # tsc --noEmit
 npm run lint               # eslint
-npm run test               # vitest run (4083 tests)
+npm run test               # vitest run (4228 tests)
 npm run test:watch         # vitest watch
 npm run eval:wiring        # 10 wiring-smoke source-of-truth checks
 npm run eval:deterministic # 18 runtime contract cases

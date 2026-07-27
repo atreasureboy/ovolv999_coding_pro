@@ -47,7 +47,7 @@ export class CriticModule implements AgentModule {
     if (this.config.planMode) return
     if (this.config.poor?.enabled) return
     if (ctx.iteration < CRITIC_MIN_ITERATIONS) return
-    // v0.3.1 (te_goal §六.3): single-track critic. Run on the fixed
+    // v0.3.1 (runtime truth contract §六.3): single-track critic. Run on the fixed
     // interval OR immediately when the coordinator detected risk
     // (ctx.criticRequested). This replaces the old "always every-N"
     // behaviour — no tokens wasted on healthy runs.

@@ -1,7 +1,7 @@
 /**
- * v0.3.1 typed events (te_goal §八).
+ * v0.3.1 typed events (runtime truth contract §八).
  *
- * Verifies the RunEvent union covers every event type te_goal lists,
+ * Verifies the RunEvent union covers every event type runtime truth contract lists,
  * and that the TaskGraph mutation methods emit the corresponding
  * event via the optional sink.
  */
@@ -33,7 +33,7 @@ const REQUIRED_EVENT_TYPES = [
 ] as const
 
 describe('RunEvent v0.3.1 coverage', () => {
-  it('declares every te_goal §八 event type', () => {
+  it('declares every runtime truth contract §八 event type', () => {
     // The compile-time type check below is the actual assertion —
     // if any required type is missing, this assignment fails.
     const types: ReadonlySet<RunEvent['type']> = new Set([

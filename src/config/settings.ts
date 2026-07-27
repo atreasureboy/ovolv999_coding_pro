@@ -92,7 +92,7 @@ export interface OvogoSettings {
   mcp?: { servers: McpServerConfig[] }
   provider?: ProviderConfig
   /**
-   * Phase 2 (eight_goal §四): model profiles + adaptive routing config.
+   * Phase 2 (adaptive runtime contract §四): model profiles + adaptive routing config.
    * When `profiles` has >1 entry and routing.enabled, the ModelRouter
    * selects per turn by complexity/context/budget/failure. Omit for the
    * default single-model router (no-op routing, override+health still work).

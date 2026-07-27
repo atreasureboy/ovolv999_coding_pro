@@ -1,5 +1,5 @@
 /**
- * v0.3.1 slash commands (te_goal §八).
+ * v0.3.1 slash commands (runtime truth contract §八).
  *
  * Verifies:
  *   - /progress exists and renders structured progress

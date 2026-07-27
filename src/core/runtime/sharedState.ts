@@ -36,7 +36,7 @@ export interface ActiveSubtask {
 }
 
 /**
- * P2-4 (five_goal §十三): shared, observable model state.
+ * P2-4 (runtime invariants §十三): shared, observable model state.
  * All components read from this single source of truth instead of
  * holding private copies. Updates bump `version` so subscribers can
  * detect changes.

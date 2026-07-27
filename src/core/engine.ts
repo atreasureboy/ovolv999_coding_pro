@@ -107,7 +107,7 @@ function buildRouter(config: EngineConfig): ModelRouter {
       })
     }
     if (profiles.length > 0) {
-      // v0.3.1 (te_goal §三.1.2): reject cross-provider profiles up
+      // v0.3.1 (runtime truth contract §三.1.2): reject cross-provider profiles up
       // front so the runtime never has to swap transports. The current
       // engine has only one OpenAI-compatible transport — multi-
       // provider rebinding is explicitly out of scope until the
@@ -146,18 +146,18 @@ export class ExecutionEngine {
    */
   private readonly modelRouter: ModelRouter
   /**
-   * v0.3.1 (te_goal §三.1.2): the resolved ProviderRuntimeBinding for
+   * v0.3.1 (runtime truth contract §三.1.2): the resolved ProviderRuntimeBinding for
    * each profile. /models + /route read this for health attribution
    * and cross-provider diagnostics.
    */
   private readonly bindingRegistry: BindingRegistry
   /**
-   * v0.3.1 (te_goal §五): per-runId task-graph store. The legacy
+   * v0.3.1 (runtime truth contract §五): per-runId task-graph store. The legacy
    * single shared graph is replaced; each run mints its own graph.
    */
   private readonly taskGraphStore: TaskGraphStore
   /**
-   * v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+   * v0.3.2 (run-scoped runtime contract §Phase 1): the per-runId RunScopedRuntimeContext
    * store. Owns the taskGraph, progressMonitor, controlMessages,
    * taskKind, and completionVerdict for every run.
    */
@@ -170,7 +170,7 @@ export class ExecutionEngine {
   private readonly progressMonitor: ProgressMonitor
   /**
    * Phase 3: optional task-decomposition DAG. Empty for simple tasks
-   * (eight_goal §五.1 — don't force a graph on trivial work). A
+   * (adaptive runtime contract §五.1 — don't force a graph on trivial work). A
    * planner/model populates it; the CompletionContract gate refuses
    * 'completed' while it has unfinished nodes.
    */
@@ -184,7 +184,7 @@ export class ExecutionEngine {
   private eventEmitter: RunEventEmitter
   private _turnInFlight = false
   /**
-   * five_goal P0-1: the ExecutionRun registry is ALWAYS present.
+   * runtime invariants P0-1: the ExecutionRun registry is ALWAYS present.
    * Previously this was optional and only created when
    * `executionRunLogDir` was set, which violated the spec
    * ("不得将'是否开启持久化'与'是否拥有 ExecutionRun'绑定").
@@ -199,7 +199,7 @@ export class ExecutionEngine {
   private readonly runEventBus: ExecutionRunEventBus
   private readonly runStore?: JsonlEventStore
   /**
-   * P1-1 (five_goal §八): ResourceScheduler is ALWAYS present and
+   * P1-1 (runtime invariants §八): ResourceScheduler is ALWAYS present and
    * wired into ToolScheduler. Per-tool resource claims (file/dir/git
    * R/W/X) are acquired before execution and released in finally.
    */
@@ -214,7 +214,7 @@ export class ExecutionEngine {
       maxRetries: 5,
       timeout: 120_000,
     })
-    // ── ExecutionRun registry + event bus (five_goal P0-1) ───────────
+    // ── ExecutionRun registry + event bus (runtime invariants P0-1) ───────────
     // Registry and bus ALWAYS exist — the spec forbids tying "has a
     // Run registry" to "has persistence configured". Only the
     // EventStore (JSONL backing) is optional; the in-memory registry
@@ -243,7 +243,7 @@ export class ExecutionEngine {
     }
     this.runEventBus = bus
 
-    // ── ResourceScheduler (five_goal P1-1) ──────────────────────────
+    // ── ResourceScheduler (runtime invariants P1-1) ──────────────────────────
     // Always created and wired into ToolScheduler. Tools declare
     // per-input claims via metadata.claims; the scheduler acquires
     // them atomically before execution and releases in finally.
@@ -263,7 +263,7 @@ export class ExecutionEngine {
     // Phase 3/4: progress monitor + task graph must exist BEFORE
     // createTools (the TaskPlan tool receives the graph handle).
     this.modelRouter = buildRouter(this.config)
-    // v0.3.1 (te_goal §三.1.2): resolve ProviderRuntimeBindings for
+    // v0.3.1 (runtime truth contract §三.1.2): resolve ProviderRuntimeBindings for
     // every profile so /models + /route can report the actual
     // transport, baseURL, and capabilities tied to the active engine.
     // resolveBindings reuses the engine's existing adapter (one
@@ -288,31 +288,31 @@ export class ExecutionEngine {
     )
     this.progressMonitor = new ProgressMonitor()
     this.eventEmitter = new RunEventEmitter()
-    // v0.3.1 (te_goal §五): the TaskGraphStore is the new source of
+    // v0.3.1 (runtime truth contract §五): the TaskGraphStore is the new source of
     // truth. The `this.taskGraph` field is kept as a back-compat shim
     // — it points at the most-recently-created graph so legacy callers
     // (TaskPlanTool, /tasks) still work. New code should prefer the
     // store.
     this.taskGraphStore = new InMemoryTaskGraphStore()
-    // v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+    // v0.3.2 (run-scoped runtime contract §Phase 1): the per-runId RunScopedRuntimeContext
     // store. The Coordinator resolves the SAME Context for the tool,
     // completion contract, and router; nothing else creates a graph
     // out of band.
     this.runContextStore = new InMemoryRunScopedRuntimeContextStore()
-    // v0.3.2 (ele_goal §Phase 2): emit RUN_SCOPED_CONTEXT_CREATED
+    // v0.3.2 (run-scoped runtime contract §Phase 2): emit RUN_SCOPED_CONTEXT_CREATED
     // events for every run. The TaskGraph created inside the
     // Context also gets its setRunId() + event sink so /trace
     // can replay the full lifecycle.
     this.runContextStore.setEventSink((evt) => {
       this.eventEmitter.emit(evt as never)
     })
-    // v0.3.2 (ele_goal §Phase 2): the TaskGraphResolver for tools
+    // v0.3.2 (run-scoped runtime contract §Phase 2): the TaskGraphResolver for tools
     // that need to operate on the CURRENT run's graph. Created here
     // so the TaskPlanTool (and any future tool) resolves the right
     // graph via runId without holding a fixed reference.
     const taskGraphResolver = new RunScopedTaskGraphResolver(this.runContextStore)
     const evidenceResolver = new RunScopedEvidenceResolver(this.runContextStore)
-    // v0.3.1 (te_goal §五 + §六.1 + §十一.14): wire TaskGraph events
+    // v0.3.1 (runtime truth contract §五 + §六.1 + §十一.14): wire TaskGraph events
     // into BOTH the RunEventEmitter (for /trace + EventStore replay)
     // and a hook that records node transitions on the ProgressMonitor
     // (so node completions / failures count as progress for the stall
@@ -396,7 +396,7 @@ export class ExecutionEngine {
     })
     this.toolPolicy = new ToolPolicy({ agent: this.config.agent })
     this.toolRegistry = new ToolRegistry(this.renderer)
-    // v0.3.1 (te_goal §三.1.1): wire ModelRouter as a sink to this
+    // v0.3.1 (runtime truth contract §三.1.1): wire ModelRouter as a sink to this
     // engine. All router-side model changes funnel through Engine's
     // switchModel() so config.model + ContextManager + ModuleManager +
     // sharedState + ModelGateway + RunEventEmitter stay consistent.
@@ -508,10 +508,10 @@ export class ExecutionEngine {
       runRegistry: this.runRegistry,
       progressMonitor: this.progressMonitor,
       taskGraph: this.taskGraph,
-      // v0.3.1 (te_goal §五): per-runId graph store
+      // v0.3.1 (runtime truth contract §五): per-runId graph store
       taskGraphStore: this.taskGraphStore,
       runContextStore: this.runContextStore,
-      // v0.3.1 (te_goal §三.1.3): expose ModelRouter to the coordinator
+      // v0.3.1 (runtime truth contract §三.1.3): expose ModelRouter to the coordinator
       // so the signal collector can read live provider health.
       modelRouter: this.modelRouter,
       // Phase 2: per-turn adaptive routing. The callback runs the router
@@ -559,7 +559,7 @@ export class ExecutionEngine {
   private recoveryInFlight: Promise<{ reattached: number; lost: number }> | null = null
 
   /**
-   * P2-7 (five_goal §十四): reconcile non-terminal runs from the
+   * P2-7 (runtime invariants §十四): reconcile non-terminal runs from the
    * previous process. Called synchronously at the end of the
    * constructor.
    *
@@ -809,7 +809,7 @@ export class ExecutionEngine {
    *     provider that rejected stream_options to one that supports
    *     it left usage streaming permanently disabled.
    *
-   * The transaction order below matches fi_goal.md §P0-1:
+   * The transaction order below matches runtime architecture contract §P0-1:
    *   resolve model → resolve Provider → resolve capabilities →
    *   update context window → clear caches → notify dependents →
    *   commit config.
@@ -820,7 +820,7 @@ export class ExecutionEngine {
    * (Provider Capability Abstraction) lands.
    */
     /**
-     * v0.3.1 (te_goal §三.1.1): split manual vs auto model switching.
+     * v0.3.1 (runtime truth contract §三.1.1): split manual vs auto model switching.
      * setModel / setModelByUser set the sticky override (CLI --model,
      * /model). applyRoutingDecision does NOT — otherwise one auto-route
      * locks the model forever and subsequent turns never re-route.
@@ -831,7 +831,7 @@ export class ExecutionEngine {
 
     setModelByUser(model: string): void {
       this.validateModelProviderMatch(model, 'manual')
-      // v0.3.1 (te_goal §三.1.1): route through ModelRouter.setModelByUser
+      // v0.3.1 (runtime truth contract §三.1.1): route through ModelRouter.setModelByUser
       // (NOT the legacy setManualOverride) so the router is the one
       // source of truth for the manual-override flag, emits the
       // MODEL_OVERRIDE_SET event, and calls the sink which calls
@@ -852,7 +852,7 @@ export class ExecutionEngine {
     }
 
     /**
-     * v0.3.1 (te_goal §三.1.2 + §三.1.4): a model whose profile declares
+     * v0.3.1 (runtime truth contract §三.1.2 + §三.1.4): a model whose profile declares
      * a different provider than the active engine transport is
      * rejected. We don't have multi-adapter switching; the engine
      * comment at line 639-642 documents this. With no profile match
@@ -878,7 +878,7 @@ export class ExecutionEngine {
     }
 
     /**
-     * v0.3.1 (te_goal §三.1.4): apply a routing-decided budget
+     * v0.3.1 (runtime truth contract §三.1.4): apply a routing-decided budget
      * allocation. We mutate maxOutputTokens only (maxInputTokens is
      * governed by the model profile's context window, already on the
      * active ContextManager). The latch prevents thrash — repeated
@@ -916,7 +916,7 @@ export class ExecutionEngine {
           this.sharedState.updateModelState({ model: previousModel })
         } catch { /* best-effort rollback */ }
         // Rollback router override too — failed manual switch must not
-        // leave a sticky bad override (te_goal §三.1.1).
+        // leave a sticky bad override (runtime truth contract §三.1.1).
         if (this.modelRouter.getManualOverride()
           && this.modelRouter.getManualOverride() !== previousModel) {
           this.modelRouter.setManualOverride(null)
@@ -935,7 +935,7 @@ export class ExecutionEngine {
   }
 
   /**
-   * v0.3.1 (te_goal §三.1.2): resolved ProviderRuntimeBindings for
+   * v0.3.1 (runtime truth contract §三.1.2): resolved ProviderRuntimeBindings for
    * each profile. /models + /route use this to display the active
    * transport, baseURL, and apiKeyRef so misconfigurations surface
    * instead of being silently masked.
@@ -949,7 +949,7 @@ export class ExecutionEngine {
     return this.progressMonitor
   }
 
-  /** v0.3.1 (te_goal §八): expose ContextManager so /progress can
+  /** v0.3.1 (runtime truth contract §八): expose ContextManager so /progress can
    *  render the working state (files changed, verification, etc.). */
   getContextManager(): ContextManager {
     return this.contextManager
@@ -961,7 +961,7 @@ export class ExecutionEngine {
   }
 
   /**
-   * v0.3.1 (te_goal §五): the per-runId task-graph store. Use this
+   * v0.3.1 (runtime truth contract §五): the per-runId task-graph store. Use this
    * for new code; getTaskGraph() returns the legacy default-run shim.
    */
   getTaskGraphStore(): TaskGraphStore {
@@ -985,7 +985,7 @@ export class ExecutionEngine {
   }
 
   /**
-   * five_goal P0-1: the ExecutionRun registry is ALWAYS present.
+   * runtime invariants P0-1: the ExecutionRun registry is ALWAYS present.
    * (Previously returned undefined when persistence was off — that
    * broke any caller that wanted to mint child runs without
    * configuring a log directory.)
@@ -1051,7 +1051,7 @@ export class ExecutionEngine {
   }
 
   /**
-   * Returns the ResourceScheduler. Always present (five_goal P1-1).
+   * Returns the ResourceScheduler. Always present (runtime invariants P1-1).
    */
   getResourceScheduler(): ResourceScheduler {
     return this.resourceScheduler

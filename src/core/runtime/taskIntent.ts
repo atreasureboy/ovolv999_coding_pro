@@ -1,5 +1,5 @@
 /**
- * TaskIntent (v0.3.2, ele_goal §Phase 3).
+ * TaskIntent (v0.3.2, run-scoped runtime contract §Phase 3).
  *
  * The structured user intent captured at the START of a run. Before
  * v0.3.2 the taskKind was derived from "did files change?" — which
@@ -47,7 +47,7 @@ export interface TaskIntent {
 }
 
 /**
- * Static-rule classifier per ele_goal §Phase 3 minimum rules. Returns
+ * Static-rule classifier per run-scoped runtime contract §Phase 3 minimum rules. Returns
  * a TaskIntent with source='static-rule' or 'keyword'. Confidence is
  * 0.6 for keyword matches, 0.95 for explicit plan-mode or user-stated
  * intents. When the static-rule layer can't confidently classify,
@@ -93,7 +93,7 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  // v0.3.3 (tha_goal §Phase 3): bilingual (EN + ZH) keyword matching.
+  // v0.3.3 (background autonomy contract §Phase 3): bilingual (EN + ZH) keyword matching.
   // Mutation keywords: 修复/修改/实现/增加/新增/删除/重构/迁移/替换/优化代码/补充测试/改造/接入/完善
   const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/
   // Analysis keywords: 审计/分析/检查/评估/设计/给出方案/研究/对比/解释架构
@@ -138,7 +138,7 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  // v0.3.3 (tha_goal §Phase 3): fail-closed default. When confidence is
+  // v0.3.3 (background autonomy contract §Phase 3): fail-closed default. When confidence is
   // too low to classify, prefer 'mutation' over 'informational' — a
   // mutation task misclassified as informational silently bypasses the
   // completion gate's change-evidence requirement. The cost of a false

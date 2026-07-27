@@ -708,7 +708,7 @@ export async function maybeCompact(
 
   // Build compacted history: summary message + recent verbatim messages.
   //
-  // Phase 6.1 (six_goal §六.1): the compaction summary is RUNTIME-
+  // Phase 6.1 (provider-runtime contract §六.1): the compaction summary is RUNTIME-
   // provided context, NOT user input, so it MUST be a `system` message.
   // The previous code authored it as role:'user' and paired it with a
   // FORGED `role:'assistant'` acknowledgment ("I've reviewed the
@@ -738,7 +738,7 @@ export async function maybeCompact(
   }
 }
 
-// ── WorkingState compaction invariants (fi_goal §七 Phase 6) ───────────────
+// ── WorkingState compaction invariants (runtime contract §七 Phase 6) ───────────────
 
 import type { WorkingState } from './workingState.js'
 import { assertCompactionInvariants } from './workingState.js'

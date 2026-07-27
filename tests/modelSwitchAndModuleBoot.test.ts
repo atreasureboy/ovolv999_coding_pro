@@ -1,7 +1,7 @@
 /**
  * P0-1 regression: transactional model switch.
  *
- * Invariant (fi_goal.md §P0-1): a model switch must be a complete
+ * Invariant (runtime architecture contract §P0-1): a model switch must be a complete
  * transaction — every subsystem that captured state derived from the
  * old model must observe the new model on the next call. No component
  * may keep divergent state.
@@ -343,7 +343,7 @@ describe('P0-7.A: groupByDependencyDepth', () => {
     expect(layers[1].map(m => m.name).sort()).toEqual(['b1', 'b2'])
   })
 
-  it('cyclic modules cause groupByDependencyDepth to throw (five_goal §十二 P2-1)', () => {
+  it('cyclic modules cause groupByDependencyDepth to throw (runtime invariants §十二 P2-1)', () => {
     const a: AgentModule = { name: 'a', dependencies: ['b'], boot: () => ({}) }
     const b: AgentModule = { name: 'b', dependencies: ['a'], boot: () => ({}) }
     // Cyclic dependencies must fail — not be silently booted.

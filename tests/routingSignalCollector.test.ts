@@ -1,8 +1,8 @@
 /**
- * v0.3.1 RoutingSignalCollector (te_goal §三.1.3).
+ * v0.3.1 RoutingSignalCollector (runtime truth contract §三.1.3).
  *
  * Verifies that the collector produces a complete RoutingSignals
- * snapshot for each te_goal-bullet:
+ * snapshot for each runtime truth contract-bullet:
  *   - architecture decision combines keyword + task-graph evidence
  *   - expected tool requirement classifies read-only vs side-effect
  *   - public-interface / cross-module / config-change signals surface
@@ -174,7 +174,7 @@ describe('RoutingSignalCollector v0.3.1', () => {
     expect(s.expectedToolRequirement).toBe('read-only') // short generic greeting under 80 chars
   })
 
-  // ── ele_goal §6.1: exhaustiveness test ──────────────────────────
+  // ── run-scoped runtime contract §6.1: exhaustiveness test ──────────────────────────
   // If a new field is added to RoutingSignals but NOT mapped in
   // signalsToRoutingInput (or listed in UNMAPPED), this test fails.
   // That prevents silent signal loss when the schema grows.

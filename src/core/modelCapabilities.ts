@@ -1,5 +1,5 @@
 /**
- * Model capability abstraction (fi_goal.md §九 Phase 8 / Round 10).
+ * Model capability abstraction (runtime architecture contract §九 Phase 8 / Round 10).
  *
  * Replaces scattered hard-coded model-name checks with a single
  * `ModelCapabilities` lookup. Every Provider Adapter is responsible

@@ -1,5 +1,5 @@
 /**
- * Structured ToolResult (fi_goal.md §六 Phase 5).
+ * Structured ToolResult (runtime architecture contract §六 Phase 5).
  *
  * Replaces ad-hoc `{content, isError}` flattening with a structured
  * shape carrying exitCode, stdout, stderr, artifacts, diagnostics,

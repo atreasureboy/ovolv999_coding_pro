@@ -1,5 +1,5 @@
 /**
- * Resource scheduler tests (fi_goal.md §五 Phase 4 / Round 7).
+ * Resource scheduler tests (runtime architecture contract §五 Phase 4 / Round 7).
  *
  * Verifies:
  *   - Conflict matrix: read/read OK, write blocks read, exclusive blocks all

@@ -1,11 +1,11 @@
 /**
- * ModelRuntimeManager (v0.3.1, te_goal §三.1.2).
+ * ModelRuntimeManager (v0.3.1, runtime truth contract §三.1.2).
  *
  * Owns the resolution of ModelProfile → ProviderRuntimeBinding and
  * validates that profiles are consistent with the active transport.
  * The current code is "single-transport mode" — only one provider
  * client is constructed at engine boot and every profile must target
- * that provider. This is te_goal's explicit fallback when the engine
+ * that provider. This is runtime truth contract's explicit fallback when the engine
  * does NOT implement cross-Provider Client management: "在配置验证
  * 阶段拒绝不同 Provider 的 profile".
  *
@@ -57,7 +57,7 @@ export interface ValidateProfilesOptions {
  *
  * Throws ProfileValidationError listing offending profiles when:
  *   - any profile declares a provider that differs from activeProvider
- *     (te_goal §三.1.2 strict rule: "拒绝不同 Provider 的 profile")
+ *     (runtime truth contract §三.1.2 strict rule: "拒绝不同 Provider 的 profile")
  *   - any two profiles share the same id OR the same model name
  *     (would collapse health stats / ambiguity).
  *

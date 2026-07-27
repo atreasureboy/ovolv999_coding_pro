@@ -168,7 +168,7 @@ describe('ModuleRegistry', () => {
     expect(modules).toHaveLength(2) // a appears once
   })
 
-  it('detects circular dependencies and throws (five_goal §十二 P2-1)', () => {
+  it('detects circular dependencies and throws (runtime invariants §十二 P2-1)', () => {
     const reg = new ModuleRegistry()
     reg.register('x', () => makeModule('x', ['y']))
     reg.register('y', () => makeModule('y', ['x']))

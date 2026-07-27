@@ -1,7 +1,7 @@
 /**
  * Boot — turn setup sequence extracted from RuntimeCoordinator.
  *
- * Responsibilities (from replan.md §5.1):
+ * Responsibilities (from architecture plan §5.1):
  *   - Boot modules (collect prompt sections + tools + context patch)
  *   - Build system prompt (identity + module sections)
  *   - Register all tools in ToolRegistry (base + module, with collision detection)

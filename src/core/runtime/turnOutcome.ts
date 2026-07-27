@@ -1,5 +1,5 @@
 /**
- * TurnOutcome (v0.3.4, mimo_goal §Phase 1).
+ * TurnOutcome (v0.3.4, durable supervisor contract §Phase 1).
  *
  * The single canonical result shape for a turn. Replaces the legacy
  * TurnResult `{ stopped, reason, output }` with a structured outcome

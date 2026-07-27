@@ -1,6 +1,6 @@
 /**
  * ExecutionRunEventBus + JsonlEventStore + crash recovery
- * (fi_goal.md §四 Phase 3 / Round 5).
+ * (runtime architecture contract §四 Phase 3 / Round 5).
  *
  * Verifies:
  *   - Per-run sequence is monotonic

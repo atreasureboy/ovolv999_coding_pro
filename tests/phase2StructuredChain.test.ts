@@ -1,5 +1,5 @@
 /**
- * Phase 2 (five_goal §三/§四): StructuredToolResult preservation +
+ * Phase 2 (runtime invariants §三/§四): StructuredToolResult preservation +
  * WorkingState live integration.
  *
  * Verifies that the main execution chain preserves structured fields

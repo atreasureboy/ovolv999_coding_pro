@@ -1,5 +1,5 @@
 /**
- * CompletionContract (eight_goal Phase 4 §六 + te_goal §四).
+ * CompletionContract (adaptive runtime contract Phase 4 §六 + runtime truth contract §四).
  *
  * A task must NOT be marked completed just because the model said so.
  * This pure gate checks the structured conditions the run actually
@@ -18,7 +18,7 @@
  *                  budget, not done"
  *   incomplete   — acceptance not satisfied and not blocked (keep going)
  *
- * v0.3.1 (te_goal §四): the six required statuses are now all produced.
+ * v0.3.1 (runtime truth contract §四): the six required statuses are now all produced.
  * `unsatisfiedAcceptance: 0` hardcoding (the previous bug) is replaced
  * by `satisfiedCriteria` flowing from TaskGraph + caller-supplied
  * evidence. Reviewer findings are folded into the verdict.
@@ -67,7 +67,7 @@ export interface BudgetState {
 }
 
 export interface CompletionInput {
-  /** v0.3.1 (te_goal §四): task kind drives what "done" means. */
+  /** v0.3.1 (runtime truth contract §四): task kind drives what "done" means. */
   taskKind: 'informational' | 'analysis' | 'mutation'
   /** True if the model reached stop_sequence / length / max_iterations. */
   modelStopped: boolean
@@ -208,7 +208,7 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
     if (!input.verification.executed) {
       residual.push('acceptance met but verification was not executed')
     }
-    // Reviewer findings do NOT block completed (per te_goal §四 — they
+    // Reviewer findings do NOT block completed (per runtime truth contract §四 — they
     // are warnings surfaced via /trace + /why, not hard blockers).
     // They are appended to residualRisks so /why can show them.
     if (input.reviewerFindings.length > 0) {

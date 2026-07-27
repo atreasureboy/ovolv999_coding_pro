@@ -1,7 +1,7 @@
 /**
  * P0-9 regression: cleanup and state refresh.
  *
- * Covers multiple invariants from fi_goal.md §P0-9:
+ * Covers multiple invariants from runtime architecture contract §P0-9:
  *   1. ToolScheduler.activeToolCalls is cleared in finally even when
  *      executor throws mid-batch.
  *   2. ClaudeCodeWorkerManager.dispose() reaps sessions it created.

@@ -1,5 +1,5 @@
 /**
- * Phase 6 (five_goal §十四 P2-7): Boot recovery distinguishes
+ * Phase 6 (runtime invariants §十四 P2-7): Boot recovery distinguishes
  * reattachable workers from dead ones.
  *
  *   external_worker + live session  → reattach (kept alive)

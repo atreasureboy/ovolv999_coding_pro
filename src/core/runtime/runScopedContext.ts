@@ -1,5 +1,5 @@
 /**
- * RunScopedRuntimeContext (v0.3.2, ele_goal §Phase 1).
+ * RunScopedRuntimeContext (v0.3.2, run-scoped runtime contract §Phase 1).
  *
  * The single source of truth for everything that happens within one
  * Run. Before v0.3.2 the Coordinator, TaskPlanTool, CompletionContract
@@ -46,7 +46,7 @@ export interface RunScopedRuntimeContext {
 }
 
 /**
- * v0.3.2 (ele_goal §Phase 8): the structured snapshot the model emits
+ * v0.3.2 (run-scoped runtime contract §Phase 8): the structured snapshot the model emits
  * when it stops. Held in the RunScopedContext so the reviewer /
  * completion contract operate on the same artifact.
  */
@@ -164,7 +164,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
  * Resolve the Context for a given runId. Used by the ToolContext
  * resolver so every Tool sees the same Context for the same runId.
  * Throws if no Context exists — production never defaults to a
- * "default" context per ele_goal §2.1.
+ * "default" context per run-scoped runtime contract §2.1.
  */
 export class RunScopedContextResolver {
   constructor(private readonly store: RunScopedRuntimeContextStore) {}

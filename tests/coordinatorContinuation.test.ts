@@ -1,7 +1,7 @@
 /**
  * P0-2 regression: long-reply continuation output completeness.
  *
- * Invariant (fi_goal.md §P0-2):
+ * Invariant (runtime architecture contract §P0-2):
  *   final returned output
  *   = all assistant segments emitted this turn, concatenated in order
  *   = sum of new assistant `content` strings pushed to `messages`

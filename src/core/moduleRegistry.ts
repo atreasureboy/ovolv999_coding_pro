@@ -34,7 +34,7 @@ export class ModuleRegistry {
     const resolveOne = (name: string): void => {
       if (seen.has(name)) return
       if (inProgress.has(name)) {
-        // Cycle detected — refuse to resolve (five_goal §十二 P2-1).
+        // Cycle detected — refuse to resolve (runtime invariants §十二 P2-1).
         throw new Error(
           `[moduleRegistry] circular dependency detected while resolving "${name}" — refusing to boot`,
         )

@@ -1,8 +1,8 @@
 /**
- * Loop Engine — built-in autonomous loop protocol (loop-kit integration).
+ * Loop Engine — built-in autonomous loop protocol.
  *
  * Implements the WAKE → SCAN → PLAN → DO → REVIEW → CHECK → ACT cycle
- * from the loop-kit LOOP.md protocol, but as a native ovolv999 capability
+ * as a native ovolv999 capability
  * instead of external shell scripts calling `claude -p`.
  *
  * Usage: `ovolv999 --loop` or `ovolv999 --loop --goal "fix all type errors"`
@@ -64,7 +64,7 @@ function parseAcceptance(content: string): Array<{ id: string; command: string }
 }
 
 /**
- * v0.3.4 (mimo_goal §Phase 8): configurable timeouts per command type.
+ * v0.3.4 (durable supervisor contract §Phase 8): configurable timeouts per command type.
  * Defaults are generous — a full test suite can legitimately take 30 min.
  */
 const GATE_TIMEOUTS: Record<string, number> = {
@@ -120,7 +120,7 @@ function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
 }
 
 /**
- * v0.3.4 (mimo_goal §Phase 8): Full quality gates run only when fast gates
+ * v0.3.4 (durable supervisor contract §Phase 8): Full quality gates run only when fast gates
  * pass AND the model claims completion. Includes test + eval + build —
  * the heavyweight commands that are too slow for every iteration.
  */
@@ -171,7 +171,7 @@ export async function runLoop(
     return
   }
 
-  // v0.3.4 (mimo_goal §Phase 4-6): Durable lease + heartbeat + checkpoint.
+  // v0.3.4 (durable supervisor contract §Phase 4-6): Durable lease + heartbeat + checkpoint.
   const taskId = goal.split('\n').find((l) => l.trim())?.slice(0, 60) || 'loop-task'
   const leaseMgr = new LoopLeaseManager(loopDir)
   const checkpointMgr = new CheckpointManager(loopDir)
@@ -188,7 +188,7 @@ export async function runLoop(
   let loopIteration = 1
   let consecutiveProviderFailures = 0
 
-  // v0.3.4 (mimo_goal §Phase 6): resume/restart checkpoint support
+  // v0.3.4 (durable supervisor contract §Phase 6): resume/restart checkpoint support
   const shouldResume = config.resume !== false // default: try resume
   const shouldRestart = config.restart === true
   let restoredCp: LoopCheckpoint | null = null
@@ -218,7 +218,7 @@ export async function runLoop(
 
   renderer.info(`Loop mode: ${maxIters} max iterations · ${acceptanceItems.length} acceptance checks`)
 
-  // v0.3.4 (mimo_goal §Phase 12): signal handlers for graceful shutdown.
+  // v0.3.4 (durable supervisor contract §Phase 12): signal handlers for graceful shutdown.
   // On SIGINT/SIGTERM: save final checkpoint + release lease + exit.
   const signalHandler = (_sig: string) => {
     renderer.warn(`\n⚠ Signal received — saving checkpoint and shutting down.`)
@@ -285,7 +285,7 @@ export async function runLoop(
   }
 
   for (let iter = loopIteration; iter <= maxIters; iter++) {
-    // v0.3.3 (tha_goal §5.2): only trust DRIVER-written DONE.flag.
+    // v0.3.3 (background autonomy contract §5.2): only trust DRIVER-written DONE.flag.
     // If a model wrote DONE.flag during a turn, rename it — the driver
     // must independently verify acceptance before completing.
     const donePath = join(loopDir, 'DONE.flag')
@@ -312,7 +312,7 @@ export async function runLoop(
     // Read current state
     const state = tryRead(join(loopDir, 'STATE.md'))
 
-    // v0.3.4 (mimo_goal §Phase 7): re-read + hash contracts for prompt↔driver
+    // v0.3.4 (durable supervisor contract §Phase 7): re-read + hash contracts for prompt↔driver
     // consistency, BEFORE building the prompt.
     const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
     const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
@@ -361,7 +361,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     // v0.3.4: declare before try block so it's visible in the completion gate
     let lastOutcome: { completion: { status: string } } | undefined
 
-    // v0.3.3 (tha_goal §5.2): check for model's CANDIDATE_DONE signal.
+    // v0.3.3 (background autonomy contract §5.2): check for model's CANDIDATE_DONE signal.
     // If present, the model claims completion — the Driver MUST verify
     // independently before accepting.
     const candidateDonePath = join(loopDir, 'CANDIDATE_DONE.flag')
@@ -412,7 +412,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     let allPassed = true
     const results: AcceptanceResult[] = []
 
-    // v0.3.3 (tha_goal §5.1): empty acceptance → blocked, not pass.
+    // v0.3.3 (background autonomy contract §5.1): empty acceptance → blocked, not pass.
     if (acceptanceItemsFresh.length === 0) {
       renderer.warn('No acceptance criteria defined — cannot verify completion')
       allPassed = false
@@ -429,14 +429,14 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       }
     }
 
-    // Run quality gates — v0.3.4 (mimo_goal §Phase 8): split into fast/full
+    // Run quality gates — v0.3.4 (durable supervisor contract §Phase 8): split into fast/full
     renderer.info('\n--- Quality gates (fast) ---')
     const fastGates = runQualityGates(cwd)
     for (const r of fastGates.results) {
       renderer.info(`  ${r}`)
     }
 
-    // v0.3.4 (mimo_goal §Phase 7): Driver-side hash verification before DONE.
+    // v0.3.4 (durable supervisor contract §Phase 7): Driver-side hash verification before DONE.
     // Re-read the contracts NOW (after the model turn) and verify the hashes
     // match what was embedded in the prompt. If they changed mid-turn, the
     // model may have operated on stale criteria — reject DONE.
@@ -444,7 +444,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     const acceptanceHashPostTurn = hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md')))
     const contractChanged = goalHashPostTurn !== goalHashThisIter || acceptanceHashPostTurn !== acceptanceHashThisIter
 
-    // v0.3.4 (mimo_goal §Phase 3): the joint completion gate.
+    // v0.3.4 (durable supervisor contract §Phase 3): the joint completion gate.
     const completionStatus = lastOutcome?.completion?.status
     const modelClaimsDone = completionStatus === 'completed'
     if (allPassed && fastGates.passed) {

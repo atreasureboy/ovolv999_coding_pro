@@ -1,5 +1,5 @@
 /**
- * v0.3.1 audit-fix tests (te_goal §十一.12, 13, 14).
+ * v0.3.1 audit-fix tests (runtime truth contract §十一.12, 13, 14).
  *
  * Verifies the new TaskGraph + TaskPlanTool + ProgressMonitor
  * integration that closes the gap between graph lifecycle and the

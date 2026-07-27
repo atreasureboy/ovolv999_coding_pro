@@ -1,5 +1,5 @@
 /**
- * ExecutionRun × Workflow integration (fi_goal.md §三 Round 4 part B).
+ * ExecutionRun × Workflow integration (runtime architecture contract §三 Round 4 part B).
  *
  * Verifies that when an ExecutionRunRegistry is wired into WorkflowContext,
  * executeWorkflow creates a child run with kind='workflow' and walks it

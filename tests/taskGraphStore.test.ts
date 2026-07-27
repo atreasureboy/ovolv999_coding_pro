@@ -1,5 +1,5 @@
 /**
- * v0.3.1 TaskGraphStore (te_goal §五).
+ * v0.3.1 TaskGraphStore (runtime truth contract §五).
  *
  * Verifies:
  *   - create / get / restore / close / list / has

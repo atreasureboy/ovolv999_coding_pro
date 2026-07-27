@@ -1,5 +1,5 @@
 /**
- * v0.3.3 (tha_goal §Phase 7) background-autonomy regression tests.
+ * v0.3.3 (background autonomy contract §Phase 7) background-autonomy regression tests.
  * 20+ strong assertions covering: per-run isolation, completion semantics,
  * DONE/PARKED safety, model-call clearing, and stale-file detection.
  */
@@ -16,7 +16,7 @@ let tmp = ''
 beforeEach(() => { tmp = mkdtempSync(`${tmpdir}/v033-`) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-describe('v0.3.3 background autonomy regression (tha_goal §Phase 7)', () => {
+describe('v0.3.3 background autonomy regression (background autonomy contract §Phase 7)', () => {
 
   // ── §1: Chinese mutation not misclassified ──────────────────────
   it('§1: Chinese mutation goals are NOT classified as informational', () => {

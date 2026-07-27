@@ -1,5 +1,5 @@
 /**
- * Phase 5 (five_goal §十二/§十三 GAP 7.1/7.2):
+ * Phase 5 (runtime invariants §十二/§十三 GAP 7.1/7.2):
  *
  * GAP 7.1 — ModuleManager cycle detection MUST fail boot.
  * GAP 7.2 — Model switch must be transactional (rollback on failure).

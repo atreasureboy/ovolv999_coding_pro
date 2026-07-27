@@ -1,5 +1,5 @@
 /**
- * ExecutionRun × ClaudeCodeTool integration (fi_goal.md §三 Round 3).
+ * ExecutionRun × ClaudeCodeTool integration (runtime architecture contract §三 Round 3).
  *
  * Verifies that when an ExecutionRunRegistry is wired into ClaudeCodeTool,
  * the `run` action creates a child run with kind='external_worker' and
@@ -114,7 +114,7 @@ describe('ClaudeCodeTool.run with registry walks the state machine', () => {
       context(),
     )
 
-    // five_goal §六 P0-6: a dispatched-but-unverified task is NOT
+    // runtime invariants §六 P0-6: a dispatched-but-unverified task is NOT
     // 'succeeded'. The run stays non-terminal in 'waiting' so the
     // orchestrator can later wait/steer/cancel/collect with the
     // same runId. Marking 'succeeded' here is explicitly forbidden.

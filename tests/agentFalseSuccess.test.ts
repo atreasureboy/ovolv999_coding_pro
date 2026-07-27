@@ -1,7 +1,7 @@
 /**
  * P0-3 regression: AgentTool false success on verification failure.
  *
- * Invariant (fi_goal.md §P0-3): a sub-agent that "succeeds" (engine
+ * Invariant (runtime architecture contract §P0-3): a sub-agent that "succeeds" (engine
  * reason !== 'error') but leaves the workspace with failing
  * typecheck/lint/test MUST propagate as isError: true to the parent.
  * Otherwise the parent has no structured signal and must parse the

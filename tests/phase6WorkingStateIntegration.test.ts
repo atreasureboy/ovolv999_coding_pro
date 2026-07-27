@@ -1,5 +1,5 @@
 /**
- * Phase 6 (five_goal §十 P1-6, P1-7):
+ * Phase 6 (runtime invariants §十 P1-6, P1-7):
  *
  * P1-6: WorkingState wired into ContextManager — no longer standalone.
  *       Tool events update the state deterministically (Read → filesRead,
@@ -106,7 +106,7 @@ describe('P1-6: applyToolEvent updates WorkingState deterministically', () => {
     const s = cm.getWorkingState()
     expect(s.verification.failed).toContain('npm test')
     expect(s.verification.passed).not.toContain('npm test')
-    // five_goal §十: 测试失败 → unresolved 添加失败摘要
+    // runtime invariants §十: 测试失败 → unresolved 添加失败摘要
     expect(s.unresolved.some(u => u.includes('npm test'))).toBe(true)
   })
 
@@ -171,7 +171,7 @@ describe('P1-6: applyToolEvent updates WorkingState deterministically', () => {
 // P1-7: renderWorkingStateBlock produces stable system-prompt text
 // ─────────────────────────────────────────────────────────────────────
 describe('P1-7: renderWorkingStateBlock produces stable output', () => {
-  it('empty state renders NO text (five_goal §四: no injection when empty)', () => {
+  it('empty state renders NO text (runtime invariants §四: no injection when empty)', () => {
     const cm = makeContextManager()
     const out = cm.renderWorkingStateBlock()
     expect(out).toBe('')

@@ -1,7 +1,7 @@
 /**
  * RuntimeCoordinator — owns the Think → Act → Observe main loop.
  *
- * Responsibilities (from replan.md §5.1):
+ * Responsibilities (from architecture plan §5.1):
  *   - Boot the runtime for a turn (delegated to boot.ts)
  *   - Drive the state-machine loop (boot → check_abort → budget_check →
  *     module_iteration → llm_call → continuation_check → parse_response →
@@ -102,7 +102,7 @@ export interface CoordinatorDeps {
   eventEmitter: RunEventEmitter
 
   /**
-   * Optional ExecutionRun registry (fi_goal §三/§四). When set, the
+   * Optional ExecutionRun registry (runtime contract §三/§四). When set, the
    * coordinator mints a `kind='turn'` run for each call to `.run()`
    * and walks it through queued → preparing → running → succeeded/failed.
    * Absent = back-compat (no run tracked).
@@ -113,13 +113,13 @@ export interface CoordinatorDeps {
   /** Phase 3: task graph — gates completion when it has unfinished nodes. */
   taskGraph?: TaskGraph
   /**
-   * v0.3.1 (te_goal §五): the per-runId task-graph store. The
+   * v0.3.1 (runtime truth contract §五): the per-runId task-graph store. The
    * Coordinator uses this to mint a fresh graph for each runId so
    * turn N's graph does not leak into turn M.
    */
   taskGraphStore?: TaskGraphStore
   /**
-   * v0.3.2 (ele_goal §Phase 1): the per-runId RunScopedRuntimeContext
+   * v0.3.2 (run-scoped runtime contract §Phase 1): the per-runId RunScopedRuntimeContext
    * store. The Coordinator mints a fresh Context for each runId and
    * resolves the SAME Context for the tool, completion contract, and
    * router. Optional — absence falls back to the v0.3.1 taskGraphStore
@@ -127,7 +127,7 @@ export interface CoordinatorDeps {
    */
   runContextStore?: RunScopedRuntimeContextStore
   /**
-   * v0.3.2 (ele_goal §Phase 3): optional override of the taskKind
+   * v0.3.2 (run-scoped runtime contract §Phase 3): optional override of the taskKind
    * classifier. Production uses the static-rule classifier; tests can
    * inject a mock to make classification deterministic.
    */
@@ -140,7 +140,7 @@ export interface CoordinatorDeps {
    */
   routeModel?: (input: RoutingInput) => string | null
   /**
-   * v0.3.1 (te_goal §三.1.3): the ModelRouter handle, used by the
+   * v0.3.1 (runtime truth contract §三.1.3): the ModelRouter handle, used by the
    * coordinator's signal collector to read provider health. Optional —
    * absence just means no live health signals.
    */
@@ -154,7 +154,7 @@ export interface CoordinatorDeps {
 
 export class RuntimeCoordinator {
   private readonly deps: CoordinatorDeps
-  /** v0.3.2 (ele_goal §Phase 7): per-turn model call attempts so
+  /** v0.3.2 (run-scoped runtime contract §Phase 7): per-turn model call attempts so
    *  the TurnOutcome can carry the full fallback chain. */
   private modelCallsThisRun: Array<{
     model: string
@@ -166,7 +166,7 @@ export class RuntimeCoordinator {
     retryable: boolean
   }> = []
   /**
-   * v0.3.3+ (tha_goal §十六 + mimo_goal §Phase 9): Provider circuit breaker
+   * v0.3.3+ (background autonomy contract §十六 + durable supervisor contract §Phase 9): Provider circuit breaker
    * with three states: CLOSED (normal), OPEN (block all), HALF_OPEN (one probe).
    */
   private consecutiveProviderFailures = 0
@@ -189,7 +189,7 @@ export class RuntimeCoordinator {
   ): Promise<{ result: TurnResult; newHistory: OpenAIMessage[]; outcome: TurnOutcome }> {
     const { config, renderer, eventLog, sharedState, eventEmitter } = this.deps
 
-    // v0.3.3 (tha_goal §十二.6): clear per-run state so consecutive turns
+    // v0.3.3 (background autonomy contract §十二.6): clear per-run state so consecutive turns
     // don't accumulate stale model-call attempts from prior turns.
     this.modelCallsThisRun = []
 
@@ -223,7 +223,7 @@ export class RuntimeCoordinator {
         registry.transition(runId, 'preparing', { phase: 'boot' })
       } catch { /* best-effort */ }
     }
-    // v0.3.2 (ele_goal §Phase 9): lifecycle start marker. Emitted
+    // v0.3.2 (run-scoped runtime contract §Phase 9): lifecycle start marker. Emitted
     // after RUN_STARTED but before the loop begins, so /trace can
     // show "execution started" distinctly from "run started" (the
     // latter is a logical event, the former a runtime event).
@@ -270,7 +270,7 @@ export class RuntimeCoordinator {
     const { systemPrompt, toolDefs, toolContext, messages, turnAbortController } = bootResult
     const planMode = sharedState.planModeActive
 
-    // five_goal P0-2: propagate the per-turn ExecutionContext through
+    // runtime invariants P0-2: propagate the per-turn ExecutionContext through
     // ToolContext so tools (AgentTool, ClaudeCodeTool, Workflow, ...)
     // can read the current runId + parentRunId dynamically. The old
     // pattern of caching parentRunId in a Tool's constructor broke
@@ -412,10 +412,10 @@ export class RuntimeCoordinator {
     let result: TurnResult
     const turnStartMs = Date.now()
     let stallInterventionApplied = false // dedupe: one system nudge per stall episode
-    // v0.3.1 (te_goal §七): typed control messages. The provider sees
+    // v0.3.1 (runtime truth contract §七): typed control messages. The provider sees
     // a snapshot rendered for THIS call; the log is drained after the
     // call so messages do NOT accumulate in the user-visible history.
-    // v0.3.3 (tha_goal §十二.2/3): use the per-run ControlMessageLog
+    // v0.3.3 (background autonomy contract §十二.2/3): use the per-run ControlMessageLog
     // from RunScopedRuntimeContext when available — NOT a local instance.
     // This ensures all components share the same control-message channel.
     const controlMessageLog = runContext?.controlMessages ?? new ControlMessageLog()
@@ -450,7 +450,7 @@ export class RuntimeCoordinator {
               const pm = progressMonitor
               if (pm) {
                 pm.tick()
-                // v0.3.1 (te_goal §六.1): feed real verification signal
+                // v0.3.1 (runtime truth contract §六.1): feed real verification signal
                 // into ProgressMonitor each iteration. A drop in failing
                 // commands = meaningful progress; no change = stall timer
                 // keeps running.
@@ -460,7 +460,7 @@ export class RuntimeCoordinator {
                 if (verdict.kind !== 'progressing') {
                   renderer.warn(`Stall detected (${verdict.kind}): ${verdict.reason} → suggested: ${verdict.action}`)
                   eventEmitter.emit({ type: 'STALL_DETECTED', kind: verdict.kind, reason: verdict.reason, action: verdict.action })
-                  // v0.3.1 (te_goal §七): emit a typed ICM instead of
+                  // v0.3.1 (runtime truth contract §七): emit a typed ICM instead of
                   // pushing a role:system string. The message is
                   // rendered to the provider each turn via
                   // controlMessageLog.renderForProvider(); it does not
@@ -493,7 +493,7 @@ export class RuntimeCoordinator {
           }
 
           case 'module_iteration': {
-            // v0.3.1 (te_goal §六.3): single-track critic. The coordinator
+            // v0.3.1 (runtime truth contract §六.3): single-track critic. The coordinator
             // computes the risk signal here and passes criticRequested to
             // the module. CriticModule is the SOLE critic actuator (LLM
             // review); the coordinator no longer injects its own critic
@@ -503,7 +503,7 @@ export class RuntimeCoordinator {
             if (pmSnap) {
               const snap = pmSnap.snapshot((Date.now() - turnStartMs) / 60_000)
               const ws = this.deps.contextManager.getWorkingState()
-              // v0.3.1 (te_goal §六.3): modelClaimingCompletion must be
+              // v0.3.1 (runtime truth contract §六.3): modelClaimingCompletion must be
               // TRUE when the model is about to emit stop_sequence
               // (or its final completion). We detect this by the most
               // recent assistant message having no tool calls AND the
@@ -541,7 +541,7 @@ export class RuntimeCoordinator {
           }
 
           case 'llm_call': {
-            // five_goal §四: inject WorkingState into the system prompt
+            // runtime invariants §四: inject WorkingState into the system prompt
             // before each LLM call. The block is empty (and thus a
             // no-op) on the first iteration; after tools run it
             // carries filesRead/filesChanged/verification/unresolved
@@ -549,7 +549,7 @@ export class RuntimeCoordinator {
             // to parse its own prior tool outputs.
             const wsBlock = this.deps.contextManager.renderWorkingStateBlock()
             const effectivePrompt = wsBlock ? `${systemPrompt}\n\n${wsBlock}` : systemPrompt
-            // v0.3.1 (te_goal §七): render the typed control messages
+            // v0.3.1 (runtime truth contract §七): render the typed control messages
             // for this call. We pass them as a SEPARATE array; the
             // callLLM layer prepends them to the assistant-visible
             // history just for this request, then drains the log so
@@ -596,7 +596,7 @@ export class RuntimeCoordinator {
 
             if (!assistantText && rawToolCalls.length === 0 && emptyResponseCount < MAX_EMPTY_RETRIES) {
               emptyResponseCount++
-              // v0.3.1 (te_goal §七): emit a typed InternalControlMessage
+              // v0.3.1 (runtime truth contract §七): emit a typed InternalControlMessage
               // and let the LLM-call loop render it for the provider.
               // The message does NOT stay in the user-visible history.
               controlMessageLog.append({
@@ -763,7 +763,7 @@ export class RuntimeCoordinator {
       // FINALLY block so boot errors, late throws (hook/module/EventStore)
       // and any other exit path all release the context. Without this,
       // the store's internal Map leaks a TaskGraph + ProgressMonitor +
-      // ControlMessageLog per failed turn (tha_goal §十二.5/§Phase 7.23).
+      // ControlMessageLog per failed turn (background autonomy contract §十二.5/§Phase 7.23).
       if (runId) {
         try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
       }
@@ -898,7 +898,7 @@ export class RuntimeCoordinator {
           })
         }
       } catch { /* best-effort: never break the turn result */ }
-      // v0.3.2 (ele_goal §Phase 9): emit RUN_STATUS_TRANSITIONED
+      // v0.3.2 (run-scoped runtime contract §Phase 9): emit RUN_STATUS_TRANSITIONED
       // before the final RUN_COMPLETED so consumers can observe the
       // exact status transition.
       this.deps.eventEmitter.emit({
@@ -914,7 +914,7 @@ export class RuntimeCoordinator {
       } as never)
     }
 
-    // v0.3.3 (tha_goal §十二.7): attach the completion verdict to the
+    // v0.3.3 (background autonomy contract §十二.7): attach the completion verdict to the
     // TurnResult so CLI, Hook, Module, Loop and Eval can consume it.
     if (completionVerdict) {
       result.completionStatus = completionVerdict.status
@@ -926,7 +926,7 @@ export class RuntimeCoordinator {
       result.completionReasons = reasons as string[] | undefined
     }
 
-    // v0.3.4 (mimo_goal §Phase 1): construct the canonical TurnOutcome
+    // v0.3.4 (durable supervisor contract §Phase 1): construct the canonical TurnOutcome
     // BEFORE module/hook completion so they receive it.
     const wsFinal = this.deps.contextManager.getWorkingState()
     const status: CompletionStatus =
@@ -968,7 +968,7 @@ export class RuntimeCoordinator {
       reason: result.reason,
     }
 
-    // v0.3.4 (mimo_goal §Phase 11): emit a status-specific terminal event.
+    // v0.3.4 (durable supervisor contract §Phase 11): emit a status-specific terminal event.
     const terminalStatus = status
     eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
     eventEmitter.emit({ type: 'RUN_COMPLETED', result })
@@ -983,7 +983,7 @@ export class RuntimeCoordinator {
     })
 
     config.hookRunner?.runOnComplete?.(result)
-    // v0.3.4 (mimo_goal §Phase 1): Hook receives the full TurnOutcome
+    // v0.3.4 (durable supervisor contract §Phase 1): Hook receives the full TurnOutcome
     config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
 
     // v0.3.3: close() is now in the finally block (covers ALL exit paths).
@@ -1004,7 +1004,7 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    // v0.3.4 (mimo_goal §Phase 9): three-state circuit breaker.
+    // v0.3.4 (durable supervisor contract §Phase 9): three-state circuit breaker.
     //
     // CLOSED: normal operation. Failures increment the counter.
     // OPEN: threshold exceeded → block all calls. After cooldown, transition
@@ -1055,7 +1055,7 @@ export class RuntimeCoordinator {
       attemptId: this.modelCallsThisRun.length,
     } as never)
     try {
-      // v0.3.1 (te_goal §七): prepend control messages for this
+      // v0.3.1 (runtime truth contract §七): prepend control messages for this
       // single call. The caller (the LLM state machine) drains the
       // log right after; the user-visible history `messages` array
       // is NEVER mutated.
@@ -1078,14 +1078,14 @@ export class RuntimeCoordinator {
           onContextOverflow: async (msgs, signal) => {
             return this.deps.contextManager.reactiveCompact(msgs, signal)
           },
-          // v0.3.1 (te_goal §三.1.4): wire real fallback through the
+          // v0.3.1 (runtime truth contract §三.1.4): wire real fallback through the
           // Router. The Router's lastDecision.fallbackChain is the
           // source of truth; if it's exhausted, returns null and the
           // Gateway surfaces the original error.
           onProviderError: (failedModel, err) => {
             providerFailed = true
             this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
-            // v0.3.2 (ele_goal §Phase 7): record the failed attempt
+            // v0.3.2 (run-scoped runtime contract §Phase 7): record the failed attempt
             // before the fallback chain advances.
             this.modelCallsThisRun.push({
               model: failedModel,
@@ -1122,7 +1122,7 @@ export class RuntimeCoordinator {
           },
         },
       )
-      // v0.3.2 (ele_goal §Phase 7): record the successful attempt.
+      // v0.3.2 (run-scoped runtime contract §Phase 7): record the successful attempt.
       this.modelCallsThisRun.push({
         model: attemptModel,
         startedAt: attemptStartedAt,
@@ -1219,7 +1219,7 @@ export class RuntimeCoordinator {
       })
     }
     // Always record against the Router even when usage is null —
-    // te_goal §三.1.4 requires health to track every call.
+    // runtime truth contract §三.1.4 requires health to track every call.
     const router = this.deps.modelRouter
     if (router) {
       const binding = router.listProfiles().find((p) => p.model === model)

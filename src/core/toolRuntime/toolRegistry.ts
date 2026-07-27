@@ -1,7 +1,7 @@
 /**
  * ToolRegistry — owns tool registration, lookup, and name-collision handling.
  *
- * Responsibilities (from replan.md §5.5):
+ * Responsibilities (from architecture plan §5.5):
  *   - Tool registration (base + extra + module tools)
  *   - Tool lookup by name
  *   - Module Tool and extra Tool merging

@@ -1,5 +1,5 @@
 /**
- * WorkingState — structured task state (fi_goal.md §七 Phase 6 / Round 8).
+ * WorkingState — structured task state (runtime architecture contract §七 Phase 6 / Round 8).
  *
  * Replaces ad-hoc reliance on free-text conversation summaries for
  * carrying long-term task context. The state is:
@@ -173,7 +173,7 @@ export function addArtifact(state: WorkingState, artifact: ArtifactRef): Working
  * diff-friendly across compaction cycles.
  */
 export function serializeWorkingState(state: WorkingState): string {
-  // five_goal §四: empty WorkingState injects NO text (not even a
+  // runtime invariants §四: empty WorkingState injects NO text (not even a
   // header). This prevents polluting the system prompt with an empty
   // skeleton block on the first turn before any tools have run.
   const isEmpty =
@@ -428,7 +428,7 @@ export function assembleSystemPrompt(
  * the model's max context minus a headroom reserve for the response
  * and the rendered WorkingState.
  *
- * fi_goal.md §七 requires: "模型切换后重新计算上下文预算"
+ * runtime architecture contract §七 requires: "模型切换后重新计算上下文预算"
  * (recompute context budget after model switch). The caller should
  * invoke this whenever the active model changes.
  */

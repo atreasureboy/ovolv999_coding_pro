@@ -1,5 +1,5 @@
 /**
- * WorkerAdapter (GAP-K / fi_goal §三 Phase 5 / five_goal §六 P0-8).
+ * WorkerAdapter (GAP-K / runtime contract §三 Phase 5 / runtime invariants §六 P0-8).
  *
  * Unifies the lifecycle operations across the different worker backings
  * ovolv999 supports:
@@ -12,7 +12,7 @@
  * obtains a WorkerAdapter reference and calls e.g. `steer(runId, instr)`
  * or `status(runId)` without caring about the backing transport.
  *
- * Lifecycle (five_goal §六):
+ * Lifecycle (runtime invariants §六):
  *
  *   start()     — launch a new worker for a task; returns a handle
  *   status()    — query current run state (non-terminal preferred source

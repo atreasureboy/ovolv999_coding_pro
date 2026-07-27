@@ -63,7 +63,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
   constructor(
     private readonly manager = new ClaudeCodeWorkerManager(),
     /**
-     * Optional ExecutionRun registry (fi_goal.md §三 Phase 2 / Round 3).
+     * Optional ExecutionRun registry (runtime architecture contract §三 Phase 2 / Round 3).
      * When supplied, the `run` action creates a child run with
      * kind='external_worker' and walks it through the state machine so
      * observers can track tmux-backed delegations uniformly. When
@@ -103,7 +103,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     return true
   }
 
-  // ── WorkerAdapter lifecycle (five_goal §六 P0-8) ──────────────────
+  // ── WorkerAdapter lifecycle (runtime invariants §六 P0-8) ──────────────────
   //
   // The ClaudeCode adapter is the first to grow the full lifecycle
   // (start/status/cancel/collect/reattach) beyond just steer(). Each
@@ -276,7 +276,7 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
   }
 
   /**
-   * GAP 5.2 (five_goal §六): block until the worker reaches a terminal
+   * GAP 5.2 (runtime invariants §六): block until the worker reaches a terminal
    * state. Polls the tmux pane for [TASK_DONE] / [TASK_FAILED], then
    * transitions the run through verifying→succeeded or →failed.
    */
@@ -486,7 +486,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
     const registry = this.runRegistry
     let runId: string | undefined
     if (registry) {
-      // five_goal P0-2: prefer the per-turn ExecutionContext.runId
+      // runtime invariants P0-2: prefer the per-turn ExecutionContext.runId
       // over the static constructor parentRunId.
       const dynamicParent = ctx.execution?.runId ?? this.parentRunId
       const run = registry.create({
@@ -574,7 +574,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
         } as ToolResult & { runId?: string; sessionId: string; status: string }
       }
 
-      // P0-6 (five_goal §六): NO `succeeded` transition here. A dispatched-
+      // P0-6 (runtime invariants §六): NO `succeeded` transition here. A dispatched-
       // but-not-waited task is NOT complete — the worker is still running
       // in the tmux pane. The Run stays in `waiting` (non-terminal) until
       // the caller explicitly waits, captures, or cancels. The runId→
@@ -582,7 +582,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
       // can resolve to this same run.
       //
       // The previous behavior (mark `succeeded` immediately on dispatch)
-      // violated five_goal §六 P0-6: '任务已发送 → succeeded → 删除
+      // violated runtime invariants §六 P0-6: '任务已发送 → succeeded → 删除
       // runId/session 映射' is explicitly forbidden — it lied to the
       // orchestrator about completion and broke later runId-keyed ops.
       transitionRun('waiting', { phase: 'dispatched-no-wait', detached: true })
@@ -594,7 +594,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
           'Use ClaudeCode({ action: "wait", session: "' + result.session + '" }) or capture to inspect progress.',
         ].join('\n'),
         isError: false,
-        // Structured fields for programmatic callers (five_goal §六):
+        // Structured fields for programmatic callers (runtime invariants §六):
         runId,
         workerId: this.workerKind,
         sessionId: result.session,
@@ -608,7 +608,7 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
   }
 
   /**
-   * GAP 5.1 (five_goal §六): resolve the tmux session for a tool
+   * GAP 5.1 (runtime invariants §六): resolve the tmux session for a tool
    * action. Prefer the runId→session map (populated by the `run`
    * action). Fall back to input.session for callers that haven't
    * migrated to the runId protocol.

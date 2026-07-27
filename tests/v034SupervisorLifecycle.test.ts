@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 12) supervisor lifecycle integration tests.
+ * v0.3.4 (durable supervisor contract §Phase 12) supervisor lifecycle integration tests.
  * Tests --resume, --restart, and lease/checkpoint interplay.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -22,7 +22,7 @@ function makeCheckpoint(iteration: number, opts: Partial<LoopCheckpoint> = {}): 
   }
 }
 
-describe('v0.3.4 supervisor lifecycle (mimo_goal §Phase 12)', () => {
+describe('v0.3.4 supervisor lifecycle (durable supervisor contract §Phase 12)', () => {
   describe('checkpoint resume', () => {
     it('resume loads iteration + failure count from checkpoint', () => {
       const cm = new CheckpointManager(tmp)

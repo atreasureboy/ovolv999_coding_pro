@@ -25,7 +25,7 @@ function makeParsedToolCall(
 /**
  * Build a minimal Tool stub whose only relevant field for partitioning
  * is `metadata.claims`. partitionToolCalls reads only `tool.name` and
- * `tool.metadata.claims` (six_goal §六: claims are the sole concurrency
+ * `tool.metadata.claims` (provider-runtime contract §六: claims are the sole concurrency
  * authority; the legacy name whitelist + static concurrencySafe flag
  * are gone).
  */
@@ -47,7 +47,7 @@ const Edit = claimTool('Edit', (i) => [writeFile(String(i.file_path ?? 'x'))])
 const Write = claimTool('Write', (i) => [writeFile(String(i.file_path ?? 'x'))])
 const Glob = claimTool('Glob', (i) => (i.path ? [{ type: 'directory', key: `dir:${i.path}`, access: 'read' }] : []))
 const Bash = claimTool('Bash', (i) => [{ type: 'process', key: `proc:${String(i.command ?? '')}`, access: 'write' }])
-// Agent declares NO claims → defaults to serial (six_goal §六.3).
+// Agent declares NO claims → defaults to serial (provider-runtime contract §六.3).
 const Agent = claimTool('Agent', () => [])
 const allTools = [Read, Edit, Write, Glob, Bash, Agent]
 
@@ -101,7 +101,7 @@ describe('partitionToolCalls', () => {
   })
 
   it('forces a claim-less tool (Agent) into a serial batch', () => {
-    // six_goal §六.3: tools declaring no claims default to serial.
+    // provider-runtime contract §六.3: tools declaring no claims default to serial.
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
       makeParsedToolCall('Agent', { description: 'do thing' }),
@@ -129,7 +129,7 @@ describe('partitionToolCalls', () => {
 
   it('defaults to serial when no tool instances are supplied (cannot compute claims)', () => {
     // Back-compat callers that pass only call names: with no tool to
-    // declare claims, every call is conservatively serial (six_goal §六.3).
+    // declare claims, every call is conservatively serial (provider-runtime contract §六.3).
     const calls = [
       makeParsedToolCall('Read', { file_path: 'a.ts' }),
       makeParsedToolCall('Read', { file_path: 'b.ts' }),

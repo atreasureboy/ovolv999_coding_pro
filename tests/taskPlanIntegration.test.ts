@@ -12,7 +12,7 @@ import type { ToolContext } from '../src/core/types.js'
 
 const ctx = { cwd: '/tmp', execution: { runId: 'test-run' } } as unknown as ToolContext
 const tool = (g?: TaskGraph) => {
-  // v0.3.2 (ele_goal §Phase 2): wrap the graph in a resolver so
+  // v0.3.2 (run-scoped runtime contract §Phase 2): wrap the graph in a resolver so
   // the tool gets the same TaskGraphResolver contract as production.
   const resolver = g
     ? { resolve: (_runId: string) => g, resolveOrNull: (_runId: string) => g }

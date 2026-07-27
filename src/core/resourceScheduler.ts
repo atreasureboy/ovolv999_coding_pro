@@ -1,5 +1,5 @@
 /**
- * Resource scheduler (fi_goal.md §五 Phase 4 / Round 7).
+ * Resource scheduler (runtime architecture contract §五 Phase 4 / Round 7).
  *
  * Tools declare resource claims; the scheduler decides whether two
  * claims conflict and serializes accordingly. The model:

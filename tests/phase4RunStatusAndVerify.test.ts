@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { TurnResult } from '../src/core/types.js'
 
 /**
- * Phase 4 (five_goal §六):
+ * Phase 4 (runtime invariants §六):
  *   GAP 6.1 — max_iterations must map to RunStatus 'blocked', NOT 'succeeded'.
  *   GAP 6.2 — modify mode must force verify=true regardless of model input.
  *

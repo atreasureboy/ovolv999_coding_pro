@@ -1,7 +1,7 @@
 /**
  * P0-6 regression: workflow variable substitution.
  *
- * Invariant (fi_goal.md §P0-6):
+ * Invariant (runtime architecture contract §P0-6):
  *   - ${{ inputs.X }}              → ctx.inputs[X]
  *   - ${{ steps.S.output }}        → captured stdout of prior step S
  *   - ${{ steps.S.exitCode }}      → numeric exit code

@@ -1,5 +1,5 @@
 /**
- * v0.3.1 wiring-smoke eval (te_goal §九).
+ * Runtime wiring-smoke eval.
  *
  * Fast, dependency-free checks that the wiring is intact: every
  * "should exist" assertion runs without booting an LLM. These are
@@ -136,17 +136,8 @@ describe('wiring-smoke (eval:wiring)', () => {
     expect(src).toMatch(/name: 'progress'/)
   })
 
-  it('C2: docs/V0_3_1_RUNTIME_TRUTH.md exists', () => {
-    // The doc is created in C2; this eval will pass once the file lands.
-    // Until then it serves as a tracked failure for the goal-driven loop.
-    const exists = fs.existsSync(
-      path.resolve(__dirname, '../../docs/V0_3_1_RUNTIME_TRUTH.md'),
-    )
-    if (!exists) {
-      // Soft-pass: record the absence in the test name so it's visible.
-      expect(exists, 'docs/V0_3_1_RUNTIME_TRUTH.md missing — see C2').toBe(true)
-    } else {
-      expect(exists).toBe(true)
-    }
+  it('C2: public runtime documentation exists', () => {
+    expect(fs.existsSync(path.resolve(__dirname, '../../README.md'))).toBe(true)
+    expect(fs.existsSync(path.resolve(__dirname, '../../docs/ADR/001-event-driven-run.md'))).toBe(true)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * v0.3.1 InternalControlMessage (te_goal §七).
+ * v0.3.1 InternalControlMessage (runtime truth contract §七).
  *
  * Verifies that:
  *   - 8 kinds all render to a non-empty provider-facing system message

@@ -1,5 +1,5 @@
 /**
- * v0.3.4 (mimo_goal §Phase 12) signal handling + circuit breaker tests.
+ * v0.3.4 (durable supervisor contract §Phase 12) signal handling + circuit breaker tests.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
@@ -11,7 +11,7 @@ let tmp = ''
 beforeEach(() => { tmp = mkdtempSync(`${tmpdir}/v034sig-`) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-describe('v0.3.4 signal handling + circuit breaker (mimo_goal §Phase 12)', () => {
+describe('v0.3.4 signal handling + circuit breaker (durable supervisor contract §Phase 12)', () => {
   describe('signal-induced checkpoint', () => {
     it('§33: checkpoint saved on simulated signal shutdown', () => {
       const loopDir = tmp

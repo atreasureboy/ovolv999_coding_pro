@@ -1,5 +1,5 @@
 /**
- * LongTermMemory — unified memory convergence (fi_goal.md §八 Phase 7 / Round 9).
+ * LongTermMemory — unified memory convergence (runtime architecture contract §八 Phase 7 / Round 9).
  *
  * Replaces ad-hoc storage across SemanticMemory / EpisodicMemory /
  * KnowledgeBase / TeamMemory with a single contract that enforces the

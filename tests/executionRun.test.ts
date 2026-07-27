@@ -1,5 +1,5 @@
 /**
- * ExecutionRun state machine + registry unit tests (fi_goal.md §三).
+ * ExecutionRun state machine + registry unit tests (runtime architecture contract §三).
  *
  * Covers:
  *   - status definitions and terminal-set membership

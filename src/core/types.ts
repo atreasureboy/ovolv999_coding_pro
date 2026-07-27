@@ -100,7 +100,7 @@ export interface ToolMetadata {
   /** Tool may access network resources. */
   requiresNetwork?: boolean
   /**
-   * GAP-D: Per-input resource claims (fi_goal §五). When provided,
+   * GAP-D: Per-input resource claims (runtime contract §五). When provided,
    * the engine can route the tool's execution through the
    * ResourceScheduler so two tools that touch the same file or git
    * ref serialize rather than race. The builder takes the same
@@ -137,7 +137,7 @@ export interface ToolContext {
   /** AbortSignal — tools should honour this to support Ctrl+C cancellation */
   signal?: AbortSignal
   /**
-   * five_goal P0-2: per-turn execution context. Carries the current
+   * runtime invariants P0-2: per-turn execution context. Carries the current
    * RunId, parent RunId, workspace id, and resolved model info. Tools
    * that spawn child runs (AgentTool, ClaudeCodeTool) MUST read
    * `context.execution.runId` as the parentRunId rather than caching
@@ -274,7 +274,7 @@ export interface EngineConfig {
   baseURL?: string
   apiKey: string
   /**
-   * Phase 1 (six_goal §四): provider id driving ProviderAdapter
+   * Phase 1 (provider-runtime contract §四): provider id driving ProviderAdapter
    * selection (e.g. 'openai', 'minimax', 'anthropic'). Omit for the
    * default openai-compatible adapter. All currently-supported
    * providers speak the OpenAI Chat Completions shape; this field is
@@ -282,7 +282,7 @@ export interface EngineConfig {
    */
   provider?: string
   /**
-   * Phase 2: model profiles for adaptive routing (eight_goal §四).
+   * Phase 2: model profiles for adaptive routing (adaptive runtime contract §四).
    * `profiles` is a list of ModelProfile-shaped objects; when >1 and
    * routing.enabled, the ModelRouter selects per turn. Typed as unknown[]
    * here (validated in the engine) to keep types.ts free of a modelRouter
@@ -317,7 +317,7 @@ export interface EngineConfig {
    *     so in-flight runs from a previous (crashed) process are
    *     visible in the new registry
    *   - wires an ExecutionRunEventBus that persists every transition
-   *     for future recovery (fi_goal.md §四 Phase 3)
+   *     for future recovery (runtime architecture contract §四 Phase 3)
    * When unset, ExecutionRun registry stays in-memory only.
    */
   executionRunLogDir?: string
@@ -418,7 +418,7 @@ export interface TurnResult {
   reason: 'max_iterations' | 'stop_sequence' | 'error' | 'interrupted'
   output: string
   /**
-   * v0.3.3 (tha_goal §十二.7): the structured completion verdict from
+   * v0.3.3 (background autonomy contract §十二.7): the structured completion verdict from
    * evaluateCompletion(). Carries the authoritative status (completed /
    * partial / blocked / incomplete) that CLI, Hook, Module, Loop and
    * Eval should use instead of guessing from `reason`.

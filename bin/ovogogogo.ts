@@ -1828,7 +1828,7 @@ async function main(): Promise<void> {
     ? (inkRendererInstance as unknown as Renderer)
     : renderer)
 
-  // v0.3.1 (te_goal §三.1.1): an explicit --model/-m on the CLI must
+  // v0.3.1 (runtime truth contract §三.1.1): an explicit --model/-m on the CLI must
   // be recorded as a STICKY manual override. Without this call, the
   // first auto-route would override the user's CLI choice — silently
   // violating the documented "--model is highest priority" invariant.

@@ -1,5 +1,5 @@
 /**
- * TaskGraphResolver (v0.3.2, ele_goal §Phase 2).
+ * TaskGraphResolver (v0.3.2, run-scoped runtime contract §Phase 2).
  *
  * The TaskPlanTool no longer holds a fixed TaskGraph. Instead it
  * receives a TaskGraphResolver that maps runId → TaskGraph, allowing

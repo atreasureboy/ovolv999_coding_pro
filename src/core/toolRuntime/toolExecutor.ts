@@ -2,7 +2,7 @@
  * ToolExecutor — executes a single tool call with all policy checks,
  * permission enforcement, hooks, result truncation, and module notification.
  *
- * Responsibilities (from replan.md §5.8):
+ * Responsibilities (from architecture plan §5.8):
  *   - Find tool in registry
  *   - Execution-time policy check (defense-in-depth: plan mode + agent allowlist)
  *   - Permission check (PermissionManager)
@@ -130,7 +130,7 @@ export class ToolExecutor {
       // Tools may return either the legacy {content, isError} shape or
       // the structured shape (status/summary/exitCode/stdout/stderr/...).
       //
-      // five_goal §三: the internal execution chain MUST preserve
+      // runtime invariants §三: the internal execution chain MUST preserve
       // structured fields (status, exitCode, stdout, stderr,
       // diagnostics, artifacts, retryable) all the way through to the
       // model-message boundary. Only ToolScheduler (which builds the
@@ -168,7 +168,7 @@ export class ToolExecutor {
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
 
-    // five_goal §四: update WorkingState from the structured tool
+    // runtime invariants §四: update WorkingState from the structured tool
     // result. Best-effort — a WorkingState bug must never break the
     // turn. This is the single integration point: both direct executor
     // calls and scheduler-routed calls go through here.

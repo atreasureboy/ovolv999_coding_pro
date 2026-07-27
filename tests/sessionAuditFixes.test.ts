@@ -1253,7 +1253,7 @@ describe('EpisodicMemory: bounded retention (defect #8)', () => {
   })
 
   it('P0-8 RELOAD: entryCount reflects pre-existing file contents on first write', () => {
-    // Regression for the fi_goal.md P0-8 bug: previously write()
+    // Regression for the runtime architecture contract P0-8 bug: previously write()
     // hard-coded entryCount=1 on first observation, ignoring any
     // pre-existing JSONL contents. Reloading an existing file with N
     // entries then writing once left entryCount=1 instead of N+1,
@@ -1282,7 +1282,7 @@ describe('EpisodicMemory: bounded retention (defect #8)', () => {
 
   it('P0-8 RELOAD: file already over cap compacts on the very next write after reload', () => {
     // Direct test of the runaway-growth failure mode called out in
-    // fi_goal.md P0-8. Previously a file reloaded at 1.5×cap would
+    // runtime architecture contract P0-8. Previously a file reloaded at 1.5×cap would
     // keep growing because entryCount was pinned to 1 on first write,
     // disabling enforceCap() until ~cap more writes accumulated.
     const dir = freshDir('epi-reload-overcap')

@@ -1,5 +1,5 @@
 /**
- * ProviderAdapter (six_goal Phase 1) — the single abstraction that owns
+ * ProviderAdapter (provider-runtime contract Phase 1) — the single abstraction that owns
  * provider-specific request shape and streaming establishment.
  *
  * ModelGateway delegates ALL model I/O to a ProviderAdapter. The
