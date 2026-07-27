@@ -39,6 +39,7 @@ export interface PromptInputProps {
   cwd: string
   /** Called when user presses Ctrl+Y (copy last reply). */
   onCopy?: () => void
+  terminalWidth?: number
 }
 
 export function PromptInput({
@@ -49,6 +50,7 @@ export function PromptInput({
   history,
   cwd,
   onCopy,
+  terminalWidth = 80,
 }: PromptInputProps): React.ReactElement {
   const { setRawMode } = useStdin()
   const [text, setText] = useState('')
@@ -295,7 +297,7 @@ export function PromptInput({
     <Box flexDirection="column">
       {hasNewline ? (
         // Multi-line render: show each line, cursor on the active line
-        <Box flexDirection="column" borderStyle="round" borderColor="#63B3ED" paddingX={1}>
+        <Box width={terminalWidth} flexDirection="column" borderStyle="round" borderColor="#63B3ED" paddingX={1}>
           <Box>
             <Text color="#63B3ED">› </Text>
             <Text dimColor>(multi-line · Ctrl+J=newline · Enter=submit)</Text>
@@ -326,7 +328,7 @@ export function PromptInput({
           })}
         </Box>
       ) : (
-        <Box borderStyle="round" borderColor="#63B3ED" paddingX={1}>
+        <Box width={terminalWidth} borderStyle="round" borderColor="#63B3ED" paddingX={1}>
           <Text color="#63B3ED">› </Text>
           <Text>
             {text.slice(0, cursor)}

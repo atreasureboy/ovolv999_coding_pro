@@ -158,7 +158,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 - **文件历史 / Rewind** — 每次编辑快照，可回滚
 - **ACP 协议** — Agent Communication Protocol server
 - **Vim 模式** — normal/insert/visual 模式，keybinding 可定制
-- **Ink/React UI** — 可选的 `--ink` 富终端 UI
+- **Ink/React UI** — 默认富终端 UI，实时多行输入、补全与交互式面板
 - **零领域绑定** — 核心是 Agent 基础设施，业务逻辑通过 Module + Tool 插件注入
 
 ## 架构全景
@@ -733,7 +733,7 @@ ovolv999/
 | 语言 | TypeScript 5.7 (ESM, strict) |
 | 运行时 | Node.js ≥ 20 |
 | LLM API | OpenAI SDK (兼容 Claude/GPT/本地端点) |
-| 终端 UI | Ink + React（可选 `--ink`）/ readline REPL（默认） |
+| 终端 UI | Ink + React（默认）/ readline REPL（`--classic` 回退） |
 | 测试 | Vitest |
 | Lint | ESLint (typescript-eslint recommendedTypeChecked) |
 | 运行时依赖 | openai · glob · zod · ink · react |

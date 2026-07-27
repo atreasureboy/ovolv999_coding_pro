@@ -204,6 +204,10 @@ export function App({
 
   const sigintCount = useRef(0)
   useInput((input, key) => {
+    if ((input === '\x04' || (key.ctrl && input === 'd')) && !state.running && !store.hasOverlay()) {
+      exit()
+      return
+    }
     const action = lookupAction(input, key, keybindings.bindings)
 
     // Help overlay toggle (only when no overlay/turn is active)
@@ -243,7 +247,7 @@ export function App({
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <Box flexDirection="column">
+    <Box width={Math.max(20, stdout.columns || 80)} flexDirection="column">
       {/* Banner */}
       {state.banner ? (
         <Banner
@@ -322,7 +326,7 @@ export function App({
 
       {/* Input or "running..." indicator */}
       {state.running || store.hasOverlay() || showHelp ? (
-        <Box marginTop={1}>
+        <Box width={Math.max(20, stdout.columns || 80)} marginTop={1}>
           <Text dimColor italic>  (turn in progress — ESC to interrupt)</Text>
         </Box>
       ) : (
@@ -335,6 +339,7 @@ export function App({
             history={inputHistory.current}
             cwd={cwd}
             onCopy={handleCopy}
+            terminalWidth={Math.max(20, stdout.columns || 80)}
           />
         </Box>
       )}

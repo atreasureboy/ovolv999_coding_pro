@@ -369,7 +369,7 @@ function parseArgs(argv: string[]): Args {
   let loopMaxIters = 12
   let continueSession = false
   let resumeSession: string | undefined
-  let ink = false
+  let ink = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   let pipe = false
   let pipeFormat: 'text' | 'json' = 'text'
   let bg = false
@@ -416,6 +416,7 @@ function parseArgs(argv: string[]): Args {
           resumeSession = requireValue(arg, args[++i])
           break
         case '--ink': ink = true; break
+        case '--classic': ink = false; break
         case '--pipe': pipe = true; break
         case '--bg': bg = true; break
         case '--init': init = true; break
@@ -541,7 +542,8 @@ OPTIONS
   --loop-max-iters <n>      Cap on loop iterations  (env: OVOGO_LOOP_MAX_ITERS, default: 12)
   -c, --continue            Resume the most recent session under <cwd>/sessions/
   -r, --resume <ref>        Resume a specific session by name, prefix, dir, or history.json
-  --ink                     Launch with Ink/React UI (full component tree, live autocomplete)
+  --ink                     Force the Ink/React UI
+  --classic                 Use the legacy readline UI
   --pipe                    Pipe mode: read stdin as context, output to stdout (no UI)
   --format <text|json>      Output format for pipe mode (default: text)
   init                      First-run provider wizard (detects Claude Code / OpenAI; writes ~/.ovogo/settings.json)
