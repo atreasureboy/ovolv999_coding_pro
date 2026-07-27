@@ -131,6 +131,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   // ── Render ────────────────────────────────────────────────────────────────
 
   const { App: AppComponent } = await import('./App.js')
+  store.setBanner(opts.version, opts.model)
 
   const instance = render(
     createElement(AppComponent, {
@@ -224,8 +225,6 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       cwd: opts.cwd,
     }),
   )
-
-  store.setBanner(opts.version, opts.model)
 
   // Register cleanup handlers for signals/crashes
   const cleanup = registerCleanup({
