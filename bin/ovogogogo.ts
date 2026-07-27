@@ -31,6 +31,7 @@ import { writeFileSync, readFileSync, existsSync, statSync, realpathSync } from 
 import { createHash } from 'crypto'
 import { homedir } from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { Writable } from 'stream'
 
 // ── .env auto-loader (no external dep, never overrides existing env vars) ──
 {
@@ -1550,8 +1551,12 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  const renderer = new Renderer()
-  renderer.banner(VERSION, model)
+  const renderer = new Renderer({
+    stream: ink
+      ? new Writable({ write(_chunk, _encoding, callback) { callback() } })
+      : process.stdout,
+  })
+  if (!ink) renderer.banner(VERSION, model)
   renderer.info(`workspace   ${cwd}`)
 
   // Load settings + hooks

@@ -329,12 +329,21 @@ export function PromptInput({
         </Box>
       ) : (
         <Box width={terminalWidth} borderStyle="round" borderColor="#63B3ED" paddingX={1}>
-          <Text color="#63B3ED">› </Text>
-          <Text>
-            {text.slice(0, cursor)}
-          </Text>
-          <Text backgroundColor="#63B3ED" color="black">{cursor < text.length ? text[cursor] : ' '}</Text>
-          {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
+          <Box width={2} flexShrink={0}>
+            <Text color="#C9A86A">›</Text>
+          </Box>
+          {cursor === text.length && text.length > 0 ? (
+            <>
+              <Text>{text.slice(0, -1)}</Text>
+              <Text backgroundColor="#63B3ED" color="black">{text.at(-1)}</Text>
+            </>
+          ) : (
+            <>
+              <Text>{text.slice(0, cursor)}</Text>
+              <Text backgroundColor="#63B3ED" color="black">{cursor < text.length ? text[cursor] : ' '}</Text>
+              {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
+            </>
+          )}
         </Box>
       )}
       {showMenu && menuEntries.length > 0 ? (

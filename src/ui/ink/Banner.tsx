@@ -32,20 +32,34 @@ export function Banner({ version, model, cwd, gitBranch, contextWindow }: Banner
       <Text bold color="#63B3ED">{BRAND_LOGO_ROWS.slice(0, 2).join('\n')}</Text>
       <Text bold color="#A78BFA">{BRAND_LOGO_ROWS.slice(2, 4).join('\n')}</Text>
       <Text bold color="#C9A86A">{BRAND_LOGO_ROWS[4]}</Text>
-      <Box gap={1}>
-        <Text dimColor>DEVELOPER AGENT RUNTIME</Text>
-        <Text color="#E8E3DA">· {model}</Text>
-        <Text dimColor>· v{version}</Text>
-        {ctxStr ? <Text dimColor>· {ctxStr} ctx</Text> : null}
-      </Box>
-      <Box borderStyle="single" borderColor="#7D8590" paddingX={1}>
-        <Box width="50%">
-          <Text color="#63B3ED">WORKSPACE </Text>
-          <Text>{cwd ? shortenPath(cwd) : '—'}</Text>
+      <Box justifyContent="space-between">
+        <Box gap={1}>
+          <Text bold color="#E8E3DA">◆ OVOLV999</Text>
+          <Text dimColor>AUTONOMOUS DEVELOPER ENVIRONMENT</Text>
+          <Text dimColor>· v{version}</Text>
         </Box>
-        <Box width="50%">
-          <Text color="#A78BFA">SOURCE </Text>
-          <Text>{gitBranch ?? 'no git'}</Text>
+        <Text color="#68D391">● ONLINE</Text>
+      </Box>
+      <Box borderStyle="round" borderColor="#7D8590" paddingX={1} flexDirection="column">
+        <Box>
+          <Box width="50%">
+            <Text color="#63B3ED">WORKSPACE  </Text>
+            <Text>{cwd ? shortenPath(cwd) : '—'}</Text>
+          </Box>
+          <Box width="50%">
+            <Text color="#C9A86A">RUNTIME  </Text>
+            <Text>{model}</Text>
+          </Box>
+        </Box>
+        <Box>
+          <Box width="50%">
+            <Text color="#A78BFA">SOURCE     </Text>
+            <Text>{gitBranch ?? 'no git'}</Text>
+          </Box>
+          <Box width="50%">
+            <Text color="#68D391">CONTEXT  </Text>
+            <Text>{ctxStr ? `${ctxStr} tokens` : '—'}</Text>
+          </Box>
         </Box>
       </Box>
     </Box>
