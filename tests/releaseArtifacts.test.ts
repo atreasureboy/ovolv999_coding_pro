@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -21,18 +20,14 @@ describe('release artifacts', () => {
     expect(pkg.scripts.prepack).toContain('npm run check')
   })
 
-  it('keeps development sources and tests out of the npm tarball', () => {
-    const output = execFileSync(
-      'npm',
-      ['pack', '--dry-run', '--json', '--ignore-scripts'],
-      { cwd: root, encoding: 'utf8' },
-    )
-    const [pack] = JSON.parse(output) as Array<{ files: Array<{ path: string }> }>
-    const paths = pack.files.map((file) => file.path)
-    expect(paths).toContain('dist/bin/ovogogogo.js')
-    expect(paths).toContain('dist/package.json')
-    expect(paths.some((path) => path.startsWith('tests/'))).toBe(false)
-    expect(paths.some((path) => path.startsWith('src/'))).toBe(false)
+  it('keeps development sources out of the publish allowlist', () => {
+    const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
+      files: string[]
+      scripts: { 'package:verify': string; prepack: string }
+    }
+    expect(pkg.files.some((path) => path === 'src' || path === 'tests')).toBe(false)
+    expect(pkg.scripts['package:verify']).toContain('verify-package.mjs')
+    expect(pkg.scripts.prepack).toContain('npm run package:verify')
   })
 
   it('has cross-platform CI and a guarded tag release', () => {

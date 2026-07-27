@@ -26,6 +26,7 @@ jobs:
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - name: Build package artifact
         run: |
+          npm run package:verify
           npm pack --ignore-scripts
           sha256sum ovolv999-*.tgz > SHA256SUMS
       - name: Smoke test package artifact

@@ -40,6 +40,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node -e \"const fs=require('fs');fs.copyFileSync('package.json','dist/package.json');fs.chmodSync('dist/bin/ovogogogo.js',0o755)\"",
+    "package:verify": "node scripts/verify-package.mjs",
     "start": "node dist/bin/ovogogogo.js",
     "dev": "tsx bin/ovogogogo.ts",
     "lint": "eslint src/ bin/ tests/ --ext .ts,.tsx",
@@ -55,7 +56,7 @@
     "eval:real": "vitest run evals/real",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && npm run lint && vitest run && npm run eval:deterministic",
-    "prepack": "npm run check && npm run build"
+    "prepack": "npm run check && npm run build && npm run package:verify"
   },
   "dependencies": {
     "glob": "^13.0.6",
