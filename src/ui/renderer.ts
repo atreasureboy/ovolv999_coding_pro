@@ -37,6 +37,9 @@ const C = {
   bcyan:   '\x1b[96m',
   bgray:   '\x1b[37m',
   white:   '\x1b[97m',
+  gold:    '\x1b[38;2;201;168;106m',
+  ivory:   '\x1b[38;2;232;227;218m',
+  slate:   '\x1b[38;2;125;133;144m',
 }
 
 // ── Spinner ─────────────────────────────────────────────────
@@ -135,24 +138,19 @@ export class Renderer {
   // ── Banner ────────────────────────────────────────────────
 
   banner(version: string, model: string): void {
-    const innerWidth = Math.min(Math.max(this.width - 6, 46), 62)
-    const brand = '◆ OVOLV999'
+    const lineWidth = Math.min(Math.max(this.width - 6, 48), 60)
     const versionLabel = `v${version}`
-    const topFill = '─'.repeat(Math.max(3, innerWidth - brand.length - versionLabel.length - 3))
-    const runtimeLabel = 'AUTONOMOUS CODING RUNTIME'
-    const bottomFill = '─'.repeat(Math.max(3, innerWidth - runtimeLabel.length - 1))
-    const modelLine = `  ${model}  ● ONLINE`
-    const modelFill = ' '.repeat(Math.max(1, innerWidth - modelLine.length))
+    const brandGap = ' '.repeat(Math.max(2, lineWidth - 'ovolv999'.length - versionLabel.length - 2))
     this.w('\n')
-    this.w(`  ${C.bpurple}╭─${R}${B}${C.bcyan}${brand}${R}${C.bpurple}─${topFill}${R}${D}${C.gray}${versionLabel}${R}${C.bpurple}─╮${R}\n`)
-    this.w(`  ${C.bpurple}│${R}${C.bcyan}${B}  ${model}${R}  ${C.bgreen}● ONLINE${R}${modelFill}${C.bpurple}│${R}\n`)
-    this.w(`  ${C.bpurple}╰${bottomFill}${R}${D}${C.gray} ${runtimeLabel}${R}${C.bpurple}─╯${R}\n`)
+    this.w(`  ${C.gold}◈${R} ${B}${C.ivory}ovolv999${R}${brandGap}${D}${C.slate}${versionLabel}${R}\n`)
+    this.w(`    ${D}${C.slate}${'─'.repeat(lineWidth)}${R}\n`)
+    this.w(`    ${C.gold}${model}${R}${D}${C.slate}  ·  ready  ·  autonomous coding agent${R}\n\n`)
   }
 
   // ── User message ──────────────────────────────────────────
 
   humanPrompt(text: string): void {
-    this.w(`\n  ${C.bblue}${B}❯${R} ${B}${C.white}${text}${R}\n`)
+    this.w(`\n  ${C.gold}›${R} ${C.ivory}${text}${R}\n`)
   }
 
   // ── LLM streaming ─────────────────────────────────────────
@@ -353,10 +351,10 @@ export class Renderer {
   info(msg: string): void {
     const match = /^(\S+)(\s+)(.*)$/.exec(msg)
     if (!match) {
-      this.w(`  ${C.bpurple}◇${R} ${D}${C.gray}${msg}${R}\n`)
+      this.w(`    ${D}${C.slate}${msg}${R}\n`)
       return
     }
-    this.w(`  ${C.bpurple}◇${R} ${C.bcyan}${match[1].toUpperCase().padEnd(11)}${R}${D}${C.gray}${match[3]}${R}\n`)
+    this.w(`    ${C.gold}${match[1].padEnd(11)}${R}${D}${C.slate}${match[3]}${R}\n`)
   }
 
   success(msg: string): void {
@@ -441,7 +439,7 @@ export class Renderer {
   // ── REPL ──────────────────────────────────────────────────
 
   writePrompt(): void {
-    this.w(`\n  ${C.bblue}❯${R} `)
+    this.w(`\n  ${C.gold}›${R} `)
   }
 
   newline(): void {

@@ -1162,7 +1162,6 @@ async function runRepl(
     }
 
     // ── Regular task ──────────────────────────────────────────
-    renderer.humanPrompt(trimmed)
     hookRunner.runUserPromptSubmit(trimmed)
     updateProgressLog(cwd, 'running', trimmed.slice(0, 100))
 
