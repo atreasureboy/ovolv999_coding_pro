@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Readable } from 'stream'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
   ACPServer,
   parseMessage,
@@ -303,16 +306,23 @@ describe('ACPServer: interrupt', () => {
 
 describe('ACPServer: file/read', () => {
   it('reads from filesystem by default', async () => {
-    const { server, output } = createServer({}, '/tmp')
-    await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
-    output.length = 0
+    const cwd = mkdtempSync(join(tmpdir(), 'ovolv999-acp-'))
+    try {
+      const path = join(cwd, 'fixture.txt')
+      writeFileSync(path, 'portable fixture', 'utf8')
+      const { server, output } = createServer({}, cwd)
+      await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
+      output.length = 0
 
-    await server.handleMessage({
-      jsonrpc: '2.0', id: 1, method: 'file/read', params: { path: '/etc/hostname' },
-    })
-    const responses = getResponses(output)
-    const r = responses[0] as { result: { content: string } }
-    expect(typeof r.result.content).toBe('string')
+      await server.handleMessage({
+        jsonrpc: '2.0', id: 1, method: 'file/read', params: { path },
+      })
+      const responses = getResponses(output)
+      const r = responses[0] as { result: { content: string } }
+      expect(r.result.content).toBe('portable fixture')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 
   it('uses custom handler when provided', async () => {

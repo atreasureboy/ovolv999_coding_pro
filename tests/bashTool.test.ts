@@ -506,12 +506,23 @@ function extractPid(content: string, key: string): number | null {
 
 /**
  * True iff a process with the given pid is still alive (running or
- * any non-terminated state, INCLUDING zombies). Reads `/proc/<pid>/stat`
- * for an authoritative state field; never uses `kill -0` because that
- * returns 0 for zombies too and would give false positives.
+ * any non-terminated state, excluding zombies). Linux reads procfs and
+ * other POSIX systems use ps; kill -0 is avoided because it sees zombies.
  */
 async function isPidAlive(pid: number): Promise<boolean> {
   const { existsSync, readFileSync } = await import('fs')
+  if (process.platform !== 'linux') {
+    const { execFileSync } = await import('child_process')
+    try {
+      const state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+      return state.length > 0 && !state.startsWith('Z')
+    } catch {
+      return false
+    }
+  }
   if (!existsSync(`/proc/${pid}`)) return false
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')

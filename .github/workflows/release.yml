@@ -13,8 +13,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -41,4 +41,3 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" ovolv999-*.tgz SHA256SUMS --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
-

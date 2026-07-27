@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, readFileSync, statSync, rmSync, writeFileSync, mkdirSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { BackgroundTaskManager, formatTaskList, formatTaskDetail } from '../src/core/backgroundTaskManager.js'
@@ -12,13 +13,22 @@ async function waitForDone(manager: BackgroundTaskManager, id: string, timeoutMs
 }
 
 /**
- * Is a PID still observable in /proc? Returns false when the PID has
- * disappeared OR when it is a zombie (state field 'Z'). Zombie = the
- * process has exited but its parent hasn't reaped it yet, which still
- * counts as "the original process is gone" for our purposes.
+ * Returns false when the PID has disappeared or is a zombie. Linux uses
+ * procfs; other POSIX systems use ps so the assertion remains portable.
  */
 function isPidAlive(pid: number): boolean {
   if (process.platform === 'win32') return false
+  if (process.platform !== 'linux') {
+    try {
+      const state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+      return state.length > 0 && !state.startsWith('Z')
+    } catch {
+      return false
+    }
+  }
   try {
     const out = readFileSync(`/proc/${pid}/stat`, 'utf8')
     // /proc/<pid>/stat: "pid (comm) state ppid ..." — state is field 3,
