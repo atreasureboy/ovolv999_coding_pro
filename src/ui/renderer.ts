@@ -14,6 +14,7 @@
 
 import { createWriteStream } from 'fs'
 import { str } from '../core/strings.js'
+import { BRAND_LOGO_ROWS } from './brand.js'
 
 // ── ANSI ────────────────────────────────────────────────────
 
@@ -40,6 +41,8 @@ const C = {
   gold:    '\x1b[38;2;201;168;106m',
   ivory:   '\x1b[38;2;232;227;218m',
   slate:   '\x1b[38;2;125;133;144m',
+  electric: '\x1b[38;2;99;179;237m',
+  violet:  '\x1b[38;2;167;139;250m',
 }
 
 // ── Spinner ─────────────────────────────────────────────────
@@ -97,6 +100,9 @@ export class Renderer {
   private tty: boolean
   private out: (s: string) => void
   private streaming = false
+  private startupActive = false
+  private startupModel = ''
+  private startupMeta = new Map<string, string>()
 
   private stream: NodeJS.WritableStream | null = null
 
@@ -138,18 +144,23 @@ export class Renderer {
   // ── Banner ────────────────────────────────────────────────
 
   banner(version: string, model: string): void {
-    const lineWidth = Math.min(Math.max(this.width - 6, 48), 60)
-    const versionLabel = `v${version}`
-    const brandGap = ' '.repeat(Math.max(2, lineWidth - 'ovolv999'.length - versionLabel.length - 2))
+    this.startupActive = true
+    this.startupModel = model
+    this.startupMeta.clear()
     this.w('\n')
-    this.w(`  ${C.gold}◈${R} ${B}${C.ivory}ovolv999${R}${brandGap}${D}${C.slate}${versionLabel}${R}\n`)
-    this.w(`    ${D}${C.slate}${'─'.repeat(lineWidth)}${R}\n`)
-    this.w(`    ${C.gold}${model}${R}${D}${C.slate}  ·  ready  ·  autonomous coding agent${R}\n\n`)
+    for (let index = 0; index < BRAND_LOGO_ROWS.length; index++) {
+      const color = index < 2 ? C.electric : index < 4 ? C.violet : C.gold
+      this.w(`  ${B}${color}${BRAND_LOGO_ROWS[index]}${R}\n`)
+    }
+    this.w(`  ${D}${C.slate}DEVELOPER AGENT RUNTIME${R}`)
+    this.w(`  ${C.slate}·${R}  ${C.ivory}${model}${R}`)
+    this.w(`  ${C.slate}·${R}  ${D}${C.slate}v${version}${R}\n\n`)
   }
 
   // ── User message ──────────────────────────────────────────
 
   humanPrompt(text: string): void {
+    this.flushStartup()
     this.w(`\n  ${C.gold}›${R} ${C.ivory}${text}${R}\n`)
   }
 
@@ -350,11 +361,57 @@ export class Renderer {
 
   info(msg: string): void {
     const match = /^(\S+)(\s+)(.*)$/.exec(msg)
+    if (this.startupActive && match) {
+      this.startupMeta.set(match[1].toLowerCase(), match[3])
+      if (match[1].toLowerCase() === 'ready') this.flushStartup()
+      return
+    }
     if (!match) {
       this.w(`    ${D}${C.slate}${msg}${R}\n`)
       return
     }
     this.w(`    ${C.gold}${match[1].padEnd(11)}${R}${D}${C.slate}${match[3]}${R}\n`)
+  }
+
+  private flushStartup(): void {
+    if (!this.startupActive) return
+    this.startupActive = false
+    const width = Math.min(Math.max(this.width - 4, 68), 92)
+    if (width < 74) {
+      for (const [label, value] of this.startupMeta) {
+        this.w(`  ${C.electric}${label.padEnd(11)}${R}${D}${C.slate}${value}${R}\n`)
+      }
+      this.w('\n')
+      return
+    }
+    const inner = width - 2
+    const column = Math.floor((inner - 1) / 2)
+    const fit = (value: string): string => {
+      const clipped = value.length > column - 3 ? `${value.slice(0, column - 4)}…` : value
+      return ` ${clipped}${' '.repeat(Math.max(0, column - clipped.length - 1))}`
+    }
+    const border = (left: string, middle: string, right: string, fill = '─'): void => {
+      this.w(`  ${C.slate}${left}${fill.repeat(column)}${middle}${fill.repeat(column)}${right}${R}\n`)
+    }
+    const row = (left: string, right: string): void => {
+      this.w(`  ${C.slate}│${R}${C.ivory}${fit(left)}${R}${C.slate}│${R}${C.ivory}${fit(right)}${R}${C.slate}│${R}\n`)
+    }
+    const workspace = this.startupMeta.get('workspace') ?? process.cwd()
+    const source = this.startupMeta.get('git') ?? 'not a git workspace'
+    const session = this.startupMeta.get('session') ?? 'new'
+    const systems = [
+      this.startupMeta.get('memory') ? `memory ${this.startupMeta.get('memory')}` : '',
+      this.startupMeta.get('agents') ? 'agents ready' : '',
+    ].filter(Boolean).join(' · ') || 'runtime ready'
+
+    border('┌', '┬', '┐')
+    this.w(`  ${C.slate}│${R}${C.electric}${fit('WORKSPACE')}${R}${C.slate}│${R}${C.violet}${fit('RUNTIME')}${R}${C.slate}│${R}\n`)
+    row(workspace, `${this.startupModel} · session ${session}`)
+    border('├', '┼', '┤')
+    this.w(`  ${C.slate}│${R}${C.electric}${fit('SOURCE')}${R}${C.slate}│${R}${C.violet}${fit('SYSTEMS')}${R}${C.slate}│${R}\n`)
+    row(source, systems)
+    border('└', '┴', '┘')
+    this.w(`  ${C.bgreen}● READY${R}  ${D}${C.slate}/help  ·  Esc interrupt  ·  Ctrl+D exit${R}\n`)
   }
 
   success(msg: string): void {
@@ -439,6 +496,7 @@ export class Renderer {
   // ── REPL ──────────────────────────────────────────────────
 
   writePrompt(): void {
+    this.flushStartup()
     this.w(`\n  ${C.gold}›${R} `)
   }
 

@@ -3,6 +3,7 @@
  */
 
 import { Text, Box } from 'ink'
+import { BRAND_LOGO_ROWS } from '../brand.js'
 
 export interface BannerProps {
   version: string
@@ -28,21 +29,25 @@ export function Banner({ version, model, cwd, gitBranch, contextWindow }: Banner
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Box justifyContent="space-between">
-        <Box>
-          <Text color="#C9A86A">◈ </Text>
-          <Text bold color="#E8E3DA">ovolv999</Text>
-        </Box>
-        <Text dimColor>v{version}</Text>
-      </Box>
-      <Text color="#7D8590">{'─'.repeat(48)}</Text>
+      <Text bold color="#63B3ED">{BRAND_LOGO_ROWS.slice(0, 2).join('\n')}</Text>
+      <Text bold color="#A78BFA">{BRAND_LOGO_ROWS.slice(2, 4).join('\n')}</Text>
+      <Text bold color="#C9A86A">{BRAND_LOGO_ROWS[4]}</Text>
       <Box gap={1}>
-        <Text color="#C9A86A">{model}</Text>
-        <Text dimColor>· ready</Text>
+        <Text dimColor>DEVELOPER AGENT RUNTIME</Text>
+        <Text color="#E8E3DA">· {model}</Text>
+        <Text dimColor>· v{version}</Text>
         {ctxStr ? <Text dimColor>· {ctxStr} ctx</Text> : null}
-        {gitBranch ? <Text dimColor>· {gitBranch}</Text> : null}
       </Box>
-      {cwd ? <Text dimColor>{shortenPath(cwd)}</Text> : null}
+      <Box borderStyle="single" borderColor="#7D8590" paddingX={1}>
+        <Box width="50%">
+          <Text color="#63B3ED">WORKSPACE </Text>
+          <Text>{cwd ? shortenPath(cwd) : '—'}</Text>
+        </Box>
+        <Box width="50%">
+          <Text color="#A78BFA">SOURCE </Text>
+          <Text>{gitBranch ?? 'no git'}</Text>
+        </Box>
+      </Box>
     </Box>
   )
 }
