@@ -43,4 +43,25 @@ describe('terminal presentation', () => {
     expect(conversation).toContain('● first line')
     expect(conversation).toContain('    second line')
   })
+
+  it('redraws submitted wide text as a closed multiline prompt', () => {
+    let output = ''
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk)
+        callback()
+      },
+    })
+    const renderer = new Renderer({ stream })
+    renderer.writePrompt()
+    renderer.closePrompt('？'.repeat(50), true)
+    const plain = stripAnsi(output)
+    const content = plain.split('\n').filter(line => line.includes('│'))
+
+    expect(plain).toContain('╭─ ask ovolv999')
+    expect(content.length).toBe(2)
+    expect(content[0]).toContain('│ ›')
+    expect(content[1]).toMatch(/│\s+？？/)
+    expect(content.every(line => line.endsWith('│'))).toBe(true)
+  })
 })

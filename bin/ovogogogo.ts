@@ -1004,7 +1004,7 @@ async function runRepl(
     slashSuggester.attach()
     const { text, eof } = await input.readLine(promptPrefix)
     slashSuggester.detach()
-    renderer.closePrompt()
+    renderer.closePrompt(text, input.isTTY)
 
     if (eof) {
       // Ctrl+D at the prompt — save the session before exiting so the

@@ -90,6 +90,54 @@ function viz(name: string): ToolVisual {
   return TOOL_VIZ[name] ?? { icon: '·', color: C.white }
 }
 
+function cellWidth(char: string): number {
+  const code = char.codePointAt(0) ?? 0
+  if (code === 0 || code < 32 || (code >= 0x7f && code < 0xa0)) return 0
+  if (/\p{Mark}/u.test(char)) return 0
+  return code >= 0x1100 && (
+    code <= 0x115f ||
+    code === 0x2329 ||
+    code === 0x232a ||
+    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  ) ? 2 : 1
+}
+
+function displayWidth(text: string): number {
+  return Array.from(text).reduce((width, char) => width + cellWidth(char), 0)
+}
+
+function wrapDisplayText(text: string, width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  let lineWidth = 0
+  for (const char of Array.from(text)) {
+    if (char === '\n') {
+      lines.push(line)
+      line = ''
+      lineWidth = 0
+      continue
+    }
+    const charWidth = cellWidth(char)
+    if (line && lineWidth + charWidth > width) {
+      lines.push(line)
+      line = ''
+      lineWidth = 0
+    }
+    line += char
+    lineWidth += charWidth
+  }
+  lines.push(line)
+  return lines
+}
+
 // ── Renderer ────────────────────────────────────────────────
 
 export class Renderer {
@@ -524,8 +572,23 @@ export class Renderer {
     return `  ${C.slate}│${R} ${C.gold}›${R} `
   }
 
-  closePrompt(): void {
+  closePrompt(text?: string, replaceReadline = false): void {
     const inner = Math.min(Math.max(this.width - 6, 58), 90)
+    if (text !== undefined && replaceReadline) {
+      const promptWidth = 6
+      const occupiedRows = Math.max(1, Math.ceil((promptWidth + displayWidth(text)) / this.width))
+      this.w(`\x1b[${occupiedRows + 1}A\r\x1b[0J`)
+      const label = ' ask ovolv999 '
+      const top = '─'.repeat(Math.max(8, inner - label.length - 1))
+      this.w(`  ${C.slate}╭─${R}${C.electric}${label}${R}${C.slate}${top}╮${R}\n`)
+      const contentWidth = inner - 3
+      const lines = wrapDisplayText(text, contentWidth)
+      lines.forEach((line, index) => {
+        const prefix = index === 0 ? `${C.gold}›${R} ` : '  '
+        const padding = ' '.repeat(Math.max(0, contentWidth - displayWidth(line)))
+        this.w(`  ${C.slate}│${R} ${prefix}${line}${padding}${C.slate}│${R}\n`)
+      })
+    }
     const line = '─'.repeat(inner)
     this.w(`  ${C.slate}╰${line}╯${R}\n`)
   }
