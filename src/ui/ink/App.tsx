@@ -60,12 +60,7 @@ export function reasoningPreview(text: string, width: number): string {
 // ── Streaming cursor — blinking block at end of streaming text ──
 
 function StreamingCursor(): React.ReactElement {
-  const [visible, setVisible] = useState(true)
-  useEffect(() => {
-    const timer = setInterval(() => setVisible((v) => !v), 500)
-    return () => clearInterval(timer)
-  }, [])
-  return <Text color="cyan">{visible ? '▋' : ' '}</Text>
+  return <Text color="cyan">▋</Text>
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -310,15 +305,6 @@ export function App({
       ) : null}
 
       <MessageList messages={liveMessages} verbose={state.verbose} />
-
-      {/* Reasoning / thinking display */}
-      {state.streamingReasoning ? (
-        <Box marginLeft={2} height={1}>
-          <Text dimColor italic wrap="truncate-end">
-            {reasoningPreview(state.streamingReasoning, terminalWidth)}
-          </Text>
-        </Box>
-      ) : null}
 
       {/* Live streaming text */}
       {state.streamingText ? (

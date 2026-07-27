@@ -148,6 +148,16 @@ describe('UIStore', () => {
       expect(store.getState().spinnerVerb).toBe('Thinking')
     })
 
+    it('buffers reasoning without repainting the terminal', () => {
+      let renders = 0
+      const unsubscribe = store.subscribe(() => { renders++ })
+      store.appendStreamingReasoning('private ')
+      store.appendStreamingReasoning('reasoning')
+      expect(store.getState().streamingReasoning).toBe('private reasoning')
+      expect(renders).toBe(0)
+      unsubscribe()
+    })
+
     it('sets banner', () => {
       store.setBanner('1.0.0', 'gpt-4')
       expect(store.getState().banner).toEqual({ version: '1.0.0', model: 'gpt-4' })

@@ -179,7 +179,6 @@ export class UIStore {
   /** Streaming: accumulate reasoning tokens (from <think> tags). */
   appendStreamingReasoning(token: string): void {
     this.state.streamingReasoning += token
-    this.emit()
   }
 
   /** Flush accumulated streaming text as a message, then clear the buffer. */
