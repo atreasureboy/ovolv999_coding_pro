@@ -68,6 +68,13 @@ export function PromptInput({
     if (!showMenu) return []
     const partial = text.slice(1).toLowerCase()
     const cmds = listCommands()
+    if (!partial) {
+      const featured = ['loop', 'plan', 'review', 'commit', 'diff', 'model', '?']
+      return featured
+        .map(name => cmds.find(command => command.name === name))
+        .filter((command): command is NonNullable<typeof command> => Boolean(command))
+        .map(command => ({ name: command.name, description: command.description, kind: 'cmd' }))
+    }
     const out: SlashEntry[] = []
     for (const c of cmds) {
       if (!partial || c.name.toLowerCase().startsWith(partial)) {
@@ -83,6 +90,10 @@ export function PromptInput({
     }
     return out.sort((a, b) => a.name.localeCompare(b.name))
   })()
+
+  useEffect(() => {
+    setMenuSelected(0)
+  }, [text])
 
   // Clamp selection when entries change
   useEffect(() => {

@@ -18,29 +18,47 @@ export interface SlashEntry {
 export function SlashMenu({
   entries,
   selected,
+  maxVisible = 7,
 }: {
   entries: SlashEntry[]
   selected: number
+  maxVisible?: number
 }): React.ReactElement {
   if (entries.length === 0) return <></>
 
-  const maxName = Math.max(...entries.map((e) => e.name.length), 4)
+  const start = Math.min(
+    Math.max(0, selected - Math.floor(maxVisible / 2)),
+    Math.max(0, entries.length - maxVisible),
+  )
+  const visible = entries.slice(start, start + maxVisible)
+  const maxName = Math.max(...visible.map((e) => e.name.length), 4)
 
   return (
     <Box flexDirection="column" marginTop={0}>
-      {entries.map((entry, i) => {
-        const isSel = i === selected
+      {visible.map((entry, index) => {
+        const absoluteIndex = start + index
+        const isSel = absoluteIndex === selected
+        const description = entry.description.length > 72
+          ? entry.description.slice(0, 71) + '…'
+          : entry.description
         return (
           <Box key={`${entry.kind}-${entry.name}`}>
             <Text color={isSel ? 'black' : 'cyan'} backgroundColor={isSel ? 'cyan' : undefined}>
               {' '}
               /{entry.name.padEnd(maxName)}{' '}
             </Text>
-            <Text dimColor> {entry.description}</Text>
+            <Text dimColor> {description}</Text>
             {entry.kind === 'skill' ? <Text dimColor italic> (skill)</Text> : null}
           </Box>
         )
       })}
+      {entries.length > maxVisible ? (
+        <Box paddingLeft={1}>
+          <Text dimColor>
+            ↑↓ navigate · {selected + 1}/{entries.length} · /? shows all commands
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   )
 }

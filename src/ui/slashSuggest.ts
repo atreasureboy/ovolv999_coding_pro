@@ -176,13 +176,17 @@ export class SlashSuggester {
     const D = '\x1b[2m'
     const R = '\x1b[0m'
     const cyan = '\x1b[36m'
+    const visible = matches.slice(0, 7)
     const lines: string[] = []
-    const maxName = Math.max(...matches.map((m) => m.name.length), 4)
-    for (const m of matches) {
+    const maxName = Math.max(...visible.map((m) => m.name.length), 4)
+    for (const m of visible) {
       const tag = m.kind === 'skill' ? ' (skill)' : ''
       const name = '/' + shorten(m.name, maxName).padEnd(maxName)
       const desc = shorten(m.description, 60)
       lines.push(`  ${cyan}${name}${R}${D}  ${desc}${tag}${R}`)
+    }
+    if (matches.length > visible.length) {
+      lines.push(`  ${D}↑↓ navigate · ${visible.length}/${matches.length} shown · /? shows all${R}`)
     }
     this.write('\n')
     for (const l of lines) this.write(l + '\n')
