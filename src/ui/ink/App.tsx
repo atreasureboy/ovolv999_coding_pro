@@ -14,7 +14,7 @@
  * to UIStore for display state, and drives the engine via async turn execution.
  */
 
-import { Text, Box, useApp, useInput, useStdout } from 'ink'
+import { Text, Box, Static, useApp, useInput, useStdout } from 'ink'
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
 import { Banner } from './Banner.js'
@@ -251,16 +251,19 @@ export function App({
   return (
     <Box width={Math.max(20, stdout.columns || 80)} flexDirection="column">
       {/* Banner */}
-      {state.banner ? (
-        <Banner
-          version={state.banner.version}
-          model={state.banner.model}
-          cwd={cwd}
-          gitBranch={getGitBranch(cwd)}
-          contextWindow={maxContextTokens}
-          terminalWidth={Math.max(20, stdout.columns || 80)}
-        />
-      ) : null}
+      <Static items={state.banner ? [state.banner] : []}>
+        {(banner) => (
+          <Banner
+            key={`${banner.version}:${banner.model}`}
+            version={banner.version}
+            model={banner.model}
+            cwd={cwd}
+            gitBranch={getGitBranch(cwd)}
+            contextWindow={maxContextTokens}
+            terminalWidth={Math.max(20, stdout.columns || 80)}
+          />
+        )}
+      </Static>
 
       {/* Interrupt overlay */}
       {state.interrupt?.active ? (

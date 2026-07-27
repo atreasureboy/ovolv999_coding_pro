@@ -118,6 +118,13 @@ export function clearRegistry(): void {
   registry.clear()
 }
 
+export function normalizeSlashCommandInput(input: string): string {
+  const trimmed = input.trim()
+  const separator = trimmed.search(/\s/)
+  if (separator < 0) return trimmed.normalize('NFKC')
+  return trimmed.slice(0, separator).normalize('NFKC') + trimmed.slice(separator)
+}
+
 // ── Dispatcher ──────────────────────────────────────────────────────────────
 
 /**
@@ -128,7 +135,7 @@ export async function dispatchSlashCommand(
   input: string,
   ctx: SlashCommandContext,
 ): Promise<SlashCommandResult | null> {
-  const trimmed = input.trim()
+  const trimmed = normalizeSlashCommandInput(input)
   if (!trimmed.startsWith('/')) return null
 
   const parts = trimmed.slice(1).split(/\s+/)

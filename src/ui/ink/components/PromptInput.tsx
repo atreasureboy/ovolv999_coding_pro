@@ -23,6 +23,7 @@ import { suggestFiles } from '../fileSuggest.js'
 import { pasteStore } from '../pasteStore.js'
 import { openInEditor } from '../../../utils/editor.js'
 import { listCommands } from '../../../commands/index.js'
+import { normalizeSlashCommandInput } from '../../../commands/index.js'
 
 export interface PromptInputProps {
   /** Called when the user presses Enter with non-empty text. */
@@ -62,11 +63,12 @@ export function PromptInput({
 
   // ── Compute slash menu entries ────────────────────────────────────────────
 
-  const showMenu = text.startsWith('/') && !text.includes(' ') && !disabled
+  const normalizedCommandText = normalizeSlashCommandInput(text)
+  const showMenu = normalizedCommandText.startsWith('/') && !normalizedCommandText.includes(' ') && !disabled
 
   const menuEntries: SlashEntry[] = (() => {
     if (!showMenu) return []
-    const partial = text.slice(1).toLowerCase()
+    const partial = normalizedCommandText.slice(1).toLowerCase()
     const cmds = listCommands()
     if (!partial) {
       const featured = ['loop', 'plan', 'review', 'commit', 'diff', 'model', '?']
@@ -145,7 +147,7 @@ export function PromptInput({
   const handleSubmit = useCallback(() => {
     if (showMenu && menuEntries.length > 0) {
       const selected = menuEntries[Math.min(menuSelected, menuEntries.length - 1)]
-      if (text !== `/${selected.name}`) {
+      if (normalizedCommandText !== `/${selected.name}`) {
         autocomplete()
         return
       }
@@ -161,7 +163,7 @@ export function PromptInput({
       setCursor(0)
       setHistIdx(-1)
     }
-  }, [text, showMenu, menuEntries, autocomplete, fileContext, fileSuggestions, autocompleteFile, onSubmit])
+  }, [text, normalizedCommandText, showMenu, menuEntries, autocomplete, fileContext, fileSuggestions, autocompleteFile, onSubmit])
 
   useInput((input, key) => {
     // ── ESC: interrupt ───────────────────────────────────────────────────
@@ -368,7 +370,7 @@ export function PromptInput({
         <SlashMenu entries={menuEntries} selected={menuSelected} />
       ) : null}
       {showMenu && menuEntries.length === 0 && text.length > 1 ? (
-        <Text dimColor> No matching commands. Type / for all commands.</Text>
+        <Text dimColor> No matching commands. Type /? to show all commands.</Text>
       ) : null}
       {fileContext.active && fileSuggestions.length > 0 ? (
         <FileSuggestMenu suggestions={fileSuggestions} selected={fileSelected} query={fileContext.query} />

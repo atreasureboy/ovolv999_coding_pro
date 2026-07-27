@@ -18,6 +18,7 @@
  */
 
 import { emitKeypressEvents } from 'readline'
+import { normalizeSlashCommandInput } from '../commands/index.js'
 
 export interface SlashSuggesterSource {
   /** Returns the list of registered command names + their descriptions */
@@ -101,9 +102,10 @@ export class SlashSuggester {
    */
   complete = (line: string): [string[], string] => {
     if (!this.enabled) return [[], line]
-    if (!line.startsWith('/')) return [[], line]
-    if (line.includes(' ')) return [[], line]
-    const partial = line.slice(1)
+    const normalized = normalizeSlashCommandInput(line)
+    if (!normalized.startsWith('/')) return [[], line]
+    if (normalized.includes(' ')) return [[], line]
+    const partial = normalized.slice(1)
     const matches = filterMatches(partial, this.source)
     const names = matches.map((m) => '/' + m.name)
     if (names.length === 0) {
@@ -151,7 +153,7 @@ export class SlashSuggester {
    */
   refresh(): void {
     if (!this.enabled) return
-    const line = this.getLine()
+    const line = normalizeSlashCommandInput(this.getLine())
     if (!line.startsWith('/') || line.includes(' ')) {
       this.clear()
       return

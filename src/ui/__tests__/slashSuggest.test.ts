@@ -51,6 +51,15 @@ describe('filterMatches', () => {
     expect(out[0].kind).toBe('cmd')
   })
 
+  it('normalizes full-width command punctuation', () => {
+    const out = filterMatches('？'.normalize('NFKC'), {
+      isTTY: true,
+      getCommands: () => [{ name: '?', description: 'Show all commands' }],
+      getSkills: () => [],
+    })
+    expect(out.map((m) => m.name)).toEqual(['?'])
+  })
+
   it('returns empty when getCommands/getSkills throw — defensive', () => {
     const out = filterMatches('h', { isTTY: true, getCommands: () => [], getSkills: () => [] })
     expect(out).toEqual([])
