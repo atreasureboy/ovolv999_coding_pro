@@ -123,6 +123,25 @@ describe('UIStore', () => {
       expect(store.getState().running).toBe(false)
     })
 
+    it('keeps completed history static while a turn is updating', () => {
+      store.addUserMessage('before')
+      expect(store.getState().committedThroughId).toBe(1)
+
+      store.setRunning(true)
+      const toolId = store.addToolStart('Read', { file_path: 'a.ts' })
+      store.setSpinner(true, 'Thinking')
+      store.setSpinner(true, 'Thinking')
+
+      expect(store.getState().committedThroughId).toBe(1)
+      const pendingTool = store.getState().messages.find((message) => message.id === toolId)
+      expect(pendingTool).toMatchObject({ type: 'tool' })
+      expect(pendingTool).not.toHaveProperty('result')
+
+      store.setToolResult(toolId, 'content', false)
+      store.setRunning(false)
+      expect(store.getState().committedThroughId).toBe(toolId)
+    })
+
     it('sets spinner state', () => {
       store.setSpinner(true, 'Thinking')
       expect(store.getState().spinnerActive).toBe(true)

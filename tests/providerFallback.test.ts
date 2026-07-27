@@ -68,7 +68,7 @@ describe('ModelGateway v0.3.1 fallback', () => {
     const onProviderError = vi.fn().mockResolvedValue('sonnet')
     const onUsage = vi.fn()
 
-    await gw.call({
+    const result = await gw.call({
       systemPrompt: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       toolDefs: [],
@@ -82,6 +82,20 @@ describe('ModelGateway v0.3.1 fallback', () => {
     expect(onProviderError.mock.calls[0][0]).toBe('haiku')
     expect(adapter.attempts).toEqual(['haiku', 'sonnet'])
     expect(onUsage).toHaveBeenCalledOnce()
+    expect(result.attempts).toHaveLength(2)
+    expect(result.attempts[0]).toMatchObject({
+      model: 'haiku',
+      provider: 'openai-compatible',
+      success: false,
+      error: 'rate limit 429 too many requests',
+      usage: null,
+    })
+    expect(result.attempts[1]).toMatchObject({
+      model: 'sonnet',
+      provider: 'openai-compatible',
+      success: true,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    })
   })
 
   it('invokes onProviderError on 5xx', async () => {
@@ -173,15 +187,27 @@ describe('ModelGateway v0.3.1 fallback', () => {
     const consumer = new FakeConsumer() as unknown as StreamConsumer
     const gw = new ModelGateway({ adapter, renderer: renderer as unknown as Renderer, streamConsumer: consumer })
     const onProviderError = vi.fn().mockResolvedValue('sonnet')
-    await expect(gw.call({
-      systemPrompt: '',
-      messages: [{ role: 'user', content: 'x' }],
-      toolDefs: [],
-      model: 'haiku',
-      maxOutputTokens: 1024,
-      abortSignal: new AbortController().signal,
-      turnAbortController: null,
-    }, { onProviderError })).rejects.toThrow('429')
+    let caught: unknown
+    try {
+      await gw.call({
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'x' }],
+        toolDefs: [],
+        model: 'haiku',
+        maxOutputTokens: 1024,
+        abortSignal: new AbortController().signal,
+        turnAbortController: null,
+      }, { onProviderError })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({
+      message: '429',
+      attempts: [
+        { model: 'haiku', success: false, error: '429' },
+        { model: 'sonnet', success: false, error: 'ETIMEDOUT' },
+      ],
+    })
     expect(adapter.attempts).toEqual(['haiku', 'sonnet'])
   })
 

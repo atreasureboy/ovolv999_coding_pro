@@ -40,6 +40,7 @@ export interface VerificationState {
 export interface ModelCallAttempt {
   profileId: string
   model: string
+  provider: string
   startedAt: number
   endedAt: number
   status: 'succeeded' | 'rate_limited' | 'timed_out' | 'unavailable' | 'invalid_request' | 'context_limit' | 'unsupported' | 'failed'
@@ -60,6 +61,8 @@ export interface TurnOutcome {
   output: string
   changedFiles: string[]
   artifacts: string[]
+  taskGraph?: unknown
+  workerReferences?: Array<{ runId: string; status: string }>
   verification: VerificationState
   modelAttempts: ModelCallAttempt[]
 

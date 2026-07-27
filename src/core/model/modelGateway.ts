@@ -56,6 +56,24 @@ export interface ModelGatewayCallbacks {
   onProviderError?: (failedModel: string, error: Error) => string | null
 }
 
+export interface ProviderAttempt {
+  model: string
+  provider: string
+  success: boolean
+  error?: string
+  latencyMs: number
+  usage: TokenUsage | null
+}
+
+export type ModelGatewayResult = StreamResult & { attempts: ProviderAttempt[] }
+
+export class ModelGatewayError extends Error {
+  constructor(message: string, public readonly attempts: ProviderAttempt[]) {
+    super(message)
+    this.name = 'ModelGatewayError'
+  }
+}
+
 export class ModelGateway {
   private readonly adapter: ProviderAdapter
   private readonly renderer: Renderer
@@ -88,11 +106,14 @@ export class ModelGateway {
   async call(
     params: ModelCallParams,
     callbacks?: ModelGatewayCallbacks,
-  ): Promise<StreamResult> {
+  ): Promise<ModelGatewayResult> {
     const { systemPrompt, messages, toolDefs, model, temperature, maxOutputTokens, abortSignal, turnAbortController } = params
 
     this.renderer.startSpinner()
     const callStartMs = Date.now()
+    const attempts: ProviderAttempt[] = []
+    let activeModel = model
+    let attemptStartMs = callStartMs
 
     const streamReq = {
       model,
@@ -111,6 +132,14 @@ export class ModelGateway {
       this.renderer.stopSpinner()
       const err = caught instanceof Error ? caught : new Error(String(caught))
       const errMsg = err.message || ''
+      attempts.push({
+        model,
+        provider: this.adapter.providerId,
+        success: false,
+        error: errMsg,
+        latencyMs: Date.now() - attemptStartMs,
+        usage: null,
+      })
 
       // Reactive compaction on context-overflow — provider-agnostic
       // (detected by error-message signature across OpenAI-compatible
@@ -118,8 +147,22 @@ export class ModelGateway {
       if (this.isContextOverflowError(errMsg) && callbacks?.onContextOverflow) {
         this.renderer.warn('Context too long — auto-compacting and retrying...')
         const compacted = await callbacks.onContextOverflow(messages, abortSignal)
-        if (!compacted) throw err
-        stream = await this.adapter.stream(streamReq)
+        if (!compacted) throw new ModelGatewayError(err.message, attempts)
+        attemptStartMs = Date.now()
+        try {
+          stream = await this.adapter.stream(streamReq)
+        } catch (retryCaught) {
+          const retryError = retryCaught instanceof Error ? retryCaught : new Error(String(retryCaught))
+          attempts.push({
+            model,
+            provider: this.adapter.providerId,
+            success: false,
+            error: retryError.message,
+            latencyMs: Date.now() - attemptStartMs,
+            usage: null,
+          })
+          throw new ModelGatewayError(retryError.message, attempts)
+        }
       } else if (this.isRetryableProviderError(errMsg) && callbacks?.onProviderError) {
         // v0.3.1 (runtime truth contract §三.1.4): provider fallback at the stream
         // ESTABLISHMENT boundary (before any tool runs). The callback
@@ -131,25 +174,41 @@ export class ModelGateway {
         const fallbackModel: string | null = (fallbackResult && typeof (fallbackResult as { then?: unknown }).then === 'function')
           ? await (fallbackResult as Promise<string | null>)
           : (fallbackResult as string | null)
-        if (!fallbackModel || fallbackModel === model) throw err
+        if (!fallbackModel || fallbackModel === model) throw new ModelGatewayError(err.message, attempts)
         this.renderer.warn(
           `Provider error on "${model}" — falling back to "${fallbackModel}"`,
         )
+        activeModel = fallbackModel
+        attemptStartMs = Date.now()
         try {
           stream = await this.adapter.stream({ ...streamReq, model: fallbackModel })
-        } catch {
-          // Fallback failed too — surface the ORIGINAL error so /why
-          // can attribute failure to the chain, not just the last hop.
-          throw err
+        } catch (fallbackCaught) {
+          const fallbackError = fallbackCaught instanceof Error ? fallbackCaught : new Error(String(fallbackCaught))
+          attempts.push({
+            model: fallbackModel,
+            provider: this.adapter.providerId,
+            success: false,
+            error: fallbackError.message,
+            latencyMs: Date.now() - attemptStartMs,
+            usage: null,
+          })
+          throw new ModelGatewayError(err.message, attempts)
         }
       } else {
-        throw err
+        throw new ModelGatewayError(err.message, attempts)
       }
     }
 
     const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
-    callbacks?.onUsage?.(result.usage, callStartMs)
-    return result
+    attempts.push({
+      model: activeModel,
+      provider: this.adapter.providerId,
+      success: true,
+      latencyMs: Date.now() - attemptStartMs,
+      usage: result.usage,
+    })
+    callbacks?.onUsage?.(result.usage, attemptStartMs)
+    return { ...result, attempts }
   }
 
   /**

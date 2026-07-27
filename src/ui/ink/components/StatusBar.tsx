@@ -44,8 +44,8 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
   const isHigh = pct > 80
 
   return (
-    <Box justifyContent="space-between" marginTop={1} paddingX={1}>
-      <Box gap={1}>
+    <Box width="100%" justifyContent="space-between" marginTop={1} paddingX={1} flexWrap="nowrap">
+      <Box gap={1} flexShrink={1}>
         <Text color="#63B3ED">◆</Text>
         <Text bold color="#E8E3DA">BUILD</Text>
         <Text color="#7D8590">/</Text>
@@ -55,7 +55,7 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
         {verbose ? <Text color="yellowBright">VERBOSE</Text> : null}
         <Text dimColor>{messageCount} msgs</Text>
       </Box>
-      <Box gap={1}>
+      <Box gap={1} flexShrink={0}>
         {isHigh ? <Text color="redBright" bold>⚠</Text> : null}
         <Text dimColor>CONTEXT</Text>
         <Text color={color}>{bar}</Text>

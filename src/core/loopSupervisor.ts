@@ -31,9 +31,21 @@ export interface LoopCheckpoint {
   iteration: number
   phase: string
   runId?: string
+  turnOutcome?: unknown
+  taskGraph?: unknown
+  passedQualityGates?: string[]
+  providerCircuit?: {
+    status: 'closed' | 'open' | 'half-open'
+    consecutiveFailures: number
+    failureBudget?: number
+  }
+  recentCommands?: string[]
+  workerReferences?: Array<{ runId: string; status: string; worktree?: string; branch?: string }>
+  progressEvidenceHash?: string
   goalHash: string
   acceptanceHash: string
   lastCommit?: string
+  head?: string
   changedFiles: string[]
   consecutiveNoProgress: number
   consecutiveProviderFailures: number
@@ -85,7 +97,8 @@ export class LoopLeaseManager {
   acquire(taskId: string, cwd: string): LoopLease {
     const now = new Date().toISOString()
     const ownerToken = randomUUID()
-    const fingerprint = this.getProcessFingerprint()
+    const fingerprint = getProcessIdentity(process.pid)
+    if (!fingerprint) throw new Error('Unable to establish a stable process identity for loop lease')
     const lease: LoopLease = {
       schemaVersion: 1,
       ownerToken,
@@ -115,9 +128,7 @@ export class LoopLeaseManager {
     try {
       existing = JSON.parse(readFileSync(this.leasePath, 'utf8')) as LoopLease
     } catch {
-      // Corrupt lease — safe to take over
-      try { unlinkSync(this.leasePath) } catch { /* best-effort */ }
-      return this.acquire(taskId, cwd)
+      return null
     }
     // Check if stale
     const heartbeatAge = Date.now() - new Date(existing.heartbeatAt).getTime()
@@ -126,13 +137,29 @@ export class LoopLeaseManager {
     let pidAlive: boolean
     try { process.kill(existing.pid, 0); pidAlive = true } catch { pidAlive = false }
     if (pidAlive) {
-      // PID alive but heartbeat stale — check fingerprint for PID reuse
-      const currentFingerprint = this.getProcessFingerprint()
-      if (existing.processStartFingerprint === currentFingerprint) return null // same process
+      const currentFingerprint = getProcessIdentity(existing.pid)
+      if (!currentFingerprint) return null
+      if (existing.processStartFingerprint === currentFingerprint) return null
     }
-    // Safe to take over
-    try { unlinkSync(this.leasePath) } catch { /* best-effort */ }
-    return this.acquire(taskId, cwd)
+    let confirmed: LoopLease
+    try {
+      confirmed = JSON.parse(readFileSync(this.leasePath, 'utf8')) as LoopLease
+    } catch {
+      return null
+    }
+    if (confirmed.ownerToken !== existing.ownerToken) return null
+    const quarantine = `${this.leasePath}.stale.${existing.ownerToken}`
+    try {
+      renameSync(this.leasePath, quarantine)
+      const acquired = this.acquire(taskId, cwd)
+      try { unlinkSync(quarantine) } catch { /* best-effort */ }
+      return acquired
+    } catch {
+      try {
+        if (!existsSync(this.leasePath) && existsSync(quarantine)) renameSync(quarantine, this.leasePath)
+      } catch { /* best-effort */ }
+      return null
+    }
   }
 
   /** Update heartbeat. Must be called periodically by the Supervisor. */
@@ -141,9 +168,14 @@ export class LoopLeaseManager {
     this.heartbeatInfo = info
     this.lease.heartbeatAt = new Date().toISOString()
     try {
+      const current = JSON.parse(readFileSync(this.leasePath, 'utf8')) as LoopLease
+      if (current.ownerToken !== this.lease.ownerToken) {
+        this.heartbeatWriteFailures++
+        return false
+      }
       // Atomic temp + rename — single JSON object with embedded heartbeat
       const data = { ...this.lease, heartbeat: info }
-      const tmp = this.leasePath + '.tmp'
+      const tmp = `${this.leasePath}.${this.lease.ownerToken}.tmp`
       writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n')
       renameSync(tmp, this.leasePath)
       this.heartbeatWriteFailures = 0
@@ -182,7 +214,7 @@ export class LoopLeaseManager {
       try {
         const current = JSON.parse(readFileSync(this.leasePath, 'utf8')) as LoopLease
         if (current.ownerToken !== this.lease.ownerToken) return // not ours
-      } catch { /* corrupt — safe to remove */ }
+      } catch { return }
     }
     try { unlinkSync(this.leasePath) } catch { /* best-effort */ }
     this.lease = null
@@ -190,15 +222,21 @@ export class LoopLeaseManager {
 
   getLease(): LoopLease | null { return this.lease }
 
-  private getProcessFingerprint(): string {
-    // Combine PID + start time as a rough fingerprint. PID reuse across
-    // restarts will have a different start time.
-    try {
-      const usage = process.memoryUsage()
-      return `${process.pid}:${process.cwd()}:${usage.rss}`
-    } catch {
-      return `${process.pid}:${Date.now()}`
-    }
+}
+
+export function getProcessIdentity(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const close = stat.lastIndexOf(')')
+    if (close < 0) return null
+    const fields = stat.slice(close + 2).split(/\s+/)
+    const startTime = fields[19]
+    if (!startTime) return null
+    let bootId = ''
+    try { bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() } catch { /* optional */ }
+    return `${hostname()}:${bootId}:${pid}:${startTime}`
+  } catch {
+    return null
   }
 }
 

@@ -64,6 +64,7 @@ export type NewUIMessage = {
 
 export interface UIState {
   messages: UIMessage[]
+  committedThroughId: number
   /** Currently streaming assistant text (accumulated token by token). */
   streamingText: string
   /** Currently streaming reasoning/thinking text (from <think> tags). */
@@ -94,6 +95,7 @@ export interface UIState {
 
 const INITIAL_STATE: UIState = {
   messages: [],
+  committedThroughId: 0,
   streamingText: '',
   streamingReasoning: '',
   running: false,
@@ -142,6 +144,7 @@ export class UIStore {
     this.state = {
       ...this.state,
       messages: [...this.state.messages, { ...msg, id }],
+      committedThroughId: this.state.running ? this.state.committedThroughId : id,
     }
     this.emit()
     return id
@@ -227,7 +230,10 @@ export class UIStore {
   // ── State setters ─────────────────────────────────────────────────────────
 
   setRunning(running: boolean): void {
-    this.state = { ...this.state, running }
+    const committedThroughId = running
+      ? this.state.committedThroughId
+      : (this.state.messages.at(-1)?.id ?? this.state.committedThroughId)
+    this.state = { ...this.state, running, committedThroughId }
     this.emit()
   }
 
@@ -323,7 +329,7 @@ export class UIStore {
 
   /** Clear all messages (for /clear). */
   clearMessages(): void {
-    this.state = { ...this.state, messages: [] }
+    this.state = { ...this.state, messages: [], committedThroughId: 0 }
     this.emit()
   }
 

@@ -19,7 +19,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
 import { Banner } from './Banner.js'
 import { Spinner } from './Spinner.js'
-import { MessageList } from './components/MessageList.js'
+import { MessageList, MessageRow } from './components/MessageList.js'
 import { PromptInput } from './components/PromptInput.js'
 import { StatusBar } from './components/StatusBar.js'
 import { PlanView } from './components/PlanView.js'
@@ -245,23 +245,44 @@ export function App({
 
   const tokens = estimateTokens(history)
   const contextPct = maxContextTokens > 0 ? tokens / maxContextTokens : 0
+  const committedMessages = state.messages.filter((message) => message.id <= state.committedThroughId)
+  const liveMessages = state.messages.filter((message) => message.id > state.committedThroughId)
+  const staticItems: Array<
+    | { kind: 'banner'; id: string; version: string; model: string }
+    | { kind: 'message'; id: string; message: (typeof committedMessages)[number] }
+  > = [
+    ...(state.banner
+      ? [{
+          kind: 'banner' as const,
+          id: `banner:${state.banner.version}:${state.banner.model}`,
+          version: state.banner.version,
+          model: state.banner.model,
+        }]
+      : []),
+    ...committedMessages.map((message) => ({
+      kind: 'message' as const,
+      id: `message:${message.id}`,
+      message,
+    })),
+  ]
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <Box width={Math.max(20, stdout.columns || 80)} flexDirection="column">
-      {/* Banner */}
-      <Static items={state.banner ? [state.banner] : []}>
-        {(banner) => (
+      <Static items={staticItems}>
+        {(item) => item.kind === 'banner' ? (
           <Banner
-            key={`${banner.version}:${banner.model}`}
-            version={banner.version}
-            model={banner.model}
+            key={item.id}
+            version={item.version}
+            model={item.model}
             cwd={cwd}
             gitBranch={getGitBranch(cwd)}
             contextWindow={maxContextTokens}
             terminalWidth={Math.max(20, stdout.columns || 80)}
           />
+        ) : (
+          <MessageRow key={item.id} msg={item.message} />
         )}
       </Static>
 
@@ -277,8 +298,7 @@ export function App({
         </Box>
       ) : null}
 
-      {/* Conversation messages */}
-      <MessageList messages={state.messages} verbose={state.verbose} />
+      <MessageList messages={liveMessages} verbose={state.verbose} />
 
       {/* Reasoning / thinking display */}
       {state.streamingReasoning ? (

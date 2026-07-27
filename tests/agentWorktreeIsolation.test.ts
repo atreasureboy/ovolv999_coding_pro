@@ -281,10 +281,10 @@ describe('P0-4.B: modifying tasks get an isolated worktree', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// P0-4.C: failures discard the worktree without merging
+// P0-4.C: incomplete workers preserve the worktree without merging
 // ─────────────────────────────────────────────────────────────────────
-describe('P0-4.C: failures discard the worktree without merging', () => {
-  it('discards on engine-error reason (no merge)', async () => {
+describe('P0-4.C: incomplete workers preserve the worktree without merging', () => {
+  it('preserves on engine-error reason (no merge)', async () => {
     const child = errorChildEngine()
     const tool = new AgentTool({
       factory: child.factory,
@@ -298,14 +298,13 @@ describe('P0-4.C: failures discard the worktree without merging', () => {
     )
 
     expect(out.isError).toBe(true)
-    expect(out.content).toContain('[Worktree] discarded')
+    expect(out.content).toContain('[Worktree] preserved')
     // No stray file merged into the parent.
     expect(existsSync(join(gitRoot, 'feature.txt'))).toBe(false)
-    // The specific worktree subdir is gone.
-    expect(existsSync(child.constructedCwds[0])).toBe(false)
+    expect(existsSync(child.constructedCwds[0])).toBe(true)
   })
 
-  it('discards on verify-gate failure (no merge of broken code)', async () => {
+  it('preserves on verify-gate failure (no merge of broken code)', async () => {
     // Parent repo has a failing test script — the worktree inherits it.
     writeFailingPackageJson(gitRoot)
     // The child "succeeds" (reason=stop_sequence) but the verify gate
@@ -341,7 +340,8 @@ describe('P0-4.C: failures discard the worktree without merging', () => {
 
     expect(out.isError).toBe(true)
     expect(out.content).toContain('[Verify Gate] ✗')
-    expect(out.content).toContain('[Worktree] discarded')
+    expect(out.content).toContain('[Worktree] preserved')
+    expect(existsSync(successChild.constructedCwds[0])).toBe(true)
   })
 })
 
@@ -581,7 +581,7 @@ describe('P0-4.G: merge artifacts are observable', () => {
     expect(readFileSync(join(gitRoot, 'hist.txt'), 'utf8')).toBe('merged change')
   })
 
-  it('after discard, the worktree branch is deleted (no leftover refs)', async () => {
+  it('after failure, the worktree branch and directory are preserved for recovery', async () => {
     const child = errorChildEngine()
     const tool = new AgentTool({
       factory: child.factory,
@@ -594,14 +594,12 @@ describe('P0-4.G: merge artifacts are observable', () => {
       { cwd: gitRoot, permissionMode: 'auto' },
     )
 
-    // No leftover worktree branches in the repo.
     const branches = execSync('git branch --list', { cwd: gitRoot, encoding: 'utf8' })
-    expect(branches).not.toMatch(/wt\//)
-    // No leftover specific worktree directory.
-    expect(existsSync(child.constructedCwds[0])).toBe(false)
-    // The worktree manager's tracking metadata is empty.
+    expect(branches).toMatch(/wt\//)
+    expect(existsSync(child.constructedCwds[0])).toBe(true)
     const mgr = getWorktreeManager(gitRoot)
-    expect(mgr.listWorktrees()).toEqual([])
+    expect(mgr.listWorktrees()).toHaveLength(1)
+    expect(mgr.listWorktrees()[0].path).toBe(child.constructedCwds[0])
   })
 })
 

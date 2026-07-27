@@ -109,7 +109,7 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     e.getEventEmitter().on('RUN_COMPLETED', () => events.push('completed'))
     e.getEventEmitter().on('CONTEXT_CLOSED', () => events.push('closed'))
     await e.runTurn('explain something', [])
-    expect(events).toEqual(['terminated', 'completed', 'hook', 'closed'])
+    expect(events).toEqual(['terminated', 'hook', 'closed'])
     expect(e.getTaskGraphStore().has(e.getLastRunContext()?.runId ?? '')).toBe(false)
   })
 
@@ -161,7 +161,11 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     for (let i = 0; i < 20; i++) {
       await e.runTurn(`iteration ${i}`, [])
     }
-    expect(true).toBe(true) // no crash = context lifecycle works
+    expect(e.getTaskGraphStore().list()).toEqual(['default'])
+    expect(e.getBackgroundTaskManager().listTasks()).toEqual([])
+    expect(e.getRunRegistry().list().every((run) =>
+      ['succeeded', 'failed', 'cancelled', 'timed_out', 'verification_failed', 'lost'].includes(run.status),
+    )).toBe(true)
   })
 
   it('§31: terminal event matches CompletionStatus', async () => {
@@ -185,8 +189,7 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     e.getEventEmitter().on('RUN_TERMINATED', () => { count++ })
     e.getEventEmitter().on('RUN_COMPLETED', () => { count++ })
     await e.runTurn('explain', [])
-    // Both fire, but each exactly once
-    expect(count).toBe(2) // RUN_TERMINATED + RUN_COMPLETED
+    expect(count).toBe(1)
   })
 
   it('§35: 20 sequential runs leave no leaked contexts', async () => {

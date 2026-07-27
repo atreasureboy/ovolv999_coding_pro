@@ -31,7 +31,7 @@ import type {
   Tool,
   ToolDefinition,
 } from '../types.js'
-import type { TokenUsage } from '../costTracker.js'
+import { calculateUSDCost, type TokenUsage } from '../costTracker.js'
 import type { CostTracker } from '../costTracker.js'
 import type { BackgroundTaskManager } from '../backgroundTaskManager.js'
 import type { FileHistory } from '../fileHistory.js'
@@ -158,11 +158,13 @@ export class RuntimeCoordinator {
    *  the TurnOutcome can carry the full fallback chain. */
   private modelCallsThisRun: Array<{
     model: string
+    provider: string
     startedAt: number
     endedAt: number
     success: boolean
     error?: string
     usage?: { inputTokens: number; outputTokens: number }
+    estimatedCost?: number
     retryable: boolean
   }> = []
   /**
@@ -972,6 +974,11 @@ export class RuntimeCoordinator {
       output: result.output,
       changedFiles: [...wsFinal.filesChanged],
       artifacts: [],
+      taskGraph: currentGraph && currentGraph.size() > 0 ? currentGraph.snapshot() : undefined,
+      workerReferences: [...sharedState.activeSubtasks.keys()].map((workerRunId) => ({
+        runId: workerRunId,
+        status: 'running',
+      })),
       verification: {
         executed: wsFinal.verification.passed.length + wsFinal.verification.failed.length > 0,
         passed: wsFinal.verification.failed.length === 0,
@@ -980,10 +987,12 @@ export class RuntimeCoordinator {
       modelAttempts: this.modelCallsThisRun.map((a) => ({
         profileId: a.model,
         model: a.model,
+        provider: a.provider,
         startedAt: a.startedAt,
         endedAt: a.endedAt,
         status: a.success ? 'succeeded' as const : 'failed' as const,
         usage: a.usage,
+        estimatedCost: a.estimatedCost,
         error: a.error,
       })),
       // Deprecated compat
@@ -994,7 +1003,6 @@ export class RuntimeCoordinator {
     // v0.3.4 (durable supervisor contract §Phase 11): emit a status-specific terminal event.
     const terminalStatus = status
     eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
-    eventEmitter.emit({ type: 'RUN_COMPLETED', result })
 
     await this.deps.moduleManager.runComplete({
       cwd: config.cwd,
@@ -1069,16 +1077,13 @@ export class RuntimeCoordinator {
       this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${this.consecutiveProviderFailures})`)
       await new Promise((resolve) => setTimeout(resolve, delayMs))
     }
-    const callStartMs = Date.now()
     const modelAtStart = this.deps.config.model
     this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
     let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null
-    let providerFailed = false
-    let attemptModel = modelAtStart
     const attemptStartedAt = Date.now()
     this.deps.eventEmitter.emit({
       type: 'MODEL_ATTEMPT_STARTED',
-      model: attemptModel,
+      model: modelAtStart,
       attemptId: this.modelCallsThisRun.length,
     } as never)
     try {
@@ -1101,7 +1106,6 @@ export class RuntimeCoordinator {
           turnAbortController: this.deps.sharedState.currentTurnAbortController,
         },
         {
-          onUsage: (usage, t0) => this.recordUsage(usage, t0, modelAtStart, true),
           onContextOverflow: async (msgs, signal) => {
             return this.deps.contextManager.reactiveCompact(msgs, signal)
           },
@@ -1110,61 +1114,22 @@ export class RuntimeCoordinator {
           // source of truth; if it's exhausted, returns null and the
           // Gateway surfaces the original error.
           onProviderError: (failedModel, err) => {
-            providerFailed = true
             this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
-            // v0.3.2 (run-scoped runtime contract §Phase 7): record the failed attempt
-            // before the fallback chain advances.
-            this.modelCallsThisRun.push({
-              model: failedModel,
-              startedAt: attemptStartedAt,
-              endedAt: Date.now(),
-              success: false,
-              error: err.message,
-              retryable: /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(err.message),
-            })
-            this.deps.eventEmitter.emit({
-              type: 'MODEL_ATTEMPT_FAILED',
-              model: failedModel,
-              attemptId: this.modelCallsThisRun.length - 1,
-              error: err.message,
-              retryable: /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(err.message),
-            } as never)
             if (!this.deps.modelRouter) return null
             const next = this.deps.modelRouter.nextFallback(failedModel)
             if (next) {
-              attemptModel = next
               // Apply the fallback model to the engine so the next
               // LLM call uses it. This is an automatic (NOT manual)
               // change so we route through applyRoutingDecision via
               // the engine sink to keep the event stream consistent.
               try { this.deps.modelRouter.applyRoutingDecision(next) } catch { /* best-effort */ }
-              this.deps.eventEmitter.emit({
-                type: 'MODEL_ATTEMPT_STARTED',
-                model: next,
-                attemptId: this.modelCallsThisRun.length,
-              } as never)
               return next
             }
             return null
           },
         },
       )
-      // v0.3.2 (run-scoped runtime contract §Phase 7): record the successful attempt.
-      this.modelCallsThisRun.push({
-        model: attemptModel,
-        startedAt: attemptStartedAt,
-        endedAt: Date.now(),
-        success: true,
-        usage: result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : undefined,
-        retryable: false,
-      })
-      this.deps.eventEmitter.emit({
-        type: 'MODEL_ATTEMPT_SUCCEEDED',
-        model: attemptModel,
-        attemptId: this.modelCallsThisRun.length - 1,
-        latencyMs: Date.now() - attemptStartedAt,
-        usage: result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : undefined,
-      } as never)
+      for (const attempt of result.attempts) this.recordGatewayAttempt(attempt)
       // v0.3.3 §十六: success resets the circuit breaker.
       this.consecutiveProviderFailures = 0
       // v0.3.4 §Phase 9: success in half-open → close the circuit.
@@ -1174,32 +1139,20 @@ export class RuntimeCoordinator {
         this.deps.renderer.info?.('Provider circuit breaker: HALF_OPEN → CLOSED (probe succeeded)')
       }
     } catch (err) {
-      // Record the failure against the profile even if the gateway
-      // threw (helps /models show real health after retries).
-      const durationMs = Date.now() - callStartMs
-      const router = this.deps.modelRouter
-      if (router) {
-        const binding = router.listProfiles().find((p) => p.model === modelAtStart)
-        if (binding) router.recordCall(binding.id, false, durationMs, null)
-      }
-      // Ensure the failed attempt is recorded even if onProviderError
-      // did not fire (e.g. the error was non-retryable).
-      if (!providerFailed) {
-        this.modelCallsThisRun.push({
+      const attempts = (err as { attempts?: Array<{
+        model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
+      }> }).attempts
+      if (attempts?.length) {
+        for (const attempt of attempts) this.recordGatewayAttempt(attempt)
+      } else {
+        this.recordGatewayAttempt({
           model: modelAtStart,
-          startedAt: attemptStartedAt,
-          endedAt: Date.now(),
+          provider: 'unknown',
           success: false,
           error: (err as Error).message,
-          retryable: false,
+          latencyMs: Date.now() - attemptStartedAt,
+          usage: null,
         })
-        this.deps.eventEmitter.emit({
-          type: 'MODEL_ATTEMPT_FAILED',
-          model: modelAtStart,
-          attemptId: this.modelCallsThisRun.length - 1,
-          error: (err as Error).message,
-          retryable: false,
-        } as never)
       }
       // v0.3.3 §十六: increment circuit breaker on failure.
       this.consecutiveProviderFailures++
@@ -1217,16 +1170,52 @@ export class RuntimeCoordinator {
       throw err
     }
 
-    // Success: record against the model that actually completed (which
-    // may be the fallback if the gateway retried).
-    const durationMs = Date.now() - callStartMs
-    const router = this.deps.modelRouter
-    if (router) {
-      const finalModel = this.deps.config.model
-      const binding = router.listProfiles().find((p) => p.model === finalModel)
-      if (binding) router.recordCall(binding.id, !providerFailed, durationMs, result.usage)
-    }
     return result
+  }
+
+  private recordGatewayAttempt(attempt: {
+    model: string
+    provider: string
+    success: boolean
+    error?: string
+    latencyMs: number
+    usage: TokenUsage | null
+  }): void {
+    const startedAt = Date.now() - attempt.latencyMs
+    const retryable = !attempt.success && /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(attempt.error ?? '')
+    const usage = attempt.usage ?? undefined
+    this.modelCallsThisRun.push({
+      model: attempt.model,
+      provider: attempt.provider,
+      startedAt,
+      endedAt: Date.now(),
+      success: attempt.success,
+      error: attempt.error,
+      usage,
+      estimatedCost: usage ? calculateUSDCost(attempt.model, usage) : 0,
+      retryable,
+    })
+    const attemptId = this.modelCallsThisRun.length - 1
+    this.deps.eventEmitter.emit(attempt.success
+      ? {
+          type: 'MODEL_ATTEMPT_SUCCEEDED',
+          model: attempt.model,
+          attemptId,
+          latencyMs: attempt.latencyMs,
+          usage,
+        }
+      : {
+          type: 'MODEL_ATTEMPT_FAILED',
+          model: attempt.model,
+          attemptId,
+          error: attempt.error ?? 'provider attempt failed',
+          retryable,
+        })
+    const binding = this.deps.modelRouter?.listProfiles().find((p) => p.model === attempt.model)
+    if (binding) this.deps.modelRouter?.recordCall(binding.id, attempt.success, attempt.latencyMs, attempt.usage)
+    if (attempt.success && attempt.usage) {
+      this.recordUsage(attempt.usage, startedAt, attempt.model, true)
+    }
   }
 
   private recordUsage(

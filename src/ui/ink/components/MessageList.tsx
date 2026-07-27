@@ -17,7 +17,7 @@ import { Markdown } from './Markdown.js'
 /** Tool types that are collapsible when appearing consecutively. */
 const COLLAPSIBLE_TOOLS = new Set(['Read', 'Grep', 'Glob'])
 
-function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
+export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
   switch (msg.type) {
     case 'user':
       return (

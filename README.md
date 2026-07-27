@@ -211,7 +211,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ║  │                                                                     │   ║
 ║  │  ┌─ Post-Run ────────────────────────────────────────────────────┐  │   ║
 ║  │  │ moduleManager.runComplete() ← ReflectionModule LLM 知识提取    │  │   ║
-║  │  │ RunEventEmitter.emit(RUN_COMPLETED / RUN_FAILED)              │  │   ║
+║  │  │ RunEventEmitter.emit(RUN_TERMINATED { status })               │  │   ║
 ║  │  └────────────────────────────────────────────────────────────────┘  │   ║
 ║  │                                                                     │   ║
 ║  │  Shared state: SharedRuntimeState (planMode, abort, allTools,      │   ║
@@ -514,7 +514,7 @@ ovolv999 "任务描述"
 
 ### Loop 自主执行模式
 
-Loop 模式按照 `PLAN → DO → REVIEW → CHECK → ACT` 周期持续推进任务，并通过独立验收命令、质量门禁、租约、心跳和 checkpoint 决定继续、恢复或完成。
+Loop 模式按照 `PLAN → DO → REVIEW → CHECK → ACT` 周期持续推进任务，并通过独立验收命令、质量门禁、租约、心跳和 checkpoint 决定继续、恢复或完成。v0.3.6 将 heartbeat 的存活信号与真实 progress 证据分离；连续心跳写入失败或连续三轮没有代码、验证、TaskGraph、Worker 等可核验证据时会进入 PARKED。
 
 在交互界面中可以像使用 `/goal` 一样直接启动：
 
@@ -542,7 +542,9 @@ ovolv999 --cwd /my/project --loop --loop-max-iters 20
 ovolv999 --cwd /my/project --loop --loop-restart
 ```
 
-运行中可在另一个终端执行 `ovolv999 --cwd /my/project`，再使用 `/loop-status` 查看租约、心跳、轮次、checkpoint 和完成标记。Loop 只接受形如 ``- [ ] A1: 描述 `验证命令` `` 的验收项；只有 Driver 独立执行全部验收及项目门禁成功后才会写入 `DONE.flag`。
+运行中可在另一个终端执行 `ovolv999 --cwd /my/project`，再使用 `/loop-status` 查看租约、心跳、轮次、checkpoint 和完成标记。Loop 只接受形如 ``- [ ] A1: 描述 `验证命令` `` 的验收项。`CANDIDATE_DONE.flag` 必须是绑定当前 `runId`、`completionStatus`、goal/acceptance hash 与 checkpoint sequence 的 JSON；只有正式 TurnOutcome 为 completed、TaskGraph 与 Worker 均完成、Driver 独立验收以及 fast/full 项目门禁全部成功后才会写入 `DONE.flag`。
+
+Provider fallback 会把每次尝试作为独立 attempt 返回并记录模型、Provider、结果、错误、延迟、usage 与估算成本。失败、partial、blocked、验证失败或合并冲突的子 Agent worktree 会保留给父 Agent 检查；只有 completed 且 verified 的产物允许自动合并和清理。每个 turn 只发送一次 `RUN_TERMINATED { status }` 终态事件。
 
 ### 配置文件
 

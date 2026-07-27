@@ -1,6 +1,6 @@
 {
   "name": "ovogogogo",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Lightweight OpenAI-compatible autonomous code execution engine",
   "license": "MIT",
   "type": "module",

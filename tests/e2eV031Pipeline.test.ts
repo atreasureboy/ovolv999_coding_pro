@@ -99,7 +99,7 @@ describe('v0.3.1 end-to-end pipeline (audit pass 2)', () => {
     const em: any = (engine as any).eventEmitter
     for (const evt of [
       'RUN_STARTED', 'MODEL_REQUESTED', 'MODEL_COMPLETED', 'TOOL_BATCH_STARTED',
-      'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_COMPLETED', 'COMPLETION_EVALUATED',
+      'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_TERMINATED', 'COMPLETION_EVALUATED',
       'COMPLETION_REJECTED', 'CRITIC_INVOKED', 'TASK_GRAPH_CREATED',
     ]) {
       em.on(evt, () => events.push(evt))
@@ -187,13 +187,12 @@ describe('v0.3.1 end-to-end pipeline (audit pass 2)', () => {
     const { engine } = makeEngine()
     const ordered: string[] = []
     const em2: any = (engine as any).eventEmitter
-    for (const evt of ['RUN_STARTED', 'MODEL_REQUESTED', 'MODEL_COMPLETED', 'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_COMPLETED']) {
+    for (const evt of ['RUN_STARTED', 'MODEL_REQUESTED', 'MODEL_COMPLETED', 'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_TERMINATED']) {
       em2.on(evt, () => ordered.push(evt))
     }
     await engine.runTurn('hi', [])
-    // RUN_STARTED must precede everything; RUN_COMPLETED must be last
     const runStartedIdx = ordered.indexOf('RUN_STARTED')
-    const runCompletedIdx = ordered.lastIndexOf('RUN_COMPLETED')
+    const runCompletedIdx = ordered.lastIndexOf('RUN_TERMINATED')
     expect(runStartedIdx).toBe(0)
     expect(runCompletedIdx).toBeGreaterThan(runStartedIdx)
   })

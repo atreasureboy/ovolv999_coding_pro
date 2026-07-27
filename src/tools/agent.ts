@@ -949,7 +949,6 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       let deliveryOutcome:
         | { status: 'delivered'; branch: string }
         | { status: 'kept_for_review'; branch: string; path: string }
-        | { status: 'discarded'; branch: string }
         | { status: 'conflict'; branch: string; conflicts: string[]; message: string }
         | { status: 'not_required' }
         = { status: 'not_required' }
@@ -997,15 +996,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         const capturedBase = wtInfo.baseBranch
         const mgr = getWorktreeManager(context.cwd)
         if (!workerAndVerifyOk) {
-          // Worker or verify failed → discard without merging.
-          try {
-            mgr.removeWorktree(capturedName, { merge: false, deleteBranch: true })
-            worktreeSection = `\n\n---\n[Worktree] discarded ${capturedBranch} (worker/verify failed)`
-            deliveryOutcome = { status: 'discarded', branch: capturedBranch }
-          } catch (err) {
-            worktreeSection = `\n\n---\n[Worktree] discard failed: ${(err as Error).message}`
-            deliveryOutcome = { status: 'discarded', branch: capturedBranch }
-          }
+          worktreeSection = `\n\n---\n[Worktree] preserved ${capturedBranch} at ${capturedPath} (worker/verify incomplete)`
+          deliveryOutcome = { status: 'kept_for_review', branch: capturedBranch, path: capturedPath }
         } else if (!mergeOnSuccess) {
           // Keep-for-review: leave worktree + branch intact.
           worktreeSection = `\n\n---\n[Worktree] kept ${capturedBranch} at ${capturedPath} (merge_on_success:false)`
@@ -1117,7 +1109,6 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       const worktreeOutcomeLegacy =
         deliveryOutcome.status === 'delivered' ? { branch: deliveryOutcome.branch, merged: true }
         : deliveryOutcome.status === 'kept_for_review' ? { branch: deliveryOutcome.branch, merged: false }
-        : deliveryOutcome.status === 'discarded' ? { branch: deliveryOutcome.branch, merged: false }
         : deliveryOutcome.status === 'conflict' ? { branch: deliveryOutcome.branch, merged: false }
         : undefined
 
