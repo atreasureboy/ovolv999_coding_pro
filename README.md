@@ -512,6 +512,28 @@ npm link
 ovolv999 "任务描述"
 ```
 
+### Loop 自主执行模式
+
+Loop 模式按照 `PLAN → DO → REVIEW → CHECK → ACT` 周期持续推进任务，并通过独立验收命令、质量门禁、租约、心跳和 checkpoint 决定继续、恢复或完成。
+
+```bash
+# 1. 在目标项目中生成 .loop/ 契约；已有文件不会被覆盖
+ovolv999 --cwd /my/project --loop-init "完成迁移并通过全部验证"
+
+# 2. 检查并按需编辑目标与验收条件
+$EDITOR /my/project/.loop/GOAL.md
+$EDITOR /my/project/.loop/ACCEPTANCE.md
+
+# 3. 启动；默认最多 12 轮，意外退出后自动从 checkpoint 恢复
+ovolv999 --cwd /my/project --loop
+
+# 调整轮数或放弃旧 checkpoint 重新执行
+ovolv999 --cwd /my/project --loop --loop-max-iters 20
+ovolv999 --cwd /my/project --loop --loop-restart
+```
+
+运行中可在另一个终端执行 `ovolv999 --cwd /my/project`，再使用 `/loop-status` 查看租约、心跳、轮次、checkpoint 和完成标记。Loop 只接受形如 ``- [ ] A1: 描述 `验证命令` `` 的验收项；只有 Driver 独立执行全部验收及项目门禁成功后才会写入 `DONE.flag`。
+
 ### 配置文件
 
 ovolv999 读取多级配置（优先级从高到低）：

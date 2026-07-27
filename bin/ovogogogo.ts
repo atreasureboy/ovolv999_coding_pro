@@ -154,6 +154,8 @@ interface Args {
   version: boolean
   loop: boolean
   loopMaxIters: number
+  loopInitGoal?: string
+  loopRestart: boolean
   continueSession: boolean
   resumeSession?: string
   ink: boolean
@@ -367,7 +369,10 @@ function parseArgs(argv: string[]): Args {
   let help = false
   let version = false
   let loop = false
-  let loopMaxIters = 12
+  let loopMaxIters = parseInt(process.env.OVOGO_LOOP_MAX_ITERS ?? '12', 10)
+  if (isNaN(loopMaxIters) || loopMaxIters <= 0) loopMaxIters = 12
+  let loopInitGoal: string | undefined
+  let loopRestart = false
   let continueSession = false
   let resumeSession: string | undefined
   let ink = Boolean(process.stdin.isTTY && process.stdout.isTTY)
@@ -402,6 +407,10 @@ function parseArgs(argv: string[]): Args {
           cwd = normalizeCwd(requireValue(arg, args[++i]))
           break
         case '--loop': loop = true; break
+        case '--loop-init':
+          loopInitGoal = requireValue(arg, args[++i])
+          break
+        case '--loop-restart': loopRestart = true; loop = true; break
         case '--loop-max-iters':
           {
             const raw = requireValue(arg, args[++i])
@@ -442,7 +451,7 @@ function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init }
 }
 
 interface ResolvedApiEnvironment {
@@ -540,6 +549,8 @@ OPTIONS
   --max-iter <n>            Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
   --cwd <path>              Working directory  (env: OVOGO_CWD, default: cwd, supports ~/)
   --loop                    Activate loop mode (reads .loop/ configuration)
+  --loop-init <goal>        Create a safe .loop/ workspace without overwriting existing files
+  --loop-restart            Discard the saved checkpoint before starting
   --loop-max-iters <n>      Cap on loop iterations  (env: OVOGO_LOOP_MAX_ITERS, default: 12)
   -c, --continue            Resume the most recent session under <cwd>/sessions/
   -r, --resume <ref>        Resume a specific session by name, prefix, dir, or history.json
@@ -612,6 +623,7 @@ EXAMPLES
   echo "refactor the tool registry" | ovolv999
   ovolv999 --continue                          # resume latest session
   ovolv999 --resume session_2026-07-14_120000  # resume by name
+  ovolv999 --loop-init "finish the migration"  # scaffold .loop/ contracts
   ovolv999 --loop --loop-max-iters 20          # activate loop mode
 `)
 }
@@ -1436,7 +1448,7 @@ async function main(): Promise<void> {
   const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
   initChildLogCapture()
 
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
@@ -1461,6 +1473,20 @@ async function main(): Promise<void> {
   if (help && !pipe) {
     printHelp(skills)
     process.exit(0)
+  }
+
+  if (loopInitGoal) {
+    const { initializeLoopWorkspace } = await import('../src/core/loopScaffold.js')
+    const result = initializeLoopWorkspace(cwd, loopInitGoal)
+    process.stdout.write(
+      `Loop workspace ready: ${join(cwd, '.loop')}\n` +
+      `Created ${result.created.length} file(s); preserved ${result.preserved.length} existing file(s).\n` +
+      (result.acceptanceCount > 0
+        ? `Detected ${result.acceptanceCount} project verification command(s).\n`
+        : 'Edit .loop/ACCEPTANCE.md and replace the placeholder with a verifiable command.\n') +
+      `Start with: ovolv999 --cwd ${JSON.stringify(cwd)} --loop\n`,
+    )
+    return
   }
 
   // ── Pipe mode: minimal flow, no banner, no session, clean stdout ────────
@@ -1552,11 +1578,11 @@ async function main(): Promise<void> {
   }
 
   const renderer = new Renderer({
-    stream: ink
+    stream: ink && !loop
       ? new Writable({ write(_chunk, _encoding, callback) { callback() } })
       : process.stdout,
   })
-  if (!ink) renderer.banner(VERSION, model)
+  if (!ink || loop) renderer.banner(VERSION, model)
   renderer.info(`workspace   ${cwd}`)
 
   // Load settings + hooks
@@ -1921,6 +1947,7 @@ async function main(): Promise<void> {
       cwd,
       loopDir: join(cwd, '.loop'),
       maxIters: loopMaxIters,
+      restart: loopRestart,
     })
     return
   }

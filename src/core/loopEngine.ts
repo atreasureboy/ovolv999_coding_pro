@@ -5,7 +5,7 @@
  * as a native ovolv999 capability
  * instead of external shell scripts calling `claude -p`.
  *
- * Usage: `ovolv999 --loop` or `ovolv999 --loop --goal "fix all type errors"`
+ * Usage: `ovolv999 --loop`
  *
  * The loop engine:
  * 1. Reads .loop/GOAL.md, .loop/ACCEPTANCE.md, .loop/STATE.md
@@ -97,14 +97,24 @@ function runAcceptance(command: string, cwd: string, timeoutMs?: number): { pass
   return { passed: false, output: output || (res.timedOut ? 'timed out' : 'failed') }
 }
 
+function projectScripts(cwd: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>
+    }
+    return parsed.scripts ?? {}
+  } catch {
+    return {}
+  }
+}
+
 function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
   const results: string[] = []
   let allPassed = true
-
-  const commands = [
-    { name: 'typecheck', cmd: 'npx tsc --noEmit 2>&1' },
-    { name: 'lint', cmd: 'npx eslint src/ bin/ tests/ 2>&1' },
-  ]
+  const scripts = projectScripts(cwd)
+  const commands = ['typecheck', 'lint']
+    .filter(name => Boolean(scripts[name]))
+    .map(name => ({ name, cmd: `npm run ${name} 2>&1` }))
 
   for (const { name, cmd } of commands) {
     const result = runAcceptance(cmd, cwd, getTimeoutMs(name))
@@ -115,6 +125,7 @@ function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
       allPassed = false
     }
   }
+  if (commands.length === 0) results.push('· no fast project gates detected')
 
   return { passed: allPassed, results }
 }
@@ -127,11 +138,10 @@ function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
 function runFullGates(cwd: string): { passed: boolean; results: string[] } {
   const results: string[] = []
   let allPassed = true
-
-  const commands = [
-    { name: 'test', cmd: 'npx vitest run 2>&1' },
-    { name: 'build', cmd: 'npm run build 2>&1' },
-  ]
+  const scripts = projectScripts(cwd)
+  const commands = ['test', 'build']
+    .filter(name => Boolean(scripts[name]))
+    .map(name => ({ name, cmd: `npm run ${name} 2>&1` }))
 
   for (const { name, cmd } of commands) {
     const result = runAcceptance(cmd, cwd, getTimeoutMs(name))
@@ -142,6 +152,7 @@ function runFullGates(cwd: string): { passed: boolean; results: string[] } {
       allPassed = false
     }
   }
+  if (commands.length === 0) results.push('· no full project gates detected')
 
   return { passed: allPassed, results }
 }
@@ -157,8 +168,10 @@ export async function runLoop(
 
   // Ensure .loop/ exists
   if (!existsSync(loopDir)) {
-    renderer.error(`Loop dir not found: ${loopDir}`)
-    renderer.info('Create .loop/ with LOOP.md, GOAL.md, ACCEPTANCE.md first.')
+    renderer.error(
+      `Loop workspace not initialized: ${loopDir}\n` +
+      `Run: ovolv999 --cwd ${JSON.stringify(cwd)} --loop-init "describe the goal"`,
+    )
     return
   }
 
@@ -167,7 +180,7 @@ export async function runLoop(
   const acceptanceRaw = tryRead(join(loopDir, 'ACCEPTANCE.md'))
 
   if (!goal) {
-    renderer.error('GOAL.md not found or empty')
+    renderer.error(`GOAL.md not found or empty: ${join(loopDir, 'GOAL.md')}`)
     return
   }
 
