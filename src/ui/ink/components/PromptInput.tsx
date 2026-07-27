@@ -298,6 +298,10 @@ export function PromptInput({
 
   return (
     <Box flexDirection="column">
+      <Box paddingLeft={2}>
+        <Text bold color="#63B3ED">◆ COMMAND DECK</Text>
+        <Text dimColor> · describe, build, transform</Text>
+      </Box>
       {hasNewline ? (
         // Multi-line render: show each line, cursor on the active line
         <Box width={terminalWidth} flexDirection="column" borderStyle="round" borderColor="#63B3ED" paddingX={1}>
@@ -331,7 +335,7 @@ export function PromptInput({
           })}
         </Box>
       ) : (
-        <Box width={terminalWidth} borderStyle="round" borderColor="#7D8590" paddingX={1}>
+        <Box width={terminalWidth} borderStyle="round" borderColor="#A78BFA" paddingX={1}>
           <Box width={2} flexShrink={0}>
             <Text color="#C9A86A">›</Text>
           </Box>

@@ -14,11 +14,12 @@ describe('Banner', () => {
       <Banner version="0.3.5" model="MiniMax-M3" cwd="/project/demo" gitBranch="main" contextWindow={200000} />,
     )
     const frame = lastFrame() ?? ''
-    expect(frame).toContain('◆ ovolv999')
+    expect(frame).toContain('████')
     expect(frame).toContain('v0.3.5')
     expect(frame).toContain('MiniMax-M3')
-    expect(frame).toContain('developer agent')
-    expect(frame).toContain('200k context')
+    expect(frame).toContain('AUTONOMOUS SOFTWARE FORGE')
+    expect(frame).toContain('SYSTEM READY')
+    expect(frame).toContain('200k CONTEXT')
     expect(frame).toContain('main')
     expect(frame).toContain('/project/demo')
     expect(frame).not.toContain('Think-Act-Observe')

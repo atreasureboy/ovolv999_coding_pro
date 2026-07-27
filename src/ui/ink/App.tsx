@@ -258,6 +258,7 @@ export function App({
           cwd={cwd}
           gitBranch={getGitBranch(cwd)}
           contextWindow={maxContextTokens}
+          terminalWidth={Math.max(20, stdout.columns || 80)}
         />
       ) : null}
 

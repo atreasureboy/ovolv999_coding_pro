@@ -44,9 +44,11 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
   const isHigh = pct > 80
 
   return (
-    <Box justifyContent="space-between" marginTop={1} borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderColor="gray">
+    <Box justifyContent="space-between" marginTop={1} paddingX={1}>
       <Box gap={1}>
         <Text color="#63B3ED">◆</Text>
+        <Text bold color="#E8E3DA">BUILD</Text>
+        <Text color="#7D8590">/</Text>
         <Text color="#C9A86A">{model}</Text>
         {gitBranch ? <Text dimColor>{gitBranch}</Text> : null}
         {planMode ? <Text color="blueBright">PLAN</Text> : null}
@@ -55,7 +57,8 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
       </Box>
       <Box gap={1}>
         {isHigh ? <Text color="redBright" bold>⚠</Text> : null}
-        <Text color={color}>[{bar}]</Text>
+        <Text dimColor>CONTEXT</Text>
+        <Text color={color}>{bar}</Text>
         <Text color={color} bold={isHigh}>{pct}%</Text>
         {tokenCount !== undefined && maxTokens ? (
           <Text dimColor>{formatTokens(tokenCount)}/{formatTokens(maxTokens)}</Text>
