@@ -10,13 +10,12 @@ describe('quick-start scripts', () => {
     const pkg = JSON.parse(read('package.json')) as {
       scripts: { build: string }
       overrides: Record<string, string>
-      pnpm: { overrides: Record<string, string> }
     }
     expect(pkg.scripts.build).toContain("copyFileSync('package.json','dist/package.json')")
     expect(pkg.scripts.build).toContain("chmodSync('dist/bin/ovogogogo.js',0o755)")
     expect(pkg.overrides['whatwg-url']).toBe('^17.1.0')
     expect(pkg.overrides.tr46).toBe('^6.0.0')
-    expect(pkg.pnpm.overrides).toEqual(pkg.overrides)
+    expect(pkg.overrides['brace-expansion']).toBe('5.0.8')
   })
 
   it('uses npm for a clean Unix cold start and never parses .env in shell', () => {

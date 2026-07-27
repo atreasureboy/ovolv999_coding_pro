@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declarationMap": false
+  },
+  "include": ["bin/**/*.ts", "bin/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist", "tests", "evals"]
+}

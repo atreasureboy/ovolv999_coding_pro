@@ -7,6 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
+[![CI](https://github.com/atreasureboy/ovolv999_coding_pro/actions/workflows/ci.yml/badge.svg)](https://github.com/atreasureboy/ovolv999_coding_pro/actions/workflows/ci.yml)
 
 > `ovolv999 "任何你需要它完成的任务"`
 
@@ -50,7 +51,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
 | 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
 | 24 | 文档与真实能力一致 | `README.md` + `docs/ADR/` | — |
-| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4242 个测试 pass | `npm test` |
+| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4270 个测试 pass | `npm test` |
 
 ### 新增模块文件
 
@@ -467,6 +468,14 @@ macOS / Linux 一键安装：
 curl -fsSL https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/install.sh | bash
 ```
 
+Windows PowerShell 一键安装：
+
+```powershell
+irm https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/install.ps1 | iex
+```
+
+安装器会在隔离目录中完成锁定依赖安装、构建和命令冒烟测试，全部成功后才替换现有版本；升级失败会保留原安装。生产环境可通过 `--version <tag>` 固定到明确版本。
+
 从源码运行：
 
 ```bash
@@ -778,7 +787,7 @@ ovolv999/
 npm run build              # tsc → dist/
 npm run typecheck          # tsc --noEmit
 npm run lint               # eslint
-npm run test               # vitest run (4242 tests)
+npm run test               # vitest run (4270 tests)
 npm run test:watch         # vitest watch
 npm run eval:wiring        # 10 wiring-smoke source-of-truth checks
 npm run eval:deterministic # 18 runtime contract cases
