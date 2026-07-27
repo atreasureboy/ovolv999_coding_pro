@@ -26,6 +26,7 @@ describe('quick-start scripts', () => {
     expect(script).toContain('find bin src -type f -newer "$ENTRY"')
     expect(script).not.toContain('OPENAI_API_KEY')
     expect(script).not.toContain('xargs')
+    expect(script).not.toContain('npm install --no-audit')
   })
 
   it('keeps local setup executable and verifies the built command', () => {
@@ -38,9 +39,30 @@ describe('quick-start scripts', () => {
   it('requires native command success in both installers', () => {
     const unix = read('install.sh')
     const windows = read('install.ps1')
-    expect(unix).toContain('"$ENTRY" --version >/dev/null')
-    expect(windows).toContain('if ($LASTEXITCODE -ne 0) { Die "build failed." }')
-    expect(windows).toContain('if ($LASTEXITCODE -ne 0) { Die "built CLI failed its version smoke test." }')
+    expect(unix).toContain('"$STAGED_ENTRY" --version >/dev/null')
+    expect(windows).toContain('if ($LASTEXITCODE -ne 0) { throw "build failed." }')
+    expect(windows).toContain('Die "built CLI failed its version smoke test."')
+  })
+
+  it('builds updates in staging and preserves the previous installation on failure', () => {
+    const unix = read('install.sh')
+    const windows = read('install.ps1')
+    expect(unix).toContain('mktemp -d "${INSTALL_DIR}.staging.XXXXXX"')
+    expect(unix).toContain('npm ci --no-audit --no-fund')
+    expect(unix).toContain('the existing installation was not changed')
+    expect(unix).not.toContain('reset --quiet --hard')
+    expect(windows).toContain('$StagingDir')
+    expect(windows).toContain('$BackupDir')
+    expect(windows).toContain('the previous installation was restored')
+    expect(windows).not.toContain('reset --quiet --hard')
+  })
+
+  it('uses one committed npm lockfile across every setup entrypoint', () => {
+    expect(() => read('package-lock.json')).not.toThrow()
+    expect(read('install.sh')).toContain('release is missing package-lock.json')
+    expect(read('install.ps1')).toContain('release is missing package-lock.json')
+    expect(read('setup.sh')).not.toContain('npm install --no-audit')
+    expect(read('setup.bat')).not.toContain('npm install --no-audit')
   })
 
   it('documents the actual checkout directory', () => {

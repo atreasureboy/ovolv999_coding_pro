@@ -39,11 +39,12 @@ if %NODE_MAJOR% LSS 20 (
 REM ── 4. 安装依赖 ──
 echo.
 echo  [1/3] Installing dependencies...
-if exist "package-lock.json" (
-    call npm ci --no-audit --no-fund
-) else (
-    call npm install --no-audit --no-fund
+if not exist "package-lock.json" (
+    echo  [X] package-lock.json is required for reproducible setup
+    pause
+    exit /b 1
 )
+call npm ci --no-audit --no-fund
 if %errorlevel% neq 0 (
     echo  [X] Install failed
     pause

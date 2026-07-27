@@ -16,11 +16,8 @@ command -v npm >/dev/null 2>&1 || die "npm not found."
 
 ok "Node $(node -v)"
 info "Installing dependencies..."
-if [ -f package-lock.json ]; then
-  npm ci --no-audit --no-fund
-else
-  npm install --no-audit --no-fund
-fi
+[ -f package-lock.json ] || die "package-lock.json is required for reproducible setup."
+npm ci --no-audit --no-fund
 
 info "Building..."
 npm run build

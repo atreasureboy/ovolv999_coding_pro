@@ -7,8 +7,8 @@
 #  Uninstall: & ([scriptblock]::Create((irm https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/install.ps1))) -Uninstall
 #
 #  Clones the repo to %USERPROFILE%\.ovolv999, installs deps, builds,
-#  and drops an `ovolv999.cmd` shim on the user PATH. Re-running updates
-#  in place. If Claude Code is configured (~/.claude/settings.json) the
+#  and drops an `ovolv999.cmd` shim on the user PATH. Re-running performs
+#  a staged replacement. If Claude Code is configured (~/.claude/settings.json) the
 #  provider is reused zero-config.
 # ================================================================
 [CmdletBinding()]
@@ -20,7 +20,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $BinName = "ovolv999"
-$RepoUrl = "https://github.com/atreasureboy/ovolv999_coding_pro.git"
+$RepoUrl = if ($env:OVOGO_REPO_URL) { $env:OVOGO_REPO_URL } else { "https://github.com/atreasureboy/ovolv999_coding_pro.git" }
 if (-not $InstallDir) { $InstallDir = Join-Path $env:USERPROFILE ".ovolv999" }
 
 function Write-Info($m) { Write-Host "[info] $m" -ForegroundColor Cyan }
@@ -63,47 +63,66 @@ Write-OK "Node $(node -v)"
 
 try { git --version | Out-Null } catch { Die "git not found. Install git first." }
 
-# Clone or update
-if (Test-Path (Join-Path $InstallDir ".git")) {
-  Write-Info "Existing install found - updating..."
-  git -C $InstallDir fetch --quiet origin $Branch
-  if ($LASTEXITCODE -ne 0) { Die "git fetch failed." }
-  git -C $InstallDir checkout --quiet $Branch
-  if ($LASTEXITCODE -ne 0) { Die "git checkout failed." }
-  git -C $InstallDir reset --quiet --hard "origin/$Branch"
-  if ($LASTEXITCODE -ne 0) { Die "git reset failed." }
-} else {
-  Write-Info "Cloning repository (shallow)..."
-  if ((Test-Path $InstallDir) -and (Get-ChildItem -Force $InstallDir | Select-Object -First 1)) {
-    Die "install directory exists and is not an ovolv999 checkout: $InstallDir"
-  }
-  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  git clone --quiet --depth 1 --branch $Branch $RepoUrl $InstallDir
-  if ($LASTEXITCODE -ne 0) { Die "git clone failed." }
-}
-Write-OK "source ready at $InstallDir"
+$InstallParent = Split-Path -Parent $InstallDir
+New-Item -ItemType Directory -Force -Path $InstallParent | Out-Null
+$StagingDir = "$InstallDir.staging.$([guid]::NewGuid().ToString('N'))"
+$BackupDir = "$InstallDir.rollback"
 
-# Install deps + build
-Write-Info "Installing dependencies (this can take a minute)..."
-Push-Location $InstallDir
+Write-Info "Downloading source into a staging directory..."
+git clone --quiet --depth 1 --branch $Branch $RepoUrl $StagingDir
+if ($LASTEXITCODE -ne 0) { Die "git clone failed for branch or tag '$Branch'." }
+if (-not (Test-Path (Join-Path $StagingDir "package-lock.json"))) {
+  Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+  Die "release is missing package-lock.json"
+}
+
+Write-Info "Installing locked dependencies..."
+$InstallError = $null
+Push-Location $StagingDir
 try {
-  if (Test-Path "package-lock.json") {
-    npm ci --no-audit --no-fund --loglevel=error
-  } else {
-    npm install --no-audit --no-fund --loglevel=error
-  }
-  if ($LASTEXITCODE -ne 0) { Die "npm dependency installation failed." }
+  npm ci --no-audit --no-fund --loglevel=error
+  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed." }
   Write-Info "Building (tsc)..."
   npm run build
-  if ($LASTEXITCODE -ne 0) { Die "build failed." }
-} catch { Die "install/build failed." }
+  if ($LASTEXITCODE -ne 0) { throw "build failed." }
+} catch {
+  $InstallError = $_.Exception.Message
+}
 finally { Pop-Location }
-Write-OK "built"
+if ($InstallError) {
+  Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+  Die "install/build failed: $InstallError"
+}
+
+$StagedEntry = Join-Path $StagingDir "dist\bin\ovogogogo.js"
+if (-not (Test-Path $StagedEntry)) {
+  Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+  Die "build output missing: $StagedEntry"
+}
+& node $StagedEntry --version | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+  Die "built CLI failed its version smoke test."
+}
+
+if (Test-Path $BackupDir) { Remove-Item $BackupDir -Recurse -Force }
+if (Test-Path $InstallDir) {
+  if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
+    Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    Die "install directory exists and is not an ovolv999 checkout: $InstallDir"
+  }
+  Move-Item $InstallDir $BackupDir
+}
+try {
+  Move-Item $StagingDir $InstallDir
+  if (Test-Path $BackupDir) { Remove-Item $BackupDir -Recurse -Force }
+} catch {
+  if (Test-Path $BackupDir) { Move-Item $BackupDir $InstallDir }
+  Die "activation failed; the previous installation was restored."
+}
+Write-OK "release activated at $InstallDir"
 
 $Entry = Join-Path $InstallDir "dist\bin\ovogogogo.js"
-if (-not (Test-Path $Entry)) { Die "build output missing: $Entry" }
-& node $Entry --version | Out-Null
-if ($LASTEXITCODE -ne 0) { Die "built CLI failed its version smoke test." }
 
 # ── create a .cmd shim on the user PATH ───────────────────────────
 $ShimDir = Join-Path $env:USERPROFILE "bin"

@@ -19,11 +19,11 @@ fi
 
 if [ ! -d node_modules ]; then
     echo "[*] Installing dependencies..."
-    if [ -f package-lock.json ]; then
-        npm ci --no-audit --no-fund
-    else
-        npm install --no-audit --no-fund
-    fi
+    [ -f package-lock.json ] || {
+        echo "[error] package-lock.json is required for reproducible startup" >&2
+        exit 1
+    }
+    npm ci --no-audit --no-fund
 fi
 
 ENTRY="dist/bin/ovogogogo.js"

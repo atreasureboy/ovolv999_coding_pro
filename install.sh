@@ -7,14 +7,14 @@
 #  Uninstall: curl -fsSL https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/install.sh | bash -s -- --uninstall
 #
 #  Clones the repo to ~/.ovolv999, installs deps, builds, and symlinks
-#  `ovolv999` onto your PATH. Re-running updates in place. If Claude
+#  `ovolv999` onto your PATH. Re-running performs a staged replacement. If Claude
 #  Code is configured (~/.claude/settings.json) the provider is reused
 #  zero-config — no API key entry needed.
 # ================================================================
 set -euo pipefail
 
 # ── config ────────────────────────────────────────────────────────
-REPO_URL="https://github.com/atreasureboy/ovolv999_coding_pro.git"
+REPO_URL="${OVOGO_REPO_URL:-https://github.com/atreasureboy/ovolv999_coding_pro.git}"
 REPO_BRANCH="main"
 INSTALL_DIR="${OVOGO_INSTALL_DIR:-$HOME/.ovolv999}"
 BIN_NAME="ovolv999"
@@ -102,37 +102,46 @@ ok "Node $(node -v)"
 # git
 command -v git >/dev/null 2>&1 || die "git not found. Install git first."
 
-# Clone or update
-if [ -d "$INSTALL_DIR/.git" ]; then
-  info "Existing install found — updating..."
-  git -C "$INSTALL_DIR" fetch --quiet origin "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" checkout --quiet "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" reset --quiet --hard "origin/$REPO_BRANCH"
-else
-  info "Cloning repository (shallow)..."
-  if [ -d "$INSTALL_DIR" ] && [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-    die "install directory exists and is not an ovolv999 checkout: $INSTALL_DIR"
-  fi
-  mkdir -p "$INSTALL_DIR"
-  git clone --quiet --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
-fi
-ok "source ready at $INSTALL_DIR"
+INSTALL_PARENT="$(dirname "$INSTALL_DIR")"
+mkdir -p "$INSTALL_PARENT"
+STAGING_DIR="$(mktemp -d "${INSTALL_DIR}.staging.XXXXXX")"
+BACKUP_DIR="${INSTALL_DIR}.rollback"
+cleanup_staging() {
+  [ ! -d "$STAGING_DIR" ] || rm -rf "$STAGING_DIR"
+}
+trap cleanup_staging EXIT INT TERM
 
-# Install deps + build
-info "Installing dependencies (this can take a minute)..."
-( cd "$INSTALL_DIR" && if [ -f package-lock.json ]; then npm ci --no-audit --no-fund --loglevel=error; else npm install --no-audit --no-fund --loglevel=error; fi ) \
-  || die "npm install failed."
-info "Building (tsc)..."
-( cd "$INSTALL_DIR" && npm run build ) || die "build failed."
-# tsc doesn't set the executable bit on the entry; the symlink is only
-# directly runnable (`ovolv999 ...`, not `node .../ovogogogo.js`) if the
-# target has +x (it has a #!/usr/bin/env node shebang).
-chmod +x "$INSTALL_DIR/dist/bin/ovogogogo.js" 2>/dev/null || true
-ok "built"
+info "Downloading source into a staging directory..."
+git clone --quiet --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$STAGING_DIR" \
+  || die "git clone failed for branch or tag '$REPO_BRANCH'."
+[ -f "$STAGING_DIR/package-lock.json" ] || die "release is missing package-lock.json"
+
+info "Installing locked dependencies..."
+( cd "$STAGING_DIR" && npm ci --no-audit --no-fund --loglevel=error ) \
+  || die "npm ci failed; the existing installation was not changed."
+info "Building and verifying..."
+( cd "$STAGING_DIR" && npm run build ) \
+  || die "build failed; the existing installation was not changed."
+chmod +x "$STAGING_DIR/dist/bin/ovogogogo.js" 2>/dev/null || true
+STAGED_ENTRY="$STAGING_DIR/dist/bin/ovogogogo.js"
+[ -x "$STAGED_ENTRY" ] || die "build output missing or not executable: $STAGED_ENTRY"
+"$STAGED_ENTRY" --version >/dev/null || die "built CLI failed its version smoke test."
+
+[ ! -e "$BACKUP_DIR" ] || rm -rf "$BACKUP_DIR"
+if [ -e "$INSTALL_DIR" ]; then
+  [ -d "$INSTALL_DIR/.git" ] || die "install directory exists and is not an ovolv999 checkout: $INSTALL_DIR"
+  mv "$INSTALL_DIR" "$BACKUP_DIR"
+fi
+if mv "$STAGING_DIR" "$INSTALL_DIR"; then
+  [ ! -e "$BACKUP_DIR" ] || rm -rf "$BACKUP_DIR"
+else
+  [ ! -e "$BACKUP_DIR" ] || mv "$BACKUP_DIR" "$INSTALL_DIR"
+  die "activation failed; the previous installation was restored."
+fi
+trap - EXIT INT TERM
+ok "release activated at $INSTALL_DIR"
 
 ENTRY="$INSTALL_DIR/dist/bin/ovogogogo.js"
-[ -x "$ENTRY" ] || die "build output missing or not executable: $ENTRY"
-"$ENTRY" --version >/dev/null || die "built CLI failed its version smoke test."
 
 # ── choose a PATH directory for the symlink (prefer writable, no sudo) ─
 choose_bindir() {
@@ -210,7 +219,7 @@ ${C_BOLD}Quick start${C_RESET}
   ${C_DIM}# single task${C_RESET}
   ${C_BOLD}ovolv999${C_RESET} "fix the failing tests in src/core"
 
-${C_BOLD}Update${C_RESET}    re-run this installer, or:  ovolv999 --update  (coming soon)
+${C_BOLD}Update${C_RESET}    re-run this installer; failed updates leave the current version untouched
 ${C_BOLD}Uninstall${C_RESET}  curl -fsSL https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/install.sh | bash -s -- --uninstall
 
 ${C_DIM}Config lives in ~/.ovogo/. Source in $INSTALL_DIR.${C_RESET}
