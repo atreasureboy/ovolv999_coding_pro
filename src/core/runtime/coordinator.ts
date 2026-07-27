@@ -293,6 +293,7 @@ export class RuntimeCoordinator {
     // scoped taskGraph. (Previously routing ran first — the router never
     // saw the intent or the per-run graph.)
     let runContext: RunScopedRuntimeContext | undefined
+    try {
     if (runId) {
       const ctxStore = this.deps.runContextStore
       if (ctxStore) {
@@ -378,6 +379,7 @@ export class RuntimeCoordinator {
             previousRoutingFailures: 0,
           } : undefined,
         })
+        if (runContext) runContext.routingSignals = signals
         const routed = this.deps.routeModel(signalsToRoutingInput(signals))
         if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
       } catch { /* best-effort: routing must never break the turn */ }
@@ -759,14 +761,6 @@ export class RuntimeCoordinator {
         sharedState.softAbortRequested = false
         sharedState.softAbortOwner = null
       }
-      // v0.3.3 audit fix: close the RunScopedRuntimeContext in the
-      // FINALLY block so boot errors, late throws (hook/module/EventStore)
-      // and any other exit path all release the context. Without this,
-      // the store's internal Map leaks a TaskGraph + ProgressMonitor +
-      // ControlMessageLog per failed turn (background autonomy contract §十二.5/§Phase 7.23).
-      if (runId) {
-        try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
-      }
     }
 
     eventEmitter.emit({ type: 'RUN_EXECUTION_STOPPED', runId: runId ?? 'unknown', stopReason: result.reason })
@@ -779,6 +773,15 @@ export class RuntimeCoordinator {
     let reviewerFindings: string[] = []
     const ws = this.deps.contextManager.getWorkingState()
     const hasChanges = ws.filesChanged.length > 0
+    if (runContext) {
+      const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+      runContext.completionCandidate = {
+        hasToolCalls: Boolean(lastAssistant?.tool_calls?.length),
+        text: result.output,
+        changedFiles: [...ws.filesChanged],
+        iteration: this.modelCallsThisRun.length,
+      }
+    }
 
     // Phase 5: final Reviewer — a deterministic post-run verdict from
     // structured state (NOT the model's self-report). Surfaces partial/
@@ -842,6 +845,7 @@ export class RuntimeCoordinator {
         budgetState: { remaining: 1, exceeded: false },
       })
       completionVerdict = v
+      if (runContext) runContext.completionVerdict = v
       // Serialize the verdict into the wire shape the event union
       // expects (a plain object with optional arrays). The full typed
       // verdict is preserved in the local `completionVerdict` for
@@ -861,6 +865,25 @@ export class RuntimeCoordinator {
           verdict: serializeVerdict(v),
         })
       }
+    }
+
+    if (!completionVerdict) {
+      completionVerdict =
+        result.reason === 'interrupted'
+          ? { status: 'cancelled', reason: 'run interrupted' }
+          : result.reason === 'max_iterations'
+            ? {
+                status: 'exhausted',
+                reason: 'maximum iterations reached',
+                iterationsUsed: 'iteration' in state ? state.iteration : config.maxIterations,
+                iterationsMax: config.maxIterations,
+              }
+            : {
+                status: 'failed',
+                reason: result.output || `run stopped with ${result.reason}`,
+                evidence: [],
+              }
+      if (runContext) runContext.completionVerdict = completionVerdict
     }
 
     // ── ExecutionRun terminal transition (GAP-C) ──
@@ -986,8 +1009,12 @@ export class RuntimeCoordinator {
     // v0.3.4 (durable supervisor contract §Phase 1): Hook receives the full TurnOutcome
     config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
 
-    // v0.3.3: close() is now in the finally block (covers ALL exit paths).
     return { result, newHistory: messages, outcome }
+    } finally {
+      if (runId) {
+        try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
+      }
+    }
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

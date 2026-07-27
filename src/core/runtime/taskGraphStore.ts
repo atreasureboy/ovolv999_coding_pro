@@ -19,6 +19,7 @@ import { TaskGraph, type TaskGraphSnapshot } from './taskGraph.js'
 
 export interface TaskGraphStore {
   create(runId: string): TaskGraph
+  attach(runId: string, graph: TaskGraph): void
   get(runId: string): TaskGraph | undefined
   restore(runId: string, snapshot: TaskGraphSnapshot): TaskGraph
   close(runId: string): void
@@ -45,6 +46,11 @@ export class InMemoryTaskGraphStore implements TaskGraphStore {
     this.graphs.set(runId, g)
     this.sink?.({ type: 'TASK_GRAPH_CREATED', runId })
     return g
+  }
+
+  attach(runId: string, graph: TaskGraph): void {
+    graph.setRunId(runId)
+    this.graphs.set(runId, graph)
   }
 
   get(runId: string): TaskGraph | undefined {

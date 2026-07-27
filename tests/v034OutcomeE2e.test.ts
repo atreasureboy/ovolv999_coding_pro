@@ -54,6 +54,71 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     expect(outcome.stopReason).toBe('stop_sequence')
   })
 
+  it('stores the completion candidate and verdict before closing the run context', async () => {
+    const c = new FakeOpenAI()
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs') }), fakeRenderer(), c as unknown as never)
+    const { outcome } = await e.runTurn('explain something', [])
+    const context = e.getLastRunContext()
+    expect(context?.runId).toBe(outcome.runId)
+    expect(context?.completionCandidate?.text).toBe(outcome.output)
+    expect(context?.completionCandidate?.iteration).toBe(1)
+    expect(context?.completionVerdict?.status).toBe(outcome.completion.status)
+    expect(e.getTaskGraph()).toBe(context?.taskGraph)
+    expect(e.getProgressMonitor()).toBe(context?.progressMonitor)
+  })
+
+  it('stores exhausted completion for a run that reaches its iteration limit', async () => {
+    const c = new FakeOpenAI()
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs'), maxIterations: 0 }), fakeRenderer(), c as unknown as never)
+    const { outcome } = await e.runTurn('explain something', [])
+    expect(outcome.completion.status).toBe('exhausted')
+    expect(e.getLastRunContext()?.completionVerdict?.status).toBe('exhausted')
+  })
+
+  it('closes the run context after terminal events', async () => {
+    const c = new FakeOpenAI()
+    const events: string[] = []
+    const holder: { engine?: ExecutionEngine } = {}
+    const hookRunner = {
+      runPreToolCall: () => [],
+      runPostToolCall: () => [],
+      runUserPromptSubmit: () => [],
+      runOnComplete: () => {
+        const context = holder.engine?.getLastRunContext()
+        expect(context?.completionVerdict).toBeDefined()
+        expect(holder.engine?.getTaskGraphStore().get(context?.runId ?? '')).toBe(context?.taskGraph)
+        events.push('hook')
+        return []
+      },
+    }
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs'), hookRunner }), fakeRenderer(), c as unknown as never)
+    holder.engine = e
+    e.getEventEmitter().on('RUN_TERMINATED', () => events.push('terminated'))
+    e.getEventEmitter().on('RUN_COMPLETED', () => events.push('completed'))
+    e.getEventEmitter().on('CONTEXT_CLOSED', () => events.push('closed'))
+    await e.runTurn('explain something', [])
+    expect(events).toEqual(['terminated', 'completed', 'hook', 'closed'])
+    expect(e.getTaskGraphStore().has(e.getLastRunContext()?.runId ?? '')).toBe(false)
+  })
+
+  it('closes the run context when a completion hook throws', async () => {
+    const c = new FakeOpenAI()
+    const hookRunner = {
+      runPreToolCall: () => [],
+      runPostToolCall: () => [],
+      runUserPromptSubmit: () => [],
+      runOnComplete: () => {
+        throw new Error('completion hook failed')
+      },
+    }
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs'), hookRunner }), fakeRenderer(), c as unknown as never)
+    const events: string[] = []
+    e.getEventEmitter().on('CONTEXT_CLOSED', () => events.push('closed'))
+    await expect(e.runTurn('explain something', [])).rejects.toThrow('completion hook failed')
+    expect(events).toEqual(['closed'])
+    expect(e.getLastRunContext()?.completionVerdict).toBeDefined()
+  })
+
   it('§14: reason !== error no longer used as sole success check', async () => {
     const logDir = join(tmp, 'logs')
     const c = new FakeOpenAI()

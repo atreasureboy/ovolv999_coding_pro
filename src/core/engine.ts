@@ -54,7 +54,11 @@ import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.j
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import type { TaskGraph } from './runtime/taskGraph.js'
 import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
-import { InMemoryRunScopedRuntimeContextStore, type RunScopedRuntimeContextStore } from './runtime/runScopedContext.js'
+import {
+  InMemoryRunScopedRuntimeContextStore,
+  type RunScopedRuntimeContext,
+  type RunScopedRuntimeContextStore,
+} from './runtime/runScopedContext.js'
 import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
@@ -304,7 +308,13 @@ export class ExecutionEngine {
     // Context also gets its setRunId() + event sink so /trace
     // can replay the full lifecycle.
     this.runContextStore.setEventSink((evt) => {
-      this.eventEmitter.emit(evt as never)
+      if (evt.type === 'CONTEXT_CREATED') {
+        const context = this.runContextStore.get(evt.runId)
+        if (context) this.taskGraphStore.attach(evt.runId, context.taskGraph)
+      } else if (evt.type === 'CONTEXT_CLOSED') {
+        this.taskGraphStore.close(evt.runId)
+      }
+      this.eventEmitter.emit(evt)
     })
     // v0.3.2 (run-scoped runtime contract §Phase 2): the TaskGraphResolver for tools
     // that need to operate on the CURRENT run's graph. Created here
@@ -946,7 +956,7 @@ export class ExecutionEngine {
 
   /** Phase 4: progress/stall monitor (fed by ToolExecutor, queried each iteration). */
   getProgressMonitor(): ProgressMonitor {
-    return this.progressMonitor
+    return this.runContextStore.getLatest()?.progressMonitor ?? this.progressMonitor
   }
 
   /** v0.3.1 (runtime truth contract §八): expose ContextManager so /progress can
@@ -957,7 +967,11 @@ export class ExecutionEngine {
 
   /** Phase 3: task-decomposition graph (empty for simple tasks). */
   getTaskGraph(): TaskGraph {
-    return this.taskGraph
+    return this.runContextStore.getLatest()?.taskGraph ?? this.taskGraph
+  }
+
+  getLastRunContext(): RunScopedRuntimeContext | undefined {
+    return this.runContextStore.getLatest()
   }
 
   /**

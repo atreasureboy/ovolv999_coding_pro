@@ -66,6 +66,7 @@ export interface CompletionCandidate {
 export interface RunScopedRuntimeContextStore {
   create(runId: string, options: { parentRunId?: string; taskKind: TaskKind }): RunScopedRuntimeContext
   get(runId: string): RunScopedRuntimeContext | undefined
+  getLatest(): RunScopedRuntimeContext | undefined
   restore(runId: string, snapshot: SerializedRunContext): RunScopedRuntimeContext
   close(runId: string): void
   list(): string[]
@@ -90,6 +91,7 @@ export interface SerializedRunContext {
 
 export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeContextStore {
   private readonly contexts = new Map<string, RunScopedRuntimeContext>()
+  private lastClosed: RunScopedRuntimeContext | undefined
   private sink: ((event: { type: 'CONTEXT_CREATED' | 'CONTEXT_CLOSED' | 'TASK_GRAPH_CREATED'; runId: string }) => void) | null = null
 
   setEventSink(sink: ((event: { type: 'CONTEXT_CREATED' | 'CONTEXT_CLOSED' | 'TASK_GRAPH_CREATED'; runId: string }) => void) | null): void {
@@ -125,6 +127,12 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
     return this.contexts.get(runId)
   }
 
+  getLatest(): RunScopedRuntimeContext | undefined {
+    let latest: RunScopedRuntimeContext | undefined
+    for (const context of this.contexts.values()) latest = context
+    return latest ?? this.lastClosed
+  }
+
   restore(runId: string, snapshot: SerializedRunContext): RunScopedRuntimeContext {
     const graph = TaskGraph.restore(JSON.stringify(snapshot.taskGraphSnapshot.nodes))
     graph.setRunId(snapshot.runId)
@@ -147,6 +155,8 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
   }
 
   close(runId: string): void {
+    const context = this.contexts.get(runId)
+    if (context) this.lastClosed = context
     this.contexts.delete(runId)
     this.sink?.({ type: 'CONTEXT_CLOSED', runId })
   }

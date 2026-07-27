@@ -38,6 +38,15 @@ describe('TaskGraphStore v0.3.1', () => {
     expect(b.list().map((n) => n.id)).toEqual(['nb'])
   })
 
+  it('attaches an existing run-scoped graph without copying it', () => {
+    const s = new InMemoryTaskGraphStore()
+    const graph = new TaskGraph()
+    s.attach('run-a', graph)
+    expect(s.get('run-a')).toBe(graph)
+    graph.addNode({ id: 'n1', title: 'A1', description: 'desc', dependencies: [] })
+    expect(s.get('run-a')?.get('n1')).toBeDefined()
+  })
+
   it('close(runA) does not affect runB', () => {
     const s = new InMemoryTaskGraphStore()
     s.create('run-a')

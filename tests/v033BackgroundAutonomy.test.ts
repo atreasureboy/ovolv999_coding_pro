@@ -70,10 +70,11 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
   // ── §5: Context released on close ────────────────────────────────
   it('§5: store.close() removes the context', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    store.create('run-x', { taskKind: 'mutation' })
+    const context = store.create('run-x', { taskKind: 'mutation' })
     expect(store.has('run-x')).toBe(true)
     store.close('run-x')
     expect(store.has('run-x')).toBe(false)
+    expect(store.getLatest()).toBe(context)
   })
 
   it('§5: consecutive 20 Runs do not leak contexts', () => {
@@ -84,6 +85,7 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
       store.close(rid)
     }
     expect(store.list()).toHaveLength(0)
+    expect(store.getLatest()?.runId).toBe('run-19')
   })
 
   // ── §8: blocked/partial/exhausted ≠ success ──────────────────────
