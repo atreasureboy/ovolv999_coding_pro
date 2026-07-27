@@ -60,30 +60,30 @@ interface ToolVisual { icon: string; color: string }
 
 const TOOL_VIZ: Record<string, ToolVisual> = {
   Bash:          { icon: '$',  color: C.byellow },
-  Read:          { icon: '📖', color: C.bcyan },
-  Write:         { icon: '✎',  color: C.bgreen },
-  Edit:          { icon: '✎',  color: C.bblue },
-  Glob:          { icon: '◆',  color: C.bpurple },
-  Grep:          { icon: '⌕',  color: C.bpurple },
-  WebFetch:      { icon: '🌐', color: C.cyan },
-  WebSearch:     { icon: '🔍', color: C.cyan },
-  TodoWrite:     { icon: '☑',  color: C.bgreen },
-  Agent:         { icon: '⊕',  color: C.bpurple },
-  ShellSession:  { icon: '⌁',  color: C.bred },
-  TmuxSession:   { icon: '⌁',  color: C.bred },
-  load_skill:    { icon: '◆',  color: C.bblue },
-  memory_write:  { icon: '✦',  color: C.bgreen },
-  memory_search: { icon: '✦',  color: C.bcyan },
-  memory_recall: { icon: '✦',  color: C.byellow },
-  TaskCreate:    { icon: '▶',  color: C.bgreen },
-  TaskGet:       { icon: '◉',  color: C.bcyan },
-  TaskList:      { icon: '☰',  color: C.bblue },
-  TaskUpdate:    { icon: '✎',  color: C.byellow },
+  Read:          { icon: '◇',  color: C.bcyan },
+  Write:         { icon: '◆',  color: C.bgreen },
+  Edit:          { icon: '◆',  color: C.bblue },
+  Glob:          { icon: '◇',  color: C.bpurple },
+  Grep:          { icon: '◇',  color: C.bpurple },
+  WebFetch:      { icon: '◎',  color: C.cyan },
+  WebSearch:     { icon: '◎',  color: C.cyan },
+  TodoWrite:     { icon: '◆',  color: C.bgreen },
+  Agent:         { icon: '◈',  color: C.bpurple },
+  ShellSession:  { icon: '◌',  color: C.bred },
+  TmuxSession:   { icon: '◌',  color: C.bred },
+  load_skill:    { icon: '◇',  color: C.bblue },
+  memory_write:  { icon: '◇',  color: C.bgreen },
+  memory_search: { icon: '◇',  color: C.bcyan },
+  memory_recall: { icon: '◇',  color: C.byellow },
+  TaskCreate:    { icon: '◆',  color: C.bgreen },
+  TaskGet:       { icon: '◇',  color: C.bcyan },
+  TaskList:      { icon: '◇',  color: C.bblue },
+  TaskUpdate:    { icon: '◆',  color: C.byellow },
   TaskStop:      { icon: '■',  color: C.bred },
   AskUserQuestion: { icon: '?', color: C.byellow },
-  ExitPlanMode:   { icon: '⚡', color: C.bgreen },
-  Sleep:          { icon: '⏸', color: C.gray },
-  NotebookEdit:   { icon: '📓', color: C.bpurple },
+  ExitPlanMode:   { icon: '◆', color: C.bgreen },
+  Sleep:          { icon: '·', color: C.gray },
+  NotebookEdit:   { icon: '◆', color: C.bpurple },
 }
 
 function viz(name: string): ToolVisual {
@@ -100,6 +100,8 @@ export class Renderer {
   private tty: boolean
   private out: (s: string) => void
   private streaming = false
+  private assistantLineStart = true
+  private assistantFirstLine = true
   private startupActive = false
   private startupModel = ''
   private startupMeta = new Map<string, string>()
@@ -168,6 +170,8 @@ export class Renderer {
 
   beginAssistantText(): void {
     this.streaming = true
+    this.assistantLineStart = true
+    this.assistantFirstLine = true
   }
 
   streamToken(token: string): void {
@@ -176,7 +180,21 @@ export class Renderer {
       this.stopSpinner()
       this.beginAssistantText()
     }
-    this.w(token)
+    const parts = token.split('\n')
+    for (let index = 0; index < parts.length; index++) {
+      if (this.assistantLineStart && parts[index]) {
+        this.w(this.assistantFirstLine
+          ? `  ${C.violet}●${R} `
+          : '    ')
+        this.assistantLineStart = false
+        this.assistantFirstLine = false
+      }
+      this.w(parts[index])
+      if (index < parts.length - 1) {
+        this.w('\n')
+        this.assistantLineStart = true
+      }
+    }
   }
 
   /** Stream reasoning/thinking content (from <think> tags). Optional — default is no-op. */
@@ -186,6 +204,8 @@ export class Renderer {
     if (this.streaming) {
       this.w('\n')
       this.streaming = false
+      this.assistantLineStart = true
+      this.assistantFirstLine = true
     }
   }
 
@@ -194,7 +214,7 @@ export class Renderer {
   toolStart(name: string, input: Record<string, unknown>): void {
     const v = viz(name)
     const preview = this.preview(name, input)
-    this.w(`\n  ${v.color}${v.icon}${R} ${B}${v.color}${name}${R}`)
+    this.w(`\n  ${v.color}${v.icon}${R} ${B}${C.ivory}${name}${R}`)
     if (preview) {
       this.w(` ${D}${C.gray}${preview}${R}`)
     }
@@ -219,7 +239,7 @@ export class Renderer {
       this.w(`    ${D}${trimmed}${R}\n`)
     }
     if (hidden > 0) {
-      this.w(`    ${D}${C.gray}+${hidden} more${R}\n`)
+      this.w(`    ${D}${C.slate}└ +${hidden} more${R}\n`)
     }
   }
 
@@ -497,7 +517,17 @@ export class Renderer {
 
   writePrompt(): void {
     this.flushStartup()
-    this.w(`\n  ${C.gold}›${R} `)
+    const inner = Math.min(Math.max(this.width - 6, 58), 90)
+    const label = ' ask ovolv999 '
+    const line = '─'.repeat(Math.max(8, inner - label.length - 1))
+    this.w(`\n  ${C.slate}╭─${R}${C.electric}${label}${R}${C.slate}${line}╮${R}\n`)
+    this.w(`  ${C.slate}│${R} ${C.gold}›${R} `)
+  }
+
+  closePrompt(): void {
+    const inner = Math.min(Math.max(this.width - 6, 58), 90)
+    const line = '─'.repeat(inner)
+    this.w(`  ${C.slate}╰${line}╯${R}\n`)
   }
 
   newline(): void {

@@ -16,22 +16,22 @@ interface ToolVisual {
 
 const TOOL_VIZ: Record<string, ToolVisual> = {
   Bash: { icon: '$', color: 'yellowBright' },
-  Read: { icon: '📖', color: 'cyanBright' },
-  Write: { icon: '✎', color: 'greenBright' },
-  Edit: { icon: '✎', color: 'blueBright' },
-  Glob: { icon: '◆', color: 'magentaBright' },
-  Grep: { icon: '⌕', color: 'magentaBright' },
-  WebFetch: { icon: '🌐', color: 'cyan' },
-  WebSearch: { icon: '🔍', color: 'cyan' },
-  TodoWrite: { icon: '☑', color: 'greenBright' },
-  Agent: { icon: '⊕', color: 'magentaBright' },
-  ShellSession: { icon: '⌁', color: 'redBright' },
-  TmuxSession: { icon: '⌁', color: 'redBright' },
+  Read: { icon: '◇', color: 'cyanBright' },
+  Write: { icon: '◆', color: 'greenBright' },
+  Edit: { icon: '◆', color: 'blueBright' },
+  Glob: { icon: '◇', color: 'magentaBright' },
+  Grep: { icon: '◇', color: 'magentaBright' },
+  WebFetch: { icon: '◎', color: 'cyan' },
+  WebSearch: { icon: '◎', color: 'cyan' },
+  TodoWrite: { icon: '◆', color: 'greenBright' },
+  Agent: { icon: '◈', color: 'magentaBright' },
+  ShellSession: { icon: '◌', color: 'redBright' },
+  TmuxSession: { icon: '◌', color: 'redBright' },
   AskUserQuestion: { icon: '?', color: 'yellowBright' },
-  ExitPlanMode: { icon: '⚡', color: 'greenBright' },
-  Sleep: { icon: '⏸', color: 'gray' },
-  Snip: { icon: '✂', color: 'yellowBright' },
-  NotebookEdit: { icon: '📓', color: 'magentaBright' },
+  ExitPlanMode: { icon: '◆', color: 'greenBright' },
+  Sleep: { icon: '·', color: 'gray' },
+  Snip: { icon: '◇', color: 'yellowBright' },
+  NotebookEdit: { icon: '◆', color: 'magentaBright' },
 }
 
 function viz(name: string): ToolVisual {
@@ -138,7 +138,7 @@ export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCa
   const newText = name === 'Edit' ? str(input.new_string) : name === 'Write' ? str(input.content) : ''
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor={v.color} paddingLeft={1}>
       <Box>
         <Text color={v.color}>{v.icon}</Text>
         <Text bold color={v.color}> {name}</Text>

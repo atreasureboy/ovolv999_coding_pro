@@ -295,9 +295,9 @@ export function PromptInput({
     <Box flexDirection="column">
       {hasNewline ? (
         // Multi-line render: show each line, cursor on the active line
-        <Box flexDirection="column">
+        <Box flexDirection="column" borderStyle="round" borderColor="#63B3ED" paddingX={1}>
           <Box>
-            <Text bold color="blueBright">❯ </Text>
+            <Text color="#63B3ED">› </Text>
             <Text dimColor>(multi-line · Ctrl+J=newline · Enter=submit)</Text>
           </Box>
           {text.split('\n').map((line, i, arr) => {
@@ -326,12 +326,12 @@ export function PromptInput({
           })}
         </Box>
       ) : (
-        <Box>
-          <Text bold color="blueBright">❯ </Text>
+        <Box borderStyle="round" borderColor="#63B3ED" paddingX={1}>
+          <Text color="#63B3ED">› </Text>
           <Text>
             {text.slice(0, cursor)}
           </Text>
-          <Text color="blueBright">{cursor < text.length ? text[cursor] : ' '}</Text>
+          <Text backgroundColor="#63B3ED" color="black">{cursor < text.length ? text[cursor] : ' '}</Text>
           {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
         </Box>
       )}
