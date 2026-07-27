@@ -43,7 +43,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test -- --shard=${{ matrix.shard }} --exclude tests/bashTool.test.ts --exclude tests/backgroundTaskManager.test.ts
+      - run: npm test -- --shard=${{ matrix.shard }} --maxWorkers=1 --exclude tests/bashTool.test.ts --exclude tests/backgroundTaskManager.test.ts
 
   platform:
     strategy:
