@@ -800,8 +800,7 @@ async function runRepl(
     return lines.join('\n')
   }
 
-  renderer.info(`Commands: /compact /cost /context /mode /doctor /rewind /tasks /workers /diff /commit /init /help`)
-  renderer.info(`ESC to interrupt · Ctrl+D to exit`)
+  renderer.info(`ready       /help · Esc interrupt · Ctrl+D exit`)
 
   let running = false
   // Whether we are currently awaiting the user's interrupt-prompt input
@@ -1539,13 +1538,13 @@ async function main(): Promise<void> {
 
   const renderer = new Renderer()
   renderer.banner(VERSION, model)
-  renderer.info(`cwd: ${cwd}`)
+  renderer.info(`workspace   ${cwd}`)
 
   // Load settings + hooks
   const settings = loadSettings(cwd)
   const projectConfig = loadProjectConfig(cwd)
   if (projectConfig) {
-    renderer.info(`Project config: .ovolv999.json loaded`)
+    renderer.info(`config      project settings loaded`)
   }
   const hookRunner = settings.hooks
     ? new HookRunner(settings.hooks, { sink: { warn: (m) => renderer.warn(m) } })
@@ -1555,29 +1554,29 @@ async function main(): Promise<void> {
   const hasHooks = hookTypes.some(t => (settings.hooks?.[t]?.length ?? 0) > 0)
   if (hasHooks) {
     const count = hookTypes.reduce((sum, t) => sum + (settings.hooks?.[t]?.length ?? 0), 0)
-    renderer.info(`Hooks: ${count} hook(s) loaded from .ovogo/settings.json`)
+    renderer.info(`hooks       ${count} loaded`)
   }
 
   // Show loaded skills (project/global only, not builtins)
   const customSkills = [...skills.values()].filter((s) => s.source !== 'builtin')
   if (customSkills.length > 0) {
-    renderer.info(`Skills: ${customSkills.length} custom skill(s) loaded — type /skills to list`)
+    renderer.info(`skills      ${customSkills.length} custom · /skills`)
   }
 
   // Load OVOGO.md files (project + user instructions)
   const ovogoMdFiles = loadOvogoMd(cwd)
   if (ovogoMdFiles.length > 0) {
     const labels = ovogoMdFiles.map((f) => f.type).join(', ')
-    renderer.info(`OVOGO.md: ${ovogoMdFiles.length} file(s) loaded (${labels})`)
+    renderer.info(`context     ${ovogoMdFiles.length} OVOGO.md · ${labels}`)
   }
 
   // Initialize memory system
   const memoryDir = getMemoryDir(cwd)
   const memStats = getMemoryStats(memoryDir)
   if (memStats.hasIndex) {
-    renderer.info(`Memory: ${memStats.entryCount} entr${memStats.entryCount !== 1 ? 'ies' : 'y'} — ${memoryDir}`)
+    renderer.info(`memory      ${memStats.entryCount} entr${memStats.entryCount !== 1 ? 'ies' : 'y'}`)
   } else {
-    renderer.info(`Memory: initialized — ${memoryDir}`)
+    renderer.info(`memory      ready`)
   }
 
   // Show task context if configured
@@ -1595,7 +1594,7 @@ async function main(): Promise<void> {
     permissionManager.addRule(rule)
   }
   if (settings.permissions?.mode || (settings.permissions?.rules?.length ?? 0) > 0) {
-    renderer.info(`Permissions: ${permissionManager.formatMode()}`)
+    renderer.info(`permissions ${permissionManager.formatMode()}`)
   }
 
   // Create per-session output directory (or reuse existing for --continue/--resume)
@@ -1620,34 +1619,34 @@ async function main(): Promise<void> {
       throw err
     }
     resumedHistory = loadSession(sessionDir)
-    renderer.info(`Resumed session: ${sessionDir} (${resumedHistory.length} messages)`)
+    renderer.info(`session     resumed · ${resumedHistory.length} messages`)
   } else if (continueSession) {
     const latest = findLatestSession(cwd)
     if (latest) {
       sessionDir = latest
       resumedHistory = loadSession(sessionDir)
-      renderer.info(`Continued session: ${sessionDir} (${resumedHistory.length} messages)`)
+      renderer.info(`session     continued · ${resumedHistory.length} messages`)
     } else {
       sessionDir = createSessionDir(cwd)
-      renderer.info(`No previous session found — starting new: ${sessionDir}`)
+      renderer.info(`session     new`)
     }
   } else {
     sessionDir = createSessionDir(cwd)
   }
-  renderer.info(`Session dir: ${sessionDir}`)
+  if (!resumeSession && !continueSession) renderer.info(`session     new`)
 
   // Initialize sub-agent tmux monitor
   const agentLogDir = join(sessionDir, 'agent-logs')
   const layoutReady = tmuxLayout.init(agentLogDir)
   if (layoutReady) {
-    renderer.info(`Agent 监控: ${tmuxLayout.sessionHint()}`)
+    renderer.info(`agents      monitor ready · /workers`)
   }
 
   // Detect project context (language, framework, git status, scripts)
   const projectCtx = detectProjectContext(cwd)
   const projectCtxSection = formatProjectContext(projectCtx)
   if (projectCtx.git?.branch) {
-    renderer.info(`Git: ${projectCtx.git.branch} · ${projectCtx.git.modifiedCount ?? 0} modified · ${projectCtx.git.stagedCount ?? 0} staged`)
+    renderer.info(`git         ${projectCtx.git.branch} · ${projectCtx.git.modifiedCount ?? 0} modified · ${projectCtx.git.stagedCount ?? 0} staged`)
   }
 
   // Build the full system prompt once (memory section injected by MemoryModule at boot)
@@ -1661,7 +1660,6 @@ async function main(): Promise<void> {
 
   // Initialize optimization components
   const eventLog = new EventLog(sessionDir)
-  renderer.info(`EventLog: ${eventLog.getFilePath()}`)
 
   // Project slug must match src/memory/index.ts:projectSlug — otherwise the
   // memory directory written here would be invisible to the memory loader

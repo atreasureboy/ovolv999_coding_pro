@@ -24,7 +24,7 @@ export interface StatusBarProps {
 
 function contextBar(pct: number): { bar: string; color: string } {
   const rounded = Math.round(pct * 100)
-  const width = 12
+  const width = 8
   const filled = Math.min(width, Math.round(pct * width))
   const empty = width - filled
   const bar = '█'.repeat(filled) + '░'.repeat(empty)
@@ -44,13 +44,13 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
   const isHigh = pct > 80
 
   return (
-    <Box justifyContent="space-between" marginTop={1}>
+    <Box justifyContent="space-between" marginTop={1} borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderColor="gray">
       <Box gap={1}>
-        <Text bold color="cyan">{model}</Text>
-        {gitBranch ? <Text color="magenta"> {gitBranch}</Text> : null}
-        {planMode ? <Text color="blueBright">◆ PLAN</Text> : null}
-        {verbose ? <Text color="yellowBright">± VERBOSE</Text> : null}
-        <Text dimColor>· {messageCount} msgs</Text>
+        <Text color="cyan">{model}</Text>
+        {gitBranch ? <Text dimColor>{gitBranch}</Text> : null}
+        {planMode ? <Text color="blueBright">PLAN</Text> : null}
+        {verbose ? <Text color="yellowBright">VERBOSE</Text> : null}
+        <Text dimColor>{messageCount} msgs</Text>
       </Box>
       <Box gap={1}>
         {isHigh ? <Text color="redBright" bold>⚠</Text> : null}

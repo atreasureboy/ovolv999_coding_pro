@@ -6,6 +6,22 @@ import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { StatusBar } from '../components/StatusBar.js'
 import { TodoListView, type TodoItem } from '../components/TodoListView.js'
+import { Banner } from '../Banner.js'
+
+describe('Banner', () => {
+  it('renders the compact product identity and workspace', () => {
+    const { lastFrame } = render(
+      <Banner version="0.3.5" model="MiniMax-M3" cwd="/project/demo" gitBranch="main" contextWindow={200000} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('◆ ovolv999 0.3.5')
+    expect(frame).toContain('MiniMax-M3')
+    expect(frame).toContain('200k ctx')
+    expect(frame).toContain('main')
+    expect(frame).toContain('/project/demo')
+    expect(frame).not.toContain('Think-Act-Observe')
+  })
+})
 
 describe('StatusBar', () => {
   it('renders model name and message count', () => {

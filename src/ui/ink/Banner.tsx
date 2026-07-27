@@ -29,22 +29,21 @@ export function Banner({ version, model, cwd, gitBranch, contextWindow }: Banner
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box>
-        <Text bold color="magenta">● ovolv999</Text>
-        <Text dimColor> v{version}</Text>
+        <Text color="cyanBright">◆ </Text>
+        <Text bold>ovolv999</Text>
+        <Text dimColor> {version}</Text>
       </Box>
-      <Box gap={1}>
-        <Text dimColor>┤</Text>
+      <Box marginLeft={2} gap={1}>
         <Text color="cyan">{model}</Text>
         {ctxStr ? <Text dimColor> · {ctxStr} ctx</Text> : null}
-        {gitBranch ? <Text color="magenta"> · {gitBranch}</Text> : null}
-        <Text dimColor>├</Text>
+        {gitBranch ? <Text dimColor> · {gitBranch}</Text> : null}
       </Box>
       {cwd ? (
-        <Box>
-          <Text dimColor>┤ </Text>
-          <Text dimColor italic>{shortenPath(cwd)}</Text>
+        <Box marginLeft={2}>
+          <Text dimColor>{shortenPath(cwd)}</Text>
         </Box>
       ) : null}
+      <Text dimColor>{'─'.repeat(48)}</Text>
     </Box>
   )
 }

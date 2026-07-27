@@ -136,9 +136,9 @@ export class Renderer {
 
   banner(version: string, model: string): void {
     this.w('\n')
-    this.w(`  ${B}${C.bpurple}● ovolv999${R} ${D}${C.gray}v${version}${R}\n`)
-    this.w(`  ${D}${C.gray}┤ ${R}${C.bcyan}${model}${R} ${D}${C.gray}├ Think-Act-Observe${R}\n`)
-    this.w('\n')
+    this.w(`  ${C.bcyan}◆${R} ${B}${C.white}ovolv999${R} ${D}${C.gray}${version}${R}\n`)
+    this.w(`    ${C.bcyan}${model}${R} ${D}${C.gray}· autonomous coding runtime${R}\n`)
+    this.w(`  ${D}${C.gray}${'─'.repeat(Math.min(this.width - 4, 52))}${R}\n`)
   }
 
   // ── User message ──────────────────────────────────────────
@@ -343,7 +343,7 @@ export class Renderer {
   // ── Status ────────────────────────────────────────────────
 
   info(msg: string): void {
-    this.w(`  ${D}${C.gray}${msg}${R}\n`)
+    this.w(`  ${D}${C.gray}· ${msg}${R}\n`)
   }
 
   success(msg: string): void {

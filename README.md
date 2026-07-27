@@ -50,7 +50,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
 | 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
 | 24 | 文档与真实能力一致 | `README.md` + `docs/ADR/` | — |
-| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4238 个测试 pass | `npm test` |
+| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4240 个测试 pass | `npm test` |
 
 ### 新增模块文件
 
@@ -744,7 +744,7 @@ ovolv999/
 npm run build              # tsc → dist/
 npm run typecheck          # tsc --noEmit
 npm run lint               # eslint
-npm run test               # vitest run (4238 tests)
+npm run test               # vitest run (4240 tests)
 npm run test:watch         # vitest watch
 npm run eval:wiring        # 10 wiring-smoke source-of-truth checks
 npm run eval:deterministic # 18 runtime contract cases
