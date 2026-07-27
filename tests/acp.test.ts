@@ -354,17 +354,23 @@ describe('ACPServer: file/read', () => {
 
 describe('ACPServer: file/write', () => {
   it('writes to filesystem', async () => {
-    const { server, output } = createServer({}, '/tmp')
-    await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
-    output.length = 0
+    const cwd = mkdtempSync(join(tmpdir(), 'ovolv999-acp-write-'))
+    try {
+      const path = join(cwd, 'output.txt')
+      const { server, output } = createServer({}, cwd)
+      await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
+      output.length = 0
 
-    await server.handleMessage({
-      jsonrpc: '2.0', id: 1, method: 'file/write',
-      params: { path: '/tmp/acp-test-write.txt', content: 'hello acp' },
-    })
-    const responses = getResponses(output)
-    const r = responses[0] as { result: { written: boolean } }
-    expect(r.result.written).toBe(true)
+      await server.handleMessage({
+        jsonrpc: '2.0', id: 1, method: 'file/write',
+        params: { path, content: 'hello acp' },
+      })
+      const responses = getResponses(output)
+      const r = responses[0] as { result: { written: boolean } }
+      expect(r.result.written).toBe(true)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 
   it('uses custom handler', async () => {

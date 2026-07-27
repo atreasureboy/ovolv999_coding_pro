@@ -29,8 +29,10 @@ describe('quick-start scripts', () => {
   })
 
   it('keeps local setup executable and verifies the built command', () => {
-    const mode = statSync(resolve(root, 'setup.sh')).mode
-    expect(mode & 0o111).not.toBe(0)
+    if (process.platform !== 'win32') {
+      const mode = statSync(resolve(root, 'setup.sh')).mode
+      expect(mode & 0o111).not.toBe(0)
+    }
     expect(read('setup.sh')).toContain('"$ENTRY" --version')
     expect(read('setup.bat')).toContain('node "%PROJECT_DIR%\\dist\\bin\\ovogogogo.js" --version')
   })
