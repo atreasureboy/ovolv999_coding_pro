@@ -204,4 +204,19 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     // is separate from the registry. Verify no crash after 20 runs.
     expect(store.list().length).toBeGreaterThanOrEqual(20)
   })
+
+  it('restores the real coordinator provider circuit state', () => {
+    const c = new FakeOpenAI()
+    const e = new ExecutionEngine(baseConfig(), fakeRenderer(), c as unknown as never)
+    e.restoreProviderCircuitState({
+      status: 'open',
+      consecutiveFailures: 5,
+      lastFailureAt: 1234,
+    })
+    expect(e.getProviderCircuitState()).toEqual({
+      status: 'open',
+      consecutiveFailures: 5,
+      lastFailureAt: 1234,
+    })
+  })
 })

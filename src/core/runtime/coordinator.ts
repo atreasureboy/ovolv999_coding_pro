@@ -183,6 +183,29 @@ export class RuntimeCoordinator {
     this.deps = deps
   }
 
+  getProviderCircuitState(): {
+    status: 'closed' | 'open' | 'half-open'
+    consecutiveFailures: number
+    lastFailureAt: number
+  } {
+    return {
+      status: this.circuitState,
+      consecutiveFailures: this.consecutiveProviderFailures,
+      lastFailureAt: this.lastProviderFailureAt,
+    }
+  }
+
+  restoreProviderCircuitState(state: {
+    status: 'closed' | 'open' | 'half-open'
+    consecutiveFailures: number
+    lastFailureAt?: number
+  }): void {
+    this.circuitState = state.status
+    this.consecutiveProviderFailures = Math.max(0, state.consecutiveFailures)
+    this.lastProviderFailureAt = Math.max(0, state.lastFailureAt ?? 0)
+    this.halfOpenProbeInFlight = false
+  }
+
   async run(
     userMessage: string,
     history: OpenAIMessage[],

@@ -229,4 +229,36 @@ describe('ModelGateway v0.3.1 fallback', () => {
     }, { onProviderError })).rejects.toThrow('429')
     expect(adapter.attempts).toEqual(['haiku'])
   })
+
+  it('attributes stream-consumption failures to the active provider attempt', async () => {
+    const renderer = new FakeRenderer()
+    const adapter = new FakeAdapter()
+    const consumer = {
+      consume: async () => { throw new Error('stream interrupted') },
+    } as unknown as StreamConsumer
+    const gw = new ModelGateway({ adapter, renderer: renderer as unknown as Renderer, streamConsumer: consumer })
+    let caught: unknown
+    try {
+      await gw.call({
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'x' }],
+        toolDefs: [],
+        model: 'sonnet',
+        maxOutputTokens: 1024,
+        abortSignal: new AbortController().signal,
+        turnAbortController: null,
+      })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({
+      message: 'stream interrupted',
+      attempts: [{
+        model: 'sonnet',
+        provider: 'openai-compatible',
+        success: false,
+        error: 'stream interrupted',
+      }],
+    })
+  })
 })

@@ -38,10 +38,12 @@ export interface LoopCheckpoint {
     status: 'closed' | 'open' | 'half-open'
     consecutiveFailures: number
     failureBudget?: number
+    lastFailureAt?: number
   }
   recentCommands?: string[]
   workerReferences?: Array<{ runId: string; status: string; worktree?: string; branch?: string }>
   progressEvidenceHash?: string
+  workspaceEvidenceHash?: string
   goalHash: string
   acceptanceHash: string
   lastCommit?: string
@@ -186,10 +188,11 @@ export class LoopLeaseManager {
     }
   }
 
-  startHeartbeat(getInfo: () => HeartbeatInfo): void {
+  startHeartbeat(getInfo: () => HeartbeatInfo, onUnhealthy?: () => void): void {
     if (this.heartbeatTimer) return
     this.heartbeatTimer = setInterval(() => {
-      this.updateHeartbeat(getInfo())
+      const ok = this.updateHeartbeat(getInfo())
+      if (!ok && this.heartbeatWriteFailures >= 3) onUnhealthy?.()
     }, this.config.intervalMs)
     if (typeof this.heartbeatTimer.unref === 'function') this.heartbeatTimer.unref()
   }
@@ -236,9 +239,12 @@ export function getProcessIdentity(pid: number): string | null {
     try { bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() } catch { /* optional */ }
     return `${hostname()}:${bootId}:${pid}:${startTime}`
   } catch {
-    return null
+    return pid === process.pid ? CURRENT_PROCESS_IDENTITY : null
   }
 }
+
+const CURRENT_PROCESS_IDENTITY =
+  `${hostname()}:${process.pid}:${Math.round(Date.now() - process.uptime() * 1000)}`
 
 /**
  * Checkpoint manager — atomic temp+rename writes, keeps one backup.

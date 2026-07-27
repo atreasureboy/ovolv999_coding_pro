@@ -99,10 +99,15 @@ export function canReuseGateEvidence(
   goalHash: string,
   acceptanceHash: string,
   requiredGates: string[],
+  workspace: { branch: string; head?: string; changedFiles: string[]; evidenceHash: string },
 ): boolean {
   return checkpoint !== null
     && checkpoint.goalHash === goalHash
     && checkpoint.acceptanceHash === acceptanceHash
+    && checkpoint.branch === workspace.branch
+    && checkpoint.head === workspace.head
+    && checkpoint.workspaceEvidenceHash === workspace.evidenceHash
+    && JSON.stringify(checkpoint.changedFiles.slice().sort()) === JSON.stringify(workspace.changedFiles.slice().sort())
     && requiredGates.every((gate) => checkpoint.passedQualityGates?.includes(gate))
 }
 
@@ -186,6 +191,26 @@ function gitSnapshot(cwd: string): { branch: string; head?: string; changedFiles
   return { branch, head, changedFiles }
 }
 
+function gitProgressEvidence(cwd: string): string {
+  return hashContract(JSON.stringify({
+    ...gitSnapshot(cwd),
+    unstaged: gitValue(cwd, 'git diff --binary --no-ext-diff'),
+    staged: gitValue(cwd, 'git diff --cached --binary --no-ext-diff'),
+  }))
+}
+
+function readProviderCircuit(engine: ExecutionEngine): {
+  status: 'closed' | 'open' | 'half-open'
+  consecutiveFailures: number
+  lastFailureAt: number
+} {
+  return engine.getProviderCircuitState?.() ?? {
+    status: 'closed',
+    consecutiveFailures: 0,
+    lastFailureAt: 0,
+  }
+}
+
 function runQualityGates(cwd: string): { passed: boolean; results: string[] } {
   const results: string[] = []
   let allPassed = true
@@ -217,7 +242,7 @@ function runFullGates(cwd: string): { passed: boolean; results: string[] } {
   const results: string[] = []
   let allPassed = true
   const scripts = projectScripts(cwd)
-  const commands = ['test', 'build']
+  const commands = ['test', 'eval:deterministic', 'build']
     .filter(name => Boolean(scripts[name]))
     .map(name => ({ name, cmd: `npm run ${name} 2>&1` }))
 
@@ -277,7 +302,6 @@ export async function runLoop(
     renderer.info('Stale lease taken over.')
   }
   let loopIteration = 1
-  let consecutiveProviderFailures = 0
   let consecutiveNoProgress = 0
   let lastProgressAt = new Date().toISOString()
   let checkpointSequence = 0
@@ -285,6 +309,7 @@ export async function runLoop(
   let passedQualityGates = new Set<string>()
   let latestOutcome: TurnOutcome | undefined
   let supervisorRunId: string = randomUUID()
+  let heartbeatFatal = false
 
   // v0.3.4 (durable supervisor contract §Phase 6): resume/restart checkpoint support
   const shouldResume = config.resume !== false // default: try resume
@@ -297,25 +322,38 @@ export async function runLoop(
     restoredCp = checkpointMgr.load()
     if (restoredCp) {
       loopIteration = restoredCp.iteration + 1
-      consecutiveProviderFailures = restoredCp.consecutiveProviderFailures
       consecutiveNoProgress = restoredCp.consecutiveNoProgress
       checkpointSequence = restoredCp.sequence
       lastProgressAt = restoredCp.updatedAt
       progressEvidenceHash = restoredCp.progressEvidenceHash ?? ''
       passedQualityGates = new Set(restoredCp.passedQualityGates ?? [])
-      renderer.info(`Resumed from checkpoint: iteration ${loopIteration}, ${consecutiveProviderFailures} prior provider failures.`)
+      if (restoredCp.providerCircuit) {
+        engine.restoreProviderCircuitState?.(restoredCp.providerCircuit)
+      }
+      renderer.info(`Resumed from checkpoint: iteration ${loopIteration}, ${restoredCp.consecutiveProviderFailures} prior provider failures.`)
     }
   }
 
   // Start heartbeat
-  leaseMgr.startHeartbeat((): HeartbeatInfo => ({
-    iteration: loopIteration,
-    phase: 'executing',
-    lastProgressAt,
-    workerCount: 0,
-    circuitStatus: consecutiveProviderFailures >= 5 ? 'open' : 'closed',
-    checkpointSequence,
-  }))
+  leaseMgr.startHeartbeat(
+    (): HeartbeatInfo => {
+      const circuit = readProviderCircuit(engine)
+      return {
+        iteration: loopIteration,
+        phase: 'executing',
+        lastProgressAt,
+        workerCount: 0,
+        circuitStatus: circuit.status,
+        checkpointSequence,
+      }
+    },
+    () => {
+      if (heartbeatFatal) return
+      heartbeatFatal = true
+      try { writeFileSync(join(loopDir, 'PARKED.flag'), 'heartbeat persistence failed repeatedly\n', 'utf8') } catch { /* best-effort */ }
+      engine.abort()
+    },
+  )
 
   const acceptanceItems = parseAcceptance(acceptanceRaw)
 
@@ -327,25 +365,32 @@ export async function runLoop(
     renderer.warn(`\n⚠ Signal received — saving checkpoint and shutting down.`)
     try {
       const git = gitSnapshot(cwd)
+      const circuit = readProviderCircuit(engine)
+      const workerReferences = (engine.getRunRegistry?.().list() ?? [])
+        .filter((run) => run.kind === 'agent' || run.kind === 'external_worker')
+        .map((run) => ({
+          runId: run.runId,
+          status: run.status,
+          worktree: run.workspace.worktreePath,
+          branch: run.workspace.branch,
+        }))
       checkpointMgr.save({
         schemaVersion: 2, sequence: ++checkpointSequence, taskId, branch: git.branch, worktree: cwd,
         iteration: loopIteration, phase: 'interrupted', runId: supervisorRunId,
         turnOutcome: latestOutcome ?? restoredCp?.turnOutcome,
         taskGraph: latestOutcome?.taskGraph ?? restoredCp?.taskGraph,
         passedQualityGates: [...passedQualityGates],
-        providerCircuit: {
-          status: consecutiveProviderFailures >= 5 ? 'open' : 'closed',
-          consecutiveFailures: consecutiveProviderFailures,
-        },
+        providerCircuit: circuit,
         recentCommands: acceptanceItems.map((item) => item.command),
-        workerReferences: restoredCp?.workerReferences ?? [],
+        workerReferences,
         goalHash: hashContract(goal),
         acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
         head: git.head,
         changedFiles: git.changedFiles,
         progressEvidenceHash,
+        workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures, consecutiveCommandFailures: 0,
+        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
         createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })
@@ -382,26 +427,33 @@ export async function runLoop(
     // v0.3.4: save final checkpoint + stop heartbeat + release lease
     try {
       const git = gitSnapshot(cwd)
+      const circuit = readProviderCircuit(engine)
+      const workerReferences = (registry?.list() ?? [])
+        .filter((run) => run.kind === 'agent' || run.kind === 'external_worker')
+        .map((run) => ({
+          runId: run.runId,
+          status: run.status,
+          worktree: run.workspace.worktreePath,
+          branch: run.workspace.branch,
+        }))
       checkpointMgr.save({
         schemaVersion: 2, sequence: ++checkpointSequence, taskId, branch: git.branch, worktree: cwd,
         iteration: loopIteration, phase: status, runId: supervisorRunId,
         turnOutcome: latestOutcome ?? restoredCp?.turnOutcome,
         taskGraph: latestOutcome?.taskGraph ?? restoredCp?.taskGraph,
         passedQualityGates: [...passedQualityGates],
-        providerCircuit: {
-          status: consecutiveProviderFailures >= 5 ? 'open' : 'closed',
-          consecutiveFailures: consecutiveProviderFailures,
-        },
+        providerCircuit: circuit,
         recentCommands: acceptanceItems.map((item) => item.command),
-        workerReferences: restoredCp?.workerReferences ?? [],
+        workerReferences,
         goalHash: hashContract(goal),
         acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
         head: git.head,
         changedFiles: git.changedFiles,
         progressEvidenceHash,
+        workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures, consecutiveCommandFailures: 0,
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
+        createdAt: restoredCp?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(),
       })
     } catch { /* best-effort */ }
     leaseMgr.stopHeartbeat()
@@ -528,8 +580,10 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       lastOutcome = turnOutcome
       latestOutcome = turnOutcome
       const nextProgressEvidenceHash = hashContract(JSON.stringify({
+        workspace: gitProgressEvidence(cwd),
         changedFiles: turnOutcome.changedFiles.slice().sort(),
         verification: turnOutcome.verification,
+        taskGraph: turnOutcome.taskGraph,
         completion: turnOutcome.completion.status,
       }))
       if (nextProgressEvidenceHash !== progressEvidenceHash
@@ -542,6 +596,11 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
       }
     } catch (err: unknown) {
       renderer.error(`Iteration ${iter} error: ${(err as Error).message}`)
+    }
+    if (heartbeatFatal) {
+      renderer.warn('Heartbeat persistence failed repeatedly — loop parked.')
+      finishLoopRun('cancelled', 'heartbeat persistence unavailable')
+      return
     }
 
     // Run acceptance checks ourselves (don't trust the agent's self-assessment)
@@ -569,11 +628,14 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
 
     // Run quality gates — v0.3.4 (durable supervisor contract §Phase 8): split into fast/full
     renderer.info('\n--- Quality gates (fast) ---')
+    const gateSnapshot = gitSnapshot(cwd)
+    const gateWorkspace = { ...gateSnapshot, evidenceHash: gitProgressEvidence(cwd) }
     const restoredFastGates = canReuseGateEvidence(
       restoredCp,
       goalHashThisIter,
       acceptanceHashThisIter,
       ['typecheck', 'lint'],
+      gateWorkspace,
     )
     const fastGates = restoredFastGates
       ? { passed: true, results: ['✓ typecheck (restored evidence)', '✓ lint (restored evidence)'] }
@@ -636,6 +698,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
           goalHashThisIter,
           acceptanceHashThisIter,
           ['test', 'build'],
+          gateWorkspace,
         )
         const fullGates = restoredFullGates
           ? { passed: true, results: ['✓ test (restored evidence)', '✓ build (restored evidence)'] }
@@ -669,6 +732,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
     try {
       checkpointSequence++
       const git = gitSnapshot(cwd)
+      const circuit = readProviderCircuit(engine)
       const runs = registry?.list() ?? []
       const workerReferences = runs
         .filter((run) => run.kind === 'agent' || run.kind === 'external_worker')
@@ -687,17 +751,15 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
         workerReferences,
         recentCommands: acceptanceItemsFresh.map((item) => item.command),
         passedQualityGates: [...passedQualityGates],
-        providerCircuit: {
-          status: consecutiveProviderFailures >= 5 ? 'open' : 'closed',
-          consecutiveFailures: consecutiveProviderFailures,
-        },
+        providerCircuit: circuit,
         goalHash: hashContract(goal),
         acceptanceHash: hashContract(acceptanceRawFresh),
         head: git.head,
         changedFiles: git.changedFiles,
         progressEvidenceHash,
+        workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures, consecutiveCommandFailures: 0,
+        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
         createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })

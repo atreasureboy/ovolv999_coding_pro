@@ -136,6 +136,7 @@ describe('v0.3.6 reliability closure', () => {
         acceptanceHash: 'acceptance',
         head: 'abc123',
         changedFiles: ['src/a.ts'],
+        workspaceEvidenceHash: 'workspace',
         consecutiveNoProgress: 1,
         consecutiveProviderFailures: 4,
         consecutiveCommandFailures: 0,
@@ -145,9 +146,18 @@ describe('v0.3.6 reliability closure', () => {
       const manager = new CheckpointManager(dir)
       manager.save(checkpoint)
       expect(manager.load()).toEqual(checkpoint)
-      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['typecheck', 'lint'])).toBe(true)
-      expect(canReuseGateEvidence(manager.load(), 'changed-goal', 'acceptance', ['typecheck'])).toBe(false)
-      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['build'])).toBe(false)
+      const workspace = { branch: 'main', head: 'abc123', changedFiles: ['src/a.ts'], evidenceHash: 'workspace' }
+      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['typecheck', 'lint'], workspace)).toBe(true)
+      expect(canReuseGateEvidence(manager.load(), 'changed-goal', 'acceptance', ['typecheck'], workspace)).toBe(false)
+      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['build'], workspace)).toBe(false)
+      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['typecheck'], {
+        ...workspace,
+        head: 'new-head',
+      })).toBe(false)
+      expect(canReuseGateEvidence(manager.load(), 'goal', 'acceptance', ['typecheck'], {
+        ...workspace,
+        evidenceHash: 'changed-diff',
+      })).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

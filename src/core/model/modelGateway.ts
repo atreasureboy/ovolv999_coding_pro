@@ -199,7 +199,21 @@ export class ModelGateway {
       }
     }
 
-    const result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
+    let result: StreamResult
+    try {
+      result = await this.streamConsumer.consume(stream, abortSignal, turnAbortController)
+    } catch (consumeCaught) {
+      const consumeError = consumeCaught instanceof Error ? consumeCaught : new Error(String(consumeCaught))
+      attempts.push({
+        model: activeModel,
+        provider: this.adapter.providerId,
+        success: false,
+        error: consumeError.message,
+        latencyMs: Date.now() - attemptStartMs,
+        usage: null,
+      })
+      throw new ModelGatewayError(consumeError.message, attempts)
+    }
     attempts.push({
       model: activeModel,
       provider: this.adapter.providerId,

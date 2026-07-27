@@ -986,6 +986,16 @@ export class ExecutionEngine {
     return this.backgroundTaskManager
   }
 
+  getProviderCircuitState(): ReturnType<RuntimeCoordinator['getProviderCircuitState']> {
+    return this.coordinator.getProviderCircuitState()
+  }
+
+  restoreProviderCircuitState(
+    state: Parameters<RuntimeCoordinator['restoreProviderCircuitState']>[0],
+  ): void {
+    this.coordinator.restoreProviderCircuitState(state)
+  }
+
   getPermissionManager(): PermissionManager {
     return this.permissionManager
   }
