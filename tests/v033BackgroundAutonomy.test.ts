@@ -58,6 +58,15 @@ describe('v0.3.3 background autonomy regression (tha_goal §Phase 7)', () => {
     expect(ctx2.taskGraph.size()).toBe(0) // run-2 graph is empty
   })
 
+  it('§3: TaskGraph transitions update the same Run progress monitor', () => {
+    const store = new InMemoryRunScopedRuntimeContextStore()
+    const ctx = store.create('run-1', { taskKind: 'mutation' })
+    ctx.taskGraph.addNode({ id: 'a', title: 'a', description: '', dependencies: [], acceptanceCriteria: [] })
+    ctx.taskGraph.start('a')
+    ctx.taskGraph.complete('a')
+    expect(ctx.progressMonitor.snapshot(5).minutesSinceLastMeaningfulProgress).toBe(0)
+  })
+
   // ── §5: Context released on close ────────────────────────────────
   it('§5: store.close() removes the context', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()

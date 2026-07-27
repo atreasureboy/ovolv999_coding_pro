@@ -378,6 +378,11 @@ export class ModelRouter {
     }
     if ((input.repoFileCount ?? 0) > 500) { c += 0.15; reasonCodes.push('large-repo') }
     if ((input.filesTouched ?? 0) > 5) { c += 0.1; reasonCodes.push('many-files') }
+    if ((input.estimatedImpactFiles ?? 0) > 5) { c += 0.1; reasonCodes.push('large-impact') }
+    if ((input.consecutiveFailures ?? 0) > 0) {
+      c += Math.min(0.2, (input.consecutiveFailures ?? 0) * 0.05)
+      reasonCodes.push('failure-escalation')
+    }
     if ((input.userGoal ?? '').length > 1200) { c += 0.1; reasonCodes.push('long-goal') }
     c = Math.min(1, c)
     return round(c)
@@ -463,7 +468,7 @@ export class ModelRouter {
 
     // Per-profile health from the collector can also penalise a
     // profile even if local recordCall has not run yet.
-    if (input.providerHealth) {
+    if ((!h || h.calls < threshold) && input.providerHealth) {
       const remote = input.providerHealth.find((h) => h.profileId === p.id)
       if (remote && remote.failRate > 0.3) {
         score -= remote.failRate * 0.4

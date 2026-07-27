@@ -158,6 +158,7 @@ export class Daemon {
 
   private handleConnection(socket: Socket): void {
     let buffer = ''
+    socket.on('error', () => {})
     socket.on('data', (data: Buffer) => {
       buffer += data.toString()
       let nl = buffer.indexOf('\n')
@@ -169,12 +170,19 @@ export class Daemon {
         try {
           const cmd = JSON.parse(line) as DaemonCommand
           const response = this.handleCommand(cmd)
-          socket.write(JSON.stringify(response) + '\n')
+          this.writeResponse(socket, response)
         } catch (err) {
           const response: DaemonResponse = { ok: false, error: err instanceof Error ? err.message : String(err) }
-          socket.write(JSON.stringify(response) + '\n')
+          this.writeResponse(socket, response)
         }
       }
+    })
+  }
+
+  private writeResponse(socket: Socket, response: DaemonResponse): void {
+    if (socket.destroyed || !socket.writable) return
+    socket.write(JSON.stringify(response) + '\n', (err) => {
+      if (err && !socket.destroyed) socket.destroy()
     })
   }
 

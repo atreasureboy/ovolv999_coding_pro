@@ -26,6 +26,7 @@ import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../module
 import type { OpenAIMessage, Tool, ToolContext, ToolResult, TurnResult } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
+import type { TurnOutcome } from '../runtime/turnOutcome.js'
 
 export interface ModuleManagerDeps {
   modules: AgentModule[]
@@ -238,7 +239,7 @@ export class ModuleManager {
     cwd: string
     sessionDir?: string
     turnResult: TurnResult
-    outcome?: import('../runtime/turnOutcome.js').TurnOutcome
+    outcome?: TurnOutcome
     messages: OpenAIMessage[]
     eventLog?: EventLog
   }): Promise<void> {

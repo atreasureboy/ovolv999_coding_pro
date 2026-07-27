@@ -50,8 +50,7 @@ describe('v0.3.4 LoopLeaseManager', () => {
 
   it('§5: heartbeat updates heartbeatAt timestamp', () => {
     const mgr = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 50_000, writeTimeoutMs: 5_000 })
-    const lease = mgr.acquire('task-1', '/project')
-    const before = lease.heartbeatAt
+    mgr.acquire('task-1', '/project')
     // Wait a tiny bit so timestamp differs
     const ok = mgr.updateHeartbeat({
       iteration: 1, phase: 'executing', lastProgressAt: new Date().toISOString(),

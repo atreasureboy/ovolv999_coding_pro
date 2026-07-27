@@ -60,7 +60,7 @@ import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
 import { buildExecutionContext } from '../executionContext.js'
 import { checkTermination } from './terminationPolicy.js'
 import { evaluateCompletion, type CompletionVerdict } from './completionContract.js'
-import type { TurnOutcome, CompletionStatus, ModelCallAttempt } from './turnOutcome.js'
+import type { TurnOutcome, CompletionStatus } from './turnOutcome.js'
 import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
@@ -331,6 +331,7 @@ export class RuntimeCoordinator {
     // v0.3.5: resolve the current TaskGraph from the per-run context
     // (preferred) or legacy deps (fallback for tests without context).
     const currentGraph = runContext?.taskGraph ?? this.deps.taskGraph
+    const progressMonitor = runContext?.progressMonitor ?? this.deps.progressMonitor
 
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
@@ -350,12 +351,11 @@ export class RuntimeCoordinator {
             unresolved: [...ws.unresolved],
           },
           contextManager: {
-            // v0.3.5: do NOT fabricate values. The collector applies its
-            // own defaults (0/1) when the source has no data — we pass
-            // the documented "no data" values here rather than pretending
-            // we measured them.
-            contextUsageRatio: 0,
-            budgetRemaining: 1,
+            // v0.3.5: do NOT fabricate values. undefined means "no data
+            // available" — the collector + router treat undefined as
+            // neutral (no long-context pressure, no budget pressure).
+            contextUsageRatio: undefined,
+            budgetRemaining: undefined,
             recentFailureCount: ws.verification.failed.length,
           },
           taskGraph: tg ? {
@@ -447,7 +447,7 @@ export class RuntimeCoordinator {
               // (observable via /trace). Active replan-injection is the
               // InternalControlMessage (Phase 1.2) follow-up; detection is
               // live here so stalls never pass silently.
-              const pm = this.deps.progressMonitor
+              const pm = progressMonitor
               if (pm) {
                 pm.tick()
                 // v0.3.1 (te_goal §六.1): feed real verification signal
@@ -499,7 +499,7 @@ export class RuntimeCoordinator {
             // review); the coordinator no longer injects its own critic
             // guidance. This eliminates the dual-critic problem.
             let criticRequested = false
-            const pmSnap = this.deps.progressMonitor
+            const pmSnap = progressMonitor
             if (pmSnap) {
               const snap = pmSnap.snapshot((Date.now() - turnStartMs) / 60_000)
               const ws = this.deps.contextManager.getWorkingState()
@@ -1258,4 +1258,3 @@ function serializeVerdict(v: CompletionVerdict): {
   }
   return { status: v.status, remaining: v.remaining }
 }
-

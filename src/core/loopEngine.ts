@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { runCommandSync } from './commandRunner.js'
-import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo } from './loopSupervisor.js'
+import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo, type LoopCheckpoint } from './loopSupervisor.js'
 import type { ExecutionEngine } from './engine.js'
 import type { Renderer } from '../ui/renderer.js'
 import { isTerminalRunStatus } from './executionRun.js'
@@ -191,7 +191,7 @@ export async function runLoop(
   // v0.3.4 (mimo_goal §Phase 6): resume/restart checkpoint support
   const shouldResume = config.resume !== false // default: try resume
   const shouldRestart = config.restart === true
-  let restoredCp: import('./loopSupervisor.js').LoopCheckpoint | null = null
+  let restoredCp: LoopCheckpoint | null = null
   if (shouldRestart) {
     checkpointMgr.clear()
     renderer.info('Checkpoint discarded (--restart).')

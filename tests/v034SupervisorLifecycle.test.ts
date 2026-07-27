@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { LoopLeaseManager, CheckpointManager, hashContract, type LoopCheckpoint } from '../src/core/loopSupervisor.js'
 

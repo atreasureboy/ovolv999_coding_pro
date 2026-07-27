@@ -113,7 +113,7 @@ export class LoopLeaseManager {
     if (!existsSync(this.leasePath)) return this.acquire(taskId, cwd)
     let existing: LoopLease
     try {
-      existing = JSON.parse(readFileSync(this.leasePath, 'utf8'))
+      existing = JSON.parse(readFileSync(this.leasePath, 'utf8')) as LoopLease
     } catch {
       // Corrupt lease — safe to take over
       try { unlinkSync(this.leasePath) } catch { /* best-effort */ }
@@ -123,7 +123,7 @@ export class LoopLeaseManager {
     const heartbeatAge = Date.now() - new Date(existing.heartbeatAt).getTime()
     if (heartbeatAge < this.config.staleAfterMs) return null // still fresh
     // Check PID liveness
-    let pidAlive = false
+    let pidAlive: boolean
     try { process.kill(existing.pid, 0); pidAlive = true } catch { pidAlive = false }
     if (pidAlive) {
       // PID alive but heartbeat stale — check fingerprint for PID reuse

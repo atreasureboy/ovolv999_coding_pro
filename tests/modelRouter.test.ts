@@ -49,6 +49,18 @@ describe('ModelRouter (Phase 2)', () => {
     expect(d.reasonCodes).toContain('long-context-need')
   })
 
+  it('treats unknown context and budget measurements as neutral', () => {
+    const r = new ModelRouter([STRONG, CHEAP, LONG])
+    const d = r.route({
+      userGoal: 'continue',
+      contextUsageRatio: undefined,
+      budgetRemaining: undefined,
+    })
+    expect(d.reasonCodes).not.toContain('long-context-need')
+    expect(d.reasonCodes).not.toContain('budget-pressure')
+    expect(d.budgetAllocation.maxOutputTokens).toBeUndefined()
+  })
+
   it('falls back along the chain and never returns the failed model', () => {
     const r = new ModelRouter([STRONG, CHEAP, LONG])
     const d = r.route({ userGoal: 'fix the bug' })
@@ -67,6 +79,31 @@ describe('ModelRouter (Phase 2)', () => {
     const d = r.route({ userGoal: 'hard architecture refactor', needsArchitecture: true })
     expect(d.selectedModel).not.toBe('weak-model')
     expect(d.reasonCodes.some((c) => c.startsWith('unhealthy'))).toBe(true)
+  })
+
+  it('uses collected failures and impact estimates as complexity signals', () => {
+    const r = new ModelRouter([STRONG, CHEAP])
+    const baseline = r.route({ userGoal: 'continue' })
+    const escalated = r.route({
+      userGoal: 'continue',
+      consecutiveFailures: 3,
+      estimatedImpactFiles: 8,
+    })
+    expect(escalated.estimatedComplexity).toBeGreaterThan(baseline.estimatedComplexity)
+    expect(escalated.reasonCodes).toContain('failure-escalation')
+    expect(escalated.reasonCodes).toContain('large-impact')
+  })
+
+  it('does not apply collector health twice when local health is authoritative', () => {
+    const weak = profile('weak', 'weak-model', { reasoning: 0.95, coding: 0.95, cost: 0.9 })
+    const r = new ModelRouter([weak, STRONG])
+    for (let i = 0; i < 3; i++) r.recordCall('weak', false, 100, null)
+    const d = r.route({
+      userGoal: 'fix the bug',
+      providerHealth: [{ profileId: 'weak', failRate: 1, avgLatencyMs: 100 }],
+    })
+    expect(d.reasonCodes).toContain('unhealthy:weak')
+    expect(d.reasonCodes).not.toContain('health-from-collector:weak')
   })
 
   it('single-profile router degrades gracefully and still respects override', () => {

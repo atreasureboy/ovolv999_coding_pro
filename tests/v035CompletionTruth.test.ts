@@ -252,7 +252,6 @@ describe('v0.3.5 Command registration — no duplicates', () => {
         name: 'plan', // already registered
         description: 'duplicate',
         usage: '/plan',
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         handler: (_args, _ctx) => ({ type: 'text' as const, value: 'dup' }),
       })
     }).toThrow()

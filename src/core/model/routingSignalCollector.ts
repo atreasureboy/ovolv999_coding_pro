@@ -36,19 +36,16 @@
 import type { RoutingInput } from './modelRouter.js'
 
 export interface RoutingSignals {
-  // required by Router.route
   userGoal: string
-  // numeric / structural state
   repoFileCount: number
   filesTouched: number
   recentFailureCount: number
-  contextUsageRatio: number
-  budgetRemaining: number
-  // role hint (for child / worker routing)
+  /** undefined when no reliable context measurement is available. */
+  contextUsageRatio?: number
+  /** undefined when no budget tracking is wired. */
+  budgetRemaining?: number
   role?: string
-  // architecture heuristic
   needsArchitecture: boolean
-  // health & history
   providerHealth: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
   previousRoutingFailures: number
   // expected tool requirement
@@ -82,10 +79,10 @@ export interface TaskGraphSnapshot {
 
 /** Minimal view of ContextManager the collector reads. */
 export interface ContextManagerSnapshot {
-  /** Estimated fraction of context window used (0..1). */
-  contextUsageRatio: number
-  /** Tokens still budgeted (0..1 fraction). */
-  budgetRemaining: number
+  /** Estimated fraction of context window used (0..1). undefined = unknown. */
+  contextUsageRatio?: number
+  /** Tokens still budgeted (0..1 fraction). undefined = unknown. */
+  budgetRemaining?: number
   /** Recent LLM failures (rolling count). */
   recentFailureCount: number
 }
@@ -166,8 +163,8 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
     repoFileCount,
     filesTouched,
     recentFailureCount: cm?.recentFailureCount ?? 0,
-    contextUsageRatio: cm?.contextUsageRatio ?? 0,
-    budgetRemaining: cm?.budgetRemaining ?? 1,
+    contextUsageRatio: cm?.contextUsageRatio,
+    budgetRemaining: cm?.budgetRemaining,
     role: tg?.preferredRoles[0],
     needsArchitecture: keywordArchitecture || tgArchitecture || (keywordConfig && manyFiles),
     providerHealth: rh?.providerHealth ?? [],
@@ -193,5 +190,14 @@ export function signalsToRoutingInput(s: RoutingSignals): RoutingInput {
     budgetRemaining: s.budgetRemaining,
     role: s.role,
     needsArchitecture: s.needsArchitecture,
+    providerHealth: s.providerHealth,
+    previousRoutingFailures: s.previousRoutingFailures,
+    expectedToolRequirement: s.expectedToolRequirement,
+    affectsPublicInterface: s.affectsPublicInterface,
+    isCrossModule: s.isCrossModule,
+    isConfigChange: s.isConfigChange,
+    requiresRootCause: s.requiresRootCause,
+    estimatedImpactFiles: s.estimatedImpactFiles,
+    taskGraphScale: s.taskGraphScale,
   } satisfies RoutingInput
 }

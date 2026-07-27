@@ -114,6 +114,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
     // set its runId so event emission is tagged correctly, and
     // also emit TASK_GRAPH_CREATED for /trace + EventStore replay.
     ctx.taskGraph.setRunId(runId)
+    ctx.taskGraph.setNodeTransitionSink((transition) => ctx.progressMonitor.recordTaskNodeTransition(transition))
     this.contexts.set(runId, ctx)
     this.sink?.({ type: 'CONTEXT_CREATED', runId })
     this.sink?.({ type: 'TASK_GRAPH_CREATED', runId })
@@ -140,6 +141,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       completionVerdict: snapshot.completionVerdict,
       startedAt: snapshot.startedAt,
     }
+    ctx.taskGraph.setNodeTransitionSink((transition) => ctx.progressMonitor.recordTaskNodeTransition(transition))
     this.contexts.set(runId, ctx)
     return ctx
   }

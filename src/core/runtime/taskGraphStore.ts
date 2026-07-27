@@ -53,6 +53,7 @@ export class InMemoryTaskGraphStore implements TaskGraphStore {
 
   restore(runId: string, snapshot: TaskGraphSnapshot): TaskGraph {
     const g = TaskGraph.restore(JSON.stringify(snapshot.nodes))
+    g.setRunId(runId)
     this.graphs.set(runId, g)
     return g
   }

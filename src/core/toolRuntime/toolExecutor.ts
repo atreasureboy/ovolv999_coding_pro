@@ -50,6 +50,7 @@ export interface ToolExecutorDeps {
   eventEmitter?: RunEventEmitter
   /** Phase 4: records every tool result for stall detection. */
   progressMonitor?: ProgressMonitor
+  resolveProgressMonitor?: (context: ToolContext) => ProgressMonitor | undefined
   renderer: Renderer
 }
 
@@ -179,7 +180,8 @@ export class ToolExecutor {
     // StallDetector sees changed files, repeated calls, and consecutive
     // errors. Best-effort, mirrors the WorkingState integration point.
     try {
-      this.deps.progressMonitor?.recordToolCall(toolName, input, {
+      const progressMonitor = this.deps.resolveProgressMonitor?.(context) ?? this.deps.progressMonitor
+      progressMonitor?.recordToolCall(toolName, input, {
         isError: result.isError,
         content: typeof result.content === 'string' ? result.content : '',
       })

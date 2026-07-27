@@ -21,7 +21,7 @@ import { join } from 'path'
 import { InputHandler, readStdin, type SharedPrompt } from '../src/ui/input.js'
 import { createTerminalAskUserHandler } from '../src/tools/askUser.js'
 import { ExitPlanModeTool } from '../src/tools/exitPlanMode.js'
-import { registerCommand, dispatchSlashCommand, getCommand, type SlashCommandContext } from '../src/commands/index.js'
+import { dispatchSlashCommand, getCommand, type SlashCommandContext } from '../src/commands/index.js'
 import '../src/commands/builtin.js'
 import { saveSession } from '../src/core/sessionManager.js'
 

@@ -151,14 +151,23 @@ describe('RoutingSignalCollector v0.3.1', () => {
     expect(input.contextUsageRatio).toBe(s.contextUsageRatio)
     expect(input.budgetRemaining).toBe(s.budgetRemaining)
     expect(input.role).toBe(s.role)
+    expect(input.providerHealth).toBe(s.providerHealth)
+    expect(input.previousRoutingFailures).toBe(s.previousRoutingFailures)
+    expect(input.expectedToolRequirement).toBe(s.expectedToolRequirement)
+    expect(input.affectsPublicInterface).toBe(s.affectsPublicInterface)
+    expect(input.isCrossModule).toBe(s.isCrossModule)
+    expect(input.isConfigChange).toBe(s.isConfigChange)
+    expect(input.requiresRootCause).toBe(s.requiresRootCause)
+    expect(input.estimatedImpactFiles).toBe(s.estimatedImpactFiles)
+    expect(input.taskGraphScale).toBe(s.taskGraphScale)
   })
 
-  it('defaults are sane when no inputs provided', () => {
+  it('preserves unknown context and budget measurements when no inputs are provided', () => {
     const s = collectRoutingSignals({ userMessage: 'hello' })
     expect(s.filesTouched).toBe(0)
     expect(s.recentFailureCount).toBe(0)
-    expect(s.budgetRemaining).toBe(1)
-    expect(s.contextUsageRatio).toBe(0)
+    expect(s.budgetRemaining).toBeUndefined()
+    expect(s.contextUsageRatio).toBeUndefined()
     expect(s.providerHealth).toEqual([])
     expect(s.previousRoutingFailures).toBe(0)
     expect(s.taskGraphScale).toBe(0)
@@ -190,19 +199,8 @@ describe('RoutingSignalCollector v0.3.1', () => {
       taskGraphScale: 3,
     }
 
-    // Fields collected but NOT yet consumed by RoutingInput.
-    // Each must be justified — adding one requires a comment.
     const UNMAPPED = new Set([
-      'providerHealth',          // consumed by ModelRouter.recordCall directly, not via RoutingInput
-      'expectedToolRequirement', // used inside the collector for heuristics; not in RoutingInput yet
-      'affectsPublicInterface',  // folded into needsArchitecture
-      'isCrossModule',           // folded into needsArchitecture
-      'isConfigChange',          // folded into needsArchitecture
-      'requiresRootCause',       // folded into needsArchitecture
-      'estimatedImpactFiles',    // folded into needsArchitecture calculation
-      'taskGraphScale',          // folded into needsArchitecture calculation
-      'recentFailureCount',      // combined into RoutingInput.consecutiveFailures (+ previousRoutingFailures)
-      'previousRoutingFailures', // combined into RoutingInput.consecutiveFailures (+ recentFailureCount)
+      'recentFailureCount',
     ])
 
     const allFields = Object.keys(sampleSignals)

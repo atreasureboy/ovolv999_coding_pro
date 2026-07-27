@@ -4,6 +4,7 @@
 
 import type { Tool, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
 import type { ExecutionRunRegistry } from '../core/executionRun.js'
+import type { RunScopedEvidenceResolver } from './taskGraphResolver.js'
 import { BashTool } from './bash.js'
 import { FileReadTool } from './fileRead.js'
 import { FileWriteTool } from './fileWrite.js'
@@ -69,7 +70,7 @@ export interface AgentWiring {
    *  via runId rather than holding a fixed reference. */
   taskGraphResolver?: TaskGraphResolver
   /** v0.3.5: per-run evidence resolver for anti-false-success. */
-  evidenceResolver?: import('./taskGraphResolver.js').RunScopedEvidenceResolver
+  evidenceResolver?: RunScopedEvidenceResolver
 }
 
 export function createTools(

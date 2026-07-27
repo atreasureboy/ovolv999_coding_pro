@@ -469,6 +469,10 @@ export class ExecutionEngine {
       hookRunner: this.config.hookRunner,
       eventEmitter: this.eventEmitter,
       progressMonitor: this.progressMonitor,
+      resolveProgressMonitor: (context) => {
+        const runId = context.execution?.runId
+        return runId ? this.runContextStore.get(runId)?.progressMonitor : undefined
+      },
       renderer: this.renderer,
     })
     this.toolScheduler = new ToolScheduler({

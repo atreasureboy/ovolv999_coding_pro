@@ -9,6 +9,7 @@ import type { ResourceClaim } from './executionRun.js'
 import type { ExecutionContext } from './executionContext.js'
 import type { FileHistory } from './fileHistory.js'
 import type { PermissionManager } from './permissionSystem.js'
+import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 
 // OpenAI-compatible tool call format
@@ -263,7 +264,7 @@ export interface IHookRunner {
   /** Called when a run completes (any reason: stop, max_iterations, error, interrupted) */
   runOnComplete?(result: TurnResult): HookResult[]
   /** v0.3.4: Called with the full TurnOutcome (carries completion.status) */
-  runOnCompleteWithOutcome?(result: TurnResult, outcome?: import('./runtime/turnOutcome.js').TurnOutcome): HookResult[]
+  runOnCompleteWithOutcome?(result: TurnResult, outcome?: TurnOutcome): HookResult[]
   /** Called after context compaction (auto-summary of older messages) */
   runOnContextOverflow?(tokensBefore: number, tokensAfter: number): HookResult[]
 }

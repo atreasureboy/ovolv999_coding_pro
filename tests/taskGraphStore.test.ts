@@ -59,6 +59,16 @@ describe('TaskGraphStore v0.3.1', () => {
     expect(restored.get('n2')?.dependencies).toEqual(['n1'])
   })
 
+  it('restore binds subsequent events to the restored runId', () => {
+    const s = new InMemoryTaskGraphStore()
+    const original = new TaskGraph()
+    const restored = s.restore('run-restored', original.snapshot())
+    const events: Array<{ runId?: string }> = []
+    restored.setEventSink((event) => events.push(event))
+    restored.addNode({ id: 'n1', title: 'task', description: 'd', dependencies: [] })
+    expect(events).toEqual([expect.objectContaining({ runId: 'run-restored' })])
+  })
+
   it('pruneTerminal drops done graphs but keeps active ones', () => {
     const s = new InMemoryTaskGraphStore()
     const a = s.create('run-a')

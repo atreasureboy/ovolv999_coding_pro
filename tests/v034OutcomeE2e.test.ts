@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { ExecutionEngine } from '../src/core/engine.js'
-import type { EngineConfig, Tool } from '../src/core/types.js'
+import type { EngineConfig } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 
 class FakeOpenAI {

@@ -167,6 +167,14 @@ export class LspClient extends EventEmitter {
       return false
     }
 
+    const spawnedProcess = this.proc
+    spawnedProcess.on('error', (err: Error) => {
+      this.initialized = false
+      if (this.proc === spawnedProcess) this.proc = null
+      for (const [, { reject }] of this.pending) reject(err)
+      this.pending.clear()
+    })
+
     if (!this.proc.stdout || !this.proc.stdin) {
       return false
     }
@@ -177,14 +185,6 @@ export class LspClient extends EventEmitter {
     if (!this.proc.pid) {
       return false
     }
-
-    // During initialization, a spawn-error (ENOENT etc.) should reject
-    // the initialize request immediately instead of waiting for timeout.
-    const initErrorHandler = (err: Error): void => {
-      for (const [, { reject }] of this.pending) reject(err)
-      this.pending.clear()
-    }
-    this.proc.once('error', initErrorHandler)
 
     this.proc.stdout.on('data', (data: Buffer) => this.onData(data))
     this.proc.on('exit', () => {
