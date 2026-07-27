@@ -20,6 +20,7 @@ export interface StatusBarProps {
   planMode: boolean
   verbose?: boolean
   gitBranch?: string | null
+  terminalWidth?: number
 }
 
 function contextBar(pct: number): { bar: string; color: string } {
@@ -37,33 +38,33 @@ function formatTokens(n: number): string {
   return `${n}`
 }
 
-export function StatusBar({ model, messageCount, contextPct, tokenCount, maxTokens, cost, apiCalls, planMode, verbose, gitBranch }: StatusBarProps): React.ReactElement {
+export function StatusBar({ model, messageCount, contextPct, tokenCount, maxTokens, cost, apiCalls, planMode, verbose, gitBranch, terminalWidth = 160 }: StatusBarProps): React.ReactElement {
   const pct = Math.round(contextPct * 100)
   const { bar, color } = contextBar(contextPct)
   const costStr = cost < 0.01 ? cost.toFixed(4) : cost < 1 ? cost.toFixed(3) : cost.toFixed(2)
   const isHigh = pct > 80
 
   return (
-    <Box width="100%" justifyContent="space-between" marginTop={1} paddingX={1} flexWrap="nowrap">
+    <Box width="100%" height={1} justifyContent="space-between" marginTop={1} paddingX={1} flexWrap="nowrap">
       <Box gap={1} flexShrink={1}>
         <Text color="#63B3ED">◆</Text>
         <Text bold color="#E8E3DA">BUILD</Text>
         <Text color="#7D8590">/</Text>
-        <Text color="#C9A86A">{model}</Text>
-        {gitBranch ? <Text dimColor>{gitBranch}</Text> : null}
+        <Text color="#C9A86A" wrap="truncate-end">{model}</Text>
+        {gitBranch && terminalWidth >= 100 ? <Text dimColor wrap="truncate-end">{gitBranch}</Text> : null}
         {planMode ? <Text color="blueBright">PLAN</Text> : null}
         {verbose ? <Text color="yellowBright">VERBOSE</Text> : null}
-        <Text dimColor>{messageCount} msgs</Text>
+        {terminalWidth >= 72 ? <Text dimColor>{messageCount} msgs</Text> : null}
       </Box>
       <Box gap={1} flexShrink={0}>
         {isHigh ? <Text color="redBright" bold>⚠</Text> : null}
         <Text dimColor>CONTEXT</Text>
         <Text color={color}>{bar}</Text>
         <Text color={color} bold={isHigh}>{pct}%</Text>
-        {tokenCount !== undefined && maxTokens ? (
+        {terminalWidth >= 105 && tokenCount !== undefined && maxTokens ? (
           <Text dimColor>{formatTokens(tokenCount)}/{formatTokens(maxTokens)}</Text>
         ) : null}
-        {apiCalls > 0 ? (
+        {terminalWidth >= 130 && apiCalls > 0 ? (
           <Text dimColor>${costStr} · {apiCalls} API</Text>
         ) : null}
       </Box>

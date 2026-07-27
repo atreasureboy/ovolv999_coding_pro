@@ -2,7 +2,7 @@
  * UIStore tests — verifies the state container that bridges engine → React.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { UIStore } from '../store.js'
 
 describe('UIStore', () => {
@@ -89,6 +89,19 @@ describe('UIStore', () => {
       store.flushStreamingText()
       expect(store.getState().messages).toHaveLength(0)
     })
+
+    it('batches token repaint notifications', () => {
+      vi.useFakeTimers()
+      let renders = 0
+      const unsubscribe = store.subscribe(() => { renders++ })
+      for (let index = 0; index < 100; index++) store.appendStreamingToken('x')
+      expect(renders).toBe(0)
+      vi.advanceTimersByTime(40)
+      expect(renders).toBe(1)
+      unsubscribe()
+      store.reset()
+      vi.useRealTimers()
+    })
   })
 
   describe('agent tracking', () => {
@@ -140,6 +153,19 @@ describe('UIStore', () => {
       store.setToolResult(toolId, 'content', false)
       store.setRunning(false)
       expect(store.getState().committedThroughId).toBe(toolId)
+    })
+
+    it('freezes completed turn output without waiting for the turn to end', () => {
+      store.setRunning(true)
+      store.addAssistantMessage('first response')
+      expect(store.getState().committedThroughId).toBe(1)
+
+      const toolId = store.addToolStart('Read', { file_path: 'a.ts' })
+      store.addInfo('queued behind tool')
+      expect(store.getState().committedThroughId).toBe(1)
+
+      store.setToolResult(toolId, 'content', false)
+      expect(store.getState().committedThroughId).toBe(3)
     })
 
     it('sets spinner state', () => {

@@ -65,6 +65,7 @@ export type NewUIMessage = {
 export interface UIState {
   messages: UIMessage[]
   committedThroughId: number
+  renderEpoch: number
   /** Currently streaming assistant text (accumulated token by token). */
   streamingText: string
   /** Currently streaming reasoning/thinking text (from <think> tags). */
@@ -96,6 +97,7 @@ export interface UIState {
 const INITIAL_STATE: UIState = {
   messages: [],
   committedThroughId: 0,
+  renderEpoch: 0,
   streamingText: '',
   streamingReasoning: '',
   running: false,
@@ -118,6 +120,8 @@ export class UIStore {
   private state: UIState = { ...INITIAL_STATE }
   private listeners = new Set<() => void>()
   private nextId = 1
+  private finalizedIds = new Set<number>()
+  private streamFlushTimer: ReturnType<typeof setTimeout> | null = null
   // Resolvers for interactive overlays (kept outside state — not serializable)
   private planResolver: ((approved: boolean) => void) | null = null
   private permissionResolver: ((result: { approved: boolean; alwaysAllow: boolean; feedback?: string }) => void) | null = null
@@ -139,24 +143,38 @@ export class UIStore {
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
-  private add(msg: NewUIMessage): number {
+  private advanceCommitted(): void {
+    let committedThroughId = this.state.committedThroughId
+    while (this.finalizedIds.delete(committedThroughId + 1)) committedThroughId++
+    if (committedThroughId !== this.state.committedThroughId) {
+      this.state = { ...this.state, committedThroughId }
+    }
+  }
+
+  private markFinal(id: number): void {
+    this.finalizedIds.add(id)
+    this.advanceCommitted()
+  }
+
+  private add(msg: NewUIMessage, finalized = true): number {
     const id = this.nextId++
     this.state = {
       ...this.state,
       messages: [...this.state.messages, { ...msg, id }],
-      committedThroughId: this.state.running ? this.state.committedThroughId : id,
     }
+    if (finalized) this.markFinal(id)
     this.emit()
     return id
   }
 
-  private update(id: number, patch: Partial<UIMessage>): void {
+  private update(id: number, patch: Partial<UIMessage>, finalized = false): void {
     this.state = {
       ...this.state,
       messages: this.state.messages.map((m) =>
         m.id === id ? ({ ...m, ...patch } as UIMessage) : m,
       ),
     }
+    if (finalized) this.markFinal(id)
     this.emit()
   }
 
@@ -173,7 +191,11 @@ export class UIStore {
   /** Streaming: accumulate tokens into a temporary buffer. */
   appendStreamingToken(token: string): void {
     this.state.streamingText += token
-    this.emit()
+    if (this.streamFlushTimer) return
+    this.streamFlushTimer = setTimeout(() => {
+      this.streamFlushTimer = null
+      this.emit()
+    }, 40)
   }
 
   /** Streaming: accumulate reasoning tokens (from <think> tags). */
@@ -183,6 +205,10 @@ export class UIStore {
 
   /** Flush accumulated streaming text as a message, then clear the buffer. */
   flushStreamingText(): void {
+    if (this.streamFlushTimer) {
+      clearTimeout(this.streamFlushTimer)
+      this.streamFlushTimer = null
+    }
     const text = this.state.streamingText.trim()
     this.state = { ...this.state, streamingText: '', streamingReasoning: '' }
     if (text) this.add({ type: 'assistant', text })
@@ -190,7 +216,7 @@ export class UIStore {
   }
 
   addToolStart(name: string, input: Record<string, unknown>): number {
-    return this.add({ type: 'tool', name, input, startTime: Date.now() })
+    return this.add({ type: 'tool', name, input, startTime: Date.now() }, false)
   }
 
   setToolResult(id: number, result: string, isError: boolean): void {
@@ -198,7 +224,7 @@ export class UIStore {
     const elapsedMs = msg && msg.type === 'tool' && msg.startTime
       ? Date.now() - msg.startTime
       : undefined
-    this.update(id, { result, isError, elapsedMs })
+    this.update(id, { result, isError, elapsedMs }, true)
   }
 
   addInfo(text: string): void { this.add({ type: 'info', text }) }
@@ -207,7 +233,7 @@ export class UIStore {
   addError(text: string): void { this.add({ type: 'error', text }) }
 
   addAgentStart(desc: string, agentType: string): number {
-    return this.add({ type: 'agent', desc, agentType, status: 'running' })
+    return this.add({ type: 'agent', desc, agentType, status: 'running' }, false)
   }
 
   setAgentDone(id: number, ok: boolean, summary?: string): void {
@@ -229,10 +255,11 @@ export class UIStore {
   // ── State setters ─────────────────────────────────────────────────────────
 
   setRunning(running: boolean): void {
-    const committedThroughId = running
-      ? this.state.committedThroughId
-      : (this.state.messages.at(-1)?.id ?? this.state.committedThroughId)
-    this.state = { ...this.state, running, committedThroughId }
+    if (!running) {
+      for (const message of this.state.messages) this.finalizedIds.add(message.id)
+      this.advanceCommitted()
+    }
+    this.state = { ...this.state, running }
     this.emit()
   }
 
@@ -328,12 +355,26 @@ export class UIStore {
 
   /** Clear all messages (for /clear). */
   clearMessages(): void {
-    this.state = { ...this.state, messages: [], committedThroughId: 0 }
+    if (this.streamFlushTimer) clearTimeout(this.streamFlushTimer)
+    this.streamFlushTimer = null
+    this.finalizedIds.clear()
+    this.nextId = 1
+    this.state = {
+      ...this.state,
+      messages: [],
+      committedThroughId: 0,
+      streamingText: '',
+      streamingReasoning: '',
+      renderEpoch: this.state.renderEpoch + 1,
+    }
     this.emit()
   }
 
   /** Full reset (for testing). */
   reset(): void {
+    if (this.streamFlushTimer) clearTimeout(this.streamFlushTimer)
+    this.streamFlushTimer = null
+    this.finalizedIds.clear()
     this.state = { ...INITIAL_STATE }
     this.nextId = 1
     this.emit()

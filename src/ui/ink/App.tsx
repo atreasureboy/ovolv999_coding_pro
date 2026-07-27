@@ -51,12 +51,6 @@ export function safeTerminalWidth(columns: number | undefined): number {
   return Math.max(20, (columns || 80) - 1)
 }
 
-export function reasoningPreview(text: string, width: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  const available = Math.max(12, width - 6)
-  return normalized.length > available ? `${normalized.slice(0, available - 1)}…` : normalized
-}
-
 // ── Streaming cursor — blinking block at end of streaming text ──
 
 function StreamingCursor(): React.ReactElement {
@@ -106,6 +100,7 @@ export function App({
   const [showHelp, setShowHelp] = useState(false)
   const inputHistory = useRef<string[]>(loadInputHistory())
   const turnStartTime = useRef(0)
+  const renderEpoch = useRef(state.renderEpoch)
 
   // ── Terminal title lifecycle ──────────────────────────────────────────────
 
@@ -113,6 +108,12 @@ export function App({
     initTerminalTitle(`ovolv999 · ${model}`)
     return () => restoreTerminalTitle()
   }, [model])
+
+  useEffect(() => {
+    if (state.renderEpoch === renderEpoch.current) return
+    renderEpoch.current = state.renderEpoch
+    stdout.write('\x1b[2J\x1b[3J\x1b[H')
+  }, [state.renderEpoch, stdout])
 
   // ── Turn execution ────────────────────────────────────────────────────────
 
@@ -276,7 +277,7 @@ export function App({
 
   return (
     <Box width={terminalWidth} flexDirection="column">
-      <Static items={staticItems}>
+      <Static key={state.renderEpoch} items={staticItems}>
         {(item) => item.kind === 'banner' ? (
           <Banner
             key={item.id}
@@ -378,6 +379,7 @@ export function App({
         planMode={state.planMode}
         verbose={state.verbose}
         gitBranch={getGitBranch(cwd)}
+        terminalWidth={terminalWidth}
       />
     </Box>
   )

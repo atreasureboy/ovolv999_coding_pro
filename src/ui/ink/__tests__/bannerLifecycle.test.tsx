@@ -1,6 +1,6 @@
 import { render } from 'ink-testing-library'
 import { describe, expect, it } from 'vitest'
-import { App, reasoningPreview, safeTerminalWidth } from '../App.js'
+import { App, safeTerminalWidth } from '../App.js'
 import { UIStore } from '../store.js'
 
 function count(value: string, needle: string): number {
@@ -11,13 +11,6 @@ describe('banner lifecycle', () => {
   it('keeps dynamic rendering inside the terminal wrap boundary', () => {
     expect(safeTerminalWidth(120)).toBe(119)
     expect(safeTerminalWidth(undefined)).toBe(79)
-  })
-
-  it('keeps live reasoning on one bounded line', () => {
-    const preview = reasoningPreview('first\nsecond   third '.repeat(20), 40)
-    expect(preview).not.toContain('\n')
-    expect(preview.length).toBeLessThanOrEqual(34)
-    expect(preview.endsWith('…')).toBe(true)
   })
 
   it('keeps exactly one visible banner across conversation updates', async () => {
