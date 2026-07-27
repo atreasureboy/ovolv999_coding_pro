@@ -31,6 +31,15 @@ info()  { printf "%s[info]%s %s\n" "$C_CYAN" "$C_RESET" "$*"; }
 ok()    { printf "%s[ok]%s   %s\n" "$C_GREEN" "$C_RESET" "$*"; }
 warn()  { printf "%s[warn]%s %s\n" "$C_YELLOW" "$C_RESET" "$*" >&2; }
 die()   { printf "%s[error]%s %s\n" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+usage() {
+  cat <<'EOF'
+ovolv999 installer
+
+Usage:
+  install.sh [--update] [--version <branch-or-tag>] [--install-dir <path>]
+  install.sh --uninstall [--install-dir <path>]
+EOF
+}
 
 # ── arg parsing ───────────────────────────────────────────────────
 ACTION="install"
@@ -38,10 +47,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall) ACTION="uninstall"; shift ;;
     --update)    ACTION="install"; shift ;;   # install is already idempotent/update
-    --version)   REPO_BRANCH="$2"; shift 2 ;;
-    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --version)
+      [ $# -ge 2 ] || die "--version requires a branch or tag"
+      REPO_BRANCH="$2"; shift 2 ;;
+    --install-dir)
+      [ $# -ge 2 ] || die "--install-dir requires a path"
+      INSTALL_DIR="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,14p' "$0" 2>/dev/null || true
+      usage
       exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
@@ -55,7 +68,7 @@ if [ "$ACTION" = "uninstall" ]; then
   for d in "${_path_dirs[@]}"; do
     [ -L "$d/$BIN_NAME" ] || continue
     case "$(readlink "$d/$BIN_NAME" 2>/dev/null || true)" in
-      "$INSTALL_DIR"/*|*/ovogogogo.js)
+      "$INSTALL_DIR"/*)
         rm -f "$d/$BIN_NAME" && ok "removed symlink $d/$BIN_NAME" ;;
     esac
   done
@@ -97,6 +110,9 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" reset --quiet --hard "origin/$REPO_BRANCH"
 else
   info "Cloning repository (shallow)..."
+  if [ -d "$INSTALL_DIR" ] && [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    die "install directory exists and is not an ovolv999 checkout: $INSTALL_DIR"
+  fi
   mkdir -p "$INSTALL_DIR"
   git clone --quiet --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
@@ -104,7 +120,7 @@ ok "source ready at $INSTALL_DIR"
 
 # Install deps + build
 info "Installing dependencies (this can take a minute)..."
-( cd "$INSTALL_DIR" && npm install --no-audit --no-fund --loglevel=error ) \
+( cd "$INSTALL_DIR" && if [ -f package-lock.json ]; then npm ci --no-audit --no-fund --loglevel=error; else npm install --no-audit --no-fund --loglevel=error; fi ) \
   || die "npm install failed."
 info "Building (tsc)..."
 ( cd "$INSTALL_DIR" && npm run build ) || die "build failed."
@@ -116,6 +132,7 @@ ok "built"
 
 ENTRY="$INSTALL_DIR/dist/bin/ovogogogo.js"
 [ -x "$ENTRY" ] || die "build output missing or not executable: $ENTRY"
+"$ENTRY" --version >/dev/null || die "built CLI failed its version smoke test."
 
 # ── choose a PATH directory for the symlink (prefer writable, no sudo) ─
 choose_bindir() {
@@ -153,7 +170,7 @@ add_to_path_rc() {
   { [ -z "$rc" ] && [ -f "$HOME/.bashrc" ]; } && rc="$HOME/.bashrc"
   [ -z "$rc" ] && [ -f "$HOME/.profile" ] && rc="$HOME/.profile"
   if [ -n "$rc" ]; then
-    if ! grep -qE "^[[:space:]]*export PATH=.*\b$dir\b" "$rc" 2>/dev/null; then
+    if ! grep -Fq "export PATH=\"$dir:\$PATH\"" "$rc" 2>/dev/null; then
       printf '\n# Added by ovolv999 installer\nexport PATH="%s:$PATH"\n' "$dir" >> "$rc"
       warn "$dir was added to PATH in $(basename "$rc"). Restart your shell or run: export PATH=\"$dir:\$PATH\""
     fi
@@ -165,8 +182,8 @@ esac
 
 # ── verify ────────────────────────────────────────────────────────
 hash -r 2>/dev/null || true
-if command -v "$BIN_NAME" >/dev/null 2>&1; then
-  ok "verification: '$BIN_NAME --version' resolves"
+if command -v "$BIN_NAME" >/dev/null 2>&1 && "$BIN_NAME" --version >/dev/null 2>&1; then
+  ok "verification: '$BIN_NAME --version' works"
 else
   warn "'$BIN_NAME' not on current PATH yet. Open a new shell, or run: export PATH=\"$BIN_DIR:\$PATH\""
 fi
