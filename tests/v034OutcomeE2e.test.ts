@@ -26,6 +26,22 @@ class FakeOpenAI {
   } } }
 }
 
+/** Like FakeOpenAI but the stream carries NO usage metadata — some
+ *  providers/relays omit it. Used to pin the P1-5 no-silent-$0 contract. */
+class FakeOpenAINoUsage {
+  chat = { completions: { create: (_p: Record<string, unknown>, o: { signal: AbortSignal }) => {
+    return new Promise<AsyncIterable<unknown>>((res, rej) => {
+      if (o.signal.aborted) { rej(new Error('aborted')); return }
+      o.signal.addEventListener('abort', () => rej(new Error('aborted')), { once: true })
+      res((async function* () {
+        await Promise.resolve()
+        yield { choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: null }] }
+        yield { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
+      })())
+    })
+  } } }
+}
+
 function fakeRenderer(): Renderer {
   const r: Record<string, (...args: unknown[]) => void> = {}
   for (const k of ['banner','raw','info','warn','error','success','startSpinner','stopSpinner','beginAssistantText','endAssistantText','streamToken','streamReasoning','assistantMessage','userMessage','toolCall','toolStart','toolResult','compactStart','compactDone','contextWarning','cost','compactionNotice','turnEnd','planModeHeader','agentStart','agentDone','agentSummary','agentHeartbeat']) r[k] = () => {}
@@ -218,5 +234,43 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
       consecutiveFailures: 5,
       lastFailureAt: 1234,
     })
+  })
+})
+
+describe('P1-5 usage-missing cost observability', () => {
+  it('flags a successful call that carried no usage instead of silently booking $0', async () => {
+    const c = new FakeOpenAINoUsage()
+    const warnings: string[] = []
+    const renderer = fakeRenderer()
+    renderer.warn = (message: string) => { warnings.push(message) }
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs') }), renderer, c as unknown as never)
+    const { outcome } = await e.runTurn('hello', [])
+    expect(outcome.completion.status).toBe('completed')
+    const succeeded = outcome.modelAttempts.filter((a) => a.status === 'succeeded')
+    expect(succeeded.length).toBeGreaterThanOrEqual(1)
+    for (const a of succeeded) {
+      expect(a.usageMissing).toBe(true)
+      expect(a.usage).toBeUndefined()
+    }
+    // Exactly one user-visible warning per run — not one per call.
+    expect(warnings.filter((w) => w.includes('under-reported'))).toHaveLength(1)
+    // Nothing fabricated: the CostTracker must NOT have booked a fake
+    // zero-cost call — token totals stay truthful, the cost is a visible
+    // under-report rather than a lie.
+    expect(e.getCostTracker().getTotalAPICalls()).toBe(0)
+    expect(e.getCostTracker().getTotalCost()).toBe(0)
+  })
+
+  it('does not set usageMissing when usage metadata is present (control)', async () => {
+    const c = new FakeOpenAI()
+    const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs') }), fakeRenderer(), c as unknown as never)
+    const { outcome } = await e.runTurn('hello', [])
+    const succeeded = outcome.modelAttempts.filter((a) => a.status === 'succeeded')
+    expect(succeeded.length).toBeGreaterThanOrEqual(1)
+    for (const a of succeeded) {
+      expect(a.usageMissing).toBeUndefined()
+      expect(a.usage).toBeDefined()
+    }
+    expect(e.getCostTracker().getTotalAPICalls()).toBeGreaterThanOrEqual(1)
   })
 })

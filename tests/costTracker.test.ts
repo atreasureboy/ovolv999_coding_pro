@@ -269,7 +269,7 @@ describe('CostTracker', () => {
     a.addUsage('mystery-model', { inputTokens: 10, outputTokens: 5 })
 
     // B sees only known
-    b.addUsage('claude-sonnet-4', { inputTokens: 200, outputTokens: 100 })
+    b.addUsage('claude-sonnet-4-5', { inputTokens: 200, outputTokens: 100 })
 
     expect(a.hasUnknownModel()).toBe(true)
     expect(b.hasUnknownModel()).toBe(false)

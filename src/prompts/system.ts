@@ -356,7 +356,9 @@ function formatTaskContextSection(t: TaskContext, sessionDir?: string): string {
  * Assemble the full system prompt from:
  *   1. Base agent prompt (identity, tools, work principles, etc.)
  *   2. OVOGO.md files (project + user instructions)
- *   3. Memory system section (MEMORY.md index + write instructions)
+ *   3. Mode persona prompt (active mode's system prompt + verbosity
+ *      guidance — see bin/ovogogogo.ts getCurrentMode; the memory
+ *      section is injected separately by MemoryModule at boot)
  *
  * This is called once at startup and cached in EngineConfig.systemPrompt.
  * Sub-agents get their own type-specific prompts instead.
@@ -364,7 +366,7 @@ function formatTaskContextSection(t: TaskContext, sessionDir?: string): string {
 export function buildFullSystemPrompt(
   cwd: string,
   ovogoMdFiles: OvogoMdFile[],
-  memorySection: string,
+  modePrompt: string,
   taskContext?: TaskContext,
   sessionDir?: string,
   skillIndex?: string,
@@ -377,8 +379,8 @@ export function buildFullSystemPrompt(
     parts.push(ovogoMdSection)
   }
 
-  if (memorySection) {
-    parts.push(memorySection)
+  if (modePrompt) {
+    parts.push(modePrompt)
   }
 
   if (skillIndex) {

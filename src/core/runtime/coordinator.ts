@@ -175,9 +175,14 @@ export class RuntimeCoordinator {
     success: boolean
     error?: string
     usage?: { inputTokens: number; outputTokens: number }
+    /** P1-5 (cost observability): a successful call that carried no usage
+     *  metadata — session cost is under-reported for this attempt. */
+    usageMissing?: boolean
     estimatedCost?: number
     retryable: boolean
   }> = []
+  /** P1-5: warn at most once per run about usage-less success responses. */
+  private usageMissingWarned = false
   /**
    * v0.3.3+ (background autonomy contract §十六 + durable supervisor contract §Phase 9): Provider circuit breaker
    * with three states: CLOSED (normal), OPEN (block all), HALF_OPEN (one probe).
@@ -228,6 +233,7 @@ export class RuntimeCoordinator {
     // v0.3.3 (background autonomy contract §十二.6): clear per-run state so consecutive turns
     // don't accumulate stale model-call attempts from prior turns.
     this.modelCallsThisRun = []
+    this.usageMissingWarned = false
 
     // P1-2 fix: resolve the effective parentRunId ONCE. A per-turn
     // override (opts.parentRunId, e.g. from runLoop's kind='loop' run)
@@ -238,7 +244,6 @@ export class RuntimeCoordinator {
 
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
-    // ── ExecutionRun tracking (GAP-C) ──
     // ── ExecutionRun tracking (GAP-C) ──
     // If a registry is wired in, mint a `kind='turn'` run that
     // reflects this turn's lifecycle. The registry is optional so
@@ -1110,6 +1115,7 @@ export class RuntimeCoordinator {
         endedAt: a.endedAt,
         status: a.success ? 'succeeded' as const : 'failed' as const,
         usage: a.usage,
+        usageMissing: a.usageMissing,
         estimatedCost: a.estimatedCost,
         error: a.error,
       })),
@@ -1314,6 +1320,25 @@ export class RuntimeCoordinator {
       retryable,
     })
     const attemptId = this.modelCallsThisRun.length - 1
+    // P1-5 (cost observability): a SUCCESSFUL call without usage metadata
+    // used to be silently booked as $0 — indistinguishable from a free
+    // call. Flag it instead: the attempt record carries usageMissing, the
+    // EventLog gets an explicit entry, and the user sees one warning per
+    // run. Nothing is fabricated — token totals stay accurate, the cost
+    // total is visibly an under-report rather than a lie.
+    if (attempt.success && !attempt.usage) {
+      this.modelCallsThisRun[attemptId].usageMissing = true
+      this.deps.eventLog?.append('tool_call', 'llm_api_usage_missing', {
+        model: attempt.model,
+        provider: attempt.provider,
+      })
+      if (!this.usageMissingWarned) {
+        this.usageMissingWarned = true
+        this.deps.renderer.warn?.(
+          'LLM response carried no usage metadata — session costs are under-reported for this provider.',
+        )
+      }
+    }
     this.deps.eventEmitter.emit(attempt.success
       ? {
           type: 'MODEL_ATTEMPT_SUCCEEDED',

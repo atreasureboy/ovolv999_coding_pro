@@ -451,7 +451,7 @@ export async function runLoop(
         providerCircuit: circuit,
         recentCommands: acceptanceItems.map((item) => item.command),
         workerReferences,
-        goalHash: hashContract(goal),
+        goalHash: hashContract(tryRead(join(loopDir, 'GOAL.md'))),
         acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
         head: git.head,
         changedFiles: git.changedFiles,
@@ -513,7 +513,7 @@ export async function runLoop(
         providerCircuit: circuit,
         recentCommands: acceptanceItems.map((item) => item.command),
         workerReferences,
-        goalHash: hashContract(goal),
+        goalHash: hashContract(tryRead(join(loopDir, 'GOAL.md'))),
         acceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
         head: git.head,
         changedFiles: git.changedFiles,
@@ -599,12 +599,16 @@ export async function runLoop(
     // Read current state
     const state = tryRead(join(loopDir, 'STATE.md'))
 
-    // v0.3.4 (durable supervisor contract §Phase 7): re-read + hash contracts for prompt↔driver
-    // consistency, BEFORE building the prompt.
+    // v0.3.4 (durable supervisor contract §Phase 7): re-read + hash BOTH contracts
+    // every iteration for prompt↔driver consistency, BEFORE building the prompt.
+    // (Originally only ACCEPTANCE was re-read while the GOAL hash came from the
+    // boot-time read — a GOAL edit mid-loop then made prompt and verification
+    // disagree, and the post-turn check rejected completion forever.)
+    const goalFresh = tryRead(join(loopDir, 'GOAL.md'))
     const acceptanceRawFresh = tryRead(join(loopDir, 'ACCEPTANCE.md'))
     const acceptanceItemsFresh = parseAcceptance(acceptanceRawFresh)
     const acceptanceHashThisIter = hashContract(acceptanceRawFresh)
-    const goalHashThisIter = hashContract(goal)
+    const goalHashThisIter = hashContract(goalFresh)
 
     // Construct prompt
     const prompt = `You are executing LOOP autonomous iteration ${iter}/${maxIters}.
@@ -641,7 +645,7 @@ Current STATE.md:
 ${state || '(empty — first iteration)'}
 
 GOAL.md:
-${goal}
+${goalFresh}
 
 ACCEPTANCE.md:
 ${acceptanceRaw || '(none — propose one based on GOAL)'}`
@@ -853,7 +857,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
         recentCommands: acceptanceItemsFresh.map((item) => item.command),
         passedQualityGates: [...passedQualityGates],
         providerCircuit: circuit,
-        goalHash: hashContract(goal),
+        goalHash: hashContract(tryRead(join(loopDir, 'GOAL.md'))),
         acceptanceHash: hashContract(acceptanceRawFresh),
         head: git.head,
         changedFiles: git.changedFiles,

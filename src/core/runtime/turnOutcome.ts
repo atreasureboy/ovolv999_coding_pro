@@ -45,6 +45,9 @@ export interface ModelCallAttempt {
   endedAt: number
   status: 'succeeded' | 'rate_limited' | 'timed_out' | 'unavailable' | 'invalid_request' | 'context_limit' | 'unsupported' | 'failed'
   usage?: { inputTokens: number; outputTokens: number }
+  /** P1-5 (cost observability): successful call carried no usage metadata —
+   *  the session cost is under-reported; see coordinator.recordGatewayAttempt. */
+  usageMissing?: boolean
   estimatedCost?: number
   error?: string
 }

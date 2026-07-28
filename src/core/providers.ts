@@ -191,6 +191,11 @@ export const MODELS: ModelInfo[] = [
     pricing: { inputPer1M: 3, outputPer1M: 12 },
   },
   {
+    id: 'o1-pro', name: 'o1 pro', provider: 'openai',
+    contextWindow: 200_000, supportsVision: true, supportsTools: true, supportsReasoning: true,
+    pricing: { inputPer1M: 150, outputPer1M: 600 },
+  },
+  {
     id: 'o3', name: 'o3', provider: 'openai',
     contextWindow: 200_000, supportsVision: true, supportsTools: true, supportsReasoning: true,
     pricing: { inputPer1M: 10, outputPer1M: 40 },
@@ -211,6 +216,11 @@ export const MODELS: ModelInfo[] = [
     id: 'claude-opus-4-1', name: 'Claude Opus 4.1', provider: 'anthropic',
     contextWindow: 200_000, supportsVision: true, supportsTools: true,
     pricing: { inputPer1M: 15, outputPer1M: 75 },
+  },
+  {
+    id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic',
+    contextWindow: 200_000, supportsVision: true, supportsTools: true, supportsParallelTools: true,
+    pricing: { inputPer1M: 3, outputPer1M: 15 },
   },
   {
     id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'anthropic',
@@ -324,8 +334,9 @@ export function detectProviderFromModel(model: string): ProviderId {
   // Cohere
   if (m.includes('command-r') || m.includes('command-a')) return 'cohere'
 
-  // Perplexity
-  if (m.startsWith('llama-') && m.includes('instruct') || m.startsWith('perplexity/')) return 'perplexity'
+  // Perplexity (llama-*-instruct aliases are NOT reachable here — the
+  // llama- prefix rule above routes all llama models to groq first)
+  if (m.startsWith('perplexity/')) return 'perplexity'
 
   // OpenAI (gpt-*, o1-*, o3-*, o4-*, text-*, davinci-*)
   if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('o4') ||

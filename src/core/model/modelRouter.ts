@@ -24,7 +24,13 @@
 
 import type { TokenUsage } from '../costTracker.js'
 
-export interface ModelCapabilities {
+/**
+ * Routing-time strength scores for a model profile. Deliberately NOT the
+ * `ModelCapabilities` in core/modelCapabilities.ts — that one is the
+ * provider feature set (boolean flags + limits) used by ProviderAdapter;
+ * this one is the 0..1 scoring input the router ranks profiles with.
+ */
+export interface RoutingCapabilities {
   /** 0..1 — strength at multi-step reasoning / architecture. */
   reasoning: number
   /** 0..1 — strength at code generation / editing. */
@@ -43,7 +49,7 @@ export interface ModelProfile {
   id: string
   provider: string
   model: string
-  capabilities: ModelCapabilities
+  capabilities: RoutingCapabilities
   /** Roles this profile can serve: 'main' | 'cheap' | 'long-context' | 'worker'. */
   roles: string[]
   available: boolean

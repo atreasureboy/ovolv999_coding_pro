@@ -92,7 +92,7 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 
 **代码接线优先级(架构演进 backlog)**:
 - ~~P0 DONE.flag 抗伪造~~ → **已完成(ADR-007,2026-07-28)**:nonce/checkpoint 双路绑定 + 工具写禁 + resume succeeded 短路;遗留:Bash 伪造 checkpoint.json 在 0.x 威胁模型外(沙箱负责)
-- P1 低成本收敛:双价格表合并(costTracker 应读 providers.ts MODELS[])、双 `ModelCapabilities` 同名异质改名、`buildFullSystemPrompt` 形参 `memorySection` 实收 modePrompt 改名、合约 GOAL/ACCEPTANCE 每轮 prompt 与校验对称重读、usage 缺失禁止静默记 0 成本、checkpoint load() 主文件缺失时先查备份
+- ~~P1 低成本收敛~~ → **已完成(2026-07-28)**:价格表单一真相源(costTracker.getModelPricing 委托 providers.ts MODELS[],null 语义保留驱动 hasUnknownModel;legacy/EOL 模型名刻意落空→"costs may be inaccurate"注记;MODELS[] 补 claude-sonnet-4-6/o1-pro);路由层 `ModelCapabilities`→`RoutingCapabilities`(与 provider 特性类型解歧);`buildFullSystemPrompt` 形参 `memorySection`→`modePrompt`;Loop 每轮对称重读 GOAL/ACCEPTANCE(prompt 正文用 `goalFresh`,三处 checkpoint 哈希现取现算,启动 `goal` 仅留存在性检查/taskId/run 标题);usage 缺失不再静默记 $0(warn 每 run 一次 + EventLog `llm_api_usage_missing` + `usageMissing` 落 TurnOutcome.modelAttempts,绝不伪造零成本调用);checkpoint load() 主文件缺失/损坏回退 checkpoint.previous.json
 - P2 决策项(接线 or 删除):`permissionRules.ts` glob 引擎(未接线,内置 deny 规则浪费)、持久层 subsystem 事件(tool.*/artifact.* 零 emit 点,死接口)、LongTermMemory R1–R6 接入引擎、双 retryable 正则合并、死字段清理(writeTimeoutMs/consecutiveCommandFailures/lastCommit)
 - P3 大迁移:品牌目录收敛、路由信号真实化(`repoFileCount=filesTouched×10` 代理、`budgetRemaining` 恒 undefined)、Windows 租约指纹降级补救(/proc-only)
 

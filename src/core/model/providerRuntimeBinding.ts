@@ -16,7 +16,7 @@
  * allows this fallback ("配置验证阶段拒绝不同 Provider 的 profile").
  */
 import type { ProviderAdapter } from './providerAdapter.js'
-import type { ModelCapabilities } from './modelRouter.js'
+import type { RoutingCapabilities } from './modelRouter.js'
 
 export interface ProviderRuntimeBinding {
   /** Profile id (e.g. 'main', 'cheap') — stable across re-routes. */
@@ -32,7 +32,7 @@ export interface ProviderRuntimeBinding {
   /** Adapter instance this binding uses. */
   adapter: ProviderAdapter
   /** Capabilities mirrored from the profile (for quick lookup). */
-  capabilities: ModelCapabilities
+  capabilities: RoutingCapabilities
   /** Roles this profile can serve. */
   roles: string[]
 }

@@ -271,16 +271,21 @@ export class CheckpointManager {
   }
 
   load(): LoopCheckpoint | null {
-    if (!existsSync(this.checkpointPath)) return null
-    try {
-      return JSON.parse(readFileSync(this.checkpointPath, 'utf8')) as LoopCheckpoint
-    } catch {
-      // Corrupt — try backup
-      if (existsSync(this.backupPath)) {
-        try { return JSON.parse(readFileSync(this.backupPath, 'utf8')) as LoopCheckpoint } catch { return null }
+    if (existsSync(this.checkpointPath)) {
+      try {
+        return JSON.parse(readFileSync(this.checkpointPath, 'utf8')) as LoopCheckpoint
+      } catch {
+        // Corrupt — fall through to backup
       }
-      return null
     }
+    // Missing OR corrupt main file → try the backup. save() renames the
+    // previous checkpoint to the backup BEFORE writing the new main file,
+    // so a crash in that window (or a corrupt write) leaves a valid
+    // backup that the old code silently discarded.
+    if (existsSync(this.backupPath)) {
+      try { return JSON.parse(readFileSync(this.backupPath, 'utf8')) as LoopCheckpoint } catch { return null }
+    }
+    return null
   }
 
   loadBackup(): LoopCheckpoint | null {

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { LoopLeaseManager, CheckpointManager, hashContract, type LoopCheckpoint } from '../src/core/loopSupervisor.js'
 import { isCompleted, isTerminal, shouldContinue, type TurnOutcome } from '../src/core/runtime/turnOutcome.js'
@@ -136,6 +136,40 @@ describe('v0.3.4 CheckpointManager', () => {
     const loaded = cm.load()
     expect(loaded).not.toBeNull()
     expect(loaded!.iteration).toBe(1) // fell back to backup
+  })
+
+  it('P1-6: missing main checkpoint falls back to backup', () => {
+    // save() renames the previous main file to the backup BEFORE writing
+    // the new main file. A crash in that window leaves the main file
+    // missing and a valid backup — the old load() returned null here,
+    // silently discarding the last good state.
+    const cm = new CheckpointManager(tmp)
+    const cp1: LoopCheckpoint = {
+      schemaVersion: 1, sequence: 1, taskId: 't1', branch: 'main', worktree: '/wt',
+      iteration: 1, phase: 'start', goalHash: 'a', acceptanceHash: 'b',
+      changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
+      consecutiveCommandFailures: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }
+    cm.save(cp1)
+    const cp2: LoopCheckpoint = { ...cp1, iteration: 2, sequence: 2 }
+    cm.save(cp2) // cp1 becomes the backup
+    unlinkSync(join(tmp, 'checkpoint.json')) // crash window: main gone, backup intact
+    const loaded = cm.load()
+    expect(loaded).not.toBeNull()
+    expect(loaded!.iteration).toBe(1)
+    expect(loaded!.sequence).toBe(1)
+  })
+
+  it('P1-6: both files missing returns null', () => {
+    const cm = new CheckpointManager(tmp)
+    expect(cm.load()).toBeNull()
+  })
+
+  it('P1-6: corrupt main AND corrupt backup returns null', () => {
+    const cm = new CheckpointManager(tmp)
+    writeFileSync(join(tmp, 'checkpoint.json'), '{ corrupt')
+    writeFileSync(join(tmp, 'checkpoint.previous.json'), 'also { corrupt')
+    expect(cm.load()).toBeNull()
   })
 
   it('§6: clear removes both files', () => {

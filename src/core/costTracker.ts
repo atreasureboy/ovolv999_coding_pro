@@ -7,7 +7,7 @@
  *   1. Captures REAL usage (prompt_tokens / completion_tokens) from the
  *      OpenAI streaming API's final chunk — no more char-based guessing
  *      for billing.
- *   2. Computes USD cost per model using a pricing table.
+ *   2. Computes USD cost per model using the registry in providers.ts.
  *   3. Tracks per-model usage breakdown (input/output/cost/apiCalls).
  *   4. Formats a human-readable cost summary for end-of-turn display.
  *   5. File-type-aware token estimation (JSON is denser — 2 bytes/token
@@ -15,60 +15,43 @@
  */
 
 // ── Model pricing (USD per 1M tokens) ───────────────────────────────────────
-// Sources: OpenAI / Anthropic / DeepSeek public pricing pages.
-// Prices change — treat as approximate. Unknown models → cost 0; the
-// unknown-model signal is tracked PER CostTracker instance (see
-// `CostTracker.hasUnknownModel()`) so multiple concurrent sessions cannot
-// pollute each other.
+// Single source of truth: the model registry in providers.ts (MODELS[]).
+// This file used to carry its own duplicated pricing table — prices drifted
+// and models had to be maintained in two places. Unknown models resolve to
+// null; the unknown-model signal is tracked PER CostTracker instance (see
+// `CostTracker.hasUnknownModel()`) so the summary can flag under-reported
+// costs instead of silently booking $0.
+
+import { getModelInfo, MODELS } from './providers.js'
 
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number
 }
 
-const MODEL_PRICING: Record<string, ModelPricing> = {
-  // OpenAI
-  'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10 },
-  'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
-  'gpt-4-turbo': { inputPer1M: 10, outputPer1M: 30 },
-  'gpt-4': { inputPer1M: 30, outputPer1M: 60 },
-  'gpt-3.5-turbo': { inputPer1M: 0.5, outputPer1M: 1.5 },
-  'o1': { inputPer1M: 15, outputPer1M: 60 },
-  'o1-mini': { inputPer1M: 3, outputPer1M: 12 },
-  'o1-pro': { inputPer1M: 150, outputPer1M: 600 },
-  'o3': { inputPer1M: 10, outputPer1M: 40 },
-  'o3-mini': { inputPer1M: 1.1, outputPer1M: 4.4 },
-  'o4-mini': { inputPer1M: 1.1, outputPer1M: 4.4 },
-  // Anthropic (Claude)
-  'claude-sonnet-4-6': { inputPer1M: 3, outputPer1M: 15 },
-  'claude-sonnet-4': { inputPer1M: 3, outputPer1M: 15 },
-  'claude-opus-4': { inputPer1M: 15, outputPer1M: 75 },
-  'claude-haiku-3-5': { inputPer1M: 0.8, outputPer1M: 4 },
-  'claude-3-5-sonnet': { inputPer1M: 3, outputPer1M: 15 },
-  'claude-3-5-haiku': { inputPer1M: 0.8, outputPer1M: 4 },
-  'claude-3-opus': { inputPer1M: 15, outputPer1M: 75 },
-  // DeepSeek
-  'deepseek-chat': { inputPer1M: 0.27, outputPer1M: 1.1 },
-  'deepseek-reasoner': { inputPer1M: 0.55, outputPer1M: 2.19 },
-  'deepseek-coder': { inputPer1M: 0.14, outputPer1M: 0.28 },
-}
-
 /**
- * Look up pricing for a model. Tries exact match, then longest-prefix match
- * (so "gpt-4o-2024-08-06" matches "gpt-4o", "claude-sonnet-4-6-20250514"
- * matches "claude-sonnet-4-6").
+ * Look up pricing for a model. Exact registry match first (including
+ * provider-prefixed ids, handled by getModelInfo), then longest-prefix
+ * match against registry ids so dated aliases keep working
+ * ("gpt-4o-2024-08-06" → "gpt-4o", "claude-sonnet-4-6-20250514" →
+ * "claude-sonnet-4-6"). Models absent from the registry (legacy/EOL
+ * names) return null → CostTracker flags the session's costs as
+ * potentially inaccurate rather than pretending they were free.
+ *
+ * NOTE: providers.ts exports a different getModelPricing that falls back
+ * to zero pricing (for context/budget math). This one returns null on
+ * purpose — the null IS the unknown-model signal.
  */
 export function getModelPricing(model: string): ModelPricing | null {
-  // Exact match
-  if (MODEL_PRICING[model]) return MODEL_PRICING[model]
+  const info = getModelInfo(model)
+  if (info) return info.pricing
 
-  // Prefix match — longest prefix wins (most specific)
   let best: ModelPricing | null = null
   let bestLen = 0
-  for (const [key, pricing] of Object.entries(MODEL_PRICING)) {
-    if (model.startsWith(key) && key.length > bestLen) {
-      best = pricing
-      bestLen = key.length
+  for (const m of MODELS) {
+    if (model.startsWith(m.id) && m.id.length > bestLen) {
+      best = m.pricing
+      bestLen = m.id.length
     }
   }
   return best
