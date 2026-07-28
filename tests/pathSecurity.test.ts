@@ -15,6 +15,7 @@ import {
   containsPathTraversal,
   containsNullByte,
   expandPath,
+  isLoopDriverOwnedPath,
 } from '../src/core/pathSecurity.js'
 
 describe('pathSecurity', () => {
@@ -106,6 +107,33 @@ describe('pathSecurity', () => {
       // independently.
       const expanded = expandPath('~/foo/../bar')
       expect(expanded).toBe(join(homedir(), 'foo/../bar'))
+    })
+  })
+
+  describe('isLoopDriverOwnedPath (ADR-007)', () => {
+    it('flags the four driver-owned files under .loop/', () => {
+      for (const f of ['DONE.flag', 'loop.lock', 'checkpoint.json', 'checkpoint.previous.json']) {
+        expect(isLoopDriverOwnedPath(`/proj/.loop/${f}`)).toBe(true)
+        expect(isLoopDriverOwnedPath(`.loop/${f}`)).toBe(true) // relative spelling
+      }
+    })
+
+    it('leaves the model collaboration surface writable', () => {
+      for (const f of ['CANDIDATE_DONE.flag', 'PARKED.flag', 'STATE.md', 'HISTORY.md', 'GOAL.md', 'ACCEPTANCE.md']) {
+        expect(isLoopDriverOwnedPath(`/proj/.loop/${f}`)).toBe(false)
+      }
+    })
+
+    it('matches parent-dir basename + file basename only', () => {
+      // Same filename elsewhere is an ordinary user file.
+      expect(isLoopDriverOwnedPath('/proj/src/DONE.flag')).toBe(false)
+      // Similar-but-different directory names are not the loop dir.
+      expect(isLoopDriverOwnedPath('/proj/.loop.bak/DONE.flag')).toBe(false)
+      expect(isLoopDriverOwnedPath('/proj/xloop/DONE.flag')).toBe(false)
+      // Forensic artifacts and temp files are not driver-owned — the
+      // binding check, not the write ban, governs them.
+      expect(isLoopDriverOwnedPath('/proj/.loop/DONE.flag.rejected')).toBe(false)
+      expect(isLoopDriverOwnedPath('/proj/.loop/checkpoint.json.tmp')).toBe(false)
     })
   })
 })

@@ -12,7 +12,7 @@
  */
 
 import { homedir } from 'os'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 
 /**
  * Detect path-traversal attempts. A "traversal" here means a `..` segment
@@ -83,4 +83,39 @@ export function expandPath(path: string): string {
     return homedir()
   }
   return path
+}
+
+/**
+ * ADR-007 (DONE.flag integrity): driver-owned files inside `.loop/`.
+ *
+ * The model's collaboration surface in `.loop/` is STATE.md, HISTORY.md,
+ * CANDIDATE_DONE.flag, and PARKED.flag. These four are the loop engine's
+ * private bookkeeping and must never be writable from a model-facing tool:
+ *
+ *   - DONE.flag                — the completion verdict (Driver-only)
+ *   - loop.lock                — lease ownership (a model "renewing" it
+ *                                could unseat a live supervisor)
+ *   - checkpoint.json          — resume state; forging phase='succeeded'
+ *                                here is the one way to satisfy DONE.flag
+ *                                checkpoint binding, so it is guarded too
+ *   - checkpoint.previous.json — load() falls back to the backup when the
+ *                                main file is corrupt, so it gets the
+ *                                same protection
+ *
+ * Matching is structural (parent-dir basename + file basename), so it
+ * catches absolute and relative spellings alike without resolving the
+ * path against cwd. Bash is deliberately NOT covered here — shell access
+ * is the sandbox's job, and the flag's cryptographic binding in
+ * loopEngine.verifyDoneFlag is the backstop for anything that slips past
+ * the tool layer.
+ */
+const LOOP_DRIVER_OWNED_FILES = new Set([
+  'DONE.flag',
+  'loop.lock',
+  'checkpoint.json',
+  'checkpoint.previous.json',
+])
+
+export function isLoopDriverOwnedPath(path: string): boolean {
+  return basename(dirname(path)) === '.loop' && LOOP_DRIVER_OWNED_FILES.has(basename(path))
 }

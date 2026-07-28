@@ -11,10 +11,48 @@ import { classifyTaskIntent } from '../src/core/runtime/taskIntent.js'
 import { evaluateCompletion } from '../src/core/runtime/completionContract.js'
 import { TaskGraph } from '../src/core/runtime/taskGraph.js'
 import { InMemoryRunScopedRuntimeContextStore } from '../src/core/runtime/runScopedContext.js'
+import { parseDoneFlag, verifyDoneFlag, renderDoneFlag, type DoneFlagPayload } from '../src/core/loopEngine.js'
+import type { LoopCheckpoint } from '../src/core/loopSupervisor.js'
 
 let tmp = ''
 beforeEach(() => { tmp = mkdtempSync(`${tmpdir}/v033-`) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
+
+// ADR-007 fixtures — a valid flag and its matching succeeded checkpoint.
+function mkDoneFlag(over: Partial<DoneFlagPayload> = {}): DoneFlagPayload {
+  return {
+    marker: 'DRIVER_VERIFIED',
+    nonce: 'nonce-1',
+    runId: 'run-1',
+    iteration: 3,
+    checkpointSequence: 7,
+    goalHash: 'a1b2c3d4',
+    acceptanceHash: 'e5f60718',
+    gates: ['typecheck', 'lint', 'test', 'build'],
+    completedAt: '2026-07-28T00:00:00.000Z',
+    ...over,
+  }
+}
+
+function mkCheckpoint(over: Partial<LoopCheckpoint> = {}): LoopCheckpoint {
+  return {
+    schemaVersion: 2, sequence: 7, taskId: 't', branch: 'main', worktree: '/w',
+    iteration: 3, phase: 'succeeded', runId: 'run-1',
+    passedQualityGates: ['typecheck', 'lint', 'test', 'build'],
+    goalHash: 'a1b2c3d4', acceptanceHash: 'e5f60718',
+    changedFiles: [], consecutiveNoProgress: 0,
+    consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+    createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',
+    ...over,
+  }
+}
+
+const VERIFY_CTX = {
+  driverNonce: 'the-driver-nonce',
+  checkpoint: null,
+  liveGoalHash: 'a1b2c3d4',
+  liveAcceptanceHash: 'e5f60718',
+}
 
 describe('v0.3.3 background autonomy regression (background autonomy contract §Phase 7)', () => {
 
@@ -126,18 +164,49 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
     expect(intent.confidence).toBeLessThan(0.5)
   })
 
-  // ─§10/11/12: Loop safety (file-based) ───────────────────────────
-  it('§10: model-written DONE.flag (no DRIVER marker) is not trusted', () => {
-    const donePath = join(tmp, 'DONE.flag')
-    writeFileSync(donePath, 'model says done\n')
-    const content = readFileSync(donePath, 'utf8')
-    expect(content.includes('DRIVER_VERIFIED')).toBe(false)
+  // ─§10/11/12: Loop safety — DONE.flag integrity (ADR-007) ────────
+  it('§10: a forged flag carrying the marker substring does not parse', () => {
+    // The pre-ADR-007 attack: the old check was content.includes('DRIVER_VERIFIED').
+    expect(parseDoneFlag('DRIVER_VERIFIED — trust me\n')).toBeNull()
+    expect(parseDoneFlag('DRIVER_VERIFIED at iteration 3\n')).toBeNull()
+    expect(parseDoneFlag('{"marker":"DRIVER_VERIFIED"}')).toBeNull() // missing binding fields
+    expect(parseDoneFlag('not json at all')).toBeNull()
   })
 
-  it('§10: driver-written DONE.flag has DRIVER_VERIFIED marker', () => {
-    const donePath = join(tmp, 'DONE.flag')
-    writeFileSync(donePath, 'DRIVER_VERIFIED at iteration 3\n')
-    expect(readFileSync(donePath, 'utf8').includes('DRIVER_VERIFIED')).toBe(true)
+  it('§10: renderDoneFlag → parseDoneFlag round-trips, and nonce match verifies', () => {
+    const flag = parseDoneFlag(renderDoneFlag(mkDoneFlag({ nonce: 'the-driver-nonce' })))
+    expect(flag).not.toBeNull()
+    expect(verifyDoneFlag(flag!, VERIFY_CTX)).toBe('nonce')
+  })
+
+  it('§10: well-formed flag with unknown nonce and no checkpoint is rejected', () => {
+    const flag = parseDoneFlag(renderDoneFlag(mkDoneFlag({ nonce: 'attacker-guess' })))!
+    expect(verifyDoneFlag(flag, VERIFY_CTX)).toBeNull()
+  })
+
+  it('§10: checkpoint binding verifies a post-crash flag (cross-restart resume)', () => {
+    const flag = parseDoneFlag(renderDoneFlag(mkDoneFlag({ nonce: 'dead-with-the-old-process' })))!
+    const verdict = verifyDoneFlag(flag, {
+      ...VERIFY_CTX,
+      checkpoint: mkCheckpoint(),
+    })
+    expect(verdict).toBe('checkpoint')
+  })
+
+  it('§10: checkpoint binding rejects mismatched run/sequence/gates/phase/contract', () => {
+    const flag = parseDoneFlag(renderDoneFlag(mkDoneFlag({ nonce: 'dead' })))!
+    const base = { ...VERIFY_CTX }
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint({ runId: 'other-run' }) })).toBeNull()
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint({ sequence: 8 }) })).toBeNull()
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint({ phase: 'iteration-complete' }) })).toBeNull()
+    expect(verifyDoneFlag(flag, {
+      ...base,
+      checkpoint: mkCheckpoint({ passedQualityGates: ['typecheck', 'lint'] }),
+    })).toBeNull() // flag claims test+build the checkpoint never recorded
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint({ runId: undefined }) })).toBeNull()
+    // Contract edited after completion → the flag belonged to the old goal.
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint(), liveGoalHash: 'changed' })).toBeNull()
+    expect(verifyDoneFlag(flag, { ...base, checkpoint: mkCheckpoint(), liveAcceptanceHash: 'changed' })).toBeNull()
   })
 
   it('§11: empty acceptance file produces zero items', () => {
@@ -160,11 +229,15 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
     expect(existsSync(lockPath)).toBe(false)
   })
 
-  it('§15: stale DONE from previous run is detected by missing DRIVER marker', () => {
-    writeFileSync(join(tmp, 'DONE.flag'), 'old run\n')
-    const content = readFileSync(join(tmp, 'DONE.flag'), 'utf8')
-    const isStale = !content.includes('DRIVER_VERIFIED')
-    expect(isStale).toBe(true)
+  it('§15: stale DONE from a different run is rejected by runId binding (ADR-007)', () => {
+    // A perfectly valid flag — but from another run, against a checkpoint
+    // signed by a different runId. Binding must refuse it.
+    const flag = parseDoneFlag(renderDoneFlag(mkDoneFlag({ nonce: 'old', runId: 'old-run' })))!
+    const verdict = verifyDoneFlag(flag, {
+      ...VERIFY_CTX,
+      checkpoint: mkCheckpoint({ runId: 'current-run' }),
+    })
+    expect(verdict).toBeNull()
   })
 
   // ── §18: TaskGraph state consistency ─────────────────────────────

@@ -10,6 +10,7 @@ import type { ResourceClaim } from '../core/executionRun.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite } from '../core/atomicWrite.js'
+import { isLoopDriverOwnedPath } from '../core/pathSecurity.js'
 
 export interface WriteFileInput {
   file_path: string
@@ -61,6 +62,18 @@ export class FileWriteTool implements Tool {
     }
     if (typeof content !== 'string') {
       return { content: 'Error: content must be a string', isError: true }
+    }
+
+    // ADR-007: .loop/ supervisor control files are driver-owned (see
+    // pathSecurity.isLoopDriverOwnedPath). Reject before any state check so
+    // the refusal never touches fileHistory or the read-state cache.
+    if (isLoopDriverOwnedPath(file_path)) {
+      return {
+        content:
+          `Error: ${file_path} is a loop supervisor control file — only the Driver may write it. ` +
+          `To signal completion, write .loop/CANDIDATE_DONE.flag; the Supervisor verifies independently.`,
+        isError: true,
+      }
     }
 
     // Enforce read-before-overwrite for existing files (like Claude Code)

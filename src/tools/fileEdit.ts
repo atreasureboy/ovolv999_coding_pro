@@ -15,6 +15,7 @@ import type { ResourceClaim } from '../core/executionRun.js'
 import { EDIT_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite, statSafely } from '../core/atomicWrite.js'
+import { isLoopDriverOwnedPath } from '../core/pathSecurity.js'
 
 export interface EditFileInput {
   file_path: string
@@ -93,6 +94,18 @@ export class FileEditTool implements Tool {
     }
     if (old_string === new_string) {
       return { content: 'Error: old_string and new_string are identical — no change needed', isError: true }
+    }
+
+    // ADR-007: .loop/ supervisor control files are driver-owned (see
+    // pathSecurity.isLoopDriverOwnedPath). Reject before any read/stat so a
+    // refused edit never touches fileHistory or the staleness machinery.
+    if (isLoopDriverOwnedPath(file_path)) {
+      return {
+        content:
+          `Error: ${file_path} is a loop supervisor control file — only the Driver may write it. ` +
+          `To signal completion, write .loop/CANDIDATE_DONE.flag; the Supervisor verifies independently.`,
+        isError: true,
+      }
     }
 
     // 25MB hard cap on file size — refuse before any read. Edit is meant

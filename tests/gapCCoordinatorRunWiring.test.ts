@@ -146,7 +146,7 @@ describe('GAP-C.2: registry always present (runtime invariants P0-1)', () => {
 // GAP-C.3: runLoop() mints a kind='loop' parent run
 // ─────────────────────────────────────────────────────────────────────
 describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
-  it('creates a kind=loop run and transitions succeeded when DONE.flag is set', async () => {
+  it('creates a kind=loop run and transitions succeeded when a resumed checkpoint records success (ADR-007)', async () => {
     const logDir = join(tmp, 'logs')
     const loopDir = join(tmp, '.loop')
     mkdirSync(loopDir, { recursive: true })
@@ -155,12 +155,21 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
     writeFileSync(join(loopDir, 'GOAL.md'), 'Prove the loop works\n')
     writeFileSync(join(loopDir, 'ACCEPTANCE.md'), '')
     writeFileSync(join(loopDir, 'STATE.md'), 'idle')
-    // Pre-create DONE.flag (v0.3.3: must contain DRIVER_VERIFIED marker)
-    writeFileSync(join(loopDir, 'DONE.flag'), 'DRIVER_VERIFIED pre-set\n')
+    // ADR-007: completion is recorded in the checkpoint, not in a forgeable
+    // flag. A phase='succeeded' checkpoint (as left by finishLoopRun, or by
+    // a crash between checkpoint save and flag write) must short-circuit a
+    // resumed loop straight to success — no iterations, no LLM calls.
+    writeFileSync(join(loopDir, 'checkpoint.json'), JSON.stringify({
+      schemaVersion: 2, sequence: 9, taskId: 'Prove the loop works', branch: 'detached',
+      worktree: tmp, iteration: 2, phase: 'succeeded', runId: 'prior-run',
+      passedQualityGates: ['typecheck', 'lint', 'test', 'build'],
+      goalHash: 'irrelevant', acceptanceHash: 'irrelevant',
+      changedFiles: [], consecutiveNoProgress: 0,
+      consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+      createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',
+    }, null, 2) + '\n')
 
     const { c, e } = makeEngine(logDir)
-    // runLoop imports runLoop from the source — but the engine config
-    // has cwd=/tmp. We pass our own loopDir via a config override.
     const { runLoop } = await import('../src/core/loopEngine.js')
     // The loop engine takes its own LoopConfig; pass the loopDir we set up.
     await runLoop(e, fakeRenderer(), {
@@ -176,6 +185,41 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
     // c was never called: loop exits before the first LLM turn.
     expect(c.createCalls).toBe(0)
   })
+
+  it('rejects a legacy/forged plaintext DONE.flag and refuses to complete (ADR-007)', async () => {
+    // Three loop iterations, each spawning git + quality-gate probes —
+    // comfortably under a minute, well over the 5s default on Windows.
+    const logDir = join(tmp, 'logs')
+    const loopDir = join(tmp, '.loop')
+    mkdirSync(loopDir, { recursive: true })
+    const { writeFileSync, existsSync, readFileSync } = await import('fs')
+    writeFileSync(join(loopDir, 'GOAL.md'), 'Prove the loop works\n')
+    writeFileSync(join(loopDir, 'ACCEPTANCE.md'), '')
+    writeFileSync(join(loopDir, 'STATE.md'), 'idle')
+    // The pre-ADR-007 forgery: a model-written flag containing the magic
+    // substring. The old substring check accepted this; the binding
+    // verification must rename it and keep looping.
+    writeFileSync(join(loopDir, 'DONE.flag'), 'DRIVER_VERIFIED pre-set\n')
+
+    const { c, e } = makeEngine(logDir)
+    const { runLoop } = await import('../src/core/loopEngine.js')
+    await runLoop(e, fakeRenderer(), {
+      cwd: tmp,
+      loopDir,
+      maxIters: 3,
+    })
+
+    // The flag was rejected as evidence, not honored.
+    expect(existsSync(join(loopDir, 'DONE.flag'))).toBe(false)
+    expect(existsSync(join(loopDir, 'DONE.flag.rejected'))).toBe(true)
+    expect(readFileSync(join(loopDir, 'DONE.flag.rejected'), 'utf8')).toContain('DRIVER_VERIFIED pre-set')
+    // The loop ran its iterations (all failing to complete) instead of
+    // exiting succeeded on the forged flag.
+    const loopRuns = e.getRunRegistry().list({ kind: 'loop' })
+    expect(loopRuns.length).toBe(1)
+    expect(loopRuns[0].status).not.toBe('succeeded')
+    expect(c.createCalls).toBe(3)
+  }, 60_000)
 })
 
 // ─────────────────────────────────────────────────────────────────────

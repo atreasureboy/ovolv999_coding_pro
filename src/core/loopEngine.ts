@@ -69,6 +69,71 @@ export function parseCompletionCandidate(content: string): CompletionCandidate |
   }
 }
 
+export interface DoneFlagPayload {
+  marker: 'DRIVER_VERIFIED'
+  nonce: string
+  runId: string
+  iteration: number
+  checkpointSequence: number
+  goalHash: string
+  acceptanceHash: string
+  gates: string[]
+  completedAt: string
+}
+
+export function parseDoneFlag(content: string): DoneFlagPayload | null {
+  try {
+    const value = JSON.parse(content) as Partial<DoneFlagPayload>
+    if (
+      value.marker !== 'DRIVER_VERIFIED'
+      || typeof value.nonce !== 'string'
+      || typeof value.runId !== 'string'
+      || !Number.isSafeInteger(value.iteration)
+      || !Number.isSafeInteger(value.checkpointSequence)
+      || typeof value.goalHash !== 'string'
+      || typeof value.acceptanceHash !== 'string'
+      || !Array.isArray(value.gates)
+      || !value.gates.every((gate) => typeof gate === 'string')
+      || typeof value.completedAt !== 'string'
+    ) return null
+    return value as DoneFlagPayload
+  } catch {
+    return null
+  }
+}
+
+/**
+ * ADR-007 (DONE.flag integrity): a DONE.flag is trusted only with proof the
+ * Driver authored it. 'nonce' — carries this process's in-memory UUID, which
+ * never touches disk or a prompt, so a model cannot forge it. 'checkpoint' —
+ * binds to a phase='succeeded' checkpoint (cross-restart resume: the nonce
+ * died with the previous process, but the Driver-signed checkpoint survived).
+ */
+export function verifyDoneFlag(flag: DoneFlagPayload, ctx: {
+  driverNonce: string
+  checkpoint: LoopCheckpoint | null
+  liveGoalHash: string
+  liveAcceptanceHash: string
+}): 'nonce' | 'checkpoint' | null {
+  if (flag.nonce === ctx.driverNonce) return 'nonce'
+  const cp = ctx.checkpoint
+  if (
+    cp !== null
+    && cp.phase === 'succeeded'
+    && typeof cp.runId === 'string'
+    && flag.runId === cp.runId
+    && flag.checkpointSequence === cp.sequence
+    && flag.gates.every((gate) => (cp.passedQualityGates ?? []).includes(gate))
+    && flag.goalHash === ctx.liveGoalHash
+    && flag.acceptanceHash === ctx.liveAcceptanceHash
+  ) return 'checkpoint'
+  return null
+}
+
+export function renderDoneFlag(payload: DoneFlagPayload): string {
+  return JSON.stringify(payload, null, 2) + '\n'
+}
+
 export function shouldParkLoop(input: {
   heartbeatWriteFailures: number
   consecutiveNoProgress: number
@@ -309,6 +374,9 @@ export async function runLoop(
   let passedQualityGates = new Set<string>()
   let latestOutcome: TurnOutcome | undefined
   let supervisorRunId: string = randomUUID()
+  // ADR-007: per-process completion nonce — never persisted, never shown to the
+  // model. A DONE.flag carrying it is proof of Driver authorship.
+  const driverNonce = randomUUID()
   let heartbeatFatal = false
 
   // v0.3.4 (durable supervisor contract §Phase 6): resume/restart checkpoint support
@@ -469,6 +537,16 @@ export async function runLoop(
     } catch { /* best-effort */ }
   }
 
+  // ADR-007: a resumed checkpoint with phase='succeeded' means the previous
+  // process already completed. Exit as success without re-running iterations —
+  // this also covers the crash window between checkpoint save and flag write,
+  // where no DONE.flag exists on disk at all.
+  if (restoredCp?.phase === 'succeeded') {
+    renderer.success('Checkpoint records a prior successful completion — loop done.')
+    finishLoopRun('succeeded')
+    return
+  }
+
   for (let iter = loopIteration; iter <= maxIters; iter++) {
     const parkReason = shouldParkLoop({
       heartbeatWriteFailures: leaseMgr.getHeartbeatWriteFailures(),
@@ -486,21 +564,29 @@ export async function runLoop(
       finishLoopRun('cancelled', 'stalled without verified progress')
       return
     }
-    // v0.3.3 (background autonomy contract §5.2): only trust DRIVER-written DONE.flag.
-    // If a model wrote DONE.flag during a turn, rename it — the driver
-    // must independently verify acceptance before completing.
+    // ADR-007 (DONE.flag integrity, supersedes background autonomy contract §5.2):
+    // substring matching is forgeable — a model writing "DRIVER_VERIFIED" passes
+    // the old check. Now the flag must verify: nonce binding (this process) or
+    // checkpoint binding (a Driver-signed phase='succeeded' checkpoint). Anything
+    // else — forgery or legacy plaintext — is renamed and the loop continues.
     const donePath = join(loopDir, 'DONE.flag')
     if (existsSync(donePath)) {
-      const content = tryRead(donePath)
-      if (!content.includes('DRIVER_VERIFIED')) {
-        // Model-written DONE — security event, rename and continue.
-        try { renameSync(donePath, join(loopDir, 'DONE.flag.rejected')) } catch { /* best-effort */ }
-        renderer.warn('WARNING: model-created DONE.flag detected and rejected. Only the Driver may complete.')
-      } else {
-        renderer.success('DONE flag (driver-verified) detected — loop completed')
+      const doneFlag = parseDoneFlag(tryRead(donePath))
+      const doneVerdict = doneFlag === null
+        ? null
+        : verifyDoneFlag(doneFlag, {
+            driverNonce,
+            checkpoint: checkpointMgr.load(),
+            liveGoalHash: hashContract(tryRead(join(loopDir, 'GOAL.md'))),
+            liveAcceptanceHash: hashContract(tryRead(join(loopDir, 'ACCEPTANCE.md'))),
+          })
+      if (doneFlag !== null && doneVerdict !== null) {
+        renderer.success(`DONE flag verified (${doneVerdict} binding) — loop completed`)
         finishLoopRun('succeeded')
         return
       }
+      try { renameSync(donePath, join(loopDir, 'DONE.flag.rejected')) } catch { /* best-effort */ }
+      renderer.warn('WARNING: unverified DONE.flag rejected (no valid driver binding). Only the Driver may complete.')
     }
     if (existsSync(join(loopDir, 'PARKED.flag'))) {
       renderer.warn('PARKED flag detected — loop paused')
@@ -710,8 +796,23 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
           passedQualityGates.add('test')
           passedQualityGates.add('build')
           renderer.success('\n✓ All acceptance + fast + full gates green — DONE!')
-          writeFileSync(join(loopDir, 'DONE.flag'), `DRIVER_VERIFIED at iteration ${iter}\n`, 'utf8')
+          // ADR-007: checkpoint FIRST — finishLoopRun saves phase='succeeded' at
+          // ++checkpointSequence — then the bound flag referencing that sequence.
+          // Crash between the two is harmless: resume short-circuits on the
+          // checkpoint; the flag is forensic, not the source of truth.
           finishLoopRun('succeeded')
+          const donePayload: DoneFlagPayload = {
+            marker: 'DRIVER_VERIFIED',
+            nonce: driverNonce,
+            runId: supervisorRunId,
+            iteration: iter,
+            checkpointSequence,
+            goalHash: goalHashPostTurn,
+            acceptanceHash: acceptanceHashPostTurn,
+            gates: [...passedQualityGates],
+            completedAt: new Date().toISOString(),
+          }
+          try { writeFileSync(join(loopDir, 'DONE.flag'), renderDoneFlag(donePayload), 'utf8') } catch { /* best-effort */ }
           return
         } else {
           renderer.warn(`\n⚠ Full gates failed — not completing.`)

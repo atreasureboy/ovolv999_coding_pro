@@ -62,7 +62,7 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 | `commands/` | 89 个 slash 命令 | builtin.ts(3487 行单文件) |
 | `integrations/` | 外部协议 | acp.ts(JSON-RPC stdio), pipeMode |
 
-### 六大核心机制(详见 docs/ADR/001-006)
+### 六大核心机制(详见 docs/ADR/001-007)
 
 1. **事件驱动 Run 状态机**:RunStatus **12 态**,VALID_TRANSITIONS 强制;blocked 唯一可恢复非终态,lost 供恢复失败。事件双层:持久 `runs.jsonl`(8 种 run.*)+ 内存 ~45 种 RunEvent。注册表调用全 best-effort——"注册表 bug 不能破坏真实 turn"。
 2. **Claim 并发调度**:工具 `metadata.claims(input)` 声明 R/W/X;`ResourceScheduler.acquire` 原子 all-or-nothing 是**唯一正确性闸门**,分区并行只是优化;无声明默认串行;git 强制 exclusive。
@@ -75,7 +75,7 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 
 stop_sequence 不算证据 → EvidenceStore 计算 criterion 满足度(**模型无法文本宣称达标**)→
 prematureHandoff 中英正则拦甩锅 → ProgressMonitor 8 检测器(A→B→A→B 环/patchHash 去重/verificationDelta)→
-Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model 权限分离**(模型只能写 CANDIDATE_DONE.flag,六条件门核准才写 DONE.flag)→ Worker 哨兵 UUID 绑定(P0-5 事故修复)。
+Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model 权限分离**(模型只能写 CANDIDATE_DONE.flag,六条件门核准才写 DONE.flag;**ADR-007**:DONE.flag 已 nonce + checkpoint 绑定校验,子串检查与旧版纯文本 flag 作废,Write/Edit 禁写 .loop/ 四个驱动文件)→ Worker 哨兵 UUID 绑定(P0-5 事故修复)。
 
 ### 数据目录双品牌(现状)
 
@@ -91,7 +91,7 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 §5 路由信号标注部分为代理值。
 
 **代码接线优先级(架构演进 backlog)**:
-- P0 DONE.flag 抗伪造(子串 includes('DRIVER_VERIFIED') 可伪造,建议 nonce 或 ToolPolicy 写禁)
+- ~~P0 DONE.flag 抗伪造~~ → **已完成(ADR-007,2026-07-28)**:nonce/checkpoint 双路绑定 + 工具写禁 + resume succeeded 短路;遗留:Bash 伪造 checkpoint.json 在 0.x 威胁模型外(沙箱负责)
 - P1 低成本收敛:双价格表合并(costTracker 应读 providers.ts MODELS[])、双 `ModelCapabilities` 同名异质改名、`buildFullSystemPrompt` 形参 `memorySection` 实收 modePrompt 改名、合约 GOAL/ACCEPTANCE 每轮 prompt 与校验对称重读、usage 缺失禁止静默记 0 成本、checkpoint load() 主文件缺失时先查备份
 - P2 决策项(接线 or 删除):`permissionRules.ts` glob 引擎(未接线,内置 deny 规则浪费)、持久层 subsystem 事件(tool.*/artifact.* 零 emit 点,死接口)、LongTermMemory R1–R6 接入引擎、双 retryable 正则合并、死字段清理(writeTimeoutMs/consecutiveCommandFailures/lastCommit)
 - P3 大迁移:品牌目录收敛、路由信号真实化(`repoFileCount=filesTouched×10` 代理、`budgetRemaining` 恒 undefined)、Windows 租约指纹降级补救(/proc-only)
