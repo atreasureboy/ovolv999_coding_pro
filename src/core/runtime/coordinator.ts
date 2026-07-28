@@ -78,6 +78,11 @@ import {
   isProjectExplorationRequest,
   type ProjectExplorationProfile,
 } from './projectExploration.js'
+import {
+  detectPrematureHandoff,
+  requiresExecutionVerification,
+  workspaceAnalysisReadTarget,
+} from './prematureHandoff.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -371,6 +376,8 @@ export class RuntimeCoordinator {
         explorationProfile = null
       }
     }
+    const genericAnalysisReadTarget = explorationProfile ? 0 : workspaceAnalysisReadTarget(userMessage)
+    const executionVerificationRequired = requiresExecutionVerification(userMessage)
 
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
@@ -450,6 +457,9 @@ export class RuntimeCoordinator {
     const MAX_LENGTH_RETRIES = 3
     let explorationContinuationCount = 0
     const MAX_EXPLORATION_CONTINUATIONS = 4
+    let completionContinuationCount = 0
+    const MAX_COMPLETION_CONTINUATIONS = 3
+    let lastAssistantText = ''
 
     let result: TurnResult
     const turnStartMs = Date.now()
@@ -610,6 +620,7 @@ export class RuntimeCoordinator {
             controlMessageLog.clear()
 
             if (assistantText) {
+              lastAssistantText = assistantText
               turnAssistantSegments.push(assistantText)
               turnTokensProduced += Math.ceil(assistantText.length / 3.5)
             }
@@ -689,6 +700,25 @@ export class RuntimeCoordinator {
                   missing: exploration.missing,
                   filesRead: exploration.filesRead,
                   target: exploration.targetReadCount,
+                })
+                state = transitionQueryState(state, { type: 'continue' })
+                break
+              }
+            }
+            if (completionContinuationCount < MAX_COMPLETION_CONTINUATIONS) {
+              const workingState = this.deps.contextManager.getWorkingState()
+              const handoff = detectPrematureHandoff({
+                assistantText: lastAssistantText,
+                intent: taskIntent,
+                filesRead: workingState.filesRead.length,
+                filesChanged: workingState.filesChanged.length,
+                verificationCount: workingState.verification.passed.length + workingState.verification.failed.length,
+              })
+              if (handoff.continue && handoff.reason) {
+                completionContinuationCount++
+                controlMessageLog.append({
+                  kind: 'task_completion_continue',
+                  reason: handoff.reason,
                 })
                 state = transitionQueryState(state, { type: 'continue' })
                 break
@@ -851,11 +881,18 @@ export class RuntimeCoordinator {
       const tg = currentGraph
       const tgSnapshot = tg && tg.size() > 0 ? tg.snapshot() : null
       const unsatisfiedFromGraph = tgSnapshot
-        ? tgSnapshot.nodes.flatMap((n) =>
+        ? tgSnapshot.nodes.filter((n) => n.status !== 'completed').flatMap((n) =>
           n.acceptanceCriteria.map((desc) => `${n.id}: ${desc}`))
         : []
       const unsatisfiedExploration = explorationAssessment
         ? explorationAssessment.criteria.filter((criterion) => !criterion.satisfied).map((criterion) => criterion.description)
+        : []
+      const unsatisfiedGenericAnalysis = genericAnalysisReadTarget > ws.filesRead.length
+        ? [`Inspect enough relevant files for evidence (${ws.filesRead.length}/${genericAnalysisReadTarget})`]
+        : []
+      const unsatisfiedExecutionVerification = executionVerificationRequired
+        && ws.verification.passed.length + ws.verification.failed.length === 0
+        ? ['Execute at least one real verification command and report its result']
         : []
       const review = reviewRun({
         taskKind: runContext?.taskKind ?? 'informational',
@@ -865,7 +902,12 @@ export class RuntimeCoordinator {
         verificationPassed: ws.verification.failed.length === 0,
         unhandledFailures: ws.verification.failed.length,
         unresolvedBlockers: ws.unresolved.length,
-        unsatisfiedCriteria: [...unsatisfiedFromGraph, ...unsatisfiedExploration],
+        unsatisfiedCriteria: [
+          ...unsatisfiedFromGraph,
+          ...unsatisfiedExploration,
+          ...unsatisfiedGenericAnalysis,
+          ...unsatisfiedExecutionVerification,
+        ],
         staleEvidence: [],
         scopeExcessive: ws.filesChanged.length > 20,
       })
@@ -891,6 +933,20 @@ export class RuntimeCoordinator {
         : []
       if (explorationAssessment) {
         acceptanceCriteria.push(...explorationAssessment.criteria)
+      }
+      if (genericAnalysisReadTarget > 0) {
+        acceptanceCriteria.push({
+          id: 'workspace-analysis-evidence',
+          description: `Inspect enough relevant files for evidence (${ws.filesRead.length}/${genericAnalysisReadTarget})`,
+          satisfied: ws.filesRead.length >= genericAnalysisReadTarget,
+        })
+      }
+      if (executionVerificationRequired) {
+        acceptanceCriteria.push({
+          id: 'execution-verification-evidence',
+          description: 'Execute at least one real verification command and report its result',
+          satisfied: ws.verification.passed.length + ws.verification.failed.length > 0,
+        })
       }
       const v = evaluateCompletion({
         taskKind,

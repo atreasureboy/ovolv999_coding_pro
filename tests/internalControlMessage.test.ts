@@ -29,6 +29,7 @@ describe('InternalControlMessage v0.3.1', () => {
       { kind: 'completion_rejected', verdict: 'blocked', blockers: ['verification failed'] },
       { kind: 'provider_fallback', from: 'haiku', to: 'sonnet', reason: '429 rate limit' },
       { kind: 'project_exploration_continue', missing: ['inspect tests'], filesRead: 3, target: 10 },
+      { kind: 'task_completion_continue', reason: 'no mutation evidence' },
     ]
     for (const s of samples) {
       const out = formatControlMessage(s)

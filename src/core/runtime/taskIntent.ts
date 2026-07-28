@@ -64,6 +64,12 @@ export function classifyTaskIntent(userMessage: string, options: {
   const planMode = options.planMode ?? false
   const explicitCriteria = options.explicitAcceptanceCriteria ?? []
   const projectExploration = /(?:读取|阅读|了解|熟悉|查看|审查|分析)[\s\S]{0,20}(?:项目|仓库|代码库)|(?:项目|仓库|代码库)[\s\S]{0,20}(?:读取|阅读|了解|熟悉|查看|审查|分析)|(?:进一步|继续|深入)[\s\S]{0,12}(?:读取|阅读|了解|查看|分析)|\b(?:read|inspect|explore|understand|review|audit)\b[\s\S]{0,40}\b(?:project|repository|repo|codebase)\b|\b(?:project|repository|repo|codebase)\b[\s\S]{0,40}\b(?:read|inspect|explore|understand|review|audit)\b/i.test(userMessage)
+  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up|polish|redesign)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善|美化|重新设计|调整界面|升级界面|改进界面)/
+  const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check|test|diagnose|troubleshoot)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证|测试|诊断|排查)/
+  const mutationAfterAnalysis = /\b(?:and|then|after(?:wards)?)\s+(?:fix|implement|refactor|rewrite|add|remove|edit|modify|patch|change|update|build|create|install|configure)\b|(?:并|然后|之后|后|并且|且)[，,\s]*(?:修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/i
+  const mutationWordIsAnalysisSubject = /(?:评估|研究|分析|审计|检查)[\s\S]{0,12}(?:迁移风险|迁移方案|竞品实现|现有实现|实现方式|实现逻辑)\s*$/i.test(text)
+  const requestsMutation = mutationKeywords.test(text)
+    && (!analysisKeywords.test(text) || mutationAfterAnalysis.test(text) || !mutationWordIsAnalysisSubject)
 
   // Highest priority: explicit user-stated kind.
   if (explicit) {
@@ -94,7 +100,7 @@ export function classifyTaskIntent(userMessage: string, options: {
     }
   }
 
-  if (projectExploration) {
+  if (projectExploration && !requestsMutation) {
     return {
       kind: 'analysis',
       requestedOutcomes: extractOutcomes(userMessage),
@@ -109,12 +115,22 @@ export function classifyTaskIntent(userMessage: string, options: {
 
   // v0.3.3 (background autonomy contract §Phase 3): bilingual (EN + ZH) keyword matching.
   // Mutation keywords: 修复/修改/实现/增加/新增/删除/重构/迁移/替换/优化代码/补充测试/改造/接入/完善
-  const mutationKeywords = /\b(fix|implement|refactor|rewrite|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up|polish|redesign)\b|(修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善|美化|重新设计|调整界面|升级界面|改进界面)/
   // Analysis keywords: 审计/分析/检查/评估/设计/给出方案/研究/对比/解释架构
-  const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证)/
   // Informational keywords: 解释/说明/回答/总结/翻译/查询
   const informationalKeywords = /\b(what|why|how|when|where|who|explain|summarize|describe|tell me|show|list|find|locate|search|hello|hi)\b|(解释|说明|回答|总结|翻译|查询|是什么|怎么做|为什么|你是谁|谁是|什么是|如何|多少|哪里|哪个|哪些)/
 
+  if (requestsMutation) {
+    return {
+      kind: 'mutation',
+      requestedOutcomes: extractOutcomes(userMessage),
+      explicitAcceptanceCriteria: explicitCriteria,
+      requiresWorkspaceChange: true,
+      expectedVerification: options.expectedVerification ?? defaultVerificationForMutation(),
+      confidence: 0.6,
+      source: 'keyword',
+      userMessage,
+    }
+  }
   if (analysisKeywords.test(text)) {
     return {
       kind: 'analysis',

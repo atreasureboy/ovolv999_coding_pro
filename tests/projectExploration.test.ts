@@ -197,4 +197,51 @@ describe('project exploration completion', () => {
     expect(client.calls).toHaveLength(5)
     expect(engine.getLastRunContext()?.completionVerdict?.status).toBe('partial')
   })
+
+  it('continues a mutation that stopped without making changes', async () => {
+    const root = fixture()
+    const client = new FakeClient()
+    for (let index = 0; index < 4; index++) client.push(response(`Proposed fix ${index}`))
+    const config: EngineConfig = {
+      apiKey: 'test',
+      model: 'test',
+      maxIterations: 10,
+      cwd: root,
+      permissionMode: 'auto',
+      permissionManager: undefined,
+      enabledModules: [],
+    }
+    const engine = new ExecutionEngine(
+      config,
+      renderer(),
+      client as unknown as ConstructorParameters<typeof ExecutionEngine>[2],
+    )
+    await engine.runTurn('修复登录错误', [])
+    expect(client.calls).toHaveLength(4)
+    expect(JSON.stringify(client.calls[1])).toContain('task_completion_continue')
+    expect(engine.getLastRunContext()?.completionVerdict?.status).toBe('incomplete')
+  })
+
+  it('does not accept a verification summary without command evidence', async () => {
+    const root = fixture()
+    const client = new FakeClient()
+    for (let index = 0; index < 4; index++) client.push(response(`Tests should pass ${index}`))
+    const config: EngineConfig = {
+      apiKey: 'test',
+      model: 'test',
+      maxIterations: 10,
+      cwd: root,
+      permissionMode: 'auto',
+      permissionManager: undefined,
+      enabledModules: [],
+    }
+    const engine = new ExecutionEngine(
+      config,
+      renderer(),
+      client as unknown as ConstructorParameters<typeof ExecutionEngine>[2],
+    )
+    await engine.runTurn('运行项目测试并验证构建', [])
+    expect(client.calls).toHaveLength(4)
+    expect(engine.getLastRunContext()?.completionVerdict?.status).toBe('partial')
+  })
 })

@@ -39,7 +39,7 @@ const DR_SHARP_PROMPT = `You are Dr. Sharp, a meticulous code reviewer and diagn
 1. **Diagnose before acting.** Never jump to a fix. Understand the root cause first.
 2. **Minimal effective change.** The smallest diff that fully solves the problem wins.
 3. **Evidence-based.** Every claim must be backed by code, logs, or behavior you can point to.
-4. **No assumptions.** If you're unsure, ask. Never guess about behavior you haven't verified.
+4. **No unsupported assumptions.** If unsure, investigate first. Ask only when a missing user decision materially changes the valid solution.
 
 ## Three-Phase Workflow
 
@@ -96,7 +96,7 @@ export const DEFAULT_MODES: Mode[] = [
     systemPrompt:
       'You are in gentle learning mode. Explain concepts clearly with examples. ' +
       'When correcting mistakes, be encouraging and explain why. ' +
-      'Offer to show alternatives before making changes. ' +
+      'Explain useful alternatives without pausing an already-authorized task. ' +
       'Use analogies to help understand complex concepts.',
     verbosity: 'verbose',
     autoApproveEdits: false,

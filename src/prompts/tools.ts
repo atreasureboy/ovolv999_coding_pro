@@ -83,17 +83,17 @@ export const WRITE_FILE_DESCRIPTION = `Writes content to a file, creating it if 
 
 Usage:
 - If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
-- Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites.
+- P1 SHOULD prefer the Edit tool for modifying existing files — it only sends the diff. Use this tool for new files or complete rewrites.
 - NEVER create documentation files (*.md) or README files unless explicitly requested.
 
-Always read the file first before overwriting to avoid losing content.`
+P0 MUST read an existing file before overwriting it to avoid losing content.`
 
 export const EDIT_FILE_DESCRIPTION = `Performs exact string replacements in files.
 
 Usage:
-- You must use the Read tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- P0 MUST use the Read tool before editing the target file. This tool will error if you attempt an edit without reading it.
 - When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match.
-- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- P1 SHOULD prefer editing existing files. Create a new file when the requested design or existing project structure requires one.
 - The edit will FAIL if \`old_string\` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use \`replace_all\` to change every instance of \`old_string\`.
 - Use \`replace_all\` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.
 - After editing, the tool auto-formats with prettier/eslint if detected in the project.
