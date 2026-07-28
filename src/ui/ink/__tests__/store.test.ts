@@ -2,7 +2,7 @@
  * UIStore tests — verifies the state container that bridges engine → React.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { UIStore } from '../store.js'
 
 describe('UIStore', () => {
@@ -90,17 +90,14 @@ describe('UIStore', () => {
       expect(store.getState().messages).toHaveLength(0)
     })
 
-    it('batches token repaint notifications', () => {
-      vi.useFakeTimers()
+    it('buffers a long response without repainting the terminal', () => {
       let renders = 0
       const unsubscribe = store.subscribe(() => { renders++ })
-      for (let index = 0; index < 100; index++) store.appendStreamingToken('x')
+      for (let index = 0; index < 10_000; index++) store.appendStreamingToken('x')
       expect(renders).toBe(0)
-      vi.advanceTimersByTime(40)
+      store.flushStreamingText()
       expect(renders).toBe(1)
       unsubscribe()
-      store.reset()
-      vi.useRealTimers()
     })
   })
 

@@ -35,12 +35,12 @@ describe('InkRenderer', () => {
     })
   })
 
-  it('streamToken stops spinner before first token', () => {
+  it('keeps the fixed progress row while buffering tokens', () => {
     renderer.startSpinner('Working')
     expect(store.getState().spinnerActive).toBe(true)
 
     renderer.streamToken('text')
-    expect(store.getState().spinnerActive).toBe(false)
+    expect(store.getState().spinnerActive).toBe(true)
   })
 
   it('toolStart + toolResult creates tool message', () => {

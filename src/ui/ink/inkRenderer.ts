@@ -46,7 +46,6 @@ export class InkRenderer {
   }
 
   streamToken(token: string): void {
-    this.store.setSpinner(false)
     this.store.appendStreamingToken(token)
   }
 

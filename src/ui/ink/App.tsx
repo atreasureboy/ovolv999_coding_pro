@@ -25,7 +25,6 @@ import { StatusBar } from './components/StatusBar.js'
 import { PlanView } from './components/PlanView.js'
 import { PermissionDialog } from './components/PermissionDialog.js'
 import { SelectPicker } from './components/SelectPicker.js'
-import { StreamingMarkdown } from './components/Markdown.js'
 import { getGitBranch } from './gitInfo.js'
 import { HelpOverlay } from './components/HelpOverlay.js'
 import { expandAtMentions } from './expandAtMentions.js'
@@ -49,12 +48,6 @@ function estimateTokens(messages: OpenAIMessage[]): number {
 
 export function safeTerminalWidth(columns: number | undefined): number {
   return Math.max(20, (columns || 80) - 1)
-}
-
-// ── Streaming cursor — blinking block at end of streaming text ──
-
-function StreamingCursor(): React.ReactElement {
-  return <Text color="cyan">▋</Text>
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -306,14 +299,6 @@ export function App({
       ) : null}
 
       <MessageList messages={liveMessages} verbose={state.verbose} />
-
-      {/* Live streaming text */}
-      {state.streamingText ? (
-        <Box marginLeft={2} flexDirection="column">
-          <StreamingMarkdown>{state.streamingText}</StreamingMarkdown>
-          <StreamingCursor />
-        </Box>
-      ) : null}
 
       {/* Spinner */}
       <Spinner active={state.spinnerActive} verb={state.spinnerVerb} />

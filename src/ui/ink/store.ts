@@ -121,7 +121,6 @@ export class UIStore {
   private listeners = new Set<() => void>()
   private nextId = 1
   private finalizedIds = new Set<number>()
-  private streamFlushTimer: ReturnType<typeof setTimeout> | null = null
   // Resolvers for interactive overlays (kept outside state — not serializable)
   private planResolver: ((approved: boolean) => void) | null = null
   private permissionResolver: ((result: { approved: boolean; alwaysAllow: boolean; feedback?: string }) => void) | null = null
@@ -191,11 +190,6 @@ export class UIStore {
   /** Streaming: accumulate tokens into a temporary buffer. */
   appendStreamingToken(token: string): void {
     this.state.streamingText += token
-    if (this.streamFlushTimer) return
-    this.streamFlushTimer = setTimeout(() => {
-      this.streamFlushTimer = null
-      this.emit()
-    }, 40)
   }
 
   /** Streaming: accumulate reasoning tokens (from <think> tags). */
@@ -205,10 +199,6 @@ export class UIStore {
 
   /** Flush accumulated streaming text as a message, then clear the buffer. */
   flushStreamingText(): void {
-    if (this.streamFlushTimer) {
-      clearTimeout(this.streamFlushTimer)
-      this.streamFlushTimer = null
-    }
     const text = this.state.streamingText.trim()
     this.state = { ...this.state, streamingText: '', streamingReasoning: '' }
     if (text) this.add({ type: 'assistant', text })
@@ -264,6 +254,7 @@ export class UIStore {
   }
 
   setSpinner(active: boolean, verb = ''): void {
+    if (this.state.spinnerActive === active && this.state.spinnerVerb === verb) return
     this.state = { ...this.state, spinnerActive: active, spinnerVerb: verb }
     this.emit()
   }
@@ -355,8 +346,6 @@ export class UIStore {
 
   /** Clear all messages (for /clear). */
   clearMessages(): void {
-    if (this.streamFlushTimer) clearTimeout(this.streamFlushTimer)
-    this.streamFlushTimer = null
     this.finalizedIds.clear()
     this.nextId = 1
     this.state = {
@@ -372,8 +361,6 @@ export class UIStore {
 
   /** Full reset (for testing). */
   reset(): void {
-    if (this.streamFlushTimer) clearTimeout(this.streamFlushTimer)
-    this.streamFlushTimer = null
     this.finalizedIds.clear()
     this.state = { ...INITIAL_STATE }
     this.nextId = 1
