@@ -145,6 +145,10 @@ export function App({
         setHistory(result.newHistory)
         const elapsed = ((Date.now() - turnStartTime.current) / 1000).toFixed(1)
         if (result.reason === 'stop_sequence') store.addSuccess(`Done in ${elapsed}s`)
+        else if (result.reason.startsWith('completion_')) {
+          const status = result.reason.slice('completion_'.length).replaceAll('_', ' ')
+          store.addWarn(`${status[0]?.toUpperCase() ?? ''}${status.slice(1)} in ${elapsed}s · /why for details`)
+        }
         else store.addInfo(`Stopped in ${elapsed}s · ${result.reason.replaceAll('_', ' ')}`)
       } catch (err: unknown) {
         const error = err as Error

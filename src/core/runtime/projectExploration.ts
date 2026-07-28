@@ -21,6 +21,7 @@ const ROOT_EVIDENCE = /^(?:agents|ovogo|readme|contributing|architecture)(?:\.[^
 const TEST_FILE = /(?:^|\/)(?:test|tests|spec|specs|__tests__)(?:\/|$)|\.(?:test|spec)\.[^.]+$/i
 const ENTRY_FILE = /(?:^|\/)(?:main|index|cli|app|server|mod|lib)\.[^.]+$|(?:^|\/)bin\//i
 const SOURCE_ROOTS = new Set(['app', 'apps', 'cmd', 'lib', 'packages', 'pkg', 'src'])
+const CODE_FILE = /\.(?:c|cc|cpp|cs|ex|exs|go|h|hpp|java|js|jsx|kt|kts|php|pl|py|rb|rs|scala|sh|swift|ts|tsx|vue)$/i
 
 export interface ProjectExplorationProfile {
   cwd: string
@@ -83,8 +84,13 @@ export function buildProjectExplorationProfile(cwd: string): ProjectExplorationP
   const rootEvidence = files.filter((file) => !file.includes('/') && ROOT_EVIDENCE.test(basename(file)))
   const testFiles = files.filter((file) => TEST_FILE.test(file))
   const entryFiles = files.filter((file) => ENTRY_FILE.test(file) || (!file.includes('/') && ROOT_EVIDENCE.test(file)))
-  const sourceAreas = [...new Set(files.map(sourceArea).filter((area): area is string => Boolean(area)))]
-  const targetReadCount = Math.min(16, Math.max(5, Math.ceil(files.length * 0.03)))
+  const sourceAreas = [...new Set(files
+    .filter((file) => CODE_FILE.test(file) && !TEST_FILE.test(file))
+    .map(sourceArea)
+    .filter((area): area is string => Boolean(area)))]
+  const rootTarget = Math.min(2, rootEvidence.length)
+  const sourceTarget = Math.min(4, sourceAreas.length)
+  const targetReadCount = Math.min(10, Math.max(4, rootTarget + sourceTarget + (testFiles.length > 0 ? 1 : 0) + 1))
   return { cwd: root, files, rootEvidence, sourceAreas, testFiles, entryFiles, targetReadCount }
 }
 
@@ -98,7 +104,10 @@ export function assessProjectExploration(
   const sourceTarget = Math.min(4, profile.sourceAreas.length)
   const rootRead = profile.rootEvidence.filter((file) => read.has(file)).length
   const sourceAreasRead = profile.sourceAreas.filter((area) =>
-    [...read].some((file) => file === area || file.startsWith(`${area}/`)),
+    [...read].some((file) =>
+      area === '.'
+        ? !file.includes('/') && CODE_FILE.test(file)
+        : file === area || file.startsWith(`${area}/`)),
   ).length
   const testRead = profile.testFiles.length === 0 || profile.testFiles.some((file) => read.has(file))
   const entryRead = profile.entryFiles.length === 0 || profile.entryFiles.some((file) => read.has(file))
@@ -142,9 +151,12 @@ export function assessProjectExploration(
 
 function sourceArea(file: string): string | null {
   const parts = file.split('/')
-  if (!SOURCE_ROOTS.has(parts[0] ?? '')) return null
   if (parts[0] === 'packages' || parts[0] === 'apps') return parts.length > 1 ? `${parts[0]}/${parts[1]}` : parts[0]
-  return parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0]
+  const sourceIndex = parts.findIndex((part) => SOURCE_ROOTS.has(part))
+  if (sourceIndex === 0) return parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0]
+  if (sourceIndex > 0) return parts.slice(0, sourceIndex).join('/')
+  if (parts.length > 1) return parts[0]
+  return '.'
 }
 
 function normalizeReadPath(cwd: string, file: string): string {

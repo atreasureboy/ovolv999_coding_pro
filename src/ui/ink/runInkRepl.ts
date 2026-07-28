@@ -38,6 +38,15 @@ export interface InkReplOptions {
   loopMaxIters: number
 }
 
+export function completionAwareReason(
+  stopReason: string,
+  completionStatus: string | undefined,
+): string {
+  return stopReason === 'stop_sequence' && completionStatus && completionStatus !== 'completed'
+    ? `completion_${completionStatus}`
+    : stopReason
+}
+
 export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   const { store, engine } = opts
 
@@ -114,7 +123,9 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       if (opts.sessionDir && history.length > 0) {
         try { saveSession(opts.sessionDir, history) } catch { /* best-effort */ }
       }
-      return { newHistory: result.newHistory, reason: result.result.reason }
+      const verdict = engine.getLastRunContext()?.completionVerdict
+      const reason = completionAwareReason(result.result.reason, verdict?.status)
+      return { newHistory: result.newHistory, reason }
     } catch (err: unknown) {
       const error = err as Error
       if (error.name !== 'AbortError') {

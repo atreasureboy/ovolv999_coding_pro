@@ -129,6 +129,30 @@ describe('project exploration completion', () => {
     expect(assessment.complete).toBe(false)
   })
 
+  it('recognizes nested monorepo implementation and test areas', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ovolv999-monorepo-'))
+    roots.push(root)
+    const files: Record<string, string> = {
+      'README.md': '# Monorepo',
+      'package.json': '{}',
+      'swe-agent/sweagent/agent.py': 'class Agent: pass',
+      'swe-agent/tests/test_agent.py': 'def test_agent(): pass',
+      'oneshot/oneshot/main.py': 'def main(): pass',
+      'oneshot/tests/test_main.py': 'def test_main(): pass',
+    }
+    for (const [file, content] of Object.entries(files)) {
+      const path = join(root, file)
+      mkdirSync(join(path, '..'), { recursive: true })
+      writeFileSync(path, content)
+    }
+    const profile = buildProjectExplorationProfile(root)
+    expect(profile.sourceAreas).toEqual(expect.arrayContaining(['swe-agent', 'oneshot']))
+    expect(profile.targetReadCount).toBeLessThanOrEqual(6)
+    const assessment = assessProjectExploration(profile, profile.files.map((file) => join(root, file)))
+    expect(assessment.complete).toBe(true)
+    expect(assessment.criteria.find((criterion) => criterion.id === 'project-source-areas')?.description).toContain('2/2')
+  })
+
   it('continues the same run after a shallow stop and closes coverage before completing', async () => {
     const root = fixture()
     const profile = buildProjectExplorationProfile(root)
@@ -178,7 +202,7 @@ describe('project exploration completion', () => {
   it('never marks repeated shallow summaries completed without read evidence', async () => {
     const root = fixture()
     const client = new FakeClient()
-    for (let index = 0; index < 5; index++) client.push(response(`Shallow summary ${index}`))
+    for (let index = 0; index < 4; index++) client.push(response(`Shallow summary ${index}`))
     const config: EngineConfig = {
       apiKey: 'test',
       model: 'test',
@@ -194,7 +218,7 @@ describe('project exploration completion', () => {
       client as unknown as ConstructorParameters<typeof ExecutionEngine>[2],
     )
     await engine.runTurn('读取这个项目', [])
-    expect(client.calls).toHaveLength(5)
+    expect(client.calls).toHaveLength(4)
     expect(engine.getLastRunContext()?.completionVerdict?.status).toBe('partial')
   })
 

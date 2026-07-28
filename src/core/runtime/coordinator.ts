@@ -455,8 +455,9 @@ export class RuntimeCoordinator {
     const MAX_EMPTY_RETRIES = 2
     let lengthRetryCount = 0
     const MAX_LENGTH_RETRIES = 3
-    let explorationContinuationCount = 0
-    const MAX_EXPLORATION_CONTINUATIONS = 4
+    let explorationNoProgressCount = 0
+    let explorationLastReadCount = 0
+    const MAX_EXPLORATION_NO_PROGRESS = 3
     let completionContinuationCount = 0
     const MAX_COMPLETION_CONTINUATIONS = 3
     let lastAssistantText = ''
@@ -688,21 +689,26 @@ export class RuntimeCoordinator {
           }
 
           case 'continuation_check': {
-            if (explorationProfile && explorationContinuationCount < MAX_EXPLORATION_CONTINUATIONS) {
+            if (explorationProfile) {
               const exploration = assessProjectExploration(
                 explorationProfile,
                 this.deps.contextManager.getWorkingState().filesRead,
               )
               if (!exploration.complete) {
-                explorationContinuationCount++
-                controlMessageLog.append({
-                  kind: 'project_exploration_continue',
-                  missing: exploration.missing,
-                  filesRead: exploration.filesRead,
-                  target: exploration.targetReadCount,
-                })
-                state = transitionQueryState(state, { type: 'continue' })
-                break
+                explorationNoProgressCount = exploration.filesRead > explorationLastReadCount
+                  ? 0
+                  : explorationNoProgressCount + 1
+                explorationLastReadCount = exploration.filesRead
+                if (explorationNoProgressCount <= MAX_EXPLORATION_NO_PROGRESS) {
+                  controlMessageLog.append({
+                    kind: 'project_exploration_continue',
+                    missing: exploration.missing,
+                    filesRead: exploration.filesRead,
+                    target: exploration.targetReadCount,
+                  })
+                  state = transitionQueryState(state, { type: 'continue' })
+                  break
+                }
               }
             }
             if (completionContinuationCount < MAX_COMPLETION_CONTINUATIONS) {
@@ -912,9 +918,6 @@ export class RuntimeCoordinator {
         scopeExcessive: ws.filesChanged.length > 20,
       })
       reviewerFindings = review.findings
-      if (review.verdict !== 'completed') {
-        renderer.warn(`Reviewer verdict: ${review.verdict} — ${review.findings.join('; ')}`)
-      }
     } catch { /* best-effort */ }
 
     if (result.reason === 'stop_sequence') {
@@ -977,11 +980,6 @@ export class RuntimeCoordinator {
         verdict: serializeVerdict(v),
       })
       if (v.status !== 'completed') {
-        let detail: string
-        if (v.status === 'blocked') detail = v.blockers.join('; ')
-        else if (v.status === 'partial' || v.status === 'incomplete') detail = v.remaining.join('; ')
-        else detail = v.reason
-        renderer.warn(`Completion gate: ${v.status} — ${detail}`)
         this.deps.eventEmitter.emit({
           type: 'COMPLETION_REJECTED',
           verdict: serializeVerdict(v),
