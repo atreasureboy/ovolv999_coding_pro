@@ -21,7 +21,7 @@ class FakeOpenAI {
   private q: Queued[] = []
   chat = { completions: { create: (_p: Record<string, unknown>, o: { signal: AbortSignal }) => {
     this.createCalls++
-    const n = this.q[this.createCalls - 1] ?? { k: 'e' as const, e: new Error('parked') }
+    const n = this.q[this.createCalls - 1] ?? { k: 's' as const, s: stopStream('Task done.') }
     return new Promise<AsyncIterable<unknown>>((res, rej) => {
       if (o.signal.aborted) { rej(new Error('aborted')); return }
       o.signal.addEventListener('abort', () => rej(new Error('aborted')), { once: true })
@@ -78,7 +78,6 @@ describe('CompletionContract main-path gate (Phase 4)', () => {
     await e.runTurn('fix and verify', [])
 
     const run = e.getRunRegistry().list({ kind: 'turn' })[0]
-    // The gate MUST block: verification.failed has 1 entry (exit-1 bash).
     expect(run.status).toBe('blocked')
     expect(run.phase).toMatch(/completion-blocked/)
     expect(run.error).toMatch(/completion/i)

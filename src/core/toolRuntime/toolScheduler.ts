@@ -228,7 +228,7 @@ export class ToolScheduler {
     const { renderer, eventLog, contextManager, sharedState, eventEmitter } = this.deps
 
     for (const { tc, input } of batch.calls) {
-      renderer.toolStart(tc.name, input)
+      renderer.toolStart(tc.name, input, tc.id)
       eventLog?.append('tool_call', tc.name, { input }, [tc.name])
       sharedState.activeToolCalls.set(tc.id, { callId: tc.id, toolName: tc.name, startedAt: Date.now() })
     }
@@ -277,7 +277,7 @@ export class ToolScheduler {
       const { tc } = batch.calls[i]
       const result = results[i]
       try {
-        renderer.toolResult(tc.name, result.content, result.isError)
+        renderer.toolResult(tc.name, result.content, result.isError, tc.id)
         eventLog?.append('tool_result', tc.name, {
           content: result.content.slice(0, 500),
           isError: result.isError,
@@ -313,7 +313,7 @@ export class ToolScheduler {
     for (const { tc, input } of batch.calls) {
       if (turnAbortSignal.aborted) return true
 
-      renderer.toolStart(tc.name, input)
+      renderer.toolStart(tc.name, input, tc.id)
       eventLog?.append('tool_call', tc.name, { input }, [tc.name])
       sharedState.activeToolCalls.set(tc.id, { callId: tc.id, toolName: tc.name, startedAt: Date.now() })
 
@@ -337,7 +337,7 @@ export class ToolScheduler {
       }
 
       try {
-        renderer.toolResult(tc.name, result.content, result.isError)
+        renderer.toolResult(tc.name, result.content, result.isError, tc.id)
         eventLog?.append('tool_result', tc.name, {
           content: result.content.slice(0, 500),
           isError: result.isError,

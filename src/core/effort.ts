@@ -168,3 +168,47 @@ export function formatEffortList(): string {
   }
   return lines.join('\n')
 }
+
+// ── Adaptive Execution Gears (v0.4 Daily Driver UX Convergence) ───────────────
+
+export type ExecutionGear = 'fast' | 'standard' | 'deep' | 'autonomous'
+
+export function detectExecutionGear(taskPrompt: string, isLoop = false): ExecutionGear {
+  if (isLoop) return 'autonomous'
+  const prompt = taskPrompt.toLowerCase().trim()
+  if (!prompt) return 'fast'
+
+  // Deep gear: complex refactoring, multi-module architecture, major migrations
+  const isComplex = /(architect|refactor|migrate|redesign|multi-file|cross-module|rewrite system|end-to-end|security audit)/.test(prompt)
+  if (isComplex) {
+    return 'deep'
+  }
+
+  // Fast gear: pure questions, explanations, status checks
+  const isQuestion = /^(what|how|why|explain|tell|where|is|can|show|list|find|search|grep|doc|status|health)\b/.test(prompt)
+  const isEditAction = /(fix|edit|add|write|modify|create|delete|update|replace|implement|build|remove)/.test(prompt)
+
+  if (isQuestion && !isEditAction) {
+    return 'fast'
+  }
+
+  if (prompt.length < 30 && !isEditAction) {
+    return 'fast'
+  }
+
+  return 'standard'
+}
+
+export function getGearModules(gear: ExecutionGear, hasMcp = false): string[] {
+  const baseMcp = hasMcp ? ['mcp'] : []
+  switch (gear) {
+    case 'fast':
+      // Simple tasks do NOT launch Critic or Reflection background modules
+      return ['memory', 'workspace', ...baseMcp]
+    case 'standard':
+    case 'deep':
+    case 'autonomous':
+      return ['memory', 'critic', 'workspace', 'reflection', ...baseMcp]
+  }
+}
+

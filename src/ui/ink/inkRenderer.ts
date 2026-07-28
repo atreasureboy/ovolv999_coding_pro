@@ -59,21 +59,12 @@ export class InkRenderer {
 
   // ── Tool calls ────────────────────────────────────────────────────────────
 
-  toolStart(name: string, input: Record<string, unknown>): void {
-    this.store.addToolStart(name, input)
+  toolStart(name: string, input: Record<string, unknown>, callId?: string): void {
+    this.store.addToolStart(name, input, callId)
   }
 
-  toolResult(name: string, result: string, isError: boolean): void {
-    // The last tool message without a result gets the result attached.
-    // This works because tools are sequential within a turn.
-    const msgs = this.store.getState().messages
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]
-      if (m.type === 'tool' && m.result === undefined) {
-        this.store.setToolResult(m.id, result, isError)
-        return
-      }
-    }
+  toolResult(name: string, result: string, isError: boolean, callId?: string): void {
+    this.store.setToolResult(callId ?? name, result, isError, callId)
   }
 
   // ── Spinner ───────────────────────────────────────────────────────────────
@@ -107,19 +98,12 @@ export class InkRenderer {
 
   // ── Sub-agent ─────────────────────────────────────────────────────────────
 
-  agentStart(desc: string, type = 'general-purpose'): void {
-    this.store.addAgentStart(desc, type)
+  agentStart(desc: string, type = 'general-purpose', runId?: string): void {
+    this.store.addAgentStart(desc, type, runId)
   }
 
-  agentDone(desc: string, ok: boolean): void {
-    const msgs = this.store.getState().messages
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]
-      if (m.type === 'agent' && m.status === 'running') {
-        this.store.setAgentDone(m.id, ok)
-        return
-      }
-    }
+  agentDone(desc: string, ok: boolean, runId?: string): void {
+    this.store.setAgentDone(runId ?? desc, ok, undefined, runId)
   }
 
   agentSummary(_type: string, _desc: string, summary: string): void {

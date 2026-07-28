@@ -83,3 +83,4 @@ coverage/
 
 # Read-only reference sources (not part of this project)
 /claude-code/
+reference/

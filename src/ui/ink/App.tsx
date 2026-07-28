@@ -71,6 +71,10 @@ export interface AppProps {
   maxContextTokens: number
   /** Working directory (for git branch display). */
   cwd: string
+  /** Callback for soft abort (first ESC) */
+  onSoftAbort?: () => void
+  /** Callback for hard abort (second ESC) */
+  onHardAbort?: () => void
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -85,6 +89,8 @@ export function App({
   initialHistory,
   maxContextTokens,
   cwd,
+  onSoftAbort,
+  onHardAbort,
 }: AppProps): React.ReactElement {
   const state: UIState = useUIStore(store)
   const { exit } = useApp()
@@ -205,10 +211,35 @@ export function App({
     // first paint. (react-hooks plugin is not enabled in this repo.)
   }, [])
 
-  // ── Global key handler (Ctrl+C, Ctrl+L, Ctrl+O, ?, etc.) ──────────────────
+  // ── Global key handler (Ctrl+C, Ctrl+L, Ctrl+O, ESC interrupt, ?, etc.) ──
 
   const sigintCount = useRef(0)
+  const abortCount = useRef(0)
+
+  useEffect(() => {
+    if (!state.running) {
+      abortCount.current = 0
+    }
+  }, [state.running])
+
   useInput((input, key) => {
+    if (state.running) {
+      if (key.escape || input === '\x1b') {
+        if (abortCount.current === 0) {
+          abortCount.current = 1
+          store.setSpinner(true, 'Cancelling (soft abort)...')
+          store.setInterrupt(true, 'Cancelling turn... (press ESC again for hard abort)')
+          onSoftAbort?.()
+        } else {
+          abortCount.current = 2
+          store.setSpinner(true, 'Interrupting (hard abort)...')
+          store.setInterrupt(true, 'Hard interrupting turn...')
+          onHardAbort?.()
+        }
+        return
+      }
+    }
+
     if ((input === '\x04' || (key.ctrl && input === 'd')) && !state.running && !store.hasOverlay()) {
       exit()
       return

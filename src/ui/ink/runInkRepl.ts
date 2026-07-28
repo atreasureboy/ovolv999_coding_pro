@@ -113,19 +113,37 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   ): Promise<{ newHistory: OpenAIMessage[]; reason: string }> {
     store.setRunning(true)
     store.setSpinner(true, 'Thinking')
+    const turnStartTime = Date.now()
     try {
       const result = await engine.runTurn(prompt, history, images)
       history = result.newHistory
       // Update cost tracking after each turn
       const ct = engine.getCostTracker()
       store.setCost(ct.getTotalCost(), ct.getTotalAPICalls())
-      // Autosave session after each completed turn (best-effort)
+      // Autosave session after each completed turn
       if (opts.sessionDir && history.length > 0) {
-        try { saveSession(opts.sessionDir, history) } catch { /* best-effort */ }
+        try {
+          saveSession(opts.sessionDir, history)
+        } catch (err: unknown) {
+          store.addWarn(`Session save warning: ${(err as Error).message}`)
+        }
       }
-      const verdict = engine.getLastRunContext()?.completionVerdict
-      const reason = completionAwareReason(result.result.reason, verdict?.status)
-      return { newHistory: result.newHistory, reason }
+
+      const elapsed = ((Date.now() - turnStartTime) / 1000).toFixed(1)
+      const { formatOutcomeCardText } = await import('../turnOutcomeCard.js')
+      const card = formatOutcomeCardText({
+        outcome: result.outcome,
+        elapsedSec: elapsed,
+        model: engine.getModel(),
+        costStr: `$${ct.getTotalCost().toFixed(4)}`,
+      })
+      const status = result.outcome?.completion?.status ?? 'completed'
+      if (status === 'completed') store.addSuccess(card)
+      else if (status === 'cancelled') store.addWarn(card)
+      else if (status === 'blocked' || status === 'failed') store.addError(card)
+      else store.addInfo(card)
+
+      return { newHistory: result.newHistory, reason: status }
     } catch (err: unknown) {
       const error = err as Error
       if (error.name !== 'AbortError') {
@@ -150,6 +168,12 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       _version: opts.version,
       model: opts.model,
       skills: opts.skills,
+      onSoftAbort: () => {
+        engine.softAbort()
+      },
+      onHardAbort: () => {
+        engine.abort()
+      },
       runTurn: async (
         prompt: string,
         currentHistory: OpenAIMessage[],
@@ -161,14 +185,15 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       dispatchSlash: async (input: string): Promise<boolean> => {
         // ── Interactive /resume (no args) → SelectPicker ─────────────────────
         if (input.trim() === '/resume' || input.trim() === '/r') {
-          const sessions = listSessions(opts.cwd)
+          const { listSessionsDetailed } = await import('../../core/sessionManager.js')
+          const sessions = listSessionsDetailed(opts.cwd)
           if (sessions.length === 0) {
             store.addInfo('No saved sessions found.')
             return true
           }
           const items = sessions.slice(0, 20).map((s) => ({
-            label: s.name,
-            description: `${s.messages} msgs`,
+            label: s.title ? `${s.title.slice(0, 45)}` : s.name,
+            description: `${s.name} · ${s.messages} msgs`,
             value: s.name,
           }))
           const selected = await store.showSelectPicker('Resume Session', items)
@@ -186,26 +211,35 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
           return true
         }
 
-        // ── Interactive /model (no args) → SelectPicker ──────────────────────
+        // ── Interactive /model (no args) → SelectPicker from ModelRouter profiles ──────
         if (input.trim() === '/model') {
           const currentModel = engine.getModel()
-          const models = [
-            { label: 'glm-4.6', description: 'ZhipuAI GLM-4.6 (default)', value: 'glm-4.6' },
-            { label: 'glm-4.5', description: 'ZhipuAI GLM-4.5', value: 'glm-4.5' },
-            { label: 'gpt-4o', description: 'OpenAI GPT-4o', value: 'gpt-4o' },
-            { label: 'gpt-4o-mini', description: 'OpenAI GPT-4o-mini (fast)', value: 'gpt-4o-mini' },
-            { label: 'claude-sonnet-4-20250514', description: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
-            { label: 'deepseek-chat', description: 'DeepSeek Chat (cheap)', value: 'deepseek-chat' },
-          ]
-          const items = models.map((m) => ({
-            ...m,
-            description: m.value === currentModel ? `${m.description} ← current` : m.description,
-          }))
+          const profiles = engine.getModelRouter().listProfiles()
+          const items = profiles.map((p) => {
+            const isCurrent = p.id === currentModel || p.model === currentModel
+            return {
+              label: p.id,
+              description: `${p.provider}/${p.model} (${p.roles.join(', ') || 'general'})${isCurrent ? ' ← current' : ''}`,
+              value: p.model || p.id,
+            }
+          })
+          if (items.length === 0) {
+            items.push({
+              label: currentModel,
+              description: `${currentModel} (current model)`,
+              value: currentModel,
+            })
+          }
           const selected = await store.showSelectPicker('Switch Model', items)
           if (selected && selected !== currentModel) {
-            engine.setModel(selected)
-            store.setModel(selected)
-            store.addInfo(`Switched model: ${selected}`)
+            try {
+              engine.setModel(selected)
+              store.setModel(selected)
+              store.addInfo(`Switched model: ${selected}`)
+            } catch (err: unknown) {
+              const msg = (err as Error).message
+              store.addError(`Model switch failed: ${msg}`)
+            }
           }
           return true
         }

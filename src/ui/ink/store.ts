@@ -21,6 +21,7 @@ export type UIMessage =
       type: 'tool'
       name: string
       input: Record<string, unknown>
+      callId?: string
       result?: string
       isError?: boolean
       startTime?: number
@@ -35,6 +36,7 @@ export type UIMessage =
       type: 'agent'
       desc: string
       agentType: string
+      runId?: string
       status: 'running' | 'done' | 'failed'
       summary?: string
     }
@@ -205,16 +207,39 @@ export class UIStore {
     else this.emit()
   }
 
-  addToolStart(name: string, input: Record<string, unknown>): number {
-    return this.add({ type: 'tool', name, input, startTime: Date.now() }, false)
+  addToolStart(name: string, input: Record<string, unknown>, callId?: string): number {
+    return this.add({ type: 'tool', name, input, callId, startTime: Date.now() }, false)
   }
 
-  setToolResult(id: number, result: string, isError: boolean): void {
-    const msg = this.state.messages.find((m) => m.id === id)
-    const elapsedMs = msg && msg.type === 'tool' && msg.startTime
-      ? Date.now() - msg.startTime
-      : undefined
-    this.update(id, { result, isError, elapsedMs }, true)
+  setToolResult(idOrCallId: number | string, result: string, isError: boolean, callId?: string): void {
+    let targetId: number | undefined
+    if (typeof idOrCallId === 'number') {
+      targetId = idOrCallId
+    } else if (typeof idOrCallId === 'string') {
+      const msg = this.state.messages.find((m) => m.type === 'tool' && m.callId === idOrCallId)
+      targetId = msg?.id
+    }
+    if (!targetId && callId) {
+      const msg = this.state.messages.find((m) => m.type === 'tool' && m.callId === callId)
+      targetId = msg?.id
+    }
+    if (!targetId) {
+      // Fallback: match last tool call without result
+      for (let i = this.state.messages.length - 1; i >= 0; i--) {
+        const m = this.state.messages[i]
+        if (m.type === 'tool' && m.result === undefined) {
+          targetId = m.id
+          break
+        }
+      }
+    }
+    if (targetId) {
+      const msg = this.state.messages.find((m) => m.id === targetId)
+      const elapsedMs = msg && msg.type === 'tool' && msg.startTime
+        ? Date.now() - msg.startTime
+        : undefined
+      this.update(targetId, { result, isError, elapsedMs }, true)
+    }
   }
 
   addInfo(text: string): void { this.add({ type: 'info', text }) }
@@ -222,12 +247,34 @@ export class UIStore {
   addWarn(text: string): void { if (text.trim()) this.add({ type: 'warn', text }) }
   addError(text: string): void { this.add({ type: 'error', text }) }
 
-  addAgentStart(desc: string, agentType: string): number {
-    return this.add({ type: 'agent', desc, agentType, status: 'running' }, false)
+  addAgentStart(desc: string, agentType: string, runId?: string): number {
+    return this.add({ type: 'agent', desc, agentType, runId, status: 'running' }, false)
   }
 
-  setAgentDone(id: number, ok: boolean, summary?: string): void {
-    this.update(id, { status: ok ? 'done' : 'failed', summary })
+  setAgentDone(idOrRunId: number | string, ok: boolean, summary?: string, runId?: string): void {
+    let targetId: number | undefined
+    if (typeof idOrRunId === 'number') {
+      targetId = idOrRunId
+    } else if (typeof idOrRunId === 'string') {
+      const msg = this.state.messages.find((m) => m.type === 'agent' && m.runId === idOrRunId)
+      targetId = msg?.id
+    }
+    if (!targetId && runId) {
+      const msg = this.state.messages.find((m) => m.type === 'agent' && m.runId === runId)
+      targetId = msg?.id
+    }
+    if (!targetId) {
+      for (let i = this.state.messages.length - 1; i >= 0; i--) {
+        const m = this.state.messages[i]
+        if (m.type === 'agent' && m.status === 'running') {
+          targetId = m.id
+          break
+        }
+      }
+    }
+    if (targetId) {
+      this.update(targetId, { status: ok ? 'done' : 'failed', summary })
+    }
   }
 
   addCompactStart(tokens: number): void {

@@ -101,10 +101,16 @@ export interface OvogoSettings {
 }
 
 function tryParse(path: string): OvogoSettings {
+  const content = readFileSync(path, 'utf8')
+  if (!content.trim()) return {}
   try {
-    return normalizeSettings(JSON.parse(readFileSync(path, 'utf8')))
-  } catch {
-    return {}
+    return normalizeSettings(JSON.parse(content))
+  } catch (err: unknown) {
+    const parseError = err as Error
+    throw new Error(
+      `Corrupted JSON config file at "${path}": ${parseError.message}\n` +
+      `Fix suggestion: Inspect and fix syntax in "${path}", or remove the file to reset config.`
+    )
   }
 }
 

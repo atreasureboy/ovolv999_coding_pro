@@ -628,6 +628,24 @@ export function findSessionByPrefix(cwd: string, prefix: string): string | null 
  * every file. Histories that fail to parse are reported with messages=0
  * rather than throwing — /sessions is informational.
  */
+export interface SessionInfo {
+  dir: string
+  name: string
+  messages: number
+}
+
+export interface DetailedSessionInfo extends SessionInfo {
+  title?: string
+  updatedAt?: string
+  changedFiles?: string[]
+  status?: string
+}
+
+/**
+ * Return all session directories, newest first by directory name. Each entry
+ * records the cached history length so /sessions doesn't have to re-parse
+ * every file.
+ */
 export function listSessions(cwd: string): SessionInfo[] {
   assertNonEmpty(cwd, 'cwd')
   const sessionsDir = join(cwd, 'sessions')
@@ -656,4 +674,27 @@ export function listSessions(cwd: string): SessionInfo[] {
       }
       return { dir, name, messages }
     })
+}
+
+/**
+ * Return rich session details (title, timestamp, status, changedFiles) for /resume and /sessions UI.
+ */
+export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
+  const basic = listSessions(cwd)
+  return basic.map((s) => {
+    let title: string | undefined
+    try {
+      const msgs = loadSession(s.dir)
+      const firstUserMsg = msgs.find((m) => m.role === 'user')
+      if (firstUserMsg && typeof firstUserMsg.content === 'string') {
+        title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      ...s,
+      title: title || s.name,
+    }
+  })
 }

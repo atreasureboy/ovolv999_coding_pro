@@ -8,6 +8,7 @@ export default defineConfig({
       '**/.claude/worktrees/**',
       '**/claude-code/**',
       '**/loop-kit/**',
+      '**/reference/**',
     ],
   },
 })

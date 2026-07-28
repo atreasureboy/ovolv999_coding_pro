@@ -259,7 +259,7 @@ export class Renderer {
 
   // ── Tool calls ────────────────────────────────────────────
 
-  toolStart(name: string, input: Record<string, unknown>): void {
+  toolStart(name: string, input: Record<string, unknown>, _callId?: string): void {
     const v = viz(name)
     const preview = this.preview(name, input)
     this.w(`\n  ${v.color}${v.icon}${R} ${B}${C.ivory}${name}${R}`)
@@ -269,7 +269,7 @@ export class Renderer {
     this.w('\n')
   }
 
-  toolResult(name: string, result: string, isError: boolean): void {
+  toolResult(name: string, result: string, isError: boolean, _callId?: string): void {
     const lines = result.split('\n').filter(l => l.trim())
 
     if (isError) {
