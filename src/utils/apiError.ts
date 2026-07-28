@@ -197,3 +197,19 @@ export function formatErrorInline(err: unknown, sessionDir?: string): string {
   if (fe.hint) line += ` ${fe.hint}`
   return line
 }
+
+/**
+ * Format an error into a complete 5-section structured error card.
+ */
+export function formatErrorCardText(err: unknown, sessionDir?: string): string {
+  const fe = formatApiError(err, sessionDir)
+  const lines: string[] = [
+    `✖ ${fe.title}: ${fe.detail}`,
+  ]
+  if (fe.what) lines.push(`  • What happened: ${fe.what}`)
+  if (fe.causes && fe.causes.length > 0) lines.push(`  • Possible causes: ${fe.causes.join('; ')}`)
+  if (fe.autoRecovery) lines.push(`  • Auto-recovery: ${fe.autoRecovery}`)
+  if (fe.nextSteps && fe.nextSteps.length > 0) lines.push(`  • Recommended next steps: ${fe.nextSteps.join(' | ')}`)
+  if (fe.logPath) lines.push(`  • Log trace location: ${fe.logPath}`)
+  return lines.join('\n')
+}

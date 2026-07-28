@@ -18,6 +18,7 @@ import type { UIStore } from './store.js'
 import type { ExecutionEngine } from '../../core/engine.js'
 import type { OpenAIMessage } from '../../core/types.js'
 import type { Renderer } from '../renderer.js'
+import type { TurnOutcome } from '../../core/runtime/turnOutcome.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
@@ -110,7 +111,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   async function runOneTurn(
     prompt: string,
     images?: Array<{ path: string; dataUrl: string }>,
-  ): Promise<{ newHistory: OpenAIMessage[]; reason: string }> {
+  ): Promise<{ newHistory: OpenAIMessage[]; reason: string; outcome?: TurnOutcome }> {
     store.setRunning(true)
     store.setSpinner(true, 'Thinking')
     const turnStartTime = Date.now()
@@ -129,21 +130,8 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
         }
       }
 
-      const elapsed = ((Date.now() - turnStartTime) / 1000).toFixed(1)
-      const { formatOutcomeCardText } = await import('../turnOutcomeCard.js')
-      const card = formatOutcomeCardText({
-        outcome: result.outcome,
-        elapsedSec: elapsed,
-        model: engine.getModel(),
-        costStr: `$${ct.getTotalCost().toFixed(4)}`,
-      })
       const status = result.outcome?.completion?.status ?? 'completed'
-      if (status === 'completed') store.addSuccess(card)
-      else if (status === 'cancelled') store.addWarn(card)
-      else if (status === 'blocked' || status === 'failed') store.addError(card)
-      else store.addInfo(card)
-
-      return { newHistory: result.newHistory, reason: status }
+      return { newHistory: result.newHistory, reason: status, outcome: result.outcome }
     } catch (err: unknown) {
       const error = err as Error
       if (error.name !== 'AbortError') {
@@ -191,11 +179,16 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
             store.addInfo('No saved sessions found.')
             return true
           }
-          const items = sessions.slice(0, 20).map((s) => ({
-            label: s.title ? `${s.title.slice(0, 45)}` : s.name,
-            description: `${s.name} · ${s.messages} msgs`,
-            value: s.name,
-          }))
+          const items = sessions.slice(0, 20).map((s) => {
+            const filesStr = s.changedFiles && s.changedFiles.length > 0 ? ` · ${s.changedFiles.length} file(s)` : ''
+            const timeStr = s.updatedAt ? ` · ${s.updatedAt}` : ''
+            const statusStr = s.status ? `[${s.status}] ` : ''
+            return {
+              label: s.title ? `${s.title.slice(0, 40)}` : s.name,
+              description: `${statusStr}${s.name}${timeStr}${filesStr} · ${s.messages} msgs`,
+              value: s.name,
+            }
+          })
           const selected = await store.showSelectPicker('Resume Session', items)
           if (selected) {
             const loaded = slashCtx.loadSession?.(selected)

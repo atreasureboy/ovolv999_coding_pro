@@ -27,6 +27,7 @@ import { PermissionDialog } from './components/PermissionDialog.js'
 import { SelectPicker } from './components/SelectPicker.js'
 import { getGitBranch } from './gitInfo.js'
 import { HelpOverlay } from './components/HelpOverlay.js'
+import type { TurnOutcome } from '../../core/runtime/turnOutcome.js'
 import { expandAtMentions } from './expandAtMentions.js'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { loadInputHistory, saveInputHistory } from '../../utils/inputHistory.js'
@@ -60,15 +61,15 @@ export interface AppProps {
   /** Execute a turn. Returns the new history. */
   runTurn: (
     prompt: string,
-    history: OpenAIMessage[],
+    currentHistory: OpenAIMessage[],
     images?: Array<{ path: string; dataUrl: string }>,
-  ) => Promise<{ newHistory: OpenAIMessage[]; reason: string }>
+  ) => Promise<{ newHistory: OpenAIMessage[]; reason: string; outcome?: TurnOutcome }>
   /** Slash command dispatcher. Returns null if not a slash command. */
   dispatchSlash: (input: string) => Promise<boolean>
   /** Initial history (for resume). */
   initialHistory: OpenAIMessage[]
   /** Max context tokens (for StatusBar). */
-  maxContextTokens: number
+  maxContextTokens?: number
   /** Working directory (for git branch display). */
   cwd: string
   /** Callback for soft abort (first ESC) */
@@ -150,16 +151,33 @@ export function App({
         const result = await runTurn(expandedText, history, images.length > 0 ? images : undefined)
         setHistory(result.newHistory)
         const elapsed = ((Date.now() - turnStartTime.current) / 1000).toFixed(1)
-        if (result.reason === 'stop_sequence') store.addSuccess(`Done in ${elapsed}s`)
-        else if (result.reason.startsWith('completion_')) {
-          const status = result.reason.slice('completion_'.length).replaceAll('_', ' ')
-          store.addWarn(`${status[0]?.toUpperCase() ?? ''}${status.slice(1)} in ${elapsed}s · /why for details`)
+        if (result.outcome) {
+          const { formatOutcomeCardText } = await import('../turnOutcomeCard.js')
+          const card = formatOutcomeCardText({
+            outcome: result.outcome,
+            elapsedSec: elapsed,
+            model,
+            costStr: `$${store.getState().cost.toFixed(4)}`,
+          })
+          const status = result.outcome.completion?.status ?? 'completed'
+          if (status === 'completed') store.addSuccess(card)
+          else if (status === 'cancelled') store.addWarn(card)
+          else if (status === 'blocked' || status === 'failed') store.addError(card)
+          else store.addInfo(card)
+        } else {
+          if (result.reason === 'stop_sequence') store.addSuccess(`Done in ${elapsed}s`)
+          else if (result.reason.startsWith('completion_')) {
+            const status = result.reason.slice('completion_'.length).replaceAll('_', ' ')
+            store.addWarn(`${status[0]?.toUpperCase() ?? ''}${status.slice(1)} in ${elapsed}s · /why for details`)
+          } else {
+            store.addInfo(`Stopped in ${elapsed}s · ${result.reason.replaceAll('_', ' ')}`)
+          }
         }
-        else store.addInfo(`Stopped in ${elapsed}s · ${result.reason.replaceAll('_', ' ')}`)
       } catch (err: unknown) {
         const error = err as Error
         if (error.name !== 'AbortError') {
-          store.addError(`Error: ${error.message}`)
+          const { formatErrorCardText } = await import('../../utils/apiError.js')
+          store.addError(formatErrorCardText(err))
         }
       } finally {
         store.setRunning(false)
@@ -227,13 +245,13 @@ export function App({
       if (key.escape || input === '\x1b') {
         if (abortCount.current === 0) {
           abortCount.current = 1
-          store.setSpinner(true, 'Cancelling (soft abort)...')
-          store.setInterrupt(true, 'Cancelling turn... (press ESC again for hard abort)')
+          store.setSpinner(true, 'Cancelling turn...')
+          store.setInterrupt(true, '中断当前任务，输入指导后重新继续 (再次按 ESC 强行终止)')
           onSoftAbort?.()
         } else {
           abortCount.current = 2
-          store.setSpinner(true, 'Interrupting (hard abort)...')
-          store.setInterrupt(true, 'Hard interrupting turn...')
+          store.setSpinner(true, 'Interrupting...')
+          store.setInterrupt(true, '强行终止当前任务...')
           onHardAbort?.()
         }
         return
@@ -278,7 +296,8 @@ export function App({
   // ── Context state for StatusBar ───────────────────────────────────────────
 
   const tokens = estimateTokens(history)
-  const contextPct = maxContextTokens > 0 ? tokens / maxContextTokens : 0
+  const maxCtx = maxContextTokens ?? 200_000
+  const contextPct = maxCtx > 0 ? tokens / maxCtx : 0
   const terminalWidth = safeTerminalWidth(stdout.columns)
   const committedMessages = state.messages.filter((message) => message.id <= state.committedThroughId)
   const liveMessages = state.messages.filter((message) => message.id > state.committedThroughId)

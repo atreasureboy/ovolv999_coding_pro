@@ -1,4 +1,4 @@
-# ovolv999 — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.4.0) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 

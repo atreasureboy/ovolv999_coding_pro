@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.3.6",
-  "description": "Observable, controllable, recoverable multi-model coding agent runtime",
+  "version": "0.4.0",
+  "description": "v0.4 Daily Driver UX Convergence — Autonomous Coding Agent REPL & Execution Engine",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",

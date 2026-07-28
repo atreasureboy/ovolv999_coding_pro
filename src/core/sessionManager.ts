@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from 'fs'
-import { join, resolve } from 'path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync, statSync } from 'fs'
+import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
 
@@ -683,18 +683,51 @@ export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
   const basic = listSessions(cwd)
   return basic.map((s) => {
     let title: string | undefined
+    let updatedAt: string | undefined
+    let status: string | undefined
+    const changedFilesSet = new Set<string>()
+
     try {
+      const historyPath = join(s.dir, 'history.json')
+      if (existsSync(historyPath)) {
+        const stat = statSync(historyPath)
+        updatedAt = stat.mtime.toISOString().replace('T', ' ').slice(0, 16)
+      }
+
       const msgs = loadSession(s.dir)
       const firstUserMsg = msgs.find((m) => m.role === 'user')
       if (firstUserMsg && typeof firstUserMsg.content === 'string') {
         title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
       }
+
+      for (const m of msgs) {
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+          for (const tc of m.tool_calls) {
+            if (['Edit', 'Write', 'Replace', 'FileEdit', 'FileWrite'].includes(tc.function.name)) {
+              try {
+                const args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>
+                const file = (args.file_path || args.path || args.targetFile || args.file) as string | undefined
+                if (file && typeof file === 'string') {
+                  changedFilesSet.add(basename(file))
+                }
+              } catch {
+                /* ignore json parse errors */
+              }
+            }
+          }
+        }
+      }
+      status = changedFilesSet.size > 0 ? 'Completed' : 'Informational'
     } catch {
-      /* ignore */
+      /* corrupt history → keep defaults */
     }
+
     return {
       ...s,
       title: title || s.name,
+      updatedAt,
+      changedFiles: Array.from(changedFilesSet),
+      status: status ?? 'Completed',
     }
   })
 }
