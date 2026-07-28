@@ -63,6 +63,7 @@ export function classifyTaskIntent(userMessage: string, options: {
   const explicit = options.explicitKind
   const planMode = options.planMode ?? false
   const explicitCriteria = options.explicitAcceptanceCriteria ?? []
+  const projectExploration = /(?:读取|阅读|了解|熟悉|查看|审查|分析)[\s\S]{0,20}(?:项目|仓库|代码库)|(?:项目|仓库|代码库)[\s\S]{0,20}(?:读取|阅读|了解|熟悉|查看|审查|分析)|(?:进一步|继续|深入)[\s\S]{0,12}(?:读取|阅读|了解|查看|分析)|\b(?:read|inspect|explore|understand|review|audit)\b[\s\S]{0,40}\b(?:project|repository|repo|codebase)\b|\b(?:project|repository|repo|codebase)\b[\s\S]{0,40}\b(?:read|inspect|explore|understand|review|audit)\b/i.test(userMessage)
 
   // Highest priority: explicit user-stated kind.
   if (explicit) {
@@ -89,6 +90,19 @@ export function classifyTaskIntent(userMessage: string, options: {
       expectedVerification: options.expectedVerification ?? [],
       confidence: 0.9,
       source: 'plan-mode',
+      userMessage,
+    }
+  }
+
+  if (projectExploration) {
+    return {
+      kind: 'analysis',
+      requestedOutcomes: extractOutcomes(userMessage),
+      explicitAcceptanceCriteria: explicitCriteria,
+      requiresWorkspaceChange: false,
+      expectedVerification: [{ kind: 'review', description: 'Representative project areas were inspected before reporting.' }],
+      confidence: 0.9,
+      source: 'static-rule',
       userMessage,
     }
   }

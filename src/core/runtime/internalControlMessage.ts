@@ -30,6 +30,7 @@ export type InternalControlMessage =
   | { kind: 'tool_recovery'; tool: string; error: string }
   | { kind: 'completion_rejected'; verdict: string; blockers: string[] }
   | { kind: 'provider_fallback'; from: string; to: string; reason: string }
+  | { kind: 'project_exploration_continue'; missing: string[]; filesRead: number; target: number }
 
 const KEEP_ACROSS_COMPACTION: ReadonlySet<InternalControlMessage['kind']> = new Set([
   'budget_warning',
@@ -109,6 +110,8 @@ export function formatControlMessage(msg: InternalControlMessage): string {
       return `[runtime control · completion_rejected · ${msg.verdict}] ${msg.blockers.join('; ')}`
     case 'provider_fallback':
       return `[runtime control · provider_fallback] Switched from ${msg.from} to ${msg.to} (${msg.reason}). Tools executed before the switch remain — do not re-run them.`
+    case 'project_exploration_continue':
+      return `[runtime control · project_exploration_continue] The user already authorized a thorough project reading. Do not ask whether to continue and do not repeat files already inspected. Continue using read-only tools until these coverage gaps are closed: ${msg.missing.join('; ')}. Unique project files inspected: ${msg.filesRead}/${msg.target}. Then provide one consolidated architecture summary with evidence.`
   }
 }
 

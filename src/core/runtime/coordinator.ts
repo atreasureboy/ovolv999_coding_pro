@@ -72,6 +72,12 @@ import {
   type RunScopedRuntimeContextStore,
 } from './runScopedContext.js'
 import { classifyTaskIntent, type TaskIntent } from './taskIntent.js'
+import {
+  assessProjectExploration,
+  buildProjectExplorationProfile,
+  isProjectExplorationRequest,
+  type ProjectExplorationProfile,
+} from './projectExploration.js'
 import { boot } from './boot.js'
 
 interface StreamingToolCall {
@@ -318,6 +324,9 @@ export class RuntimeCoordinator {
     // scoped taskGraph. (Previously routing ran first — the router never
     // saw the intent or the per-run graph.)
     let runContext: RunScopedRuntimeContext | undefined
+    const taskIntent = this.deps.classifyIntent
+      ? this.deps.classifyIntent(userMessage, { planMode })
+      : classifyTaskIntent(userMessage, { planMode })
     try {
     if (runId) {
       const ctxStore = this.deps.runContextStore
@@ -326,18 +335,14 @@ export class RuntimeCoordinator {
           parentRunId: effectiveParentRunId,
           taskKind: 'informational',
         })
-        const planMode = this.deps.sharedState.planModeActive
-        const intent = this.deps.classifyIntent
-          ? this.deps.classifyIntent(userMessage, { planMode })
-          : classifyTaskIntent(userMessage, { planMode })
-        runContext.taskKind = intent.kind
+        runContext.taskKind = taskIntent.kind
         this.deps.eventEmitter.emit({
           type: 'TASK_INTENT_CLASSIFIED',
           runId,
           intent: {
-            kind: intent.kind,
-            source: intent.source,
-            confidence: intent.confidence,
+            kind: taskIntent.kind,
+            source: taskIntent.source,
+            confidence: taskIntent.confidence,
           },
         } as never)
         // v0.3.5: do NOT write back to this.deps.taskGraph (shared mutable
@@ -358,6 +363,14 @@ export class RuntimeCoordinator {
     // (preferred) or legacy deps (fallback for tests without context).
     const currentGraph = runContext?.taskGraph ?? this.deps.taskGraph
     const progressMonitor = runContext?.progressMonitor ?? this.deps.progressMonitor
+    let explorationProfile: ProjectExplorationProfile | null = null
+    if (isProjectExplorationRequest(userMessage)) {
+      try {
+        explorationProfile = buildProjectExplorationProfile(config.cwd)
+      } catch {
+        explorationProfile = null
+      }
+    }
 
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
@@ -435,6 +448,8 @@ export class RuntimeCoordinator {
     const MAX_EMPTY_RETRIES = 2
     let lengthRetryCount = 0
     const MAX_LENGTH_RETRIES = 3
+    let explorationContinuationCount = 0
+    const MAX_EXPLORATION_CONTINUATIONS = 4
 
     let result: TurnResult
     const turnStartMs = Date.now()
@@ -662,6 +677,23 @@ export class RuntimeCoordinator {
           }
 
           case 'continuation_check': {
+            if (explorationProfile && explorationContinuationCount < MAX_EXPLORATION_CONTINUATIONS) {
+              const exploration = assessProjectExploration(
+                explorationProfile,
+                this.deps.contextManager.getWorkingState().filesRead,
+              )
+              if (!exploration.complete) {
+                explorationContinuationCount++
+                controlMessageLog.append({
+                  kind: 'project_exploration_continue',
+                  missing: exploration.missing,
+                  filesRead: exploration.filesRead,
+                  target: exploration.targetReadCount,
+                })
+                state = transitionQueryState(state, { type: 'continue' })
+                break
+              }
+            }
             if (enableContinuation) {
               const decision = checkTokenBudget(budgetTracker, turnTokenBudget, turnTokensProduced)
               if (decision.action === 'continue') {
@@ -797,6 +829,9 @@ export class RuntimeCoordinator {
     let completionVerdict: ReturnType<typeof evaluateCompletion> | null = null
     let reviewerFindings: string[] = []
     const ws = this.deps.contextManager.getWorkingState()
+    const explorationAssessment = explorationProfile
+      ? assessProjectExploration(explorationProfile, ws.filesRead)
+      : null
     const hasChanges = ws.filesChanged.length > 0
     if (runContext) {
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -819,6 +854,9 @@ export class RuntimeCoordinator {
         ? tgSnapshot.nodes.flatMap((n) =>
           n.acceptanceCriteria.map((desc) => `${n.id}: ${desc}`))
         : []
+      const unsatisfiedExploration = explorationAssessment
+        ? explorationAssessment.criteria.filter((criterion) => !criterion.satisfied).map((criterion) => criterion.description)
+        : []
       const review = reviewRun({
         taskKind: runContext?.taskKind ?? 'informational',
         goalPresent: userMessage.trim().length > 0,
@@ -827,7 +865,7 @@ export class RuntimeCoordinator {
         verificationPassed: ws.verification.failed.length === 0,
         unhandledFailures: ws.verification.failed.length,
         unresolvedBlockers: ws.unresolved.length,
-        unsatisfiedCriteria: unsatisfiedFromGraph,
+        unsatisfiedCriteria: [...unsatisfiedFromGraph, ...unsatisfiedExploration],
         staleEvidence: [],
         scopeExcessive: ws.filesChanged.length > 20,
       })
@@ -851,6 +889,9 @@ export class RuntimeCoordinator {
           n.acceptanceCriteria.map((desc, i) => ({ id: `${n.id}::${i}`, description: desc, satisfied: n.status === 'completed' })),
         )
         : []
+      if (explorationAssessment) {
+        acceptanceCriteria.push(...explorationAssessment.criteria)
+      }
       const v = evaluateCompletion({
         taskKind,
         modelStopped: true,
