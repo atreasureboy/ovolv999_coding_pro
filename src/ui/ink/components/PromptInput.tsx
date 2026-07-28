@@ -70,27 +70,67 @@ export function PromptInput({
     if (!showMenu) return []
     const partial = normalizedCommandText.slice(1).toLowerCase()
     const cmds = listCommands()
+    const coreSet = new Set(['plan', 'gear', 'model', 'resume', 'status', 'clear', 'exit', 'diff', 'undo', 'history'])
+
+    const getCat = (name: string): string => {
+      if (coreSet.has(name)) return 'Core'
+      if (['sessions', 'export', 'compact'].includes(name)) return 'Session'
+      if (['route', 'why', 'workers', 'doctor', 'health', 'audit', 'stats'].includes(name)) return 'Diagnostics'
+      return 'Tools'
+    }
+
     if (!partial) {
-      const featured = ['loop', 'plan', 'review', 'commit', 'diff', 'model', '?']
-      return featured
+      const featuredNames = ['plan', 'gear', 'model', 'resume', 'status', 'diff', 'undo', 'history', 'clear', 'exit']
+      return featuredNames
         .map(name => cmds.find(command => command.name === name))
         .filter((command): command is NonNullable<typeof command> => Boolean(command))
-        .map(command => ({ name: command.name, description: command.description, kind: 'cmd' }))
+        .map(command => ({
+          name: command.name,
+          description: command.description,
+          kind: 'cmd',
+          category: getCat(command.name),
+        }))
     }
+
+    const isFuzzyMatch = (pat: string, str: string): boolean => {
+      let p = 0
+      for (let i = 0; i < str.length && p < pat.length; i++) {
+        if (str[i] === pat[p]) p++
+      }
+      return p === pat.length
+    }
+
     const out: SlashEntry[] = []
     for (const c of cmds) {
-      if (!partial || c.name.toLowerCase().startsWith(partial)) {
-        out.push({ name: c.name, description: c.description, kind: 'cmd' })
+      const cName = c.name.toLowerCase()
+      if (cName.startsWith(partial) || isFuzzyMatch(partial, cName)) {
+        out.push({
+          name: c.name,
+          description: c.description,
+          kind: 'cmd',
+          category: getCat(c.name),
+        })
       }
     }
-    if (partial) {
-      for (const s of skills) {
-        if (s.name.toLowerCase().startsWith(partial)) {
-          out.push({ name: s.name, description: s.description, kind: 'skill' })
-        }
+    for (const s of skills) {
+      const sName = s.name.toLowerCase()
+      if (sName.startsWith(partial) || isFuzzyMatch(partial, sName)) {
+        out.push({
+          name: s.name,
+          description: s.description,
+          kind: 'skill',
+          category: 'Skills',
+        })
+      }
     }
-    }
-    return out.sort((a, b) => a.name.localeCompare(b.name))
+
+    // Sort: exact prefix match first, then fuzzy
+    return out.sort((a, b) => {
+      const aPrefix = a.name.toLowerCase().startsWith(partial) ? 0 : 1
+      const bPrefix = b.name.toLowerCase().startsWith(partial) ? 0 : 1
+      if (aPrefix !== bPrefix) return aPrefix - bPrefix
+      return a.name.localeCompare(b.name)
+    })
   })()
 
   useEffect(() => {

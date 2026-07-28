@@ -13,6 +13,8 @@ export interface SlashEntry {
   name: string
   description: string
   kind: 'cmd' | 'skill'
+  category?: string
+  isRecent?: boolean
 }
 
 export function SlashMenu({
@@ -38,9 +40,11 @@ export function SlashMenu({
       {visible.map((entry, index) => {
         const absoluteIndex = start + index
         const isSel = absoluteIndex === selected
-        const description = entry.description.length > 72
-          ? entry.description.slice(0, 71) + '…'
+        const description = entry.description.length > 60
+          ? entry.description.slice(0, 59) + '…'
           : entry.description
+        const categoryLabel = entry.category ? ` [${entry.category}]` : ''
+        const recentLabel = entry.isRecent ? ' ★' : ''
         return (
           <Box key={`${entry.kind}-${entry.name}`}>
             <Text color={isSel ? 'black' : 'cyan'} backgroundColor={isSel ? 'cyan' : undefined}>
@@ -48,6 +52,8 @@ export function SlashMenu({
               /{entry.name.padEnd(maxName)}{' '}
             </Text>
             <Text dimColor> {description}</Text>
+            {entry.category ? <Text dimColor italic>{categoryLabel}</Text> : null}
+            {recentLabel ? <Text color="yellow">{recentLabel}</Text> : null}
             {entry.kind === 'skill' ? <Text dimColor italic> (skill)</Text> : null}
           </Box>
         )
@@ -55,7 +61,7 @@ export function SlashMenu({
       {entries.length > maxVisible ? (
         <Box paddingLeft={1}>
           <Text dimColor>
-            ↑↓ navigate · {selected + 1}/{entries.length} · /? shows all commands
+            ↑↓ navigate · {selected + 1}/{entries.length} · Tab/Enter select
           </Text>
         </Box>
       ) : null}
