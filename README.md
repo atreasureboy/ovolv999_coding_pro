@@ -31,27 +31,29 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 2 | 自动路由可连续多轮重新决策 | `RuntimeCoordinator.collectRoutingSignals` 每轮调用 | 同上 |
 | 3 | 用户显式选择仍具有最高优先级 | `setModelByUser` + `MODEL_OVERRIDE_SET` 事件 | 同上 |
 | 4 | 跨 Provider profile 在配置阶段明确拒绝 | `validateProfiles` 抛 `ProfileValidationError` | `tests/modelRuntimeManager.test.ts` |
-| 5 | Router 接收真实运行信号（11 项） | `RoutingSignalCollector` | `tests/routingSignalCollector.test.ts` |
+| 5 | Router 接收真实运行信号（11 项¹） | `RoutingSignalCollector` | `tests/routingSignalCollector.test.ts` |
 | 6 | 健康、延迟和失败数据真实更新 | `ModelRouter.recordCall` 在 `callLLM` 真实调用 | `tests/providerFallback.test.ts` |
 | 7 | fallback 可测试且不重复副作用 | `ModelGateway.isRetryableProviderError` + `onProviderError` | 同上 |
 | 8 | Coordinator 真正调用 CompletionContract | `evaluateCompletion` 在 stop_sequence 后调用 | `tests/completionContractStatus.test.ts` |
-| 9 | 同一个最终 verdict | 6 状态：completed / partial / blocked / failed / cancelled / exhausted | 同上 |
+| 9 | 同一个最终 verdict | 契约层 7 态（completed / partial / blocked / failed / cancelled / exhausted / incomplete）；TurnOutcome 对外收敛为 6 态，incomplete = 继续执行而非终裁 | 同上 |
 | 10 | acceptance criteria 不再硬编码为零 | `TaskNode.acceptanceCriteria` + Reviewer 真实传递 | 同上 |
 | 11 | TaskGraph 按 runId 隔离 | `TaskGraphStore` + per-runId 注入 coordinator | `tests/taskGraphStore.test.ts` |
-| 12 | TaskPlan 状态转换严格（12 个 action） | `TaskPlanTool` 完整动作集 | `tests/taskPlanAuditFixes.test.ts` |
+| 12 | TaskPlan 状态转换严格（13 个 action） | `TaskPlanTool` 完整动作集 | `tests/taskPlanAuditFixes.test.ts` |
 | 13 | TaskGraph 可事件化恢复 | `TaskGraph.serialize/restore` + 事件 emit | `tests/runEventTypes.test.ts` |
 | 14 | ProgressMonitor 接收任务节点变化 | `recordTaskNodeTransition` | `tests/taskPlanAuditFixes.test.ts` |
 | 15 | 能检测非连续重复循环（A→B→A→B） | `ProgressMonitor.detectABABPattern` | `tests/progressMonitorSliding.test.ts` |
 | 16 | completion-time critic 生效 | `modelClaimingCompletion: true` 真实传递 | `tests/completionContractStatus.test.ts` |
 | 17 | 不存在两套 Critic 调度 | `shouldInvokeCritic` 单一入口 | `tests/criticReviewer.test.ts` |
 | 18 | 内部控制消息不污染用户历史 | `ControlMessageLog` 临时渲染给 provider 后 `clear()` | `tests/internalControlMessage.test.ts` |
-| 19 | `/trace` 基于事件回放 | RunEvent 19 类型已声明 | `tests/runEventTypes.test.ts` |
+| 19 | `/trace` 基于事件回放 | RunEvent 54 种类型化变体（内存层）+ run.* 持久事件 | `tests/runEventTypes.test.ts` |
 | 20 | `/why` 基于真实决策证据 | `Router.getLastDecision()` + `RouterEventListener` | `tests/slashCommandRealTrace.test.ts` |
 | 21 | `/progress` 可用 | `getContextManager / getTaskGraph / getProgressMonitor / getCostTracker` | 同上 |
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
 | 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
 | 24 | 文档与真实能力一致 | `README.md` + `docs/ADR/` | — |
 | 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4270 个测试 pass | `npm test` |
+
+> ¹ 信号 schema 完整（11 项契约 + 6 项次级），但部分运行期为代理/中性值：`repoFileCount = filesTouched×10` 廉价代理（`routingSignalCollector.ts:137`），`budgetRemaining` 尚未从 budget 模块接线（`coordinator.ts:404` 显式 undefined）。信号真实化列入演进 backlog。
 
 ### 新增模块文件
 
@@ -108,8 +110,8 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 | 8 | Worker 崩溃或主进程重启后可恢复状态 | `JsonlEventStore` + `recoverRegistryFromStore` + 引擎启动时标记 in-flight → failed | `tests/gapGEngineRecovery.test.ts` |
 | 9 | 工具并发由资源冲突决定 | `ResourceScheduler`（R/W/X 矩阵）+ 工具 `metadata.claims` 声明 | `tests/gapDToolClaims.test.ts`, `tests/resourceScheduler.test.ts` |
 | 10 | 上下文压缩不丢失关键工作状态 | `WorkingState` + INV-1..INV-5 不变量 + `maybeCompactWithInvariants` | `tests/workingState.test.ts` |
-| 11 | 长期记忆绑定来源和 commit | `LongTermMemory` R1-R6 闸门（验证 / 来源标记 / commit 绑定 / 过期 / 冲突合并） | `tests/longTermMemory.test.ts` |
-| 12 | Provider 差异不泄漏到主 Runtime | `ModelCapabilities` + `ProviderAdapter` 注册表 + `toProviderRequest` / `fromProviderStreamChunk` | `tests/modelCapabilities.test.ts` |
+| 11 | 长期记忆绑定来源和 commit | `LongTermMemory` R1-R6 闸门（验证 / 来源标记 / commit 绑定 / 过期 / 冲突合并）——**契约完整，尚未接入引擎主循环**（仅测试引用） | `tests/longTermMemory.test.ts` |
+| 12 | Provider 差异不泄漏到主 Runtime | 运行时路径：`OpenAICompatibleAdapter`（openai / minimax / openai-compatible，单传输）；`ModelCapabilities` + `ProviderAdapter` 注册表 + `toProviderRequest` / `fromProviderStreamChunk` 为**未接线的规格接口** | `tests/modelCapabilities.test.ts` |
 | 13 | README 展示 Runtime 能力（非工具数量） | 本节 | — |
 
 ### 故障注入覆盖（§十二）
@@ -127,9 +129,9 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ### 其它特性
 
 - **统一 Harness** — 所有 Agent 走同一套 Boot Sequence，按模块配置差异化执行
-- **模块化能力** — memory / critic / workspace / reflection 四个可组合模块
+- **模块化能力** — memory / critic / workspace / reflection / mcp 五个可组合模块
 - **配置驱动角色** — 探索者、规划者、审查者 = 不同 AgentConfig 配置实例，零代码新增角色
-- **三层记忆系统** — Semantic（语义知识）+ Episodic（过程轨迹）+ KnowledgeBase（结构化知识库）
+- **记忆系统** — 引擎层：Semantic（语义知识，来源优先级 user_stated > agent_inferred > tool_observed）+ Episodic（工具轨迹，被动写入）；命令/契约层：KnowledgeBase、TeamMemory、LongTermMemory（R1–R6，尚未接入引擎循环）
 - **来源归因 + 冲突解决** — `user_stated > agent_inferred > tool_observed` 优先级链
 - **验证闸门** — 子 agent 完成代码修改后自动按项目 scripts / 语言工具验证（No Tuple, No Merge）
 - **并发调度** — 只读/安全工具并行 (Promise.all)，状态工具串行
@@ -143,7 +145,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 - **上下文管理** — microCompact + snipCompact + autoCompact 三级策略，含系统提示词 token
 - **Budget + Effort** — token 预算控制 + 自动 effort 分级
 - **Auto-Classifier** — 自动将用户请求分类为 code/search/debug/general，选择最优 effort
-- **Auto-Dream** — 空闲时后台知识整理与经验巩固
+- **Auto-Dream** — 被动模式统计库（patterns.json 触发→动作成功计数、dream-log.json；无离线 LLM 整理过程）
 - **MagicDocs** — 自动从代码提取项目文档（7 种提取器：overview/api/models/config/decisions/patterns/dependencies）
 - **遥测** — opt-in 本地分析，14 种事件类型，聚合统计
 - **设置同步** — AES-256-GCM 加密，git/file 传输，跨机器配置同步
@@ -267,6 +269,7 @@ const agentConfig: AgentConfig = {
 | `critic` | — | onIteration 每 5 轮纠错 | — |
 | `workspace` | 注入 sessionDir 到 ToolContext | — | — |
 | `reflection` | — | onComplete LLM 知识提取 | — |
+| `mcp` | 连接 stdio MCP 服务器并注入工具 | dispose 关闭进程 | `mcp__<server>__<tool>`（动态注入） |
 
 ### AgentConfig — 配置驱动角色（无 agent_type）
 
@@ -750,7 +753,7 @@ ovolv999/
 | Boot Sequence | 7 步：identity → modules → boot → prompt → tools → context → trajectory |
 | 来源归因 + 冲突解决 | `user_stated(3) > agent_inferred(2) > tool_observed(1)` |
 | Memory 三原语 | `memory_write` / `memory_search` / `memory_recall` |
-| 三层记忆 | Semantic + Episodic + KnowledgeBase |
+| 三层记忆 | 引擎层 Semantic + Episodic；KnowledgeBase / TeamMemory / LongTermMemory 为命令或契约层（未接入引擎循环） |
 | Boot 时相关性检索 | `extractKeywords` + `scoreRelevance` → top-10 |
 | Memory 整合 | `consolidateSession` — REPL 退出时 LLM 总结 |
 | Skill 系统 | frontmatter 解析 + 懒加载 + 语义搜索 + auto-suggest |
