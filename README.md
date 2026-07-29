@@ -70,6 +70,10 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 
 主 Agent 通过 `model_role` 请求能力等级，通过 `delegation_context` 传递目标、约束、相关文件、架构决策和验收标准。子 Agent 返回结构化 Worker Result；最终完成权仍属于主 Agent。
 
+所有子 Agent 默认只能选择 `builder`、`reviewer`、`utility`、`worker` 或 `planner` 次级角色。只有根主 Agent 能显式申请 `architect`，且必须提供 `escalation_reason`；嵌套 Agent 的顶级模型申请会被 Runtime 拒绝。配置了次级 Profile 但凭据不可用时会直接返回诊断错误，不会静默改用主模型。没有配置任何模型 Profile 的旧版单模型安装仍保持兼容。
+
+项目能力优先于 Token 节约。Runtime 鼓励主 Agent 将重复劳动、范围明确的底层实现、代码阅读与摘要、测试补充和独立复核交给次级子 Agent；架构设计、跨模块公共接口、迁移、安全边界和根因级决策会被强制升级为 `architect`。同一角色存在多个 Profile 时，代码、推理和工具能力优先，成本与速度只用于质量满足后的弱同级决胜。
+
 当前版本接通的是生成模型的角色分工。`embedding` Profile 只会被隔离在 Agent 路由之外，内置向量生成与向量数据库适配尚未接通。
 
 ## 运行时核心能力
@@ -83,7 +87,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 1 | 自动路由不会创建 manual override | `ModelRouter.applyRoutingDecision` | `tests/modelRouterApiSplit.test.ts` |
 | 2 | 自动路由可连续多轮重新决策 | `RuntimeCoordinator.collectRoutingSignals` 每轮调用 | 同上 |
 | 3 | 用户显式选择仍具有最高优先级 | `setModelByUser` + `MODEL_OVERRIDE_SET` 事件 | 同上 |
-| 4 | 跨 Provider profile 在配置阶段明确拒绝 | `validateProfiles` 抛 `ProfileValidationError` | `tests/modelRuntimeManager.test.ts` |
+| 4 | 主 Router 拒绝跨 Provider 绑定；跨 Provider Worker 仅在 Agent 边界解析 | `validateProfiles` + `resolveAgentModelAssignment` | `tests/modelRuntimeManager.test.ts`、`tests/agentModelPolicy.test.ts` |
 | 5 | Router 接收真实运行信号（11 项¹） | `RoutingSignalCollector` | `tests/routingSignalCollector.test.ts` |
 | 6 | 健康、延迟和失败数据真实更新 | `ModelRouter.recordCall` 在 `callLLM` 真实调用 | `tests/providerFallback.test.ts` |
 | 7 | fallback 可测试且不重复副作用 | `ModelGateway.isRetryableProviderError` + `onProviderError` | 同上 |

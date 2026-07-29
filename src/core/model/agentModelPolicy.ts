@@ -23,14 +23,39 @@ export interface AgentModelAssignment {
 
 const ROLE_BY_PRESET: Readonly<Record<string, AgentModelRole[]>> = {
   'general-purpose': ['builder', 'worker'],
-  'code-reviewer': ['reviewer', 'architect'],
+  'code-reviewer': ['reviewer', 'worker'],
   explore: ['utility', 'worker'],
-  plan: ['architect', 'planner'],
-  coordinator: ['architect'],
+  plan: ['planner', 'reviewer'],
+  coordinator: ['planner', 'worker'],
+}
+
+export class AgentModelAssignmentError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AgentModelAssignmentError'
+  }
 }
 
 export function preferredModelRolesForAgent(agentPreset: string): AgentModelRole[] {
   return [...(ROLE_BY_PRESET[agentPreset] ?? ['worker'])]
+}
+
+const ARCHITECTURE_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/(?:架构).*(?:设计|调整|重构|决策|评审|审计|规划|方案|改造)|(?:设计|调整|重构|决策|评审|审计|规划|方案|改造).*(?:架构)/i, 'architecture decision'],
+  [/(?:architecture|architectural).*(?:design|change|refactor|decision|review|audit|plan|migration)|(?:design|change|refactor|decision|review|audit|plan|migration).*(?:architecture|architectural)/i, 'architecture decision'],
+  [/(?:跨模块|公共接口|公开接口).{0,24}(?:设计|调整|变更|修改|迁移|重构)|(?:设计|调整|变更|修改|迁移|重构).{0,24}(?:跨模块|公共接口|公开接口)|(?:系统设计|整体改造|全面重构|大规模重构|迁移方案|数据迁移|安全边界|权限模型|一致性协议|分布式设计|根因分析)/i, 'system-wide impact'],
+  [/(?:cross[- ]module|public api).{0,48}(?:design|change|modify|refactor|migrate|redesign)|(?:design|change|modify|refactor|migrate|redesign).{0,48}(?:cross[- ]module|public api)|(?:system design|large[- ]scale refactor|migration strategy|data migration|schema migration|security boundary|authorization model|consistency protocol|distributed design|root cause analysis)/i, 'system-wide impact'],
+]
+
+export function architectureEscalationReasons(text: string): string[] {
+  const normalized = text
+    .replace(/\b(?:do not|don't|must not|without)\s+(?:change|modify|redesign|refactor)\s+(?:the\s+)?public api(?:s)?\b/gi, '')
+    .replace(/(?:不要|不得|不可|无需)(?:修改|变更|调整|重构)(?:公共接口|公开接口)/g, '')
+  return Array.from(new Set(
+    ARCHITECTURE_PATTERNS
+      .filter(([pattern]) => pattern.test(normalized))
+      .map(([, reason]) => reason),
+  ))
 }
 
 function validRole(value: unknown): value is AgentModelRole {
@@ -42,7 +67,7 @@ function validRole(value: unknown): value is AgentModelRole {
     || value === 'planner'
 }
 
-function scoreProfile(profile: Record<string, unknown>, roleIndex: number): number {
+function scoreProfile(profile: Record<string, unknown>, roleIndex: number, role: AgentModelRole): number {
   const capabilities = profile.capabilities && typeof profile.capabilities === 'object'
     ? profile.capabilities as Record<string, unknown>
     : {}
@@ -50,13 +75,17 @@ function scoreProfile(profile: Record<string, unknown>, roleIndex: number): numb
     typeof value === 'number' && Number.isFinite(value) ? value : fallback
   const roleWeight = 10 - roleIndex
   if (roleIndex < 0) return -1
-  if (roleIndex === 0 && (profile.roles as unknown[])?.includes('architect')) {
-    return roleWeight + number(capabilities.reasoning, 0.5) * 2
-  }
-  return roleWeight
-    + number(capabilities.coding, 0.5)
-    + number(capabilities.reasoning, 0.5)
-    + number(capabilities.cost, 0.5) * 0.25
+  const reasoning = number(capabilities.reasoning, 0.5)
+  const coding = number(capabilities.coding, 0.5)
+  const toolCalling = number(capabilities.toolCalling, 0.5)
+  const speed = number(capabilities.speed, 0.5)
+  const cost = number(capabilities.cost, 0.5)
+  const quality = role === 'builder'
+    ? coding * 3 + reasoning * 2 + toolCalling
+    : role === 'reviewer' || role === 'planner' || role === 'architect'
+      ? reasoning * 3 + coding * 2 + toolCalling
+      : reasoning * 2 + coding * 2 + toolCalling
+  return quality * 100 + roleWeight * 5 + speed * 0.05 + cost * 0.02
 }
 
 export function resolveAgentModelAssignment(
@@ -72,7 +101,7 @@ export function resolveAgentModelAssignment(
     ? [options.requestedRole]
     : preferredModelRolesForAgent(options.agentPreset)
   const rawProfiles = config.models?.profiles ?? []
-  const unavailableKeys: string[] = []
+  const unavailableReasons: string[] = []
   const candidates: Array<{
     profile: Record<string, unknown>
     role: AgentModelRole
@@ -99,13 +128,18 @@ export function resolveAgentModelAssignment(
       : (config.provider ?? 'openai')
     const crossProvider = provider !== (config.provider ?? 'openai')
     if (!apiKey || (crossProvider && !apiKeyEnv)) {
-      if (apiKeyEnv) unavailableKeys.push(apiKeyEnv)
+      const profileLabel = typeof profile.id === 'string' ? profile.id : profile.model
+      unavailableReasons.push(
+        apiKeyEnv
+          ? `${apiKeyEnv} is not configured`
+          : `${profileLabel} requires its own apiKeyEnv for provider ${provider}`,
+      )
       continue
     }
     candidates.push({
       profile,
       role: roles[roleIndex],
-      score: scoreProfile(profile, roleIndex),
+      score: scoreProfile(profile, roleIndex, roles[roleIndex]),
       apiKey,
       apiKeyEnv,
     })
@@ -138,9 +172,15 @@ export function resolveAgentModelAssignment(
   }
 
   const role = roles[0] && validRole(roles[0]) ? roles[0] : 'worker'
-  const reason = unavailableKeys.length > 0
-    ? `matching profile unavailable because ${Array.from(new Set(unavailableKeys)).join(', ')} is not configured`
-    : `no available profile matched roles ${roles.join(', ')}`
+  if (rawProfiles.length > 0) {
+    const detail = unavailableReasons.length > 0
+      ? Array.from(new Set(unavailableReasons)).join('; ')
+      : `no configured profile matched roles ${roles.join(', ')}`
+    throw new AgentModelAssignmentError(
+      `No eligible ${role} sub-agent model: ${detail}. Configure a secondary models.profiles entry instead of falling back to the main model.`,
+    )
+  }
+  const reason = `legacy single-model configuration has no role profiles for ${roles.join(', ')}`
   return {
     source: 'parent-fallback',
     profileId: 'parent',

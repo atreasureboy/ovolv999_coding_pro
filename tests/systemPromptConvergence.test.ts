@@ -74,7 +74,16 @@ describe('system prompt — role-aware delegation truth', () => {
   const prompt = getSystemPrompt('/tmp/project')
 
   it('requires capability roles, structured context, and parent-owned acceptance', () => {
-    expect(prompt).toContain('Use model_role only as a capability request')
+    expect(prompt).toContain('Sub-agents default to secondary model roles')
+    expect(prompt).toContain('Only the root main agent may request model_role architect')
+    expect(prompt).toContain('must provide escalation_reason')
+    expect(prompt).toContain('Nested agents cannot request architect')
+    expect(prompt).toContain('Never silently downgrade architecture work')
+    expect(prompt).toContain('silently fall back to the main model')
+    expect(prompt).toContain('Protect project quality before optimizing token cost')
+    expect(prompt).toContain('repetitive, bounded low-level implementation')
+    expect(prompt).toContain('require architect participation')
+    expect(prompt).toContain('Cost and speed may break ties only after role and quality')
     expect(prompt).toContain('delegation_context')
     expect(prompt).toContain('Embedding profiles are reserved for retrieval integrations, not autonomous agents')
     expect(prompt).toContain('The Worker Result is evidence, not authority')

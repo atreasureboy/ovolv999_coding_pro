@@ -23,6 +23,16 @@ runtime, plus role-aware profile assignment when the existing `AgentTool`
 constructs a child engine. Main profiles carry `main` or `architect`; worker
 profiles carry `builder`, `reviewer`, `utility`, `worker`, or `planner`.
 Cross-provider worker profiles resolve credentials only through `apiKeyEnv`.
+Every child preset defaults to a secondary role. The root main agent is the
+only caller allowed to request `architect`, and the request must carry an
+`escalation_reason`. Nested agents cannot promote themselves. A configured
+secondary profile with missing credentials fails closed instead of silently
+consuming the main model.
+Secondary delegation is intended for repetitive work, bounded implementation,
+reading and summarization, tests, and independent review. Architecture,
+cross-module public interfaces, migrations, security boundaries, and root-cause
+decisions require `architect`. Profile scoring prioritizes coding, reasoning,
+and tool capability; cost and speed are weak tie-breakers only.
 
 ## Consequences
 + Trivial tasks use the cheap model (saves tokens); hard tasks escalate.
@@ -32,8 +42,10 @@ Cross-provider worker profiles resolve credentials only through `apiKeyEnv`.
   retain final acceptance authority.
 + Child results carry status, verification, changed files, blockers, model
   attempts, cost, and retained worktree information.
-- Missing worker credentials fall back to the parent transport with an
-  explicit reason.
+- Legacy single-model installs without any profiles still use their only
+  model for compatibility.
+- Configured multi-model installs fail closed when the eligible secondary
+  profile or credential is unavailable.
 - Embedding profiles are reserved for a future retrieval binding and are never
   spawned as autonomous agents by the current runtime.
 - Requires the user to declare profiles in config (single-model default

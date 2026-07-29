@@ -7,6 +7,10 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Added role-aware model assignment to the existing AgentTool child-engine path.
 - Added architect, builder, reviewer, utility, worker, and planner capability roles.
 - Added cross-provider worker profiles with environment-referenced API keys.
+- Made every default child preset select secondary roles; architect requires a reasoned request from the root main agent.
+- Failed closed when a configured secondary profile is unavailable instead of silently using the main model.
+- Required architect participation for architecture, cross-module API, migration, security-boundary, and root-cause delegations.
+- Made quality capabilities dominate profile selection; cost and speed are only weak tie-breakers.
 - Added structured delegation context for goals, constraints, relevant files, decisions, and acceptance criteria.
 - Added durable Worker Result handoff with status, changed files, verification, blockers, model attempts, cost, and retained worktree evidence.
 - Aggregated child-model token usage into parent session cost accounting.

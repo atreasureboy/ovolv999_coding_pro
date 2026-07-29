@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  architectureEscalationReasons,
   preferredModelRolesForAgent,
   resolveAgentModelAssignment,
 } from '../src/core/model/agentModelPolicy.js'
@@ -23,9 +24,18 @@ function config(profiles: unknown[]): EngineConfig {
 describe('agent model policy', () => {
   it('maps agent presets to capability roles', () => {
     expect(preferredModelRolesForAgent('general-purpose')).toEqual(['builder', 'worker'])
-    expect(preferredModelRolesForAgent('code-reviewer')).toEqual(['reviewer', 'architect'])
+    expect(preferredModelRolesForAgent('code-reviewer')).toEqual(['reviewer', 'worker'])
     expect(preferredModelRolesForAgent('explore')).toEqual(['utility', 'worker'])
-    expect(preferredModelRolesForAgent('plan')).toEqual(['architect', 'planner'])
+    expect(preferredModelRolesForAgent('plan')).toEqual(['planner', 'reviewer'])
+    expect(preferredModelRolesForAgent('coordinator')).toEqual(['planner', 'worker'])
+  })
+
+  it('detects architecture-sensitive delegations in Chinese and English', () => {
+    expect(architectureEscalationReasons('设计跨模块公共接口并调整整体架构')).not.toEqual([])
+    expect(architectureEscalationReasons('Plan a schema migration and security boundary')).not.toEqual([])
+    expect(architectureEscalationReasons('读取 src/core/engine.ts 并总结内容')).toEqual([])
+    expect(architectureEscalationReasons('Implement the already-specified parser helper')).toEqual([])
+    expect(architectureEscalationReasons('Implement the helper without changing public APIs')).toEqual([])
   })
 
   it('assigns a cross-provider builder profile and resolves only its env key', () => {
@@ -64,8 +74,8 @@ describe('agent model policy', () => {
     expect(assignment.audit).not.toContain('builder-secret')
   })
 
-  it('falls back to the parent transport when a matching profile key is unavailable', () => {
-    const assignment = resolveAgentModelAssignment(
+  it('fails closed instead of using the main model when a secondary key is unavailable', () => {
+    expect(() => resolveAgentModelAssignment(
       config([{
         id: 'builder',
         provider: 'minimax',
@@ -74,14 +84,35 @@ describe('agent model policy', () => {
         roles: ['builder'],
       }]),
       { agentPreset: 'general-purpose', env: {} },
-    )
+    )).toThrow(/MISSING_KEY.*secondary.*falling back/s)
+  })
+
+  it('keeps legacy single-model installs compatible when no profiles exist', () => {
+    const assignment = resolveAgentModelAssignment(config([]), {
+      agentPreset: 'general-purpose',
+      env: {},
+    })
 
     expect(assignment).toMatchObject({
       source: 'parent-fallback',
       model: 'frontier-main',
       apiKey: 'main-secret',
     })
-    expect(assignment.reason).toContain('MISSING_KEY')
+  })
+
+  it('does not select an architect profile for any default child preset', () => {
+    const profiles = [
+      { id: 'architect', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
+      { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder', 'worker'] },
+      { id: 'reviewer', provider: 'openai', model: 'review-model', roles: ['reviewer', 'planner'] },
+      { id: 'utility', provider: 'openai', model: 'utility-model', roles: ['utility'] },
+    ]
+    for (const preset of ['general-purpose', 'code-reviewer', 'explore', 'plan', 'coordinator']) {
+      expect(resolveAgentModelAssignment(config(profiles), {
+        agentPreset: preset,
+        env: {},
+      }).role).not.toBe('architect')
+    }
   })
 
   it('honors an explicit reviewer role without accepting arbitrary profile ids', () => {
@@ -95,6 +126,55 @@ describe('agent model policy', () => {
 
     expect(assignment.profileId).toBe('review')
     expect(assignment.role).toBe('reviewer')
+  })
+
+  it('prioritizes role quality over a cheaper lower-capability profile', () => {
+    const assignment = resolveAgentModelAssignment(
+      config([
+        {
+          id: 'cheap-builder',
+          provider: 'openai',
+          model: 'cheap-model',
+          roles: ['builder'],
+          capabilities: { coding: 0.6, reasoning: 0.5, toolCalling: 0.6, cost: 1, speed: 1 },
+        },
+        {
+          id: 'quality-builder',
+          provider: 'openai',
+          model: 'quality-model',
+          roles: ['builder'],
+          capabilities: { coding: 0.95, reasoning: 0.85, toolCalling: 0.9, cost: 0.1, speed: 0.4 },
+        },
+      ]),
+      { agentPreset: 'general-purpose', env: {} },
+    )
+
+    expect(assignment.profileId).toBe('quality-builder')
+  })
+
+  it('chooses a substantially stronger secondary fallback role over a weak preferred role', () => {
+    const assignment = resolveAgentModelAssignment(
+      config([
+        {
+          id: 'weak-builder',
+          provider: 'openai',
+          model: 'weak-builder-model',
+          roles: ['builder'],
+          capabilities: { coding: 0.2, reasoning: 0.2, toolCalling: 0.2 },
+        },
+        {
+          id: 'strong-worker',
+          provider: 'openai',
+          model: 'strong-worker-model',
+          roles: ['worker'],
+          capabilities: { coding: 0.95, reasoning: 0.9, toolCalling: 0.9 },
+        },
+      ]),
+      { agentPreset: 'general-purpose', env: {} },
+    )
+
+    expect(assignment.profileId).toBe('strong-worker')
+    expect(assignment.role).toBe('worker')
   })
 
   it('keeps cross-provider worker profiles out of the main-agent router', () => {

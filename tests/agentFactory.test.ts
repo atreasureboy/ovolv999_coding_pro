@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest'
 import { AgentTool } from '../src/tools/agent.js'
 import { createTools, type AgentWiring } from '../src/tools/index.js'
 import type { EngineConfig, ToolContext, AgentChildEngineFactory } from '../src/core/types.js'
+import { resolveAgentConfig } from '../src/core/agentPresets.js'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -193,6 +194,130 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
       if (previous === undefined) delete process.env[envName]
       else process.env[envName] = previous
     }
+  })
+
+  it('requires a root-main escalation request before assigning an architect model', async () => {
+    const recorder: RecordedCall[] = []
+    const parent = makeParentConfig({
+      model: 'architect-model',
+      provider: 'openai',
+      models: {
+        profiles: [
+          { id: 'architect', provider: 'openai', model: 'architect-model', roles: ['main', 'architect'] },
+          { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder'] },
+        ],
+      },
+    })
+    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const rootTool = new AgentTool({
+      factory: capturingFactory('architect', recorder),
+      parentConfig: parent,
+      parentRenderer: renderer,
+    })
+
+    const missingReason = await rootTool.execute({
+      description: 'architecture review',
+      prompt: 'review the boundary',
+      model_role: 'architect',
+    }, makeContext('/context'))
+    expect(missingReason).toMatchObject({ isError: true })
+    expect(missingReason.content).toContain('escalation_reason is required')
+    expect(recorder).toHaveLength(0)
+
+    const approved = await rootTool.execute({
+      description: 'architecture review',
+      prompt: 'review the boundary',
+      model_role: 'architect',
+      escalation_reason: 'public API changes span three runtime modules',
+    }, makeContext('/context'))
+    expect(approved.isError).toBe(false)
+    expect(recorder[0]).toMatchObject({ model: 'architect-model' })
+  })
+
+  it('blocks architecture-sensitive work from default secondary roles', async () => {
+    const recorder: RecordedCall[] = []
+    const tool = new AgentTool({
+      factory: capturingFactory('builder', recorder),
+      parentConfig: makeParentConfig({
+        models: {
+          profiles: [
+            { id: 'architect', provider: 'openai', model: 'architect-model', roles: ['architect'] },
+            { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder'] },
+          ],
+        },
+      }),
+      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+    })
+
+    const result = await tool.execute({
+      description: '跨模块架构调整',
+      prompt: '设计新的公共接口和迁移方案',
+      subagent_type: 'general-purpose',
+    }, makeContext('/context'))
+
+    expect(result).toMatchObject({ isError: true })
+    expect(result.content).toContain('requires architect participation')
+    expect(result.content).toContain('model_role:"architect"')
+    expect(recorder).toHaveLength(0)
+  })
+
+  it('rejects architect escalation from a nested agent', async () => {
+    const recorder: RecordedCall[] = []
+    const nestedTool = new AgentTool({
+      factory: capturingFactory('architect', recorder),
+      parentConfig: makeParentConfig({
+        agent: resolveAgentConfig({ preset: 'coordinator' }),
+        models: {
+          profiles: [
+            { id: 'architect', provider: 'openai', model: 'architect-model', roles: ['architect'] },
+            { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder'] },
+          ],
+        },
+      }),
+      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+    })
+
+    const result = await nestedTool.execute({
+      description: 'nested escalation',
+      prompt: 'review architecture',
+      model_role: 'architect',
+      escalation_reason: 'nested worker asks for stronger model',
+    }, makeContext('/context'))
+
+    expect(result).toMatchObject({ isError: true })
+    expect(result.content).toContain('only the root main agent')
+    expect(recorder).toHaveLength(0)
+  })
+
+  it('does not silently use the main model when configured secondary credentials are missing', async () => {
+    const recorder: RecordedCall[] = []
+    const tool = new AgentTool({
+      factory: capturingFactory('builder', recorder),
+      parentConfig: makeParentConfig({
+        model: 'architect-model',
+        provider: 'openai',
+        models: {
+          profiles: [{
+            id: 'builder',
+            provider: 'minimax',
+            model: 'builder-model',
+            apiKeyEnv: 'OVOLV999_INTENTIONALLY_MISSING_KEY',
+            roles: ['builder'],
+          }],
+        },
+      }),
+      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+    })
+
+    const result = await tool.execute(
+      { description: 'implement unit', prompt: 'do it', subagent_type: 'general-purpose' },
+      makeContext('/context'),
+    )
+
+    expect(result).toMatchObject({ isError: true })
+    expect(result.content).toContain('OVOLV999_INTENTIONALLY_MISSING_KEY')
+    expect(result.content).toContain('instead of falling back to the main model')
+    expect(recorder).toHaveLength(0)
   })
 
   it('two AgentTool instances with distinct factories do not cross-talk under Promise.all', async () => {

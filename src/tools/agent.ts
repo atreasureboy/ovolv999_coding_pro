@@ -33,6 +33,8 @@ import { type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
 import type { WorkerAdapter, SteerEventEmitter, WorkerHandle, WorkerStatus, WorkerResult, WorkerDescriptor, WorkerTask } from '../core/workerAdapter.js'
 import {
+  AgentModelAssignmentError,
+  architectureEscalationReasons,
   resolveAgentModelAssignment,
   type AgentModelAssignment,
   type AgentModelRole,
@@ -573,9 +575,12 @@ Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterati
 
 ## Role-aware model assignment
 
-Use model_role to request architect, builder, reviewer, utility, worker, or planner capability.
+Sub-agents default to secondary roles. Use model_role to request builder, reviewer, utility, worker, or planner capability.
+Only the root main agent may request architect, and it must include escalation_reason.
 The runtime resolves that role through configured models.profiles and API-key environment references.
 Use delegation_context to pass the global goal, constraints, relevant files, decisions, and acceptance criteria.
+Use secondary roles for repetitive work, bounded low-level implementation, code reading and summaries, tests, and independent review.
+Architecture, cross-module public interfaces, migrations, security boundaries, and root-cause design require architect participation.
 
 ## Verification Gate
 
@@ -625,6 +630,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           task_mode: { type: 'string', enum: ['read_only', 'modify'], description: 'P0-4: Task mode. "modify" enforces isolated worktree + verification + structured delivery (default "read_only").' },
           merge_on_success: { type: 'boolean', description: 'When task_mode:"modify", merge the worktree branch back on success (default true). Set false to keep the worktree for manual review.' },
           model_role: { type: 'string', enum: ['architect', 'builder', 'reviewer', 'utility', 'worker', 'planner'], description: 'Capability role used to select the sub-agent model profile. Defaults from subagent_type.' },
+          escalation_reason: { type: 'string', description: 'Required when the root main agent requests model_role:"architect". Nested agents cannot request architect.' },
           delegation_context: {
             type: 'object',
             description: 'Structured handoff from the main agent.',
@@ -692,12 +698,43 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       && ['architect', 'builder', 'reviewer', 'utility', 'worker', 'planner'].includes(input.model_role)
       ? input.model_role as AgentModelRole
       : undefined
-    const modelAssignment = resolveAgentModelAssignment(this.parentConfig, {
-      agentPreset: agentLabel,
-      requestedRole,
-    })
     const delegationContext = normalizeDelegationContext(input.delegation_context)
-
+    const architectureReasons = architectureEscalationReasons([
+      description,
+      prompt,
+      delegationContext ? JSON.stringify(delegationContext) : '',
+    ].join('\n'))
+    if (architectureReasons.length > 0 && requestedRole !== 'architect') {
+      return {
+        content: `Error: this delegation requires architect participation (${architectureReasons.join(', ')}). The root main agent must retry with model_role:"architect" and escalation_reason.`,
+        isError: true,
+      }
+    }
+    const escalationReason = str(input.escalation_reason, '').trim()
+    if (requestedRole === 'architect' && this.parentConfig.agent) {
+      return {
+        content: 'Error: only the root main agent may request an architect sub-agent',
+        isError: true,
+      }
+    }
+    if (requestedRole === 'architect' && !escalationReason) {
+      return {
+        content: 'Error: escalation_reason is required when requesting an architect sub-agent',
+        isError: true,
+      }
+    }
+    let modelAssignment: AgentModelAssignment
+    try {
+      modelAssignment = resolveAgentModelAssignment(this.parentConfig, {
+        agentPreset: agentLabel,
+        requestedRole,
+      })
+    } catch (error) {
+      if (error instanceof AgentModelAssignmentError) {
+        return { content: `Error: ${error.message}`, isError: true }
+      }
+      throw error
+    }
     if (typeof input.max_iterations === 'number') {
       agentConfig.maxIterations = Math.min(input.max_iterations, 200)
     }
@@ -708,6 +745,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       agentConfig,
       agentLabel,
       modelAssignment,
+      escalationReason || undefined,
       delegationContext,
       verify,
       modifiesState,
@@ -733,6 +771,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     agentConfig: AgentConfig,
     agentLabel: string,
     modelAssignment: AgentModelAssignment,
+    escalationReason: string | undefined,
     delegationContext: DelegationContext | undefined,
     verify: boolean,
     modifiesState: boolean,
@@ -952,6 +991,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       `- model_role: ${modelAssignment.role}`,
       `- model_profile: ${modelAssignment.profileId}`,
       `- model: ${modelAssignment.provider}/${modelAssignment.model}`,
+      ...(escalationReason ? [`- escalation_reason: ${escalationReason}`] : []),
     ]
 
     const sessionDirHint = parentConfig.sessionDir
@@ -962,6 +1002,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       '- Strictly follow the "Task Instructions" below. Do not change task scope.',
       '- If user/main agent gave explicit constraints, treat them as highest priority.',
       '- If information is missing and blocks execution, report what is missing. Do not guess.',
+      '- If bounded work uncovers an architecture, public-interface, migration, security-boundary, or root-cause decision, stop and return it as a blocker for the root main agent.',
       '- If SESSION_DIR placeholder appears, use the value from "Inherited Context" below.',
       sessionDirHint,
       '',
@@ -990,6 +1031,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       model_role: modelAssignment.role,
       model: modelAssignment.model,
       provider: modelAssignment.provider,
+      escalation_reason: escalationReason,
       verify_enabled: verify,
       placeholders_replaced: placeholdersReplaced,
       prompt_preview: normalizedPrompt.slice(0, 500),
