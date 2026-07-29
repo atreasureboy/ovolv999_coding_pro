@@ -39,12 +39,12 @@ if %NODE_MAJOR% LSS 20 (
 REM ── 4. 安装依赖 ──
 echo.
 echo  [1/3] Installing dependencies...
-if not exist "package-lock.json" (
-    echo  [X] package-lock.json is required for reproducible setup
+if not exist "pnpm-lock.yaml" (
+    echo  [X] pnpm-lock.yaml is required for reproducible setup
     pause
     exit /b 1
 )
-call npm ci --no-audit --no-fund
+call corepack pnpm install --frozen-lockfile
 if %errorlevel% neq 0 (
     echo  [X] Install failed
     pause
@@ -55,7 +55,7 @@ echo  [OK] Dependencies ready
 REM ── 5. 编译 ──
 echo.
 echo  [2/3] Building TypeScript...
-call npm run build
+call corepack pnpm build
 if %errorlevel% neq 0 (
     echo  [X] Build failed
     pause
@@ -66,9 +66,9 @@ echo  [OK] Build complete
 REM ── 7. 全局命令 ──
 echo.
 echo  [3/3] Creating global command "ovolv999"...
-call npm link 2>nul
+call corepack pnpm link --global 2>nul
 if %errorlevel% neq 0 (
-    echo  [!] npm link failed
+    echo  [!] pnpm link failed
     echo      Run directly with: node "%PROJECT_DIR%\dist\bin\ovogogogo.js"
 ) else (
     echo  [OK] Global command "ovolv999" linked

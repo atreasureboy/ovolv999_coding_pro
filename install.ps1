@@ -71,19 +71,19 @@ $BackupDir = "$InstallDir.rollback"
 Write-Info "Downloading source into a staging directory..."
 git clone --quiet --depth 1 --branch $Branch $RepoUrl $StagingDir
 if ($LASTEXITCODE -ne 0) { Die "git clone failed for branch or tag '$Branch'." }
-if (-not (Test-Path (Join-Path $StagingDir "package-lock.json"))) {
+if (-not (Test-Path (Join-Path $StagingDir "pnpm-lock.yaml"))) {
   Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-  Die "release is missing package-lock.json"
+  Die "release is missing pnpm-lock.yaml"
 }
 
 Write-Info "Installing locked dependencies..."
 $InstallError = $null
 Push-Location $StagingDir
 try {
-  npm ci --no-audit --no-fund --loglevel=error
-  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed." }
+  corepack pnpm install --frozen-lockfile
+  if ($LASTEXITCODE -ne 0) { throw "pnpm dependency installation failed." }
   Write-Info "Building (tsc)..."
-  npm run build
+  corepack pnpm build
   if ($LASTEXITCODE -ne 0) { throw "build failed." }
 } catch {
   $InstallError = $_.Exception.Message

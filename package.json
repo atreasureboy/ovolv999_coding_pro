@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.4.1",
-  "description": "v0.4 Daily Driver UX Convergence — Autonomous Coding Agent REPL & Execution Engine",
+  "version": "0.4.2",
+  "description": "v0.4.2 Interaction Truth Closure — Autonomous Coding Agent REPL & Execution Engine",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",
@@ -26,7 +26,7 @@
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "npm@9.2.0",
+  "packageManager": "pnpm@11.17.0",
   "keywords": [
     "coding-agent",
     "cli",
@@ -55,8 +55,8 @@
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
     "eval:real": "vitest run evals/real",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && npm run lint && vitest run && npm run eval:deterministic",
-    "prepack": "npm run check && npm run build && npm run package:verify"
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm eval:deterministic",
+    "prepack": "pnpm check && pnpm build && pnpm package:verify"
   },
   "dependencies": {
     "glob": "^13.0.6",

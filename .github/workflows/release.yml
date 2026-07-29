@@ -14,28 +14,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-          cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
       - name: Verify tag matches package version
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - name: Build package artifact
         run: |
-          npm run package:verify
-          npm pack --ignore-scripts
+          pnpm package:verify
+          pnpm pack --ignore-scripts
           sha256sum ovolv999-*.tgz > SHA256SUMS
       - name: Smoke test package artifact
         run: |
           mkdir package-smoke
-          npm install --prefix package-smoke ./ovolv999-*.tgz
+          pnpm add --dir package-smoke ./ovolv999-*.tgz
           package-smoke/node_modules/.bin/ovolv999 --version
       - name: Publish npm package
-        run: npm publish --provenance --access public
+        run: pnpm publish --provenance --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Create GitHub release

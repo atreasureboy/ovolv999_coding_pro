@@ -1,4 +1,4 @@
-# ovolv999 (v0.4.0) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.4.2) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -18,6 +18,17 @@
 ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走同一套可观测的执行 Run 状态机，状态变更通过结构化事件持久化，工具并发由资源冲突调度，子任务通过 Worker Steering 实时干预，故障后可从 JSONL 日志恢复。
 
 项目定位：**可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**。
+
+### v0.4.2 Interaction Truth Closure
+
+- 首次向导释放 readline，随后由唯一 UI 输入层接管 stdin。
+- ESC 中断统一产出 `cancelled`，界面只承诺安全中断，不承诺暂停后恢复。
+- `safe / standard / autonomous` 权限 Profile 统一所有入口；工具写权限同时受 TaskIntent 约束。
+- informational 与默认 analysis 保持工作区只读；mutation 才开放写工具。
+- `--pipe --format json` 的 stdout 只承载 JSON，诊断与交互信息进入 stderr。
+- 当前模型来自 Runtime；自动路由或 fallback 后，状态栏、标题和结果卡同步成功模型。
+- Session 加载错误按损坏、截断、schema、权限和消息格式分类，并保留上一版 `.bak`。
+- 包管理、锁文件、CI、安装脚本和验收命令统一为 pnpm。
 
 ## 运行时核心能力
 
@@ -51,7 +62,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |
 | 23 | 至少 15 个确定性 Runtime Eval | **18 个 deterministic + 10 个 wiring** | `evals/deterministic-runtime` + `evals/wiring-smoke` |
 | 24 | 文档与真实能力一致 | `README.md` + `docs/ADR/` | — |
-| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 4270 个测试 pass | `npm test` |
+| 25 | typecheck / lint / unit / integration / deterministic 全部通过 | 完整测试套件通过 | `pnpm test` |
 
 > ¹ 信号 schema 完整（11 项契约 + 6 项次级），但部分运行期为代理/中性值：`repoFileCount = filesTouched×10` 廉价代理（`routingSignalCollector.ts:137`），`budgetRemaining` 尚未从 budget 模块接线（`coordinator.ts:404` 显式 undefined）。信号真实化列入演进 backlog。
 
@@ -484,8 +495,8 @@ irm https://raw.githubusercontent.com/atreasureboy/ovolv999_coding_pro/main/inst
 ```bash
 git clone https://github.com/atreasureboy/ovolv999_coding_pro.git
 cd ovolv999_coding_pro
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
 ### 配置
@@ -519,8 +530,8 @@ ovolv999 stop <id>    # 停止会话
 ovolv999 clean        # 清理已终止会话
 
 # 构建后使用全局命令
-npm run build
-npm link
+pnpm build
+pnpm link --global
 ovolv999 "任务描述"
 ```
 
@@ -786,15 +797,15 @@ ovolv999/
 ## 构建
 
 ```bash
-npm run build              # tsc → dist/
-npm run typecheck          # tsc --noEmit
-npm run lint               # eslint
-npm run test               # vitest run (4270 tests)
-npm run test:watch         # vitest watch
-npm run eval:wiring        # 10 wiring-smoke source-of-truth checks
-npm run eval:deterministic # 18 runtime contract cases
-npm run eval:real          # opt-in real-LLM evals (not in CI by default)
-npm run check              # typecheck + lint + unit + integration + eval:deterministic
+pnpm build              # tsc → dist/
+pnpm typecheck          # tsc --noEmit
+pnpm lint               # eslint
+pnpm test               # vitest run
+pnpm test:watch         # vitest watch
+pnpm eval:wiring        # wiring-smoke source-of-truth checks
+pnpm eval:deterministic # deterministic runtime contract cases
+pnpm eval:real          # opt-in real-LLM evals (not in CI by default)
+pnpm check              # typecheck + lint + unit + integration + eval:deterministic
 ```
 
 ## 许可

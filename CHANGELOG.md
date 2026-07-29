@@ -2,6 +2,16 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.4.2
+
+- Closed the first-run readline lifecycle and stdin ownership gap.
+- Normalized soft and hard interrupts to a cancelled TurnOutcome.
+- Unified permission profiles and enforced TaskIntent-aware write policy.
+- Added multilingual deep-task routing and runtime model synchronization.
+- Isolated headless JSON stdout from plans, diagnostics, progress, and terminal control.
+- Added actionable session corruption diagnostics and `.bak` recovery.
+- Standardized package metadata, lockfile, CI, installers, and release commands on pnpm.
+
 ## 0.4.1
 
 Golden-path closure: the capabilities behind the v0.4.0 runtime existed but
@@ -151,4 +161,3 @@ parity. No new major features.
 - Made Unix and Windows updates staged and rollback-safe.
 - Added cross-platform CI, dependency automation, package smoke tests, and a tag-driven release workflow.
 - Reduced the published package to runtime artifacts and public documentation.
-

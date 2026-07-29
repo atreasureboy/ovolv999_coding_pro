@@ -18,14 +18,14 @@ describe('quick-start scripts', () => {
     expect(pkg.overrides['brace-expansion']).toBe('5.0.8')
   })
 
-  it('uses npm for a clean Unix cold start and never parses .env in shell', () => {
+  it('uses pnpm for a clean Unix cold start and never parses .env in shell', () => {
     const script = read('start.sh')
-    expect(script).toContain('npm ci --no-audit --no-fund')
-    expect(script).toContain('npm run build')
+    expect(script).toContain('corepack pnpm install --frozen-lockfile')
+    expect(script).toContain('corepack pnpm build')
     expect(script).toContain('find bin src -type f -newer "$ENTRY"')
     expect(script).not.toContain('OPENAI_API_KEY')
     expect(script).not.toContain('xargs')
-    expect(script).not.toContain('npm install --no-audit')
+    expect(script).not.toContain('npm ci')
   })
 
   it('keeps local setup executable and verifies the built command', () => {
@@ -49,7 +49,7 @@ describe('quick-start scripts', () => {
     const unix = read('install.sh')
     const windows = read('install.ps1')
     expect(unix).toContain('mktemp -d "${INSTALL_DIR}.staging.XXXXXX"')
-    expect(unix).toContain('npm ci --no-audit --no-fund')
+    expect(unix).toContain('corepack pnpm install --frozen-lockfile')
     expect(unix).toContain('the existing installation was not changed')
     expect(unix).not.toContain('reset --quiet --hard')
     expect(windows).toContain('$StagingDir')
@@ -58,12 +58,12 @@ describe('quick-start scripts', () => {
     expect(windows).not.toContain('reset --quiet --hard')
   })
 
-  it('uses one committed npm lockfile across every setup entrypoint', () => {
-    expect(() => read('package-lock.json')).not.toThrow()
-    expect(read('install.sh')).toContain('release is missing package-lock.json')
-    expect(read('install.ps1')).toContain('release is missing package-lock.json')
-    expect(read('setup.sh')).not.toContain('npm install --no-audit')
-    expect(read('setup.bat')).not.toContain('npm install --no-audit')
+  it('uses one committed pnpm lockfile across every setup entrypoint', () => {
+    expect(() => read('pnpm-lock.yaml')).not.toThrow()
+    expect(read('install.sh')).toContain('release is missing pnpm-lock.yaml')
+    expect(read('install.ps1')).toContain('release is missing pnpm-lock.yaml')
+    expect(read('setup.sh')).toContain('corepack pnpm install --frozen-lockfile')
+    expect(read('setup.bat')).toContain('corepack pnpm install --frozen-lockfile')
   })
 
   it('documents the actual checkout directory', () => {

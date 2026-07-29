@@ -17,7 +17,7 @@ describe('release artifacts', () => {
     expect(pkg.engines.node).toBe('>=20')
     expect(pkg.repository.url).toContain('atreasureboy/ovolv999_coding_pro')
     expect(pkg.files).toEqual(expect.arrayContaining(['dist/bin', 'dist/src', 'dist/package.json']))
-    expect(pkg.scripts.prepack).toContain('npm run check')
+    expect(pkg.scripts.prepack).toContain('pnpm check')
   })
 
   it('keeps development sources out of the publish allowlist', () => {
@@ -27,7 +27,7 @@ describe('release artifacts', () => {
     }
     expect(pkg.files.some((path) => path === 'src' || path === 'tests')).toBe(false)
     expect(pkg.scripts['package:verify']).toContain('verify-package.mjs')
-    expect(pkg.scripts.prepack).toContain('npm run package:verify')
+    expect(pkg.scripts.prepack).toContain('pnpm package:verify')
   })
 
   it('has cross-platform CI and a guarded tag release', () => {
@@ -37,7 +37,7 @@ describe('release artifacts', () => {
     expect(ci).toContain('ubuntu-latest, macos-latest, windows-latest')
     expect(ci).toContain('node: [20, 22]')
     expect(release).toContain('Verify tag matches package version')
-    expect(release).toContain('npm publish --provenance --access public')
+    expect(release).toContain('pnpm publish --provenance --access public')
     expect(release).toContain('secrets.NPM_TOKEN')
   })
 })

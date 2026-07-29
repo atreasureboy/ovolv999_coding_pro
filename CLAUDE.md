@@ -16,9 +16,9 @@ openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安�
 npx tsc --noEmit          # 类型检查
 npx vitest run            # 全部测试
 npx vitest run tests/<f>  # 单文件
-npm run build             # tsc → dist/ + 复制 package.json
-npm run check             # typecheck + lint + unit + integration + eval:deterministic
-npm run dev               # tsx bin/ovogogogo.ts
+pnpm build             # tsc → dist/ + 复制 package.json
+pnpm check             # typecheck + lint + unit + integration + eval:deterministic
+pnpm dev               # tsx bin/ovogogogo.ts
 ```
 
 ## 工作约定(重要)

@@ -6,7 +6,7 @@
 - **Run all tests:** `npx vitest run`
 - **Run single test file:** `npx vitest run tests/<file>.test.ts`
 - **Run tests in watch mode:** `npx vitest`
-- **Build:** `npm run build`
+- **Build:** `pnpm build`
 - **Run the tool:** `ovolv999` (symlink → dist/bin/ovogogogo.js)
 
 ## Code Style

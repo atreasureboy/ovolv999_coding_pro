@@ -5,8 +5,8 @@
 Use Node.js 20 or newer.
 
 ```bash
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
 ## Required checks
@@ -14,11 +14,11 @@ npm run build
 Before opening a pull request, run:
 
 ```bash
-npm run typecheck
-npm run lint
-npm test
-npm run eval:deterministic
-npm run build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm eval:deterministic
+pnpm build
 ```
 
 Add focused Vitest coverage for every behavior change. Keep TypeScript in strict ESM mode, follow neighboring patterns, and place tests under `tests/`.
@@ -26,4 +26,3 @@ Add focused Vitest coverage for every behavior change. Keep TypeScript in strict
 ## Pull requests
 
 Keep changes scoped, explain the affected runtime call chain, and include actual verification results. Do not weaken assertions or mark capabilities complete before they are connected to the production execution path.
-

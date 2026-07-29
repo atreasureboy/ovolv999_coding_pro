@@ -114,13 +114,13 @@ trap cleanup_staging EXIT INT TERM
 info "Downloading source into a staging directory..."
 git clone --quiet --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$STAGING_DIR" \
   || die "git clone failed for branch or tag '$REPO_BRANCH'."
-[ -f "$STAGING_DIR/package-lock.json" ] || die "release is missing package-lock.json"
+[ -f "$STAGING_DIR/pnpm-lock.yaml" ] || die "release is missing pnpm-lock.yaml"
 
 info "Installing locked dependencies..."
-( cd "$STAGING_DIR" && npm ci --no-audit --no-fund --loglevel=error ) \
-  || die "npm ci failed; the existing installation was not changed."
+( cd "$STAGING_DIR" && corepack pnpm install --frozen-lockfile ) \
+  || die "pnpm install failed; the existing installation was not changed."
 info "Building and verifying..."
-( cd "$STAGING_DIR" && npm run build ) \
+( cd "$STAGING_DIR" && corepack pnpm build ) \
   || die "build failed; the existing installation was not changed."
 chmod +x "$STAGING_DIR/dist/bin/ovogogogo.js" 2>/dev/null || true
 STAGED_ENTRY="$STAGING_DIR/dist/bin/ovogogogo.js"

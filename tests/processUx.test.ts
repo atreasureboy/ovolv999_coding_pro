@@ -29,7 +29,7 @@ import { UIStore } from '../src/ui/ink/store.js'
 import { InkRenderer } from '../src/ui/ink/inkRenderer.js'
 import { detectExecutionProfile, EXECUTION_PROFILES } from '../src/core/effort.js'
 import { formatApiError } from '../src/utils/apiError.js'
-import { loadSession, saveSession, listSessions } from '../src/core/sessionManager.js'
+import { loadSession, saveSession } from '../src/core/sessionManager.js'
 import { formatOutcomeCardText } from '../src/ui/turnOutcomeCard.js'
 
 type Queued = { k: 's'; s: AsyncIterable<unknown> } | { k: 'e'; e: Error }
@@ -122,7 +122,7 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
       try {
         JSON.parse(content)
       } catch (err) {
-        throw new Error(`Corrupted JSON config file at "${badConfigPath}": ${(err as Error).message}`)
+        throw new Error(`Corrupted JSON config file at "${badConfigPath}": ${(err as Error).message}`, { cause: err })
       }
     }
     expect(parseBad).toThrow(/Corrupted JSON config file/)

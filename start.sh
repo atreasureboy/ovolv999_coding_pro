@@ -19,11 +19,11 @@ fi
 
 if [ ! -d node_modules ]; then
     echo "[*] Installing dependencies..."
-    [ -f package-lock.json ] || {
-        echo "[error] package-lock.json is required for reproducible startup" >&2
+    [ -f pnpm-lock.yaml ] || {
+        echo "[error] pnpm-lock.yaml is required for reproducible startup" >&2
         exit 1
     }
-    npm ci --no-audit --no-fund
+    corepack pnpm install --frozen-lockfile
 fi
 
 ENTRY="dist/bin/ovogogogo.js"
@@ -31,7 +31,7 @@ if [ ! -f "$ENTRY" ] || [ ! -f dist/package.json ] ||
    find bin src -type f -newer "$ENTRY" -print -quit | grep -q . ||
    [ package.json -nt "$ENTRY" ] || [ tsconfig.json -nt "$ENTRY" ]; then
     echo "[*] Building..."
-    npm run build
+    corepack pnpm build
 fi
 
 exec node "$ENTRY" "$@"
