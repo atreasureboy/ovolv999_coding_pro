@@ -19,6 +19,12 @@ export interface StatusBarProps {
   apiCalls: number
   planMode: boolean
   verbose?: boolean
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): the profile the current turn runs
+   * under. Anything but 'standard' renders a chip so users can SEE that
+   * a Q&A turn dropped the Critic/Reflection machinery.
+   */
+  profile?: 'fast' | 'standard' | 'deep' | 'autonomous' | null
   gitBranch?: string | null
   terminalWidth?: number
 }
@@ -38,7 +44,7 @@ function formatTokens(n: number): string {
   return `${n}`
 }
 
-export function StatusBar({ model, messageCount, contextPct, tokenCount, maxTokens, cost, apiCalls, planMode, verbose, gitBranch, terminalWidth = 160 }: StatusBarProps): React.ReactElement {
+export function StatusBar({ model, messageCount, contextPct, tokenCount, maxTokens, cost, apiCalls, planMode, verbose, profile, gitBranch, terminalWidth = 160 }: StatusBarProps): React.ReactElement {
   const pct = Math.round(contextPct * 100)
   const { bar, color } = contextBar(contextPct)
   const costStr = cost < 0.01 ? cost.toFixed(4) : cost < 1 ? cost.toFixed(3) : cost.toFixed(2)
@@ -53,6 +59,11 @@ export function StatusBar({ model, messageCount, contextPct, tokenCount, maxToke
         <Text color="#C9A86A" wrap="truncate-end">{model}</Text>
         {gitBranch && terminalWidth >= 100 ? <Text dimColor wrap="truncate-end">{gitBranch}</Text> : null}
         {planMode ? <Text color="blueBright">PLAN</Text> : null}
+        {profile && profile !== 'standard' ? (
+          <Text color={profile === 'fast' ? 'cyanBright' : profile === 'deep' ? 'magentaBright' : 'greenBright'}>
+            {profile.toUpperCase()}
+          </Text>
+        ) : null}
         {verbose ? <Text color="yellowBright">VERBOSE</Text> : null}
         {terminalWidth >= 72 ? <Text dimColor>{messageCount} msgs</Text> : null}
       </Box>

@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { mergeConfig, DEFAULT_CONFIG, type ConfigSchema } from './config.js'
+import { warnConfigOnce } from '../config/diagnostics.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -110,7 +111,12 @@ export function getRawConfig(scope: 'global' | 'project', cwd?: string): Record<
   if (!existsSync(path)) return null
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `raw config unreadable — migrations skipped (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return null
   }
 }

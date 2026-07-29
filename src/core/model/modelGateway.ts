@@ -22,11 +22,18 @@ import type { TokenUsage } from '../costTracker.js'
 import type { Renderer } from '../../ui/renderer.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
 import type { ProviderAdapter } from './providerAdapter.js'
+import type { EventLog } from '../eventLog.js'
 
 export interface ModelGatewayDeps {
   adapter: ProviderAdapter
   renderer: Renderer
   streamConsumer?: StreamConsumer
+  /**
+   * v0.4.1 C1 (callId truth): forwarded to the default StreamConsumer so
+   * stream-protocol anomalies (e.g. multiple missing tool_call ids) are
+   * recorded structurally. Ignored when `streamConsumer` is injected.
+   */
+  eventLog?: EventLog
 }
 
 export interface ModelCallParams {
@@ -82,7 +89,7 @@ export class ModelGateway {
   constructor(deps: ModelGatewayDeps) {
     this.adapter = deps.adapter
     this.renderer = deps.renderer
-    this.streamConsumer = deps.streamConsumer ?? new StreamConsumer({ renderer: this.renderer })
+    this.streamConsumer = deps.streamConsumer ?? new StreamConsumer({ renderer: this.renderer, eventLog: deps.eventLog })
   }
 
   get streamUsageSupported(): boolean {

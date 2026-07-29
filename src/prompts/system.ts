@@ -85,7 +85,7 @@ function getIntroSection(cwd: string, sessionDir?: string): string {
 
 # Tone and style
 - General Q&A: Be concise, direct, and to the point.
-- Software engineering & coding tasks: Provide a clear, structured summary of changes made, verification executed, and required next steps or blockers (if blocked/partial). Do not artificially limit coding deliverables to 1-3 sentences when detailed context or verification results are required.
+- Software engineering & coding tasks: Close with the single structured outcome report defined in "Outcome Reporting" — as much detail as the changes and verification actually require.
 - No unnecessary preamble or postamble.
 - Reference code locations as \`path:line\`.
 - When encountering errors, diagnose and fix — do not apologize.
@@ -261,19 +261,19 @@ The result returned by the sub-agent is NOT visible to the user. You MUST send a
 
 function getCriticInteractSection(): string {
   return `# Session Interaction
- - Press **ESC** to pause — the current tool will finish, then you can inject guidance. After receiving new instructions, continue the task without repeating completed steps.
+ - Pressing **ESC** stops the run at the next boundary — the current tool finishes, then the run halts. The user's next message continues the work; completed steps are not repeated. A second ESC force-kills immediately.
  - An automatic critic check runs every few iterations. If corrections are injected, **adjust immediately — do not argue.**
  - For tasks with 3+ steps → use TodoWrite to track progress`
 }
 
-function getOutputStyleSection(): string {
-  return `# Output Style
-- Concise, direct, to the point — CLI display, keep it short
-- 1-3 sentences when possible; one word if sufficient
-- No preamble/postamble (e.g. "The answer is...", "Next I will...")
-- Reference code as \`path:line\`
-- On error: state cause + fix action, no apologies
-- After the full task is implemented and verified, give one concise outcome report and stop`
+function getOutcomeReportSection(): string {
+  return `# Outcome Reporting
+After a task that changes code, end with exactly ONE structured outcome report. Its fields mirror the outcome card the UI renders, so the terminal and the report always agree:
+- **Changes** — what was modified and why (reference code as \`path:line\`)
+- **Verification** — commands actually run and their real results (never claim passes you did not observe)
+- **Unresolved** — anything still broken or uncertain
+- **Next actions** — required follow-up steps
+Omit empty sections. For pure Q&A or explanation, answer concisely and directly — no report block. No preamble/postamble; on error, state cause + fix action, no apologies. Never compress a coding deliverable below the detail its changes and verification actually require.`
 }
 
 function getAutonomySection(): string {
@@ -323,7 +323,7 @@ export function getSystemPrompt(cwd: string, taskContext?: TaskContext, sessionD
     getInteractiveSection(),
     getMultiAgentSection(),
     getCriticInteractSection(),
-    getOutputStyleSection(),
+    getOutcomeReportSection(),
     getAutonomySection(),
     getActionsSection(),
   ]

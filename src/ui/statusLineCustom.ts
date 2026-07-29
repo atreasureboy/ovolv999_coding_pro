@@ -10,6 +10,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
 import { stripAnsi } from '../utils/ansi.js'
+import { warnConfigOnce } from '../config/diagnostics.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,12 @@ export function loadConfig(): StatusLineConfig | null {
   if (!existsSync(path)) return null
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as StatusLineConfig
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `statusline config corrupt — using built-in status line (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return null
   }
 }

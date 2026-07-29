@@ -52,6 +52,17 @@ export interface BootParams {
   fileHistory: FileHistory | null
   eventLog?: EventLog
   eventEmitter?: RunEventEmitter
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): the resolved per-turn profile.
+   * `modules` gates ModuleManager.boot({only}); `excludedTools` hides
+   * tools from the definitions AND blocks them at execution time via
+   * ToolContext. Absent → full v0.4.0 behavior (all modules, no
+   * exclusions).
+   */
+  executionProfile?: {
+    modules: string[]
+    excludedTools?: string[]
+  }
 }
 
 export interface BootResult {
@@ -67,7 +78,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     userMessage, history, images, config, baseTools, sharedState,
     moduleManager, contextManager, toolPolicy, toolRegistry,
     permissionManager, backgroundTaskManager, fileHistory,
-    eventLog, eventEmitter,
+    eventLog, eventEmitter, executionProfile,
   } = params
 
   const planMode = sharedState.planModeActive
@@ -79,7 +90,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     config,
     userMessage,
   }
-  const bootOutput = await moduleManager.boot(bootCtx)
+  const bootOutput = await moduleManager.boot(bootCtx, executionProfile ? { only: executionProfile.modules } : {})
   const { systemPromptSections: moduleSections, toolContextPatch, tools: moduleTools } = bootOutput
 
   // ── Register tools (base + module, with collision detection) ──
@@ -98,7 +109,11 @@ export async function boot(params: BootParams): Promise<BootResult> {
   contextManager.beginTurn(systemPrompt)
 
   // ── Compute exposed tool definitions ──
-  const toolDefs = toolPolicy.getExposedDefinitions(toolRegistry.getAll(), planMode)
+  const toolDefs = toolPolicy.getExposedDefinitions(
+    toolRegistry.getAll(),
+    planMode,
+    executionProfile?.excludedTools,
+  )
 
   // ── Per-turn AbortController ──
   const turnAbortController = new AbortController()
@@ -142,6 +157,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     fileHistory: fileHistory ?? undefined,
     ...toolContextPatch,
     availableToolNames: toolDefs.map(t => t.function.name),
+    excludedTools: executionProfile?.excludedTools,
     snipMessages: (keepRecent: number, reason?: string) =>
       contextManager.applySnip(messages, keepRecent, reason),
     getMessages: () => messages.map(m => ({ ...m })),

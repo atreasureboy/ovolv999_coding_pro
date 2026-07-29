@@ -72,6 +72,7 @@ import {
   type RunScopedRuntimeContextStore,
 } from './runScopedContext.js'
 import { classifyTaskIntent, type TaskIntent } from './taskIntent.js'
+import { EXECUTION_PROFILES, resolveExecutionProfile } from '../effort.js'
 import {
   assessProjectExploration,
   buildProjectExplorationProfile,
@@ -275,6 +276,38 @@ export class RuntimeCoordinator {
       } as never)
     }
 
+    // ── ExecutionProfile resolution (v0.4.1 WS4) ──
+    // Resolved BEFORE boot so module gating, tool exclusion and the
+    // per-turn limits all derive from ONE decision. Precedence: sticky
+    // override (--profile / /profile) > TaskIntent (informational →
+    // fast) > prompt-shape detection (deep escalation) > standard.
+    // This is the resource-depth axis; TaskKind (below) stays the
+    // completion-semantics axis — two axes, one verdict each.
+    const taskIntent = this.deps.classifyIntent
+      ? this.deps.classifyIntent(userMessage, { planMode: sharedState.planModeActive })
+      : classifyTaskIntent(userMessage, { planMode: sharedState.planModeActive })
+    const profileResolution = resolveExecutionProfile(
+      userMessage,
+      taskIntent,
+      sharedState.executionProfileOverride,
+    )
+    const profileSpec = EXECUTION_PROFILES[profileResolution.profile]
+    const profileModules = [
+      ...profileSpec.modules,
+      // mcp is config-gated: append whenever the engine constructed
+      // it — read the CONSTRUCTED list (modules), not moduleNames
+      // (which reflects the previous turn's gated view).
+      ...(this.deps.moduleManager.modules.some(m => m.name === 'mcp') ? ['mcp'] : []),
+    ]
+    const effectiveMaxIterations = profileSpec.maxIterations ?? config.maxIterations
+    const effectiveMaxOutputTokens = profileSpec.maxOutputTokens ?? config.maxOutputTokens
+    eventEmitter.emit({
+      type: 'PROFILE_RESOLVED',
+      profile: profileResolution.profile,
+      source: profileResolution.source,
+      modules: profileModules,
+    } as never)
+
     // ── Boot Sequence ──
     let bootResult
     try {
@@ -294,6 +327,10 @@ export class RuntimeCoordinator {
         fileHistory: this.deps.fileHistory,
         eventLog,
         eventEmitter,
+        executionProfile: {
+          modules: profileModules,
+          excludedTools: profileSpec.excludedTools,
+        },
       })
     } catch (bootErr) {
       const msg = (bootErr as Error).message || String(bootErr)
@@ -334,11 +371,29 @@ export class RuntimeCoordinator {
     // scoped taskGraph. (Previously routing ran first — the router never
     // saw the intent or the per-run graph.)
     let runContext: RunScopedRuntimeContext | undefined
-    const taskIntent = this.deps.classifyIntent
-      ? this.deps.classifyIntent(userMessage, { planMode })
-      : classifyTaskIntent(userMessage, { planMode })
+    // taskIntent was classified before boot (it feeds profile
+    // resolution); the event is emitted here for every turn — a fast
+    // turn still classifies, the classification is what MADE it fast.
     try {
     if (runId) {
+      this.deps.eventEmitter.emit({
+        type: 'TASK_INTENT_CLASSIFIED',
+        runId,
+        intent: {
+          kind: taskIntent.kind,
+          source: taskIntent.source,
+          confidence: taskIntent.confidence,
+        },
+      } as never)
+    }
+    if (profileResolution.profile === 'fast') {
+      // v0.4.1 WS4: fast turns skip per-run TaskGraph / scoped-context
+      // creation — a Q&A turn doesn't plan. Every downstream consumer
+      // already treats runContext as optional (control messages fall
+      // back to a local log, progress monitoring to the shared
+      // monitor, routing signals to "no graph").
+      this.deps.taskGraph?.reset()
+    } else if (runId) {
       const ctxStore = this.deps.runContextStore
       if (ctxStore) {
         runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
@@ -346,15 +401,6 @@ export class RuntimeCoordinator {
           taskKind: 'informational',
         })
         runContext.taskKind = taskIntent.kind
-        this.deps.eventEmitter.emit({
-          type: 'TASK_INTENT_CLASSIFIED',
-          runId,
-          intent: {
-            kind: taskIntent.kind,
-            source: taskIntent.source,
-            confidence: taskIntent.confidence,
-          },
-        } as never)
         // v0.3.5: do NOT write back to this.deps.taskGraph (shared mutable
         // global). Use the runContext's graph via a local variable instead.
       } else {
@@ -453,7 +499,7 @@ export class RuntimeCoordinator {
     let pendingParsedCalls: ParsedToolCall[] = []
     const enableContinuation = config.enableContinuation ?? false
     const turnTokenBudget =
-      config.turnTokenBudget ?? this.deps.contextManager.effectiveMaxOutputTokens(config.maxOutputTokens) * 4
+      config.turnTokenBudget ?? this.deps.contextManager.effectiveMaxOutputTokens(effectiveMaxOutputTokens) * 4
     const budgetTracker = createBudgetTracker()
     let turnTokensProduced = 0
     let emptyResponseCount = 0
@@ -486,7 +532,7 @@ export class RuntimeCoordinator {
               hardAborted: turnAbortController.signal.aborted,
               softAborted: this.deps.sharedState.claimSoftAbort(turnAbortController),
               iteration: state.iteration,
-              maxIterations: config.maxIterations,
+              maxIterations: effectiveMaxIterations,
             })
             if (decision.kind === 'hard_abort') {
               eventEmitter.emit({ type: 'ABORT_REQUESTED', kind: 'hard', reason: 'user_cancelled' })
@@ -622,6 +668,7 @@ export class RuntimeCoordinator {
                 toolDefs,
                 turnAbortController.signal,
                 controlMessages,
+                effectiveMaxOutputTokens,
               )
             controlMessageLog.clear()
 
@@ -847,7 +894,12 @@ export class RuntimeCoordinator {
         turnNumber: errorIteration,
         lastToolName,
       })
-      renderer.error(`Engine error: ${errMsg}`)
+      // v0.4.1 WS8 (render-once): the coordinator does NOT render the error
+      // itself. It emits RUN_FAILED + returns a failed outcome; the FRONTEND
+      // is the single renderer (Ink: App.handleSubmit catch; classic:
+      // runSingleTask/runTask catch → formatErrorCardText). Pre-WS8 this
+      // `renderer.error('Engine error: …')` double-printed under the
+      // frontend's own error card on every engine failure.
       const errOutput = computeFinalOutput()
       eventEmitter.emit({ type: 'RUN_FAILED', error: errMsg, output: errOutput })
       result = { stopped: true, reason: 'error', output: errOutput || `[Error: ${errMsg}]` }
@@ -1000,8 +1052,8 @@ export class RuntimeCoordinator {
             ? {
                 status: 'exhausted',
                 reason: 'maximum iterations reached',
-                iterationsUsed: 'iteration' in state ? state.iteration : config.maxIterations,
-                iterationsMax: config.maxIterations,
+                iterationsUsed: 'iteration' in state ? state.iteration : effectiveMaxIterations,
+                iterationsMax: effectiveMaxIterations,
               }
             : {
                 status: 'failed',
@@ -1091,8 +1143,18 @@ export class RuntimeCoordinator {
       completion: {
         status,
         reasons: result.completionReasons ?? [],
-        evidence: [],
-        requiredNextActions: [],
+        // v0.4.1 WS7 (session truth): carry the REAL contract evidence and
+        // next actions instead of hardcoded empties. The CompletionVerdict
+        // branches that have evidence always populate it (completionContract
+        // §evaluateCompletion); blocked verdicts carry blockers instead.
+        evidence: completionVerdict && 'evidence' in completionVerdict
+          ? completionVerdict.evidence.map((detail) => ({ type: 'contract', detail }))
+          : [],
+        requiredNextActions: completionVerdict
+          ? ('remaining' in completionVerdict ? completionVerdict.remaining
+            : 'blockers' in completionVerdict ? completionVerdict.blockers
+            : [])
+          : [],
       },
       output: result.output,
       changedFiles: [...wsFinal.filesChanged],
@@ -1119,6 +1181,9 @@ export class RuntimeCoordinator {
         estimatedCost: a.estimatedCost,
         error: a.error,
       })),
+      // v0.4.1 WS7 (session truth): wall-clock turn duration for the
+      // session envelope's lastOutcome and the outcome card.
+      durationMs: Date.now() - turnStartMs,
       // Deprecated compat
       stopped: result.stopped,
       reason: result.reason,
@@ -1157,6 +1222,11 @@ export class RuntimeCoordinator {
     toolDefs: ToolDefinition[],
     turnAbortSignal: AbortSignal,
     controlMessages: OpenAIMessage[] = [],
+    // v0.4.1 WS4 (ExecutionProfile): the turn's resolved output-token base.
+    // run() computes it as profileSpec.maxOutputTokens ?? config.maxOutputTokens;
+    // absent (no other callers today) falls back to the plain config value so
+    // this helper keeps its pre-v0.4.1 semantics if ever reused.
+    turnMaxOutputTokens?: number,
   ): Promise<{
     assistantText: string
     finishReason: string | null
@@ -1225,7 +1295,9 @@ export class RuntimeCoordinator {
           toolDefs,
           model: modelAtStart,
           temperature: this.deps.config.temperature,
-          maxOutputTokens: this.deps.contextManager.effectiveMaxOutputTokens(this.deps.config.maxOutputTokens),
+          maxOutputTokens: this.deps.contextManager.effectiveMaxOutputTokens(
+            turnMaxOutputTokens ?? this.deps.config.maxOutputTokens,
+          ),
           abortSignal: turnAbortSignal,
           turnAbortController: this.deps.sharedState.currentTurnAbortController,
         },

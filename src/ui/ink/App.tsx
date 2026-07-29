@@ -72,6 +72,12 @@ export interface AppProps {
   maxContextTokens?: number
   /** Working directory (for git branch display). */
   cwd: string
+  /**
+   * v0.4.1 WS8: session directory for the error card's log-trace line
+   * (points at <sessionDir>/events.ndjson). Absent when sessions are
+   * disabled (e.g. --pipe).
+   */
+  sessionDir?: string
   /** Callback for soft abort (first ESC) */
   onSoftAbort?: () => void
   /** Callback for hard abort (second ESC) */
@@ -90,6 +96,7 @@ export function App({
   initialHistory,
   maxContextTokens,
   cwd,
+  sessionDir,
   onSoftAbort,
   onHardAbort,
 }: AppProps): React.ReactElement {
@@ -176,12 +183,21 @@ export function App({
       } catch (err: unknown) {
         const error = err as Error
         if (error.name !== 'AbortError') {
+          // v0.4.1 WS8 (render-once): the SINGLE Ink error renderer.
+          // runOneTurn rethrows non-abort failures here; the card carries
+          // the session's real log path and the turn's real attempt count
+          // (tracked by the modelBridge via MODEL_ATTEMPT_STARTED).
           const { formatErrorCardText } = await import('../../utils/apiError.js')
-          store.addError(formatErrorCardText(err))
+          store.addError(formatErrorCardText(err, sessionDir, store.getState().apiAttempts))
         }
       } finally {
         store.setRunning(false)
         store.setSpinner(false)
+        // v0.4.1 C2 (interrupt truth): the interrupt overlay must not outlive
+        // the turn. Pre-C2 it stayed rendered under the idle input box until
+        // the user pressed ESC again — a stuck "Interrupted" banner over a
+        // fresh prompt.
+        store.setInterrupt(false)
         updateTerminalTitle(model, false)
         // Bell notification for long-running turns (>5s)
         const elapsed = Date.now() - turnStartTime.current
@@ -246,7 +262,10 @@ export function App({
         if (abortCount.current === 0) {
           abortCount.current = 1
           store.setSpinner(true, 'Cancelling turn...')
-          store.setInterrupt(true, '中断当前任务，输入指导后重新继续 (再次按 ESC 强行终止)')
+          // v0.4.1 C2 (interrupt truth): soft abort stops the turn at the next
+          // boundary — it does NOT pause-and-inject in Ink (feedback injection
+          // is classic-only in v0.4.1). Continuation = the user's next message.
+          store.setInterrupt(true, '任务暂停中——当前步骤完成后停止;发送消息即可继续 (再按 ESC 立即强杀)')
           onSoftAbort?.()
         } else {
           abortCount.current = 2
@@ -347,7 +366,7 @@ export function App({
           {state.interrupt.feedback ? (
             <Text color="yellowBright">⚡ {state.interrupt.feedback.slice(0, 120)}</Text>
           ) : (
-            <Text dimColor>Type feedback or press Enter to resume</Text>
+            <Text dimColor>当前步骤完成后停止——发送消息即可继续</Text>
           )}
         </Box>
       ) : null}
@@ -417,6 +436,7 @@ export function App({
         apiCalls={state.apiCalls}
         planMode={state.planMode}
         verbose={state.verbose}
+        profile={state.profile}
         gitBranch={getGitBranch(cwd)}
         terminalWidth={terminalWidth}
       />

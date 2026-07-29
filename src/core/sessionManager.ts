@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSyn
 import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
+import type { TurnOutcome } from './runtime/turnOutcome.js'
+import { warnOnce } from '../utils/warnOnce.js'
 
 export interface SessionInfo {
   dir: string
@@ -23,13 +25,34 @@ const SESSION_DIR_PREFIX = 'session_'
 // callers see an actionable error rather than silent corruption.
 
 /** The schema this binary writes. Bump when the on-disk shape changes. */
-export const CURRENT_SESSION_VERSION = 1
+export const CURRENT_SESSION_VERSION = 2
 
 /** The lowest version this binary still understands (>= will migrate; < will reject). */
 export const MIN_SUPPORTED_VERSION = 1
 
 /** Schema name — human-readable identifier separate from numeric version. */
-export const CURRENT_SESSION_SCHEMA = 'ovogo.session.v1'
+export const CURRENT_SESSION_SCHEMA = 'ovogo.session.v2'
+
+/** v1 schema name — retained so SCHEMA_FOR_VERSION validates legacy files. */
+export const V1_SESSION_SCHEMA = 'ovogo.session.v1'
+
+/**
+ * v0.4.1 WS7 (session truth): the persisted summary of the last turn's
+ * outcome. /resume and /sessions read the REAL verdict from here instead
+ * of guessing "changed files ⇒ Completed". Fields mirror TurnOutcome but
+ * are JSON-safe scalars/arrays only.
+ */
+export interface OutcomeSummary {
+  /** The completion-contract verdict status that actually ended the turn. Never guessed. */
+  status: string
+  changedFiles: string[]
+  verification: { executed: boolean; passed: boolean }
+  blockers: string[]
+  requiredNextActions: string[]
+  /** The model that finally answered (fallback-aware). */
+  lastModel?: string
+  durationMs?: number
+}
 
 export interface SessionEnvelope {
   version: number
@@ -37,6 +60,12 @@ export interface SessionEnvelope {
   /** Last write time. New envelopes always populate this. Validated as ISO. */
   updatedAt: string
   messages: OpenAIMessage[]
+  /**
+   * v2 only: the last turn's outcome truth. Absent in v1 files and in v2
+   * files saved before any turn completed — listings render 'unknown'
+   * for those, NEVER a guess.
+   */
+  lastOutcome?: OutcomeSummary
 }
 
 /**
@@ -47,6 +76,7 @@ export interface SessionEnvelope {
  * new version.
  */
 const SCHEMA_FOR_VERSION: Readonly<Record<number, string>> = Object.freeze({
+  1: V1_SESSION_SCHEMA,
   [CURRENT_SESSION_VERSION]: CURRENT_SESSION_SCHEMA,
 })
 
@@ -202,6 +232,7 @@ type EnvelopeRecord = {
   schema: unknown
   updatedAt: unknown
   messages: unknown
+  lastOutcome?: unknown
 }
 
 /** Narrow an `isEnvelope()`-confirmed object to its declared shape. */
@@ -331,14 +362,66 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     }
   }
 
+  // Gate (5, v2): lastOutcome is optional, but when present it MUST match
+  // the OutcomeSummary shape — a half-written outcome record is corruption,
+  // not something to display as truth.
+  if (env.lastOutcome !== undefined && !isValidOutcomeSummary(env.lastOutcome)) {
+    throw new CorruptSessionError(
+      sessionDir,
+      new Error('history.lastOutcome does not match the OutcomeSummary shape'),
+    )
+  }
+
   if (version === CURRENT_SESSION_VERSION) {
     // Same-version short-circuit — no transform needed.
     return env as unknown as SessionEnvelope
   }
 
-  // Intermediate versions (MIN..CURRENT) — a clean migration step is needed.
-  // Future: add migrateToV2, migrateToV3, ... and dispatch by version here.
+  if (version === 1) {
+    // Safe: gate (4) validated every entry against isValidMessageShape;
+    // the cast only sheds the Array.isArray `any[]` narrowing.
+    return migrateV1ToV2(env, messages as OpenAIMessage[])
+  }
+
+  // Future intermediate versions add a dispatch branch above.
   throw new UnknownSessionVersionError(sessionDir, version, MIN_SUPPORTED_VERSION, CURRENT_SESSION_VERSION)
+}
+
+/**
+ * Runtime shape check for a persisted OutcomeSummary. Mirrors the interface
+ * field-by-field so a truncated / foreign lastOutcome record is rejected as
+ * corrupt instead of rendered as session truth.
+ */
+function isValidOutcomeSummary(value: unknown): value is OutcomeSummary {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const o = value as Record<string, unknown>
+  if (typeof o.status !== 'string' || o.status.length === 0) return false
+  if (!Array.isArray(o.changedFiles) || !o.changedFiles.every((f) => typeof f === 'string')) return false
+  if (!Array.isArray(o.blockers) || !o.blockers.every((f) => typeof f === 'string')) return false
+  if (!Array.isArray(o.requiredNextActions) || !o.requiredNextActions.every((f) => typeof f === 'string')) return false
+  if (!o.verification || typeof o.verification !== 'object' || Array.isArray(o.verification)) return false
+  const ver = o.verification as Record<string, unknown>
+  if (typeof ver.executed !== 'boolean' || typeof ver.passed !== 'boolean') return false
+  if (o.lastModel !== undefined && typeof o.lastModel !== 'string') return false
+  if (o.durationMs !== undefined && (typeof o.durationMs !== 'number' || Number.isNaN(o.durationMs))) return false
+  return true
+}
+
+/**
+ * Migration step v1 → v2: message shapes are unchanged; v2 only ADDS the
+ * optional lastOutcome field. v1 files never stored an outcome, so the
+ * migrated envelope simply lacks one — /sessions then reports status
+ * 'unknown' and never guesses. `updatedAt` is preserved verbatim: a schema
+ * upgrade is not a user edit, and the gate above already proved it is a
+ * valid ISO instant.
+ */
+function migrateV1ToV2(env: EnvelopeRecord, messages: OpenAIMessage[]): SessionEnvelope {
+  return {
+    version: CURRENT_SESSION_VERSION,
+    schema: CURRENT_SESSION_SCHEMA,
+    updatedAt: String(env.updatedAt),
+    messages: messages.map((m) => ({ ...m })),
+  }
 }
 
 /**
@@ -409,7 +492,7 @@ export function createSessionDir(cwd: string, now: Date = new Date()): string {
  * history.json. Catching it at save time keeps the on-disk state always
  * self-consistent.
  */
-export function saveSession(sessionDir: string, history: OpenAIMessage[]): void {
+export function saveSession(sessionDir: string, history: OpenAIMessage[], outcome?: OutcomeSummary): void {
   assertNonEmpty(sessionDir, 'sessionDir')
   if (!Array.isArray(history)) {
     throw new TypeError('history must be an array of OpenAIMessage')
@@ -425,6 +508,11 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
         `(role='tool' rows must include a non-empty tool_call_id; all rows need a valid role and string-or-null content)`,
       )
     }
+  }
+  // v0.4.1 WS7: same pre-flight discipline for the outcome record — a
+  // malformed lastOutcome must never be persisted as session truth.
+  if (outcome !== undefined && !isValidOutcomeSummary(outcome)) {
+    throw new TypeError('outcome does not match the OutcomeSummary shape')
   }
 
   const historyPath = join(sessionDir, 'history.json')
@@ -445,6 +533,10 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
     // clone keeps us safe against in-place mutation of the caller's
     // array across subsequent turns.
     messages: history.map((m) => ({ ...m })),
+    // Omitted entirely when no outcome is supplied so v2 files written
+    // before any turn completed are byte-identical in shape to the v1
+    // ones (minus the version bump).
+    ...(outcome ? { lastOutcome: outcome } : {}),
   }
 
   let tmpFd: number | null = null
@@ -495,10 +587,22 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[]): void 
  * never used to infer the schema.
  */
 export function loadSession(sessionDir: string): OpenAIMessage[] {
+  return loadSessionEnvelope(sessionDir)?.messages ?? []
+}
+
+/**
+ * Load the FULL envelope (messages + persisted outcome truth) for a session
+ * directory. Returns null when no history file exists. Error contract is
+ * identical to loadSession: CorruptSessionError for unparseable content,
+ * UnknownSessionVersionError for foreign versions — neither is coerced.
+ * v0.4.1 WS7: this is the read path /sessions and /resume use so they can
+ * show the REAL last-turn status instead of guessing from file shapes.
+ */
+export function loadSessionEnvelope(sessionDir: string): SessionEnvelope | null {
   assertNonEmpty(sessionDir, 'sessionDir')
   const historyPath = join(sessionDir, 'history.json')
 
-  if (!existsSync(historyPath)) return []
+  if (!existsSync(historyPath)) return null
 
   let raw: string
   try {
@@ -514,7 +618,40 @@ export function loadSession(sessionDir: string): OpenAIMessage[] {
     throw new CorruptSessionError(sessionDir, err)
   }
 
-  return migrateToCurrent(parsed, sessionDir).messages
+  return migrateToCurrent(parsed, sessionDir)
+}
+
+/**
+ * v0.4.1 WS7 (session truth): project a TurnOutcome down to the persistable
+ * OutcomeSummary. lastModel uses the same precedence as
+ * ui/turnOutcomeCard.effectiveModelFor (last SUCCEEDED attempt → last
+ * attempt → absent) so the envelope and the on-screen card always agree on
+ * which model answered after a fallback chain.
+ */
+export function summarizeOutcome(outcome: TurnOutcome): OutcomeSummary {
+  const attempts = outcome.modelAttempts ?? []
+  let lastModel: string | undefined
+  for (let i = attempts.length - 1; i >= 0; i--) {
+    if (attempts[i].status === 'succeeded') {
+      lastModel = attempts[i].model
+      break
+    }
+  }
+  if (lastModel === undefined && attempts.length > 0) {
+    lastModel = attempts[attempts.length - 1].model
+  }
+  return {
+    status: outcome.completion.status,
+    changedFiles: outcome.changedFiles ?? [],
+    verification: {
+      executed: outcome.verification?.executed ?? false,
+      passed: outcome.verification?.passed ?? false,
+    },
+    blockers: outcome.completion.reasons ?? [],
+    requiredNextActions: outcome.completion.requiredNextActions ?? [],
+    ...(lastModel ? { lastModel } : {}),
+    ...(typeof outcome.durationMs === 'number' ? { durationMs: outcome.durationMs } : {}),
+  }
 }
 
 /**
@@ -677,15 +814,51 @@ export function listSessions(cwd: string): SessionInfo[] {
 }
 
 /**
+ * v0.4.0-era heuristic scan: derive touched file names from Edit/Write
+ * tool calls in the message history. Kept ONLY as a changedFiles fallback
+ * for v1 legacy envelopes (which predate lastOutcome). It is deliberately
+ * NEVER used to infer `status` — "changed files ⇒ Completed" was exactly
+ * the guess v0.4.1 WS7 removes (a blocked turn that edited files is not
+ * completed, and /resume used to lie about it).
+ */
+function scanChangedFilesFromMessages(msgs: OpenAIMessage[]): string[] {
+  const changedFilesSet = new Set<string>()
+  for (const m of msgs) {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        if (['Edit', 'Write', 'Replace', 'FileEdit', 'FileWrite'].includes(tc.function.name)) {
+          try {
+            const args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>
+            const file = (args.file_path || args.path || args.targetFile || args.file) as string | undefined
+            if (file && typeof file === 'string') {
+              changedFilesSet.add(basename(file))
+            }
+          } catch {
+            /* ignore json parse errors */
+          }
+        }
+      }
+    }
+  }
+  return Array.from(changedFilesSet)
+}
+
+/**
  * Return rich session details (title, timestamp, status, changedFiles) for /resume and /sessions UI.
+ *
+ * v0.4.1 WS7 (session truth): `status` comes ONLY from the envelope's
+ * persisted lastOutcome verdict. Sessions without one (v1 legacy, or v2
+ * saved before a turn completed) report 'unknown' — never a guess.
+ * Corrupt or foreign-version histories report 'corrupt' / 'unknown' and
+ * warn once on stderr instead of silently rendering as 'Completed'.
  */
 export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
   const basic = listSessions(cwd)
   return basic.map((s) => {
     let title: string | undefined
     let updatedAt: string | undefined
-    let status: string | undefined
-    const changedFilesSet = new Set<string>()
+    let status = 'unknown'
+    let changedFiles: string[] = []
 
     try {
       const historyPath = join(s.dir, 'history.json')
@@ -694,40 +867,43 @@ export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
         updatedAt = stat.mtime.toISOString().replace('T', ' ').slice(0, 16)
       }
 
-      const msgs = loadSession(s.dir)
-      const firstUserMsg = msgs.find((m) => m.role === 'user')
-      if (firstUserMsg && typeof firstUserMsg.content === 'string') {
-        title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
-      }
+      const envelope = loadSessionEnvelope(s.dir)
+      if (envelope) {
+        const firstUserMsg = envelope.messages.find((m) => m.role === 'user')
+        if (firstUserMsg && typeof firstUserMsg.content === 'string') {
+          title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
+        }
 
-      for (const m of msgs) {
-        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
-          for (const tc of m.tool_calls) {
-            if (['Edit', 'Write', 'Replace', 'FileEdit', 'FileWrite'].includes(tc.function.name)) {
-              try {
-                const args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>
-                const file = (args.file_path || args.path || args.targetFile || args.file) as string | undefined
-                if (file && typeof file === 'string') {
-                  changedFilesSet.add(basename(file))
-                }
-              } catch {
-                /* ignore json parse errors */
-              }
-            }
-          }
+        if (envelope.lastOutcome) {
+          // v2 truth path.
+          status = envelope.lastOutcome.status
+          changedFiles = [...envelope.lastOutcome.changedFiles]
+        }
+        // v1 legacy fallback: the file scan still names touched files,
+        // but status stays 'unknown' — we no longer guess completion.
+        if (changedFiles.length === 0) {
+          changedFiles = scanChangedFilesFromMessages(envelope.messages)
         }
       }
-      status = changedFilesSet.size > 0 ? 'Completed' : 'Informational'
-    } catch {
-      /* corrupt history → keep defaults */
+    } catch (err) {
+      if (err instanceof CorruptSessionError) {
+        status = 'corrupt'
+        warnOnce(`session:corrupt:${s.dir}`, `Warning: session "${s.name}" has a corrupt history.json — ${(err as Error).message}`)
+      } else if (err instanceof UnknownSessionVersionError) {
+        status = 'unknown'
+        warnOnce(`session:version:${s.dir}`, `Warning: session "${s.name}" was written by a newer build — ${(err as Error).message}`)
+      } else {
+        status = 'corrupt'
+        warnOnce(`session:read:${s.dir}`, `Warning: could not read session "${s.name}": ${(err as Error).message}`)
+      }
     }
 
     return {
       ...s,
       title: title || s.name,
       updatedAt,
-      changedFiles: Array.from(changedFilesSet),
-      status: status ?? 'Completed',
+      changedFiles,
+      status,
     }
   })
 }

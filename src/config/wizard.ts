@@ -30,14 +30,42 @@ interface WizardIO {
 }
 
 function makeIO(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): WizardIO {
+  // v0.4.1 WS2: line-queued IO. Pre-WS2 used rl.question per ask, which had
+  // two failure modes on piped stdin:
+  //  1. HANG — a closed stdin (`init < /dev/null`, dropped pipe) never fired
+  //     the question callback, freezing the wizard forever;
+  //  2. LOST LINES — a burst write (`printf '1\nkey\n' | ovolv999 init`)
+  //     emits all 'line' events in one tick; rl.question only listens for
+  //     the CURRENT question, so lines for not-yet-asked questions were
+  //     dropped on the floor.
+  // Now every line lands in a queue; ask() drains it or waits, and EOF
+  // releases any waiter with '' so callers exit cleanly (the manual path's
+  // "API key is required" gate turns that into a clean non-zero exit).
   const rl = createInterface({ input, output })
+  let closed = false
+  const pendingLines: string[] = []
+  const waiters: Array<(line: string) => void> = []
+  rl.on('line', (line: string) => {
+    const waiter = waiters.shift()
+    if (waiter) waiter(line)
+    else pendingLines.push(line)
+  })
+  rl.on('close', () => {
+    closed = true
+    for (const waiter of waiters.splice(0)) waiter('')
+  })
   return {
     ask: (q: string, def?: string) => new Promise((resolve) => {
       const suffix = def !== undefined ? c.dim(` [${def}]`) : ''
-      rl.question(`${q}${suffix} `, (ans) => {
-        const trimmed = ans.trim()
+      output.write(`${q}${suffix} `)
+      const settle = (raw: string): void => {
+        const trimmed = raw.trim()
         resolve(trimmed === '' && def !== undefined ? def : trimmed)
-      })
+      }
+      const buffered = pendingLines.shift()
+      if (buffered !== undefined) { settle(buffered); return }
+      if (closed) { resolve(def ?? ''); return }
+      waiters.push(settle)
     }),
     say: (s: string) => output.write(s + '\n'),
   }

@@ -623,7 +623,6 @@ ovolv999/
 │   │   ├── effort.ts                # effort 分级系统
 │   │   ├── budget.ts                # token 预算控制
 │   │   ├── modes.ts                 # 模式系统
-│   │   ├── outputStyles.ts          # 输出风格
 │   │   ├── hooks.ts                 # 6 种 Hook + HookRunner
 │   │   ├── goals.ts                 # 目标管理
 │   │   ├── diagnostics.ts           # LSP 诊断集成

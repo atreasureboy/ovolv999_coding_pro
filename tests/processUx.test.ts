@@ -27,7 +27,7 @@ import type { EngineConfig } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 import { UIStore } from '../src/ui/ink/store.js'
 import { InkRenderer } from '../src/ui/ink/inkRenderer.js'
-import { detectExecutionGear, getGearModules } from '../src/core/effort.js'
+import { detectExecutionProfile, EXECUTION_PROFILES } from '../src/core/effort.js'
 import { formatApiError } from '../src/utils/apiError.js'
 import { loadSession, saveSession, listSessions } from '../src/core/sessionManager.js'
 import { formatOutcomeCardText } from '../src/ui/turnOutcomeCard.js'
@@ -102,13 +102,13 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
     return new ExecutionEngine(config, fakeRenderer(), fakeClient as unknown as never)
   }
 
-  it('1. detect execution gear for simple Q&A vs complex task', () => {
-    expect(detectExecutionGear('what is the time?')).toBe('fast')
-    expect(detectExecutionGear('explain how this function works')).toBe('fast')
-    expect(detectExecutionGear('fix the bug in src/add.ts')).toBe('standard')
-    expect(detectExecutionGear('refactor the entire multi-file architecture')).toBe('deep')
+  it('1. detect execution profile for simple Q&A vs complex task', () => {
+    expect(detectExecutionProfile('what is the time?')).toBe('fast')
+    expect(detectExecutionProfile('explain how this function works')).toBe('fast')
+    expect(detectExecutionProfile('fix the bug in src/add.ts')).toBe('standard')
+    expect(detectExecutionProfile('refactor the entire multi-file architecture')).toBe('deep')
 
-    const fastModules = getGearModules('fast')
+    const fastModules = EXECUTION_PROFILES.fast.modules
     expect(fastModules).not.toContain('critic')
     expect(fastModules).not.toContain('reflection')
   })

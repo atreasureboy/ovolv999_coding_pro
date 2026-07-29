@@ -1,13 +1,24 @@
+/**
+ * pipeMode pure units — v0.4.1 WS3 migration.
+ *
+ * Deleted alongside the old raw path's helpers: the executePipe,
+ * gatherProjectContext and parsePipeArgs describes (bin/ovogogogo.ts
+ * parseArgs is now the ONE CLI parser — see tests/parseArgsFix.test.ts;
+ * the raw path survives frozen as --llm-only in the bin).
+ *
+ * KEPT and load-bearing:
+ *   - buildPrompt  — prompt framing shared by --pipe and --llm-only
+ *   - estimateTokens — --llm-only envelope stats
+ *   - formatPipeOutput — the FROZEN sshRemote envelope keys
+ *     { response, stats: { inputTokens, outputTokens, durationMs } }
+ *   - getPipeHelp — user-facing contract text
+ */
 import { describe, it, expect } from 'vitest'
 import {
   buildPrompt,
-  gatherProjectContext,
   estimateTokens,
-  executePipe,
   formatPipeOutput,
-  parsePipeArgs,
   getPipeHelp,
-  type PipeOptions,
 } from '../src/integrations/pipeMode.js'
 
 describe('pipeMode', () => {
@@ -69,20 +80,6 @@ describe('pipeMode', () => {
     })
   })
 
-  describe('gatherProjectContext', () => {
-    it('returns git branch in a git repo', () => {
-      const ctx = gatherProjectContext(process.cwd())
-      // This project IS a git repo
-      expect(ctx).toContain('Git branch:')
-    })
-
-    it('handles non-existent directory gracefully', () => {
-      const ctx = gatherProjectContext('/nonexistent/path')
-      // Should not throw, may be empty or just have what it can find
-      expect(typeof ctx).toBe('string')
-    })
-  })
-
   describe('estimateTokens', () => {
     it('estimates tokens as chars/4', () => {
       expect(estimateTokens('')).toBe(0)
@@ -96,54 +93,7 @@ describe('pipeMode', () => {
     })
   })
 
-  describe('executePipe', () => {
-    it('calls LLM with full prompt and returns result', async () => {
-      const mockLLM = async (prompt: string) => `Response to: ${prompt.slice(0, 20)}`
-
-      const result = await executePipe(
-        { cwd: '/test', prompt: 'hello' },
-        'stdin content',
-        mockLLM,
-      )
-
-      expect(result.response).toContain('Response to:')
-      expect(result.stdinContent).toBe('stdin content')
-      expect(result.fullPrompt).toContain('hello')
-      expect(result.estimatedInputTokens).toBeGreaterThan(0)
-      expect(result.estimatedOutputTokens).toBeGreaterThan(0)
-      expect(result.durationMs).toBeGreaterThanOrEqual(0)
-    })
-
-    it('propagates LLM errors', async () => {
-      const failingLLM = async () => {
-        throw new Error('API failure')
-      }
-
-      await expect(
-        executePipe({ cwd: '/test' }, 'content', failingLLM),
-      ).rejects.toThrow('API failure')
-    })
-
-    it('passes options to LLM call', async () => {
-      let receivedOpts: PipeOptions | null = null
-      const mockLLM = async (_prompt: string, opts: PipeOptions) => {
-        receivedOpts = opts
-        return 'ok'
-      }
-
-      await executePipe(
-        { cwd: '/test', model: 'gpt-4o-mini', format: 'json' },
-        'content',
-        mockLLM,
-      )
-
-      expect(receivedOpts).not.toBeNull()
-      expect(receivedOpts!.model).toBe('gpt-4o-mini')
-      expect(receivedOpts!.format).toBe('json')
-    })
-  })
-
-  describe('formatPipeOutput', () => {
+  describe('formatPipeOutput — frozen sshRemote envelope', () => {
     const mockResult = {
       response: 'Hello world',
       stdinContent: 'input',
@@ -172,14 +122,12 @@ describe('pipeMode', () => {
       expect(parsed.stats.durationMs).toBe(100)
     })
 
-    it('json output includes stats object', () => {
+    it('json output includes EXACTLY the frozen top-level and stats keys', () => {
       const out = formatPipeOutput(mockResult, 'json')
-      const parsed = JSON.parse(out)
-      expect(parsed).toHaveProperty('response')
-      expect(parsed).toHaveProperty('stats')
-      expect(parsed.stats).toHaveProperty('inputTokens')
-      expect(parsed.stats).toHaveProperty('outputTokens')
-      expect(parsed.stats).toHaveProperty('durationMs')
+      const parsed = JSON.parse(out) as Record<string, unknown>
+      expect(Object.keys(parsed).sort()).toEqual(['response', 'stats'])
+      expect(Object.keys(parsed.stats as Record<string, unknown>).sort())
+        .toEqual(['durationMs', 'inputTokens', 'outputTokens'])
     })
 
     it('handles multiline responses', () => {
@@ -188,89 +136,6 @@ describe('pipeMode', () => {
         'text',
       )
       expect(out).toBe('line1\nline2\nline3')
-    })
-  })
-
-  describe('parsePipeArgs', () => {
-    it('returns null for --help', () => {
-      expect(parsePipeArgs(['--help'])).toBeNull()
-      expect(parsePipeArgs(['-h'])).toBeNull()
-    })
-
-    it('parses prompt from positional args', () => {
-      const result = parsePipeArgs(['explain', 'this', 'code'])
-      expect(result).not.toBeNull()
-      expect(result!.prompt).toBe('explain this code')
-    })
-
-    it('parses --cwd', () => {
-      const result = parsePipeArgs(['--cwd', '/custom', 'prompt'])
-      expect(result!.cwd).toBe('/custom')
-    })
-
-    it('parses -C as cwd alias', () => {
-      const result = parsePipeArgs(['-C', '/custom', 'prompt'])
-      expect(result!.cwd).toBe('/custom')
-    })
-
-    it('parses --model', () => {
-      const result = parsePipeArgs(['--model', 'gpt-4o-mini', 'prompt'])
-      expect(result!.model).toBe('gpt-4o-mini')
-    })
-
-    it('parses -m as model alias', () => {
-      const result = parsePipeArgs(['-m', 'claude-3', 'prompt'])
-      expect(result!.model).toBe('claude-3')
-    })
-
-    it('parses --format json', () => {
-      const result = parsePipeArgs(['--format', 'json', 'prompt'])
-      expect(result!.format).toBe('json')
-    })
-
-    it('parses --no-context', () => {
-      const result = parsePipeArgs(['--no-context', 'prompt'])
-      expect(result!.includeContext).toBe(false)
-    })
-
-    it('parses --max-stdin', () => {
-      const result = parsePipeArgs(['--max-stdin', '5000', 'prompt'])
-      expect(result!.maxStdinBytes).toBe(5000)
-    })
-
-    it('parses --base-url', () => {
-      const result = parsePipeArgs(['--base-url', 'http://localhost:8080', 'prompt'])
-      expect(result!.baseURL).toBe('http://localhost:8080')
-    })
-
-    it('defaults cwd to process.cwd()', () => {
-      const result = parsePipeArgs(['prompt'])
-      expect(result!.cwd).toBe(process.cwd())
-    })
-
-    it('handles no args', () => {
-      const result = parsePipeArgs([])
-      expect(result).not.toBeNull()
-      expect(result!.prompt).toBeUndefined()
-    })
-
-    it('handles mixed args', () => {
-      const result = parsePipeArgs([
-        '--model', 'gpt-4o',
-        'explain',
-        '--format', 'json',
-        'this code',
-      ])
-      expect(result!.model).toBe('gpt-4o')
-      expect(result!.format).toBe('json')
-      expect(result!.prompt).toBe('explain this code')
-    })
-
-    it('skips unknown flags', () => {
-      const result = parsePipeArgs(['--unknown', 'value', 'prompt'])
-      expect(result).not.toBeNull()
-      // Unknown flag consumed 'value', but 'prompt' should still be captured
-      expect(result!.prompt).toContain('prompt')
     })
   })
 
@@ -287,7 +152,7 @@ describe('pipeMode', () => {
       expect(help).toContain('Examples:')
     })
 
-    it('includes all options', () => {
+    it('includes all options the real parser accepts', () => {
       const help = getPipeHelp()
       expect(help).toContain('--cwd')
       expect(help).toContain('--model')
@@ -297,12 +162,18 @@ describe('pipeMode', () => {
       expect(help).toContain('--base-url')
     })
 
-    it('includes exit codes', () => {
+    it('documents the v0.4.1 exit ladder', () => {
       const help = getPipeHelp()
       expect(help).toContain('Exit codes:')
-      expect(help).toContain('success')
-      expect(help).toContain('error')
+      expect(help).toContain('completed')
       expect(help).toContain('API error')
+    })
+
+    it('states the engine-backed stdout contract', () => {
+      const help = getPipeHelp()
+      expect(help).toContain('execution engine')
+      expect(help).toContain('stdout')
+      expect(help).toContain('--llm-only')
     })
   })
 })

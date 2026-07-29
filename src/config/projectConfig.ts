@@ -18,6 +18,7 @@
 
 import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
+import { warnConfigOnce } from './diagnostics.js'
 
 export interface ProjectConfig {
   model?: string
@@ -31,6 +32,61 @@ export interface ProjectConfig {
 }
 
 const CONFIG_FILES = ['.ovolv999.json', '.ovolv999.jsonc']
+const PERMISSION_MODES = new Set(['auto', 'ask', 'deny'])
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Field-level validation (hand-rolled, project convention). Invalid fields
+ * are dropped WITH a one-time stderr warning — the run continues with the
+ * valid subset (CI/--bg children must never die on a typo'd config).
+ */
+function normalizeProjectConfig(parsed: unknown, file: string): ProjectConfig | null {
+  if (!isObject(parsed)) {
+    warnConfigOnce({
+      file, severity: 'warning',
+      message: 'project config must be a JSON object — ignored',
+      fix: `fix or remove "${file}"`,
+    })
+    return null
+  }
+  const out: ProjectConfig = {}
+  const drop = (field: string, expected: string): void => warnConfigOnce({
+    file, field, severity: 'warning',
+    message: `"${field}" has an invalid value — expected ${expected}, dropped`,
+    fix: `correct "${field}" in "${file}"`,
+  })
+
+  if (typeof parsed.model === 'string' && parsed.model.trim()) out.model = parsed.model
+  else if (parsed.model !== undefined) drop('model', 'a non-empty string')
+
+  if (typeof parsed.permissionMode === 'string' && PERMISSION_MODES.has(parsed.permissionMode)) {
+    out.permissionMode = parsed.permissionMode as ProjectConfig['permissionMode']
+  } else if (parsed.permissionMode !== undefined) drop('permissionMode', 'one of "auto" | "ask" | "deny"')
+
+  if (typeof parsed.maxIterations === 'number' && Number.isFinite(parsed.maxIterations)) out.maxIterations = parsed.maxIterations
+  else if (parsed.maxIterations !== undefined) drop('maxIterations', 'a number')
+
+  if (typeof parsed.maxContextTokens === 'number' && Number.isFinite(parsed.maxContextTokens)) out.maxContextTokens = parsed.maxContextTokens
+  else if (parsed.maxContextTokens !== undefined) drop('maxContextTokens', 'a number')
+
+  if (typeof parsed.systemPrompt === 'string') out.systemPrompt = parsed.systemPrompt
+  else if (parsed.systemPrompt !== undefined) drop('systemPrompt', 'a string')
+
+  if (Array.isArray(parsed.enabledModules) && parsed.enabledModules.every((m) => typeof m === 'string')) {
+    out.enabledModules = parsed.enabledModules
+  } else if (parsed.enabledModules !== undefined) drop('enabledModules', 'an array of strings')
+
+  if (isObject(parsed.poor) && typeof parsed.poor.enabled === 'boolean') out.poor = { enabled: parsed.poor.enabled }
+  else if (parsed.poor !== undefined) drop('poor', 'an object like { "enabled": boolean }')
+
+  if (typeof parsed.temperature === 'number' && Number.isFinite(parsed.temperature)) out.temperature = parsed.temperature
+  else if (parsed.temperature !== undefined) drop('temperature', 'a number')
+
+  return out
+}
 
 export function loadProjectConfig(cwd: string): ProjectConfig | null {
   let dir = cwd
@@ -42,9 +98,16 @@ export function loadProjectConfig(cwd: string): ProjectConfig | null {
           let content = readFileSync(configPath, 'utf-8')
           // Strip JSONC comments (// ...) — simple line-level stripping
           content = content.replace(/^\s*\/\/.*$/gm, '')
-          const parsed: unknown = JSON.parse(content)
-          return parsed as ProjectConfig
-        } catch {
+          return normalizeProjectConfig(JSON.parse(content), configPath)
+        } catch (err) {
+          // Corrupt project config: warn once and continue — never fatal
+          // (background/CI children re-enter with the same cwd).
+          warnConfigOnce({
+            file: configPath,
+            severity: 'warning',
+            message: `project config ignored — ${(err as Error).message.split('\n')[0]}`,
+            fix: `fix or remove "${configPath}"`,
+          })
           return null
         }
       }

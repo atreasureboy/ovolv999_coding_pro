@@ -38,7 +38,7 @@ function getDynamicGroups(): ShortcutGroup[] {
     {
       title: 'Navigation',
       items: [
-        { key: 'ESC', desc: 'Interrupt running turn' },
+        { key: 'ESC', desc: 'Stop running turn (ESC again: force kill)' },
         { key: 'Ctrl+R', desc: 'Reverse history search (bash-style)' },
         { key: 'Ctrl+Y', desc: 'Copy last assistant reply' },
         { key: 'Ctrl+L', desc: 'Clear screen and redraw' },

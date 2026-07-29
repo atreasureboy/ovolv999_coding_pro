@@ -22,6 +22,7 @@ import { join } from 'path'
 import { homedir, hostname } from 'os'
 import { execSync } from 'child_process'
 import { randomBytes, createHash, createCipheriv, createDecipheriv, scryptSync } from 'crypto'
+import { warnConfigOnce } from '../config/diagnostics.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -85,7 +86,12 @@ function safeReadJson<T>(path: string): T | undefined {
   if (!existsSync(path)) return undefined
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as T
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `settings file corrupt — skipped for sync bundle (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return undefined
   }
 }

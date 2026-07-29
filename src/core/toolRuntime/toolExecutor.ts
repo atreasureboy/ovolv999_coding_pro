@@ -80,7 +80,7 @@ export class ToolExecutor {
     }
 
     // Execution-time policy check (defense in depth)
-    const policyError = toolPolicy.checkExecutionAllowed(allTools, toolName, planMode)
+    const policyError = toolPolicy.checkExecutionAllowed(allTools, toolName, planMode, context.excludedTools)
     if (policyError) {
       const result: ToolResult = { content: policyError, isError: true }
       eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })

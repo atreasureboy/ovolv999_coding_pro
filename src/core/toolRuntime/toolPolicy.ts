@@ -38,11 +38,13 @@ export class ToolPolicy {
 
   /**
    * Filter tool definitions for the LLM request.
-   * Applies sub-agent allowlist (if agent config is set) and plan mode.
+   * Applies sub-agent allowlist (if agent config is set), plan mode,
+   * and the per-turn execution-profile exclusion set (v0.4.1 WS4).
    */
   getExposedDefinitions(
     allTools: Tool[],
     planMode: boolean,
+    excludedTools?: string[],
   ): ToolDefinition[] {
     let defs = getToolDefinitions(allTools)
 
@@ -64,6 +66,11 @@ export class ToolPolicy {
       })
     }
 
+    if (excludedTools && excludedTools.length > 0) {
+      const excludedSet = new Set(excludedTools)
+      defs = defs.filter(t => !excludedSet.has(t.function.name))
+    }
+
     return defs
   }
 
@@ -80,6 +87,7 @@ export class ToolPolicy {
     allTools: Tool[],
     toolName: string,
     planMode: boolean,
+    excludedTools?: string[],
   ): string | null {
     // Plan mode defense-in-depth
     if (planMode) {
@@ -87,6 +95,12 @@ export class ToolPolicy {
       if (!tool || !(tool.metadata?.readOnly === true || LEGACY_PLAN_MODE_TOOLS.has(toolName))) {
         return `Tool "${toolName}" is not available in plan mode. Only read-only tools are allowed. Output your plan as text.`
       }
+    }
+
+    // Execution-profile defense-in-depth (v0.4.1 WS4): a model that
+    // fabricates a hidden tool name is still blocked at call time.
+    if (excludedTools && excludedTools.includes(toolName)) {
+      return `Tool "${toolName}" is not available under the current execution profile. It was hidden to keep this turn lightweight — complete the task without it.`
     }
 
     // Agent allowlist defense-in-depth

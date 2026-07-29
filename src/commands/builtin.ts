@@ -21,6 +21,7 @@ import { getCurrentMode, setCurrentMode, cycleMode, getAllModes, type Mode } fro
 import type { PermissionMode } from '../core/permissionSystem.js'
 import { saveProjectSettings } from '../config/settings.js'
 import { estimateTokens, calculateContextState, microCompact } from '../core/compact.js'
+import { EXECUTION_PROFILES, isExecutionProfile } from '../core/effort.js'
 import type { OpenAIMessage } from '../core/types.js'
 import { existsSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -513,6 +514,49 @@ registerCommand({
   },
 })
 
+// ── /exec-profile — show or change execution profile ────────────────────────
+// (NOT /profile — that name belongs to the legacy config-profiles system
+// below; NOT /effort — that is the reasoning-effort axis. The CLI flag is
+// --profile because argv has no such collision.)
+
+registerCommand({
+  name: 'exec-profile',
+  description: 'Show current execution profile, set a sticky override, or restore auto',
+  aliases: ['ep'],
+  usage: '/exec-profile [fast|standard|deep|autonomous|auto]',
+  handler: (args, ctx) => {
+    const trimmed = args.trim()
+    if (!trimmed) {
+      const override = ctx.engine.getExecutionProfileOverride()
+      const lines: string[] = [
+        override
+          ? `Execution profile: ${override}  (sticky override — '/exec-profile auto' to clear)`
+          : 'Execution profile: auto  (resolved per turn from task intent + prompt)',
+        '',
+        'Available profiles:',
+      ]
+      for (const [name, spec] of Object.entries(EXECUTION_PROFILES)) {
+        const caps: string[] = [`modules: ${spec.modules.join(', ')}`]
+        if (spec.maxIterations !== undefined) caps.push(`max iterations: ${spec.maxIterations}`)
+        if (spec.maxOutputTokens !== undefined) caps.push(`max output tokens: ${spec.maxOutputTokens}`)
+        if (spec.excludedTools && spec.excludedTools.length > 0) caps.push(`hidden tools: ${spec.excludedTools.join(', ')}`)
+        lines.push(`  ${name} — ${spec.description}`)
+        lines.push(`      ${caps.join(' · ')}`)
+      }
+      return text(lines.join('\n'))
+    }
+    if (trimmed === 'auto' || trimmed === 'clear') {
+      ctx.engine.setExecutionProfileOverride(null)
+      return text('Profile override cleared — per-turn auto resolution resumed.')
+    }
+    if (!isExecutionProfile(trimmed)) {
+      return text(`Unknown profile "${trimmed}". Valid: fast, standard, deep, autonomous (or 'auto' to clear).`)
+    }
+    ctx.engine.setExecutionProfileOverride(trimmed)
+    return text(`Execution profile set: ${trimmed}  (sticky — applies to every turn until '/exec-profile auto')`)
+  },
+})
+
 // ── /permissions — show permission mode ─────────────────────────────────────
 
 registerCommand({
@@ -988,9 +1032,9 @@ registerCommand({
     return text(
       'Available commands:\n' +
       lines.join('\n') +
-      '\n\n  /plan <task>       Plan mode — analyze then confirm before execute\n' +
-      '  /<skill_name>      Run a loaded skill\n\n' +
-      'Type / for autocomplete. ? for keyboard shortcuts. ESC to interrupt.'
+      '\n\n  /<skill_name>      Run a loaded skill\n' +
+      '  Plan mode          Ctrl+P (default) — read-only analysis, confirm before execute\n\n' +
+      'Type / for autocomplete. ? for keyboard shortcuts. ESC stops a running turn (again: force kill).'
     )
   },
 })
@@ -1527,45 +1571,11 @@ registerCommand({
   },
 })
 
-registerCommand({
-  name: 'style',
-  aliases: ['output-style'],
-  description: 'Set or show output style. Usage: /style [concise|verbose|structured|socratic|code-focused|teaching|default]',
-  handler: (args, ctx) => {
-    const { loadOutputStyles, setActiveStyle } =
-      require('../core/outputStyles.js') as typeof import('../core/outputStyles.js')
-
-    const trimmed = args.trim().toLowerCase()
-
-    if (trimmed) {
-      const result = setActiveStyle(ctx.cwd, trimmed)
-      if (!result.success) {
-        return text(`⚠ ${result.error}`)
-      }
-      const active = loadOutputStyles(ctx.cwd).active
-      return text(`✓ Output style: ${active.name}\n${active.description}`)
-    }
-
-    // Show all styles
-    const result = loadOutputStyles(ctx.cwd)
-    const lines: string[] = ['Output Styles:', '']
-
-    if (result.errors.length > 0) {
-      lines.push('⚠ Config errors:')
-      for (const e of result.errors) lines.push(`  ${e}`)
-      lines.push('')
-    }
-
-    for (const s of result.styles) {
-      const marker = s.id === result.active.id ? '▶' : ' '
-      lines.push(`${marker} ${s.id.padEnd(15)} ${s.name.padEnd(15)} ${s.description}`)
-    }
-
-    lines.push('', `Active: ${result.active.name} (${result.active.id})`)
-    lines.push('Usage: /style <id> to switch')
-    return text(lines.join('\n'))
-  },
-})
+// v0.4.1 (golden-path closure): /style + core/outputStyles.ts removed — a
+// third parallel brevity system that was never wired into the engine prompt
+// (only persisted a config file). The single output contract now lives in
+// prompts/system.ts getOutcomeReportSection(); explicit user verbosity
+// preference stays in modes.ts getVerbosityPrompt (appended last, wins).
 
 // v0.3.1 (runtime truth contract §八): the second /export registration was removed
 // to keep the registry clean. The first registration (line 955) is
@@ -1573,7 +1583,7 @@ registerCommand({
 
 registerCommand({
   name: 'audit',
-  description: 'Validate all .ovolv999/ configuration files (keybindings, styles, workflows, skills)',
+  description: 'Validate all .ovolv999/ configuration files (keybindings, workflows, skills)',
   handler: (_args, ctx) => {
     const { runDoctorChecks, formatDoctorReport } =
       require('../utils/doctor.js') as typeof import('../utils/doctor.js')

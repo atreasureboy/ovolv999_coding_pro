@@ -162,6 +162,13 @@ export interface ToolContext {
   episodicMemory?: EpisodicMemory
   /** Tool names available to this agent — used for skill permission checks */
   availableToolNames?: string[]
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): tools the current execution profile
+   * hides from the model AND blocks at execution time (defense in depth
+   * via ToolPolicy). Per-turn; set by the boot sequence, absent when no
+   * profile excludes tools (standard/deep → v0.4.0 behavior).
+   */
+  excludedTools?: string[]
   /** Background task manager — for async long-running task lifecycle */
   backgroundTaskManager?: BackgroundTaskManager
   /**

@@ -22,8 +22,9 @@ import type { TurnOutcome } from '../../core/runtime/turnOutcome.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
-import { formatApiError } from '../../utils/apiError.js'
-import { saveSession } from '../../core/sessionManager.js'
+import { wireModelBridge } from './modelBridge.js'
+import { saveSession, summarizeOutcome } from '../../core/sessionManager.js'
+import { warnOnce } from '../../utils/warnOnce.js'
 
 export interface InkReplOptions {
   store: UIStore
@@ -108,23 +109,30 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
 
   // ── Turn execution ────────────────────────────────────────────────────────
 
+  // v0.4.1 WS7 (session truth): the last finished turn's outcome, kept so the
+  // exit/cleanup save (which has no runTurn result in scope) can persist the
+  // REAL verdict into the Envelope v2 `lastOutcome` — /resume lists status
+  // from the envelope, never guessed.
+  let lastOutcome: TurnOutcome | undefined
+
   async function runOneTurn(
     prompt: string,
     images?: Array<{ path: string; dataUrl: string }>,
   ): Promise<{ newHistory: OpenAIMessage[]; reason: string; outcome?: TurnOutcome }> {
     store.setRunning(true)
     store.setSpinner(true, 'Thinking')
-    const turnStartTime = Date.now()
     try {
       const result = await engine.runTurn(prompt, history, images)
       history = result.newHistory
+      if (result.outcome) lastOutcome = result.outcome
       // Update cost tracking after each turn
       const ct = engine.getCostTracker()
       store.setCost(ct.getTotalCost(), ct.getTotalAPICalls())
-      // Autosave session after each completed turn
+      // Autosave session after each completed turn — with the turn's outcome
+      // so the envelope carries the persisted verdict (v0.4.1 WS7).
       if (opts.sessionDir && history.length > 0) {
         try {
-          saveSession(opts.sessionDir, history)
+          saveSession(opts.sessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
         } catch (err: unknown) {
           store.addWarn(`Session save warning: ${(err as Error).message}`)
         }
@@ -134,11 +142,17 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       return { newHistory: result.newHistory, reason: status, outcome: result.outcome }
     } catch (err: unknown) {
       const error = err as Error
-      if (error.name !== 'AbortError') {
-        const fe = formatApiError(err)
-        store.addError(`${fe.title}: ${fe.detail}${fe.hint ? ' ' + fe.hint : ''}`)
+      if (error.name === 'AbortError') {
+        // ESC interrupt — not an error; App renders the plain stop line.
+        return { newHistory: history, reason: 'error' }
       }
-      return { newHistory: history, reason: 'error' }
+      // v0.4.1 WS8 (render-once): rethrow to App.handleSubmit's catch — the
+      // SINGLE Ink error renderer (5-section card with sessionDir + the real
+      // attempt count from store.apiAttempts). Pre-WS8 this catch swallowed
+      // the error after a plain addError, leaving App's card handler dead.
+      // The finally below still runs first, so spinner/running state is
+      // cleaned up before the error reaches App.
+      throw err
     } finally {
       store.setRunning(false)
       store.setSpinner(false)
@@ -149,6 +163,12 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
 
   const { App: AppComponent } = await import('./App.js')
   store.setBanner(opts.version, opts.model)
+
+  // v0.4.1 WS5 (UI model truth): bridge runtime events into the UIStore so
+  // the StatusBar shows the model the engine is ACTUALLY running — not the
+  // startup value. Disconnected in the finally block below so a dead REPL
+  // never leaks listeners on a reused engine.
+  const modelBridge = wireModelBridge(store, engine.getEventEmitter())
 
   const instance = render(
     createElement(AppComponent, {
@@ -261,15 +281,23 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       initialHistory: history,
       maxContextTokens: opts.maxContextTokens,
       cwd: opts.cwd,
+      sessionDir: opts.sessionDir,
     }),
   )
 
   // Register cleanup handlers for signals/crashes
   const cleanup = registerCleanup({
     onCleanup: () => {
-      // Final session save on exit (best-effort)
+      // Final session save on exit — v0.4.1 WS7: persist the last turn's
+      // verdict so /resume shows the real status. A failed save is warned to
+      // stderr exactly once per process (never swallowed silently — the user
+      // must learn their work did not persist).
       if (opts.sessionDir && history.length > 0) {
-        try { saveSession(opts.sessionDir, history) } catch { /* best-effort */ }
+        try {
+          saveSession(opts.sessionDir, history, lastOutcome ? summarizeOutcome(lastOutcome) : undefined)
+        } catch (err: unknown) {
+          warnOnce('session:save:inkRepl', `Failed to persist session: ${(err as Error).message}`)
+        }
       }
       instance.unmount()
     },
@@ -278,6 +306,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   try {
     await instance.waitUntilExit()
   } finally {
+    modelBridge.disconnect()
     cleanup()
   }
 }

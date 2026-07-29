@@ -63,8 +63,11 @@ export class InkRenderer {
     this.store.addToolStart(name, input, callId)
   }
 
-  toolResult(name: string, result: string, isError: boolean, callId?: string): void {
-    this.store.setToolResult(callId ?? name, result, isError, callId)
+  toolResult(_name: string, result: string, isError: boolean, callId?: string): void {
+    // v0.4.1 C1 (callId truth): NEVER `callId ?? name` — matching the tool
+    // NAME against the callId field hit nothing real and slid into the
+    // store's position guess. No callId → visible orphan row instead.
+    this.store.setToolResult(callId, result, isError)
   }
 
   // ── Spinner ───────────────────────────────────────────────────────────────
@@ -102,8 +105,10 @@ export class InkRenderer {
     this.store.addAgentStart(desc, type, runId)
   }
 
-  agentDone(desc: string, ok: boolean, runId?: string): void {
-    this.store.setAgentDone(runId ?? desc, ok, undefined, runId)
+  agentDone(_desc: string, ok: boolean, runId?: string): void {
+    // v0.4.1 C1: no `runId ?? desc` — a desc matched against the runId
+    // field is a guess. No runId → the store renders a visible orphan.
+    this.store.setAgentDone(runId, ok, undefined, runId)
   }
 
   agentSummary(_type: string, _desc: string, summary: string): void {

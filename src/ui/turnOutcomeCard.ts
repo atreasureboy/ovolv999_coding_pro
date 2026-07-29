@@ -5,18 +5,37 @@
  * for CLI & Ink interfaces.
  */
 
-import type { TurnOutcome } from '../core/runtime/turnOutcome.js'
+import type { ModelCallAttempt, TurnOutcome } from '../core/runtime/turnOutcome.js'
 import type { Renderer } from './renderer.js'
 
 export interface OutcomeCardOptions {
   outcome: TurnOutcome
   elapsedSec: string
+  /** Startup/preferred model — used only when no attempt data exists. */
   model: string
   costStr?: string
 }
 
+/**
+ * v0.4.1 WS5 (UI model truth): the model the card should display.
+ * After a fallback chain A→B the turn was ANSWERED by B, so the card
+ * must say B even though opts.model (startup config) says A.
+ * Precedence: last SUCCEEDED attempt → last attempt of any kind →
+ * the caller's fallback. Never fabricated — if the attempts array is
+ * empty, the startup model is the only truth we have.
+ */
+export function effectiveModelFor(outcome: { modelAttempts?: ModelCallAttempt[] }, fallback: string): string {
+  const attempts = outcome.modelAttempts ?? []
+  if (attempts.length === 0) return fallback
+  for (let i = attempts.length - 1; i >= 0; i--) {
+    if (attempts[i].status === 'succeeded') return attempts[i].model
+  }
+  return attempts[attempts.length - 1].model
+}
+
 export function formatOutcomeCardText(opts: OutcomeCardOptions): string {
   const { outcome, elapsedSec, model, costStr } = opts
+  const effectiveModel = effectiveModelFor(outcome, model)
   const status = outcome.completion?.status ?? 'completed'
   const statusSymbol =
     status === 'completed' ? '✓ COMPLETED' :
@@ -27,7 +46,7 @@ export function formatOutcomeCardText(opts: OutcomeCardOptions): string {
 
   const lines: string[] = []
   lines.push(`Turn Outcome: ${statusSymbol}`)
-  lines.push(`  ⏱ Duration: ${elapsedSec}s  ·  Model: ${model}${costStr ? `  ·  Cost: ${costStr}` : ''}`)
+  lines.push(`  ⏱ Duration: ${elapsedSec}s  ·  Model: ${effectiveModel}${costStr ? `  ·  Cost: ${costStr}` : ''}`)
 
   if (outcome.changedFiles && outcome.changedFiles.length > 0) {
     lines.push(`  📁 Modified files (${outcome.changedFiles.length}):`)

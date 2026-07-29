@@ -67,6 +67,7 @@ import { ToolScheduler } from './toolRuntime/toolScheduler.js'
 import { ToolRegistry } from './toolRuntime/toolRegistry.js'
 import { RuntimeCoordinator } from './runtime/coordinator.js'
 import { SharedRuntimeState } from './runtime/sharedState.js'
+import type { ExecutionProfile } from './effort.js'
 import { RunEventEmitter } from './runtime/events.js'
 import { ExecutionRunRegistry, isTerminalRunStatus } from './executionRun.js'
 import type { WorkerAdapter } from './workerAdapter.js'
@@ -390,6 +391,7 @@ export class ExecutionEngine {
       // config.provider (default openai-compatible).
       adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
       renderer: this.renderer,
+      eventLog: this.eventLog,
     })
     // NOTE: `this.modelRouter` is assigned once above (line 235). v0.3.1
     // removed the duplicate buildRouter() that previously overwrote the
@@ -534,17 +536,22 @@ export class ExecutionEngine {
         const router = this.modelRouter
         if (!router.isRoutingEnabled() || router.getManualOverride()) return null
         const decision = router.route(input)
-        if (decision.selectedModel && decision.selectedModel !== this.config.model) {
-          try {
-            // v0.3.1: applyRoutingDecision does NOT set manual override —
-            // auto-routing must remain re-routable on subsequent turns.
-            // It also applies decision.budgetAllocation so the Router's
-            // budget-pressure decision actually constrains maxOutputTokens.
-            this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation)
-            return decision.selectedModel
-          } catch { return null }
-        }
-        return null
+        if (!decision.selectedModel) return null
+        try {
+          // v0.3.1: applyRoutingDecision does NOT set manual override —
+          // auto-routing must remain re-routable on subsequent turns.
+          // It also applies decision.budgetAllocation so the Router's
+          // budget-pressure decision actually constrains maxOutputTokens.
+          //
+          // v0.4.1 WS5: call it even when the selected model EQUALS the
+          // current one. switchModel() is a same-model no-op (no
+          // MODEL_CHANGED event, no gateway reset), but the allocation
+          // must still land — the old `!== this.config.model` guard
+          // skipped the whole call and silently dropped the Router's
+          // budget-pressure maxOutputTokens.
+          this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation)
+        } catch { return null }
+        return decision.selectedModel !== this.config.model ? decision.selectedModel : null
       },
     })
 
@@ -859,6 +866,21 @@ export class ExecutionEngine {
     /** Clear the manual override, restoring auto-routing (/model auto). */
     clearModelOverride(): void {
       this.modelRouter.setManualOverride(null)
+    }
+
+    /**
+     * v0.4.1 WS4 (ExecutionProfile): set/clear the sticky per-engine
+     * profile override (--profile / `/profile <name>`). Mirrors the
+     * /model override contract: a user choice wins over per-turn
+     * intent/detection until cleared. Pass null to resume per-turn
+     * resolution.
+     */
+    setExecutionProfileOverride(profile: ExecutionProfile | null): void {
+      this.sharedState.executionProfileOverride = profile
+    }
+
+    getExecutionProfileOverride(): ExecutionProfile | null {
+      return this.sharedState.executionProfileOverride
     }
 
     /**

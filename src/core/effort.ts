@@ -6,6 +6,8 @@
  * Lower effort = faster, more direct answers.
  */
 
+import type { TaskKind } from './runtime/taskIntent.js'
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type EffortLevel = 'minimal' | 'low' | 'medium' | 'high' | 'maximum'
@@ -169,22 +171,86 @@ export function formatEffortList(): string {
   return lines.join('\n')
 }
 
-// ── Adaptive Execution Gears (v0.4 Daily Driver UX Convergence) ───────────────
+// ── Execution Profiles (v0.4.1 WS4: Golden Path Closure) ──────────────────────
+//
+// A profile fixes the RESOURCE DEPTH of one turn: which capability
+// modules boot, the iteration cap, the output-token budget, and which
+// heavyweight tools are hidden. It is a different axis from TaskKind
+// (completionContract semantics — informational vs mutation): e.g. a
+// mutation task can run under `deep`, an informational one under `fast`.
+//
+// Renamed from the v0.4.0 dead-code "ExecutionGear" — the types existed
+// but were never wired. v0.4.1 wires them per-turn through
+// ModuleManager.boot({only}), ToolPolicy excludedTools, and the
+// coordinator's effective iteration/output limits.
 
-export type ExecutionGear = 'fast' | 'standard' | 'deep' | 'autonomous'
+export type ExecutionProfile = 'fast' | 'standard' | 'deep' | 'autonomous'
 
-export function detectExecutionGear(taskPrompt: string, isLoop = false): ExecutionGear {
+export type ProfileSource = 'override' | 'intent' | 'detected' | 'default'
+
+export interface ExecutionProfileSpec {
+  /**
+   * Base capability modules booted under this profile (subset of the
+   * engine's constructed module set — filtering happens per turn in
+   * ModuleManager.boot({only}), the constructor list stays full).
+   * `mcp` is NOT listed here: it is config-gated and appended at
+   * wiring time whenever the engine constructed it, under EVERY
+   * profile — a user's MCP setup is never silently dropped by a
+   * profile change.
+   */
+  modules: string[]
+  /** Per-turn iteration cap. undefined → EngineConfig.maxIterations unchanged. */
+  maxIterations?: number
+  /** Per-turn output-token budget. undefined → EngineConfig.maxOutputTokens unchanged. */
+  maxOutputTokens?: number
+  /** Tools hidden from the model AND blocked at execution under this profile. */
+  excludedTools?: string[]
+  description: string
+}
+
+export const EXECUTION_PROFILES: Record<ExecutionProfile, ExecutionProfileSpec> = {
+  fast: {
+    modules: ['memory', 'workspace'],
+    maxIterations: 30,
+    excludedTools: ['Agent', 'TaskPlan'],
+    description: 'Read-only / Q&A: no Critic, no Reflection, no sub-agents, no task graph.',
+  },
+  standard: {
+    // EXACTLY the pre-v0.4.1 default module set — a standard turn must
+    // behave byte-for-byte like a v0.4.0 turn (gate test pins this).
+    modules: ['memory', 'critic', 'workspace', 'reflection'],
+    description: 'Default: full module set, engine-configured limits.',
+  },
+  deep: {
+    modules: ['memory', 'critic', 'workspace', 'reflection'],
+    maxIterations: 300,
+    maxOutputTokens: 32000,
+    description: 'Complex refactors / migrations: raised iteration and output budgets.',
+  },
+  autonomous: {
+    // Documentary: --loop entries boot through their own runLoop path;
+    // this spec exists so /profile can show and validate the full set.
+    modules: ['memory', 'critic', 'workspace', 'reflection'],
+    description: 'Background loop autonomy (driven by the --loop entry, not per-turn resolution).',
+  },
+}
+
+export function isExecutionProfile(value: string): value is ExecutionProfile {
+  return value === 'fast' || value === 'standard' || value === 'deep' || value === 'autonomous'
+}
+
+export function detectExecutionProfile(taskPrompt: string, isLoop = false): ExecutionProfile {
   if (isLoop) return 'autonomous'
   const prompt = taskPrompt.toLowerCase().trim()
   if (!prompt) return 'fast'
 
-  // Deep gear: complex refactoring, multi-module architecture, major migrations
+  // Deep profile: complex refactoring, multi-module architecture, major migrations
   const isComplex = /(architect|refactor|migrate|redesign|multi-file|cross-module|rewrite system|end-to-end|security audit)/.test(prompt)
   if (isComplex) {
     return 'deep'
   }
 
-  // Fast gear: pure questions, explanations, status checks
+  // Fast profile: pure questions, explanations, status checks
   const isQuestion = /^(what|how|why|explain|tell|where|is|can|show|list|find|search|grep|doc|status|health)\b/.test(prompt)
   const isEditAction = /(fix|edit|add|write|modify|create|delete|update|replace|implement|build|remove)/.test(prompt)
 
@@ -199,16 +265,24 @@ export function detectExecutionGear(taskPrompt: string, isLoop = false): Executi
   return 'standard'
 }
 
-export function getGearModules(gear: ExecutionGear, hasMcp = false): string[] {
-  const baseMcp = hasMcp ? ['mcp'] : []
-  switch (gear) {
-    case 'fast':
-      // Simple tasks do NOT launch Critic or Reflection background modules
-      return ['memory', 'workspace', ...baseMcp]
-    case 'standard':
-    case 'deep':
-    case 'autonomous':
-      return ['memory', 'critic', 'workspace', 'reflection', ...baseMcp]
-  }
+/**
+ * Resolve the execution profile for ONE turn. Precedence:
+ *   1. sticky override (--profile / /profile) — always wins, any source;
+ *   2. TaskIntent: informational (pure Q&A) → fast, even when the regex
+ *      would say otherwise (the classifier has more signal than keywords);
+ *   3. detectExecutionProfile regex — responsible for `deep` escalation
+ *      (and legacy `fast` detection on analysis-shaped prompts);
+ *   4. standard default.
+ */
+export function resolveExecutionProfile(
+  message: string,
+  intent: { kind: TaskKind } | null | undefined,
+  override?: ExecutionProfile | null,
+): { profile: ExecutionProfile; source: ProfileSource } {
+  if (override) return { profile: override, source: 'override' }
+  if (intent?.kind === 'informational') return { profile: 'fast', source: 'intent' }
+  const detected = detectExecutionProfile(message)
+  if (detected !== 'standard') return { profile: detected, source: 'detected' }
+  return { profile: 'standard', source: 'default' }
 }
 

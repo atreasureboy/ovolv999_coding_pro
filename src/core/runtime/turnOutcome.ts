@@ -68,6 +68,12 @@ export interface TurnOutcome {
   workerReferences?: Array<{ runId: string; status: string }>
   verification: VerificationState
   modelAttempts: ModelCallAttempt[]
+  /**
+   * v0.4.1 WS7 (session truth): wall-clock turn duration in ms.
+   * Optional only because pre-WS7 tests/envelopes may construct
+   * outcomes without it; the coordinator always populates it.
+   */
+  durationMs?: number
 
   // Deprecated compat fields — derived FROM completion, never read by new code.
   /** @deprecated use completion.status */

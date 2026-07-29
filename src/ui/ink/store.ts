@@ -94,6 +94,22 @@ export interface UIState {
   apiCalls: number
   /** Verbose mode (Ctrl+O) — show all tool results expanded. */
   verbose: boolean
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): the profile the current/last turn runs
+   * under, from the PROFILE_RESOLVED event. null = no turn resolved yet.
+   * The StatusBar shows a chip when this is anything other than 'standard'
+   * — deliberately NOT part of `banner` (banner lives in Ink's <Static>
+   * region and would re-render noisily on every per-turn resolution).
+   */
+  profile: 'fast' | 'standard' | 'deep' | 'autonomous' | null
+  /**
+   * v0.4.1 WS8 (error truth): how many model calls the CURRENT turn has
+   * attempted (from MODEL_ATTEMPT_STARTED events; reset on PROFILE_RESOLVED,
+   * which fires once per turn before boot). The Ink error card feeds this to
+   * formatErrorCardText so "Auto-recovery" reports the REAL attempt count
+   * instead of a fabricated static string.
+   */
+  apiAttempts: number
 }
 
 const INITIAL_STATE: UIState = {
@@ -114,6 +130,8 @@ const INITIAL_STATE: UIState = {
   cost: 0,
   apiCalls: 0,
   verbose: false,
+  profile: null,
+  apiAttempts: 0,
 }
 
 // ── Store implementation ────────────────────────────────────────────────────
@@ -211,7 +229,7 @@ export class UIStore {
     return this.add({ type: 'tool', name, input, callId, startTime: Date.now() }, false)
   }
 
-  setToolResult(idOrCallId: number | string, result: string, isError: boolean, callId?: string): void {
+  setToolResult(idOrCallId: number | string | undefined, result: string, isError: boolean, callId?: string): void {
     let targetId: number | undefined
     if (typeof idOrCallId === 'number') {
       targetId = idOrCallId
@@ -224,22 +242,28 @@ export class UIStore {
       targetId = msg?.id
     }
     if (!targetId) {
-      // Fallback: match last tool call without result
-      for (let i = this.state.messages.length - 1; i >= 0; i--) {
-        const m = this.state.messages[i]
-        if (m.type === 'tool' && m.result === undefined) {
-          targetId = m.id
-          break
-        }
-      }
+      // v0.4.1 C1 (callId truth): pre-C1 this position-guessed — "attach to
+      // the last tool call without a result". With parallel tool execution
+      // that silently misattributed results (tool B's output shown under
+      // tool A). Now an unmatched result becomes a VISIBLE orphan row: the
+      // user sees that attribution failed instead of a plausible lie.
+      this.addOrphanToolResult(result, isError)
+      return
     }
-    if (targetId) {
-      const msg = this.state.messages.find((m) => m.id === targetId)
-      const elapsedMs = msg && msg.type === 'tool' && msg.startTime
-        ? Date.now() - msg.startTime
-        : undefined
-      this.update(targetId, { result, isError, elapsedMs }, true)
-    }
+    const msg = this.state.messages.find((m) => m.id === targetId)
+    const elapsedMs = msg && msg.type === 'tool' && msg.startTime
+      ? Date.now() - msg.startTime
+      : undefined
+    this.update(targetId, { result, isError, elapsedMs }, true)
+  }
+
+  /** v0.4.1 C1: a tool result with no matchable call — rendered, never guessed. */
+  addOrphanToolResult(result: string, isError: boolean): void {
+    const snippet = result.length > 200 ? `${result.slice(0, 200)}…` : result
+    this.add({
+      type: 'warn',
+      text: `(unattributed tool result${isError ? ' · error' : ''}) ${snippet}`,
+    })
   }
 
   addInfo(text: string): void { this.add({ type: 'info', text }) }
@@ -251,7 +275,7 @@ export class UIStore {
     return this.add({ type: 'agent', desc, agentType, runId, status: 'running' }, false)
   }
 
-  setAgentDone(idOrRunId: number | string, ok: boolean, summary?: string, runId?: string): void {
+  setAgentDone(idOrRunId: number | string | undefined, ok: boolean, summary?: string, runId?: string): void {
     let targetId: number | undefined
     if (typeof idOrRunId === 'number') {
       targetId = idOrRunId
@@ -264,17 +288,23 @@ export class UIStore {
       targetId = msg?.id
     }
     if (!targetId) {
-      for (let i = this.state.messages.length - 1; i >= 0; i--) {
-        const m = this.state.messages[i]
-        if (m.type === 'agent' && m.status === 'running') {
-          targetId = m.id
-          break
-        }
-      }
+      // v0.4.1 C1: same rule as tool results — never position-guess
+      // ("the last running agent"), render a visible orphan instead.
+      this.addOrphanAgentResult(ok, summary)
+      return
     }
-    if (targetId) {
-      this.update(targetId, { status: ok ? 'done' : 'failed', summary })
-    }
+    this.update(targetId, { status: ok ? 'done' : 'failed', summary })
+  }
+
+  /** v0.4.1 C1: an agent result with no matchable run — rendered, never guessed. */
+  addOrphanAgentResult(ok: boolean, summary?: string): void {
+    const snippet = summary
+      ? (summary.length > 200 ? `${summary.slice(0, 200)}…` : summary)
+      : ''
+    this.add({
+      type: 'warn',
+      text: `(unattributed agent result · ${ok ? 'done' : 'failed'})${snippet ? ' ' + snippet : ''}`,
+    })
   }
 
   addCompactStart(tokens: number): void {
@@ -328,6 +358,20 @@ export class UIStore {
 
   setModel(model: string): void {
     this.state = { ...this.state, banner: this.state.banner ? { ...this.state.banner, model } : null }
+    this.emit()
+  }
+
+  /** v0.4.1 WS4: per-turn execution profile (PROFILE_RESOLVED → StatusBar chip). */
+  setProfile(profile: 'fast' | 'standard' | 'deep' | 'autonomous' | null): void {
+    if (this.state.profile === profile) return
+    this.state = { ...this.state, profile }
+    this.emit()
+  }
+
+  /** v0.4.1 WS8: per-turn model call attempt count (error card truth). */
+  setApiAttempts(n: number): void {
+    if (this.state.apiAttempts === n) return
+    this.state = { ...this.state, apiAttempts: n }
     this.emit()
   }
 

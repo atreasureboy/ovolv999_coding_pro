@@ -28,10 +28,8 @@
 
 import { resolve, join, dirname, basename } from 'path'
 import { writeFileSync, readFileSync, existsSync, statSync, realpathSync } from 'fs'
-import { createHash } from 'crypto'
 import { homedir } from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { Writable } from 'stream'
 
 // ── .env auto-loader (no external dep, never overrides existing env vars) ──
 {
@@ -59,51 +57,43 @@ import { Writable } from 'stream'
   }
 }
 import { ExecutionEngine } from '../src/core/engine.js'
+import { assembleEngine } from '../src/cli/engineAssembly.js'
+import type { AssemblySession } from '../src/cli/engineAssembly.js'
+import { isExecutionProfile, type ExecutionProfile } from '../src/core/effort.js'
 import { Renderer } from '../src/ui/renderer.js'
-import type { UIStore } from '../src/ui/ink/store.js'
-import type { InkRenderer } from '../src/ui/ink/inkRenderer.js'
 import { InputHandler, readStdin, type SharedPrompt } from '../src/ui/input.js'
 import { SlashSuggester } from '../src/ui/slashSuggest.js'
 import { runWithDeadline } from '../src/ui/turnDeadline.js'
 import { trimHistoryForNextTurn } from '../src/ui/historyTrimmer.js'
+import { pipeExitCodeFor, isApiClassError, outcomeIsApiClassFailure } from '../src/ui/pipeRenderer.js'
 import type { EngineConfig, OpenAIMessage } from '../src/core/types.js'
-import { getProjectSettingsPath, loadSettings, saveProjectSettings, loadGlobalProvider } from '../src/config/settings.js'
+import { getProjectSettingsPath, saveProjectSettings, loadGlobalProvider } from '../src/config/settings.js'
 import { runFirstRunWizard } from '../src/config/wizard.js'
-import { loadProjectConfig } from '../src/config/projectConfig.js'
-import { HookRunner, NoopHookRunner } from '../src/config/hooks.js'
-import { loadSkills, expandSkillPrompt, formatSkillIndex } from '../src/skills/loader.js'
+import { loadSkills, expandSkillPrompt } from '../src/skills/loader.js'
 import type { Skill } from '../src/skills/loader.js'
-import { loadOvogoMd } from '../src/config/ovogomd.js'
-import { getMemoryDir, getMemoryStats } from '../src/memory/index.js'
-import { buildFullSystemPrompt } from '../src/prompts/system.js'
-import { getCurrentMode, getVerbosityPrompt } from '../src/core/modes.js'
-import { EventLog } from '../src/core/eventLog.js'
-import { SemanticMemory } from '../src/core/semanticMemory.js'
-import { EpisodicMemory } from '../src/core/episodicMemory.js'
-import { globalModuleRegistry } from '../src/core/moduleRegistry.js'
-import { MemoryModule } from '../src/modules/memory.js'
-import { CriticModule } from '../src/modules/critic.js'
-import { WorkspaceModule } from '../src/modules/workspace.js'
-import { ReflectionModule, consolidateSession } from '../src/modules/reflection.js'
-import { McpModule } from '../src/modules/mcp.js'
-import { detectProjectContext, formatProjectContext } from '../src/config/projectContext.js'
-import { createLoadSkillTool } from '../src/tools/loadSkill.js'
-import { createTerminalAskUserHandler } from '../src/tools/askUser.js'
+import type { SemanticMemory } from '../src/core/semanticMemory.js'
+import type { EpisodicMemory } from '../src/core/episodicMemory.js'
+import { consolidateSession } from '../src/modules/reflection.js'
 import { dispatchSlashCommand, listCommands, type SlashCommandContext } from '../src/commands/index.js'
 import '../src/commands/builtin.js' // register all built-in commands
-import { tmuxLayout } from '../src/ui/tmuxLayout.js'
-import { PermissionManager } from '../src/core/permissionSystem.js'
 import {
   AmbiguousSessionError,
   SessionNotFoundError,
-  createSessionDir,
   findLatestSession,
   listSessions,
   loadSession,
   resolveSessionPath,
   saveSession,
+  summarizeOutcome,
+  type OutcomeSummary,
 } from '../src/core/sessionManager.js'
-import type { AgentChildEngineFactory } from '../src/core/types.js'
+import type { TurnOutcome } from '../src/core/runtime/turnOutcome.js'
+import { warnOnce } from '../src/utils/warnOnce.js'
+import { formatErrorCardText } from '../src/utils/apiError.js'
+import { renderOutcomeCard } from '../src/ui/turnOutcomeCard.js'
+import { isInteractiveTerminal } from '../src/utils/tty.js'
+import { probeProvider } from '../src/config/providerProbe.js'
+import { createInterface } from 'readline'
 
 // v0.3.5: single version source — read from package.json at build time.
 // All CLI/checkpoint/telemetry/banner display uses this constant.
@@ -132,6 +122,16 @@ let activePrompt: SharedPrompt | null = null
  * is triggered by SIGINT, SIGTERM, SIGHUP, or a non-0 exit path.
  */
 let saveOnExit: (() => void) | null = null
+
+/**
+ * v0.4.1 WS7 (session truth): the verdict of the most recently COMPLETED
+ * turn, summarized for the Envelope v2 `lastOutcome` field. Set by
+ * runTask/runSingleTask on success; exit-path saves persist it so /resume
+ * lists the real status instead of guessing. Mid-turn/error saves pass
+ * `undefined` explicitly — an incomplete turn has no verdict, and a stale
+ * one would lie.
+ */
+let lastOutcomeSummary: OutcomeSummary | undefined
 
 /**
  * Hard deadline for a single engine turn. If a turn exceeds this,
@@ -163,6 +163,14 @@ interface Args {
   pipeFormat: 'text' | 'json'
   bg: boolean
   init: boolean
+  /** v0.4.1 WS3: pipe flags promoted from the deleted pipeMode.parsePipeArgs. */
+  maxStdinBytes?: number
+  noContext: boolean
+  baseURL?: string
+  /** Hidden frozen v0.4.0 raw single-shot path (sshRemote's latency contract). */
+  llmOnly: boolean
+  /** v0.4.1 WS4: sticky execution-profile override (wins over intent/detection). */
+  profile?: ExecutionProfile
 }
 
 /**
@@ -357,7 +365,7 @@ function assertNonEmptyString(value: string, name: string): void {
   }
 }
 
-function parseArgs(argv: string[]): Args {
+export function parseArgs(argv: string[]): Args {
   const args = argv.slice(2)
   let task: string | undefined
   let model = resolveApiEnvironment().model
@@ -375,11 +383,16 @@ function parseArgs(argv: string[]): Args {
   let loopRestart = false
   let continueSession = false
   let resumeSession: string | undefined
-  let ink = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  let ink = isInteractiveTerminal()
   let pipe = false
   let pipeFormat: 'text' | 'json' = 'text'
   let bg = false
   let init = false
+  let maxStdinBytes: number | undefined
+  let noContext = false
+  let baseURLFlag: string | undefined
+  let llmOnly = false
+  let profile: ExecutionProfile | undefined
 
   try {
     for (let i = 0; i < args.length; i++) {
@@ -428,8 +441,32 @@ function parseArgs(argv: string[]): Args {
         case '--ink': ink = true; break
         case '--classic': ink = false; break
         case '--pipe': pipe = true; break
+        case '--llm-only': llmOnly = true; break
         case '--bg': bg = true; break
         case '--init': init = true; break
+        case '--no-context': noContext = true; break
+        case '--max-stdin':
+          {
+            const raw = requireValue(arg, args[++i])
+            const n = parseInt(raw, 10)
+            if (isNaN(n) || n <= 0) {
+              throw new ArgError(`Error: --max-stdin must be a positive integer (got "${raw}")`)
+            }
+            maxStdinBytes = n
+          }
+          break
+        case '--base-url':
+          baseURLFlag = requireValue(arg, args[++i])
+          break
+        case '--profile':
+          {
+            const raw = requireValue(arg, args[++i])
+            if (!isExecutionProfile(raw)) {
+              throw new ArgError(`Error: --profile must be one of: fast, standard, deep, autonomous (got "${raw}")`)
+            }
+            profile = raw
+          }
+          break
         case '--format':
           {
             const rawFormat = requireValue(arg, args[++i])
@@ -441,7 +478,16 @@ function parseArgs(argv: string[]): Args {
           break
         default:
           if (arg === 'init') init = true
-          else if (!arg.startsWith('-')) task = task ? task + ' ' + arg : arg
+          else if (arg.startsWith('-')) {
+            // v0.4.1 WS3: unknown flags used to be silently dropped while
+            // their VALUES leaked into the positional task text
+            // (`--pipe --wat watval do x` ran task "watval do x"). Warn,
+            // and for long flags consume the following non-dash token so
+            // it cannot become task text either.
+            process.stderr.write(`Warning: unknown option "${arg}" ignored\n`)
+            if (arg.startsWith('--') && i + 1 < args.length && !args[i + 1].startsWith('-')) i++
+          }
+          else task = task ? task + ' ' + arg : arg
       }
     }
   } catch (err) {
@@ -451,7 +497,7 @@ function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile }
 }
 
 interface ResolvedApiEnvironment {
@@ -533,6 +579,30 @@ function readClaudeSettingsEnv(): Record<string, string> {
   }
 }
 
+/**
+ * v0.4.1 WS2: one yes/no before the first-run wizard. Questions go to
+ * stderr (stdout stays clean for any consumer that captured it), and EOF
+ * answers with the default instead of hanging — the readline 'close'
+ * sentinel mirrors the wizard's own EOF handling.
+ */
+async function askYesNo(question: string, def = true): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  try {
+    const ans = await new Promise<string>((resolve) => {
+      const onEnd = (): void => resolve('')
+      rl.once('close', onEnd)
+      rl.question(`${question} ${def ? '[Y/n]' : '[y/N]'} `, (a) => {
+        rl.off('close', onEnd)
+        resolve(a.trim())
+      })
+    })
+    if (ans === '') return def
+    return /^y(es)?$/i.test(ans)
+  } finally {
+    rl.close()
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Help text
 // ─────────────────────────────────────────────────────────────
@@ -547,6 +617,7 @@ export function printHelp(skills: Map<string, Skill>): void {
 OPTIONS
   -m, --model <model>       LLM model  (env: OVOGO_MODEL, default: ${defaultModel})
   --max-iter <n>            Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
+  --profile <name>          Execution profile: fast | standard | deep | autonomous  (default: auto per task)
   --cwd <path>              Working directory  (env: OVOGO_CWD, default: cwd, supports ~/)
   --loop                    Activate loop mode (reads .loop/ configuration)
   --loop-init <goal>        Create a safe .loop/ workspace without overwriting existing files
@@ -594,16 +665,9 @@ TOOLS
   ShellSession  Manage inbound persistent shell sessions
 
 REPL COMMANDS
-  /plan <task>   Run task in plan mode (read-only analysis + confirm before execute)
-  /skills        List available skills
+${listCommands().map(c => `  /${c.name.padEnd(14)} ${c.description}`).join('\n')}
   /<skill> [args] Run a built-in or custom skill
-  /sessions      List saved sessions (resume with --continue or --resume)
-  /clear         Clear conversation history
-  /history       Show message count
-  /model         Show current model
-  /cwd           Show working directory
-  /help          Show this help
-  /exit          Exit ovolv999
+  Plan mode: Ctrl+P (default binding) — read-only analysis, confirm before execute
 
 SKILLS (${skills.size} available)
 ${[...skills.values()].map(s => `  /${s.name.padEnd(14)} ${s.description}`).join('\n')}
@@ -767,7 +831,7 @@ async function runRepl(
   saveOnExit = (): void => {
     if (!currentSessionDir) return
     try {
-      saveSession(currentSessionDir, history)
+      saveSession(currentSessionDir, history, lastOutcomeSummary)
     } catch (err: unknown) {
       renderer.warn(`Failed to persist session: ${(err as Error).message}`)
     }
@@ -882,6 +946,14 @@ async function runRepl(
     let currentPrompt   = prompt
     let currentHistory  = taskHistory
 
+    // v0.4.1 WS8 (error truth): count this turn's real model call attempts
+    // so a failure card reports "attempted N calls" instead of a fabricated
+    // recovery claim. attemptId is the 0-based per-run call index.
+    let turnApiAttempts = 0
+    const unsubAttempts = engine.getEventEmitter().on('MODEL_ATTEMPT_STARTED', (e) => {
+      turnApiAttempts = Math.max(turnApiAttempts, e.attemptId + 1)
+    })
+
     try {
       while (true) {
         // Race the engine against a hard deadline. The timer handle
@@ -891,7 +963,7 @@ async function runRepl(
         let result: {
           result: { reason: string; output: string }
           newHistory: OpenAIMessage[]
-          outcome?: { completion: { status: string } }
+          outcome?: TurnOutcome
         }
         let deadlineExceeded = false
         const dl = runWithDeadline(
@@ -931,9 +1003,16 @@ async function runRepl(
               history.length = 0
               history.push(...trimHistoryForNextTurn(settled.value.newHistory))
             }
-            // Save the partial history so the user can resume.
+            // Save the partial history so the user can resume. The turn is
+            // INCOMPLETE here, so no verdict is persisted (v0.4.1 WS7) —
+            // /resume will report this session's status as unknown rather
+            // than showing a stale verdict from an earlier turn.
             if (sessionDir) {
-              try { saveSession(sessionDir, history) } catch { /* best-effort */ }
+              try {
+                saveSession(sessionDir, history, undefined)
+              } catch (err: unknown) {
+                warnOnce('session:save:interrupt', `Failed to persist session: ${(err as Error).message}`)
+              }
             }
             // Fall through to the interrupt prompt so the user can give
             // feedback (e.g. "skip this step") or just hit Enter to continue.
@@ -961,10 +1040,16 @@ async function runRepl(
         history.push(...trimHistoryForNextTurn(result.newHistory))
         currentHistory = [...history]
 
-        // Persist session after each turn (best-effort — warn on disk failure)
+        // v0.4.1 WS7: remember this turn's verdict for exit-path saves.
+        if (result.outcome) {
+          lastOutcomeSummary = summarizeOutcome(result.outcome)
+        }
+
+        // Persist session after each turn — with the turn's verdict so the
+        // envelope carries the persisted status (v0.4.1 WS7).
         if (sessionDir) {
           try {
-            saveSession(sessionDir, history)
+            saveSession(sessionDir, history, lastOutcomeSummary)
           } catch (err: unknown) {
             renderer.warn(`Failed to persist session: ${(err as Error).message}`)
           }
@@ -980,8 +1065,13 @@ async function runRepl(
           if (eof) {
             // Ctrl+D during interrupt prompt = hard exit
             // Save first so the interrupt can be resumed in a later session.
+            // Mid-interrupt history → no verdict persisted (v0.4.1 WS7).
             if (sessionDir) {
-              try { saveSession(sessionDir, history) } catch { /* best-effort */ }
+              try {
+                saveSession(sessionDir, history, undefined)
+              } catch (err: unknown) {
+                warnOnce('session:save:interrupt', `Failed to persist session: ${(err as Error).message}`)
+              }
             }
             break
           }
@@ -998,19 +1088,35 @@ async function runRepl(
           continue
         }
 
-        // Normal finish (stop / max_iterations / error)
+        // Normal finish (stop / max_iterations / error). v0.4.1 WS8: the
+        // classic REPL's FIRST structured result card — pre-WS8 it printed
+        // only "Done in Xs · status" while the Ink frontend had a full card.
         const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-        const status = result.outcome?.completion.status ?? result.result.reason
-        if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
-        else renderer.info(`Done in ${elapsed}s · ${status}`)
+        if (result.outcome) {
+          renderOutcomeCard(renderer, {
+            outcome: result.outcome,
+            elapsedSec: elapsed,
+            model: engine.getModel(),
+            costStr: `$${engine.getCostTracker().getTotalCost().toFixed(4)}`,
+          })
+        } else {
+          const status = result.result.reason
+          if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
+          else renderer.info(`Done in ${elapsed}s · ${status}`)
+        }
         break
       }
     } catch (err: unknown) {
       const error = err as Error
       if (error.name !== 'AbortError') {
-        renderer.error(`Error: ${error.message}`)
+        // v0.4.1 WS8 (render-once): the SINGLE classic error renderer —
+        // 5-section card with the session log path and the real attempt
+        // count. The coordinator no longer self-renders, so this prints
+        // exactly once.
+        renderer.error(formatErrorCardText(err, currentSessionDir, turnApiAttempts))
       }
     } finally {
+      unsubAttempts()
       running = false
     }
   }
@@ -1026,9 +1132,15 @@ async function runRepl(
       // Ctrl+D at the prompt — save the session before exiting so the
       // user can resume with `--continue` or `--resume <session>`.
       // saveOnExit is also wired into cleanup() in main(), but we save
-      // here too for a tight, deterministic path.
+      // here too for a tight, deterministic path. Idle at the prompt
+      // means the last turn completed, so its verdict is persisted
+      // (v0.4.1 WS7).
       if (currentSessionDir) {
-        try { saveSession(currentSessionDir, history) } catch { /* best-effort */ }
+        try {
+          saveSession(currentSessionDir, history, lastOutcomeSummary)
+        } catch (err: unknown) {
+          warnOnce('session:save:repl', `Failed to persist session: ${(err as Error).message}`)
+        }
       }
       renderer.newline()
       renderer.info('Goodbye.')
@@ -1067,7 +1179,7 @@ async function runRepl(
         for (const cmd of cmds) {
           process.stdout.write('  \x1b[36m/' + cmd.name.padEnd(16) + '\x1b[0m \x1b[2m' + cmd.description + '\x1b[0m\n')
         }
-        process.stdout.write('\n  \x1b[2mAlso: /plan <task>, /<skill_name>\x1b[0m\n\n')
+        process.stdout.write('\n  \x1b[2mAlso: /<skill_name> runs a loaded skill; Ctrl+P toggles plan mode.\x1b[0m\n\n')
         continue
       }
 
@@ -1151,7 +1263,7 @@ async function runRepl(
         if (slashResult.type === 'exit') {
           if (currentSessionDir) {
             try {
-              saveSession(currentSessionDir, history)
+              saveSession(currentSessionDir, history, lastOutcomeSummary)
             } catch (err: unknown) {
               renderer.warn(`Failed to persist session on exit: ${(err as Error).message}`)
             }
@@ -1256,6 +1368,15 @@ async function runSingleTask(
   const startMs = Date.now()
   let result: { reason: string; output: string }
   let completionStatus: string | undefined
+  // v0.4.1 WS7: this turn's verdict, persisted on the success save below.
+  let taskOutcomeSummary: OutcomeSummary | undefined
+  // v0.4.1 WS8: the full outcome (for the result card) and the real model
+  // call attempt count (for the error card's auto-recovery line).
+  let finalOutcome: TurnOutcome | undefined
+  let turnApiAttempts = 0
+  const unsubAttempts = engine.getEventEmitter().on('MODEL_ATTEMPT_STARTED', (e) => {
+    turnApiAttempts = Math.max(turnApiAttempts, e.attemptId + 1)
+  })
   let deadlineExceeded = false
   const dl = runWithDeadline(
     () => engine.runTurn(task, resumedHistory ?? historyRef),
@@ -1271,6 +1392,11 @@ async function runSingleTask(
     const out = await dl.promise
     result = out.result
     completionStatus = out.outcome?.completion.status
+    if (out.outcome) {
+      finalOutcome = out.outcome
+      taskOutcomeSummary = summarizeOutcome(out.outcome)
+      lastOutcomeSummary = taskOutcomeSummary
+    }
     // CRITICAL: take the engine's `newHistory`, trim it for next-turn
     // budget, and write it back into the caller's `historyRef` so the
     // /continue and /resume flows see THIS turn. The previous
@@ -1288,7 +1414,10 @@ async function runSingleTask(
     if (deadlineExceeded) {
       renderer.warn(`Turn hit the ${HARD_TURN_DEADLINE_MS / 1000}s hard deadline.`)
     } else if (error.name !== 'AbortError') {
-      renderer.error(`Error: ${error.message}`)
+      // v0.4.1 WS8 (render-once): the SINGLE classic error renderer for
+      // single-shot mode — 5-section card, real session log path, real
+      // attempt count. The coordinator no longer self-renders.
+      renderer.error(formatErrorCardText(err, sessionDir, turnApiAttempts))
     }
     // Even on error/deadline, the engine may have appended messages
     // before bailing. Trim whatever is in `out.newHistory` (if
@@ -1304,26 +1433,73 @@ async function runSingleTask(
       historyRef.push(...trimmed)
     }
     if (sessionDir && historyRef.length > 0) {
-      try { saveSession(sessionDir, historyRef) } catch { /* best-effort */ }
+      // Error/deadline: the turn never produced a verdict — persist the
+      // partial history WITHOUT a stale outcome (v0.4.1 WS7).
+      try {
+        saveSession(sessionDir, historyRef, undefined)
+      } catch (err: unknown) {
+        warnOnce('session:save:singleTask', `Failed to persist session: ${(err as Error).message}`)
+      }
+    }
+    // v0.4.1 C4 (entry-semantics parity): single-shot doors must report
+    // failure to the shell exactly like --pipe — same ladder, same
+    // classifiers (pipeRenderer.ts). Pre-C4 this path returned normally
+    // after rendering the error card, so scripts saw exit 0 off a dead
+    // API key while --pipe exited 2.
+    if (deadlineExceeded) {
+      process.exitCode = 1
+    } else if (error.name !== 'AbortError') {
+      process.exitCode = isApiClassError(err) ? 2 : 1
     }
     updateProgressLog(cwd, 'complete', 'done')
     return
   } finally {
+    unsubAttempts()
     dl.clear()
   }
 
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
-  const status = completionStatus ?? result.reason
-  if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
-  else renderer.info(`Done in ${elapsed}s · ${status}`)
+  if (finalOutcome) {
+    // v0.4.1 WS8: the classic frontend's FIRST structured result card
+    // (pre-WS8 single-shot mode printed only "Done in Xs · status").
+    // Same twin the Ink frontend renders — one card component per frontend.
+    renderOutcomeCard(renderer, {
+      outcome: finalOutcome,
+      elapsedSec: elapsed,
+      model: engine.getModel(),
+      costStr: `$${engine.getCostTracker().getTotalCost().toFixed(4)}`,
+    })
+  } else {
+    const status = completionStatus ?? result.reason
+    if (status === 'completed') renderer.success(`Done in ${elapsed}s`)
+    else renderer.info(`Done in ${elapsed}s · ${status}`)
+  }
+
+  // v0.4.1 C4: the verdict the card shows IS the exit code the shell sees —
+  // identical ladder to --pipe (completed→0; other verdicts→1; API-class
+  // terminal failures→2). Pre-C4 a failed single-shot turn exited 0.
+  if (finalOutcome) {
+    let code: number = pipeExitCodeFor(finalOutcome.completion.status)
+    if (code !== 0 && outcomeIsApiClassFailure(finalOutcome)) code = 2
+    process.exitCode = code
+  } else if (completionStatus !== undefined && completionStatus !== 'completed') {
+    process.exitCode = 1
+  } else if (result.reason.startsWith('completion_')) {
+    process.exitCode = 1
+  }
 
   // Persist the final history so --continue / --resume can pick it up.
   // saveOnExit (set by main() for single-shot mode) covers most cases,
   // but we save here too — the engine may have appended messages after
   // the last runTask check, and a deterministic save on success is
-  // easier to reason about than relying on the exit handler.
+  // easier to reason about than relying on the exit handler. The turn's
+  // verdict rides along so /resume shows the real status (v0.4.1 WS7).
   if (sessionDir && historyRef.length > 0) {
-    try { saveSession(sessionDir, historyRef) } catch { /* best-effort */ }
+    try {
+      saveSession(sessionDir, historyRef, taskOutcomeSummary)
+    } catch (err: unknown) {
+      warnOnce('session:save:singleTask', `Failed to persist session: ${(err as Error).message}`)
+    }
   }
   updateProgressLog(cwd, 'complete', 'done')
 }
@@ -1463,7 +1639,7 @@ async function main(): Promise<void> {
   const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
   initChildLogCapture()
 
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
@@ -1504,7 +1680,83 @@ async function main(): Promise<void> {
     return
   }
 
-  // ── Pipe mode: minimal flow, no banner, no session, clean stdout ────────
+  // ── LLM-only mode: frozen v0.4.0 raw single-shot path ────────────────────
+  // Hidden escape hatch for latency-sensitive automation (sshRemote.ts is
+  // the standing consumer — see src/core/sshRemote.ts). Bypasses the
+  // execution engine: no tools, no modules, one raw chat completion.
+  // v0.4.0 exposed exactly this behavior as --pipe; --pipe now runs the
+  // full engine (Breaking — see CHANGELOG v0.4.1). Deliberately NOT in
+  // --help: new users should get the real engine.
+  if (llmOnly) {
+    if (help) {
+      const { getPipeHelp } = await import('../src/integrations/pipeMode.js')
+      process.stdout.write(getPipeHelp() + '\n')
+      process.exit(0)
+    }
+
+    const apiKey = apiEnvironment.apiKey
+    if (!apiKey) {
+      process.stderr.write('Error: no API key configured for pipe mode\n')
+      process.exit(1)
+    }
+
+    const { readStdin, buildPrompt, estimateTokens, formatPipeOutput } = await import('../src/integrations/pipeMode.js')
+
+    let stdinContent = ''
+    if (!process.stdin.isTTY) {
+      try {
+        stdinContent = await readStdin(maxStdinBytes)
+      } catch (err) {
+        process.stderr.write(`Error reading stdin: ${(err as Error).message}\n`)
+        process.exit(1)
+      }
+    }
+
+    if (!task && !stdinContent.trim()) {
+      process.stderr.write('Error: no prompt or stdin input provided\n')
+      process.exit(1)
+    }
+
+    const OpenAI = (await import('openai')).default
+    const client = new OpenAI({ apiKey, baseURL: baseURLFlag ?? apiEnvironment.baseURL })
+
+    const fullPrompt = buildPrompt(task, stdinContent, { cwd, includeContext: !noContext })
+    const startedAt = Date.now()
+    let response = ''
+    try {
+      const resp = await client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a helpful coding assistant. Respond concisely.' },
+          { role: 'user', content: fullPrompt },
+        ],
+      })
+      response = resp.choices[0]?.message?.content ?? ''
+    } catch (err) {
+      process.stderr.write(`API error: ${(err as Error).message}\n`)
+      process.exit(2)
+    }
+
+    process.stdout.write(formatPipeOutput({
+      response,
+      stdinContent,
+      fullPrompt,
+      estimatedInputTokens: estimateTokens(fullPrompt),
+      estimatedOutputTokens: estimateTokens(response),
+      durationMs: Date.now() - startedAt,
+    }, pipeFormat))
+    if (!process.stdout.write('\n')) { /* best-effort flush */ }
+    process.exit(0)
+  }
+
+  // ── Pipe mode: full engine, headless, clean stdout ───────────────────────
+  // v0.4.1 WS3: --pipe now runs the SAME ExecutionEngine as every other
+  // front door (tools enabled, identical permission/model precedence —
+  // consistency matrix C4). The PipeRenderer enforces stdout = answer
+  // only; diagnostics go to stderr. Exit ladder:
+  //   0 completed · 1 partial/blocked/exhausted/cancelled/failed · 2 API throw
+  // No project session dir is written and no durable session state remains
+  // (assembleEngine gives this path a scratch dir it removes on dispose).
   if (pipe) {
     if (help) {
       const { getPipeHelp } = await import('../src/integrations/pipeMode.js')
@@ -1518,12 +1770,12 @@ async function main(): Promise<void> {
       process.exit(1)
     }
 
-    const { readStdin, executePipe, formatPipeOutput } = await import('../src/integrations/pipeMode.js')
+    const { readStdin, buildPrompt, formatPipeOutput } = await import('../src/integrations/pipeMode.js')
 
     let stdinContent = ''
     if (!process.stdin.isTTY) {
       try {
-        stdinContent = await readStdin()
+        stdinContent = await readStdin(maxStdinBytes)
       } catch (err) {
         process.stderr.write(`Error reading stdin: ${(err as Error).message}\n`)
         process.exit(1)
@@ -1535,44 +1787,122 @@ async function main(): Promise<void> {
       process.exit(1)
     }
 
-    const OpenAI = (await import('openai')).default
-    const client = new OpenAI({ apiKey, baseURL: apiEnvironment.baseURL })
+    const { PipeRenderer, pipeExitCodeFor, isApiClassError, outcomeIsApiClassFailure } = await import('../src/ui/pipeRenderer.js')
+    const pipeRenderer = new PipeRenderer({ format: pipeFormat })
+    const assembled = await assembleEngine({
+      cwd,
+      apiKey,
+      baseURL: baseURLFlag ?? apiEnvironment.baseURL,
+      provider: apiEnvironment.provider,
+      model,
+      maxIterations: maxIter,
+      frontend: 'headless',
+      session: false,
+      version: VERSION,
+      skills,
+      quiet: true,
+      getActivePrompt: () => activePrompt,
+      renderer: pipeRenderer,
+      profileOverride: profile,
+    })
 
-    const llmCall = async (prompt: string): Promise<string> => {
-      try {
-        const resp = await client.chat.completions.create({
-          model,
-          messages: [
-            { role: 'system', content: 'You are a helpful coding assistant. Respond concisely.' },
-            { role: 'user', content: prompt },
-          ],
-        })
-        return resp.choices[0]?.message?.content ?? ''
-      } catch (err) {
-        process.stderr.write(`API error: ${(err as Error).message}\n`)
-        process.exit(2)
+    let exitCode: number
+    try {
+      const fullPrompt = buildPrompt(task, stdinContent, { cwd, includeContext: !noContext })
+      const { outcome } = await assembled.engine.runTurn(fullPrompt, [])
+      const costTracker = assembled.engine.getCostTracker()
+      const response = pipeRenderer.responseText || outcome.output
+      if (pipeFormat === 'json') {
+        // Frozen sshRemote envelope — keys pinned by tests/pipeMode.test.ts.
+        // Stats are REAL costTracker values now (no more chars/4 estimates).
+        process.stdout.write(formatPipeOutput({
+          response,
+          stdinContent,
+          fullPrompt,
+          estimatedInputTokens: costTracker.getTotalInputTokens(),
+          estimatedOutputTokens: costTracker.getTotalOutputTokens(),
+          durationMs: costTracker.getTotalAPIDurationMs(),
+        }, 'json'))
+        process.stdout.write('\n')
+      } else if (pipeRenderer.responseText === '') {
+        // Nothing streamed (e.g. a non-streaming transport fell back) —
+        // emit the coordinator's final output instead of printing nothing,
+        // but ONLY for a completed turn: on a failed turn outcome.output
+        // is the error text (`[Error: ...]`), and stdout stays answer-only.
+        if (outcome.completion.status === 'completed') {
+          process.stdout.write(response + '\n')
+        }
+      } else {
+        process.stdout.write('\n')
       }
+      exitCode = pipeExitCodeFor(outcome.completion.status)
+      if (exitCode !== 0 && outcomeIsApiClassFailure(outcome)) {
+        // The coordinator absorbs API failures into a `failed` outcome
+        // (circuit breaker) instead of throwing — escalate here so a dead
+        // provider / bad key is still distinguishable from a failed task.
+        exitCode = 2
+      }
+      if (exitCode !== 0) {
+        const attempts = outcome.modelAttempts ?? []
+        const lastError = attempts.length > 0 ? attempts[attempts.length - 1].error : undefined
+        process.stderr.write(exitCode === 2 && lastError
+          ? `pipe: API error: ${lastError}\n`
+          : `pipe: task ended with status "${outcome.completion.status}"\n`)
+      }
+    } catch (err) {
+      process.stderr.write(`pipe: ${(err as Error).message}\n`)
+      exitCode = isApiClassError(err) ? 2 : 1
+    } finally {
+      assembled.dispose()
     }
-
-    const result = await executePipe(
-      { cwd, prompt: task, format: pipeFormat },
-      stdinContent,
-      llmCall,
-    )
-
-    process.stdout.write(formatPipeOutput(result, pipeFormat))
-    if (!process.stdout.write('\n')) { /* best-effort flush */ }
-    process.exit(0)
+    process.exit(exitCode)
   }
 
+  // v0.4.1 WS2 (first-run closure): a missing API key is no longer a dead
+  // end. Interactive terminals get ONE question → the first-run wizard →
+  // a real provider probe → fall-through into the main UI (no exit, no
+  // "re-run to continue" dance). Non-TTY callers (CI, pipes, cron) get an
+  // actionable stderr block and exit 1 — the wizard's readline would hang
+  // on their closed stdin.
+  if (!apiEnvironment.apiKey) {
+    if (!isInteractiveTerminal()) {
+      process.stderr.write(
+        '\x1b[31mError:\x1b[0m no API key is configured.\n\n' +
+          'Configure one, then re-run:\n' +
+          '  export OPENAI_API_KEY=<your key>      # or run: ovolv999 init\n\n' +
+          'MiniMax users: set ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_BASE_URL).\n',
+      )
+      process.exit(1)
+    }
+    const proceed = await askYesNo('\nNo API key configured. Run first-time setup now?', true)
+    if (proceed) {
+      const { configured } = await runFirstRunWizard({})
+      // Re-resolve: loadGlobalProvider() now reads the just-saved key.
+      if (configured) Object.assign(apiEnvironment, resolveApiEnvironment())
+    }
+    if (!apiEnvironment.apiKey) {
+      process.stderr.write('\x1b[31mError:\x1b[0m no API key configured. Re-run `ovolv999 init` when ready.\n')
+      process.exit(1)
+    }
+    // Prove the freshly-saved config reaches a model BEFORE the user sits
+    // down at the UI — streaming + tool calling, the two capabilities every
+    // turn depends on. Failure renders the honest five-section card but
+    // KEEPS the saved config (an offline user is not locked out: fix the
+    // network and re-run, no re-setup).
+    process.stderr.write(`Probing provider (${model ?? apiEnvironment.model})…\n`)
+    const probe = await probeProvider({
+      apiKey: apiEnvironment.apiKey,
+      baseURL: baseURLFlag ?? apiEnvironment.baseURL,
+      model: model ?? apiEnvironment.model,
+    })
+    if (!probe.ok) {
+      process.stderr.write(formatErrorCardText(probe.error ?? new Error('provider probe failed'), undefined, 1) + '\n')
+      process.stderr.write('\x1b[33m⚠\x1b[0m Config kept in ~/.ovogo/settings.json — fix the key or network and re-run `ovolv999`.\n')
+      process.exit(1)
+    }
+    process.stderr.write(`✓ Provider reachable (${probe.model}, ${probe.latencyMs}ms) — starting ovolv999.\n`)
+  }
   const apiKey = apiEnvironment.apiKey
-  if (!apiKey) {
-    process.stderr.write(
-      '\x1b[31mError:\x1b[0m no API key is configured.\n' +
-        'Set OPENAI_API_KEY, or configure MiniMax through ANTHROPIC_AUTH_TOKEN.\n',
-    )
-    process.exit(1)
-  }
 
   // ── Background mode: spawn a detached session and exit ───────────────────
   if (bg) {
@@ -1592,313 +1922,73 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  const renderer = new Renderer({
-    stream: ink && !loop
-      ? new Writable({ write(_chunk, _encoding, callback) { callback() } })
-      : process.stdout,
-  })
-  if (!ink || loop) renderer.banner(VERSION, model)
-  renderer.info(`workspace   ${cwd}`)
-
-  // Load settings + hooks
-  const settings = loadSettings(cwd)
-  const projectConfig = loadProjectConfig(cwd)
-  if (projectConfig) {
-    renderer.info(`config      project settings loaded`)
-  }
-  const hookRunner = settings.hooks
-    ? new HookRunner(settings.hooks, { sink: { warn: (m) => renderer.warn(m) } })
-    : new NoopHookRunner()
-
-  const hookTypes = ['PreToolCall', 'PostToolCall', 'UserPromptSubmit', 'OnError', 'OnComplete', 'OnContextOverflow'] as const
-  const hasHooks = hookTypes.some(t => (settings.hooks?.[t]?.length ?? 0) > 0)
-  if (hasHooks) {
-    const count = hookTypes.reduce((sum, t) => sum + (settings.hooks?.[t]?.length ?? 0), 0)
-    renderer.info(`hooks       ${count} loaded`)
-  }
-
-  // Show loaded skills (project/global only, not builtins)
-  const customSkills = [...skills.values()].filter((s) => s.source !== 'builtin')
-  if (customSkills.length > 0) {
-    renderer.info(`skills      ${customSkills.length} custom · /skills`)
-  }
-
-  // Load OVOGO.md files (project + user instructions)
-  const ovogoMdFiles = loadOvogoMd(cwd)
-  if (ovogoMdFiles.length > 0) {
-    const labels = ovogoMdFiles.map((f) => f.type).join(', ')
-    renderer.info(`context     ${ovogoMdFiles.length} OVOGO.md · ${labels}`)
-  }
-
-  // Initialize memory system
-  const memoryDir = getMemoryDir(cwd)
-  const memStats = getMemoryStats(memoryDir)
-  if (memStats.hasIndex) {
-    renderer.info(`memory      ${memStats.entryCount} entr${memStats.entryCount !== 1 ? 'ies' : 'y'}`)
-  } else {
-    renderer.info(`memory      ready`)
-  }
-
-  // Show task context if configured
-  const taskContext = settings.taskContext
-  if (taskContext) {
-    renderer.info(`Task: ${taskContext.name ?? '未命名'} · 阶段: ${taskContext.phase ?? '未设置'}`)
-    if (taskContext.scope && taskContext.scope.length > 0) {
-      renderer.info(`Scope: ${taskContext.scope.join(', ')}`)
-    }
-  }
-
-  const permissionManager = new PermissionManager()
-  permissionManager.setMode(settings.permissions?.mode ?? (ink ? 'default' : 'bypassPermissions'))
-  for (const rule of settings.permissions?.rules ?? []) {
-    permissionManager.addRule(rule)
-  }
-  if (settings.permissions?.mode || (settings.permissions?.rules?.length ?? 0) > 0) {
-    renderer.info(`permissions ${permissionManager.formatMode()}`)
-  }
-
-  // Create per-session output directory (or reuse existing for --continue/--resume)
-  let sessionDir: string
-  let resumedHistory: OpenAIMessage[] = []
+  // Resolve session inputs here — the CLI layer owns exit codes, so
+  // ambiguous/not-found resume errors surface before assembly. The
+  // assembly consumes the resolved dir/history (see engineAssembly.ts).
+  let assemblySession: AssemblySession
   if (resumeSession) {
+    let resumedDir: string
     try {
       // resolveResumePath validates path inputs (session dirs only,
       // history.json normalization, dangerous-root refusal) before
       // delegating session-name lookups to the existing resolver.
-      sessionDir = resolveResumePath(cwd, resumeSession)
+      resumedDir = resolveResumePath(cwd, resumeSession)
     } catch (err: unknown) {
       if (err instanceof AmbiguousSessionError) {
-        renderer.error(err.message)
-        for (const m of err.matches) renderer.error(`  - ${m}`)
+        process.stderr.write(err.message + '\n')
+        for (const m of err.matches) process.stderr.write(`  - ${m}\n`)
         process.exit(1)
       }
       if (err instanceof SessionNotFoundError) {
-        renderer.error(err.message)
+        process.stderr.write(err.message + '\n')
         process.exit(1)
       }
       throw err
     }
-    resumedHistory = loadSession(sessionDir)
-    renderer.info(`session     resumed · ${resumedHistory.length} messages`)
+    assemblySession = { mode: 'existing', dir: resumedDir, history: loadSession(resumedDir), label: 'resumed' }
   } else if (continueSession) {
     const latest = findLatestSession(cwd)
-    if (latest) {
-      sessionDir = latest
-      resumedHistory = loadSession(sessionDir)
-      renderer.info(`session     continued · ${resumedHistory.length} messages`)
-    } else {
-      sessionDir = createSessionDir(cwd)
-      renderer.info(`session     new`)
-    }
+    assemblySession = latest
+      ? { mode: 'existing', dir: latest, history: loadSession(latest), label: 'continued' }
+      : { mode: 'new' }
   } else {
-    sessionDir = createSessionDir(cwd)
-  }
-  if (!resumeSession && !continueSession) renderer.info(`session     new`)
-
-  // Initialize sub-agent tmux monitor
-  const agentLogDir = join(sessionDir, 'agent-logs')
-  const layoutReady = tmuxLayout.init(agentLogDir)
-  if (layoutReady) {
-    renderer.info(`agents      monitor ready · /workers`)
+    assemblySession = { mode: 'new' }
   }
 
-  // Detect project context (language, framework, git status, scripts)
-  const projectCtx = detectProjectContext(cwd)
-  const projectCtxSection = formatProjectContext(projectCtx)
-  if (projectCtx.git?.branch) {
-    renderer.info(`git         ${projectCtx.git.branch} · ${projectCtx.git.modifiedCount ?? 0} modified · ${projectCtx.git.stagedCount ?? 0} staged`)
-  }
-
-  // Build the full system prompt once (memory section injected by MemoryModule at boot)
-  const skillIndex = formatSkillIndex(skills)
-  // Load current mode persona — prepends its system prompt + verbosity guidance
-  const modesDir = join(homedir(), '.ovogo', 'modes')
-  const mode = getCurrentMode(modesDir)
-  const verbosityPrompt = getVerbosityPrompt(mode.verbosity)
-  const modePrompt = [mode.systemPrompt, verbosityPrompt].filter(Boolean).join('\n\n')
-  const systemPrompt = buildFullSystemPrompt(cwd, ovogoMdFiles, modePrompt, taskContext, sessionDir, skillIndex, projectCtxSection)
-
-  // Initialize optimization components
-  const eventLog = new EventLog(sessionDir)
-
-  // Project slug must match src/memory/index.ts:projectSlug — otherwise the
-  // memory directory written here would be invisible to the memory loader
-  // on the next session. Hash-suffixed to prevent collisions between paths
-  // that sanitize to the same prefix (e.g. `/a/proj foo` and `/a/proj-foo`).
-  const projectSlug = cwd.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 24) +
-    '_' + createHash('sha256').update(cwd).digest('hex').slice(0, 8)
-  const semanticMemory = new SemanticMemory(join(homedir(), '.ovogo', 'projects', projectSlug))
-  const episodicMemory = new EpisodicMemory(join(homedir(), '.ovogo', 'projects', projectSlug))
-
-  // Register capability modules (factories read from EngineConfig at resolve time)
-  globalModuleRegistry.register('memory', (ctx) =>
-    new MemoryModule(ctx.config.semanticMemory!, ctx.config.episodicMemory!))
-  globalModuleRegistry.register('critic', (ctx) =>
-    new CriticModule(ctx.client, ctx.model, ctx.config))
-  globalModuleRegistry.register('workspace', (ctx) =>
-    new WorkspaceModule(ctx.config.sessionDir))
-  globalModuleRegistry.register('reflection', (ctx) =>
-    new ReflectionModule(ctx.client, ctx.model, ctx.config.semanticMemory!, ctx.config))
-  globalModuleRegistry.register('mcp', () => new McpModule())
-
-  const maxCtxTokens = process.env.OVOGO_MAX_CONTEXT_TOKENS
-    ? parseInt(process.env.OVOGO_MAX_CONTEXT_TOKENS, 10)
-    : 200_000 // default: claude-sonnet-4-x 200k; DeepSeek: set to 64000 or 128000
-
-  // Create load_skill tool bound to the loaded skills map
-  const loadSkillTool = createLoadSkillTool(skills)
-
-  // Sub-agent factory lives on the engine config so it's owned by THIS
-  // engine instance. No module-level mutable state — concurrent engines or
-  // parallel Agent calls don't clobber each other. The factory closure is
-  // the stable key (see src/tools/agent.ts). MUST be set on config BEFORE
-  // any ExecutionEngine (or planEngine) is constructed, because the engine
-  // reads `config.agentFactory` inside its constructor to wire its AgentTool.
-  const agentFactory: AgentChildEngineFactory = (childConfig, childRenderer) =>
-    new ExecutionEngine(childConfig, childRenderer as Renderer)
-
-  // ── Ink UI mode: create UIStore early so config callbacks can use it ──────
-  let uiStore: UIStore | undefined
-  let inkRendererInstance: InkRenderer | undefined
-  if (ink) {
-    const { UIStore: UIStoreClass } = await import('../src/ui/ink/store.js')
-    const { InkRenderer: InkRendererClass } = await import('../src/ui/ink/inkRenderer.js')
-    uiStore = new UIStoreClass()
-    inkRendererInstance = new InkRendererClass(uiStore)
-  }
-
-  const config: EngineConfig = {
-    model: projectConfig?.model ?? model,
-    apiKey,
-    baseURL: apiEnvironment.baseURL,
-    // Phase 1: drive ProviderAdapter selection from the resolved
-    // environment (minimax vs openai today; both route through the
-    // openai-compatible adapter since MiniMax M3 is served at /v1).
-    provider: apiEnvironment.provider,
-    // Phase 2: adaptive model routing profiles (from ~/.ovogo/settings.json).
-    models: settings.models,
-    maxIterations: projectConfig?.maxIterations ?? maxIter,
+  // v0.4.1 WS3: ONE shared assembly for every front door — interactive,
+  // single-shot, piped stdin, --pipe (above), --bg child re-entry, --loop.
+  // Settings/hooks/permissions/model-preference/module wiring cannot drift
+  // between entry paths anymore.
+  const assembled = await assembleEngine({
     cwd,
-    permissionMode: projectConfig?.permissionMode ?? 'auto',
-    permissionManager,
-    hookRunner,
-    systemPrompt: projectConfig?.systemPrompt
-      ? systemPrompt + '\n\n' + projectConfig.systemPrompt
-      : systemPrompt,
+    apiKey,
+    baseURL: baseURLFlag ?? apiEnvironment.baseURL,
+    provider: apiEnvironment.provider,
+    model,
+    maxIterations: maxIter,
+    frontend: ink ? 'ink' : 'classic',
+    loop,
+    session: assemblySession,
+    version: VERSION,
+    skills,
+    getActivePrompt: () => activePrompt,
+    profileOverride: profile,
+  })
+  const {
+    engine,
+    config,
+    planConfig,
+    renderer,
+    uiStore,
+    inkRenderer: inkRendererInstance,
     sessionDir,
-    maxContextTokens: projectConfig?.maxContextTokens ?? maxCtxTokens,
-    temperature: projectConfig?.temperature
-      ?? (process.env.OVOGO_TEMPERATURE ? parseFloat(process.env.OVOGO_TEMPERATURE) : undefined),
-    maxOutputTokens: process.env.OVOGO_MAX_OUTPUT_TOKENS ? parseInt(process.env.OVOGO_MAX_OUTPUT_TOKENS, 10) : undefined,
-    poor: projectConfig?.poor ?? settings.poor ?? (process.env.OVOGO_POOR === '1' ? { enabled: true } : undefined),
-    mcp: settings.mcp,
-    eventLog,
+    resumedHistory,
+    hookRunner,
     semanticMemory,
     episodicMemory,
-    extraTools: skills.size > 0 ? [loadSkillTool] : [],
-    enabledModules: projectConfig?.enabledModules
-      ?? (settings.mcp?.servers?.length
-        ? ['memory', 'critic', 'workspace', 'reflection', 'mcp']
-        : ['memory', 'critic', 'workspace', 'reflection']),
-    agentFactory,
-    askUserQuestion: createTerminalAskUserHandler({
-      // The handler reads `activePrompt` lazily (it can be null before
-      // the REPL has wired up its readline) and falls back to
-      // non-TTY auto-answers in that case.
-      //
-      // The TTY gate considers BOTH stdout AND stdin. Checking only
-      // stdout.isTTY gives a false positive when the user redirects
-      // stdout to a file/pipe but keeps stdin attached (so the program
-      // thinks it can prompt, but the prompt would never reach the user).
-      // We require stdin to look like a terminal too — a redirected
-      // stdout is usually paired with a redirected stdin, but if it's
-      // not, asking the user is still the wrong call (we'd block).
-      prompt: {
-        get isTTY(): boolean {
-          if (activePrompt) return activePrompt.isTTY
-          return Boolean(process.stdout.isTTY && process.stdin.isTTY)
-        },
-        readLine: (p, signal) => activePrompt
-          ? activePrompt.readLine(p, signal)
-          : Promise.resolve({ text: '', eof: true }),
-        close: () => activePrompt?.close(),
-      },
-      writeOut: (s) => process.stdout.write(s),
-    }),
-    exitPlanMode: async (plan: string): Promise<boolean> => {
-      // Ink UI mode: show plan approval overlay
-      if (uiStore) {
-        return uiStore.showPlanApproval(plan)
-      }
-      // Non-TTY (pipe mode, sub-agent, before REPL has wired its readline):
-      // auto-approve. This is the explicit, documented contract — we do NOT
-      // wait for stdin to produce a "y" because nobody is typing.
-      if (!activePrompt || !activePrompt.isTTY) {
-        process.stdout.write('\n\x1b[95m❯❯ Plan (auto-approved in non-interactive mode):\x1b[0m\n')
-        process.stdout.write(plan + '\n')
-        return true
-      }
-      // Interactive: use the REPL's readline, not a second readline.
-      process.stdout.write('\n\x1b[95m❯❯ Plan:\x1b[0m\n')
-      process.stdout.write(plan + '\n')
-      process.stdout.write('\n\x1b[93mApprove this plan? (y/n):\x1b[0m ')
-      const { text: answer, eof } = await activePrompt.readLine('')
-      if (eof) {
-        // Ctrl+D during approval — treat as rejection so the LLM revises
-        process.stdout.write('\n')
-        return false
-      }
-      return answer.trim().toLowerCase().startsWith('y')
-    },
-    requestPermission: uiStore
-      ? async (toolName, input, riskLevel) => {
-          const preview = toolName === 'Bash' && typeof input.command === 'string'
-            ? input.command
-            : JSON.stringify(input).slice(0, 100)
-           const result = await uiStore.showPermissionDialog({ toolName, preview, riskLevel })
-           if (result.alwaysAllow) {
-             permissionManager.addRule({
-               toolName,
-               ruleContent: '*',
-               behavior: 'allow',
-               source: 'user',
-             })
-           }
-           return { approved: result.approved, feedback: result.feedback }
-        }
-      : undefined,
-  }
-
-  // Plan-mode config: read-only analysis, no reflection (plans aren't completed work).
-  // Inherits the same agentFactory via spread so /plan also has a fully-wired AgentTool.
-  const planPermissionManager = new PermissionManager()
-  planPermissionManager.setMode('plan')
-  const planConfig: EngineConfig = {
-    ...config,
-    planMode: true,
-    permissionManager: planPermissionManager,
-    enabledModules: ['memory', 'workspace'],
-  }
-
-  // ── Ink UI mode: UIStore + InkRenderer already created above (before config)
-
-  const engine = new ExecutionEngine(config, inkRendererInstance
-    ? (inkRendererInstance as unknown as Renderer)
-    : renderer)
-
-  // v0.3.1 (runtime truth contract §三.1.1): an explicit --model/-m on the CLI must
-  // be recorded as a STICKY manual override. Without this call, the
-  // first auto-route would override the user's CLI choice — silently
-  // violating the documented "--model is highest priority" invariant.
-  // The same call also funnels through Engine.setModelByUser, which
-  // validates the profile's provider matches the active transport.
-  if (projectConfig?.model) {
-    try {
-      engine.setModelByUser(config.model)
-    } catch (err) {
-      renderer.warn(`Warning: --model could not be applied: ${(err as Error).message}`)
-    }
-  }
+    maxContextTokens: maxCtxTokens,
+    model: effectiveModel,
+  } = assembled
 
   // Cleanup on any exit path — must be IDEMPOTENT (signal handlers may fire
   // alongside the natural `exit` event). Order matters: save session first
@@ -1916,8 +2006,9 @@ async function main(): Promise<void> {
     if (cleanedUp) return
     cleanedUp = true
     try { saveOnExit?.() } catch { /* best-effort */ }
-    try { engine.dispose() } catch { /* best-effort — never let cleanup throw */ }
-    try { tmuxLayout.destroy() } catch { /* best-effort */ }
+    // Idempotent: engine.dispose + tmux teardown (+ scratch dir removal
+    // for headless runs) — see engineAssembly.ts.
+    try { assembled.dispose() } catch { /* best-effort — never let cleanup throw */ }
     // Display cost summary if any API calls were made
     try {
       const costTracker = engine.getCostTracker()
@@ -1933,10 +2024,15 @@ async function main(): Promise<void> {
   // Wire saveOnExit for non-REPL modes so cleanup() persists the
   // session on every exit path. The REPL wires its own (history-mutating)
   // version; for pipe/loop/single-shot we save the static history we
-  // have at exit time.
+  // have at exit time. v0.4.1 WS7: the last completed turn's verdict
+  // (set by runSingleTask) rides along when present.
   saveOnExit = (): void => {
     if (!sessionDir) return
-    try { saveSession(sessionDir, resumedHistory) } catch { /* best-effort */ }
+    try {
+      saveSession(sessionDir, resumedHistory, lastOutcomeSummary)
+    } catch (err: unknown) {
+      warnOnce('session:save:exit', `Failed to persist session: ${(err as Error).message}`)
+    }
   }
 
   // Pipe input?
@@ -1947,7 +2043,11 @@ async function main(): Promise<void> {
       // Update saveOnExit to capture the post-turn history snapshot
       saveOnExit = (): void => {
         if (!sessionDir) return
-        try { saveSession(sessionDir, resumedHistory) } catch { /* best-effort */ }
+        try {
+          saveSession(sessionDir, resumedHistory, lastOutcomeSummary)
+        } catch (err: unknown) {
+          warnOnce('session:save:exit', `Failed to persist session: ${(err as Error).message}`)
+        }
       }
       await runSingleTask(engine, renderer, piped, cwd, resumedHistory, sessionDir, resumedHistory)
       return
@@ -1983,7 +2083,7 @@ async function main(): Promise<void> {
       engine,
       inkRenderer: inkRendererInstance as unknown as Renderer,
       version: VERSION,
-      model,
+      model: effectiveModel,
       skills: skillsArray,
       cwd,
       sessionDir,

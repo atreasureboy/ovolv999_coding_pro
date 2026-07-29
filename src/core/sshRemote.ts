@@ -318,7 +318,7 @@ export function runRemoteAgent(profile: SshProfile, options: RemoteAgentOptions)
   // Build the remote ovolv999 command
   let cmd = 'ovolv999'
   if (options.model) cmd += ` --model ${shellQuote(options.model)}`
-  cmd += ` --pipe`  // non-interactive
+  cmd += ` --llm-only`  // v0.4.1 WS3: frozen raw single-shot path (--pipe now runs the full engine; latency/semantics contract preserved here)
   cmd += ` ${shellQuote(options.task)}`
 
   const result = execRemote(profile, cmd, {

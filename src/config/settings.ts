@@ -32,10 +32,13 @@ import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
 import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
 import type { McpServerConfig } from '../core/mcpClient.js'
+import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
+import type { ConfigDiagnostic } from './diagnostics.js'
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'])
 const PERMISSION_BEHAVIORS = new Set(['allow', 'deny', 'ask'])
 const PERMISSION_SOURCES = new Set(['builtin', 'user', 'project'])
+const HOOK_EVENTS = ['PreToolCall', 'PostToolCall', 'UserPromptSubmit', 'OnError', 'OnComplete', 'OnContextOverflow'] as const
 
 export interface HookEntry {
   /** Comma-separated tool names to match, or "*" / omit for all. Supports trailing "*" wildcard. */
@@ -104,12 +107,17 @@ function tryParse(path: string): OvogoSettings {
   const content = readFileSync(path, 'utf8')
   if (!content.trim()) return {}
   try {
-    return normalizeSettings(JSON.parse(content))
+    return normalizeSettings(JSON.parse(content), path)
   } catch (err: unknown) {
     const parseError = err as Error
+    const loc = parseJsonSyntaxError(parseError, content)
+    const locText = loc && loc.line !== undefined
+      ? ` (line ${loc.line}${loc.column !== undefined ? `, column ${loc.column}` : ''})`
+      : ''
     throw new Error(
-      `Corrupted JSON config file at "${path}": ${parseError.message}\n` +
-      `Fix suggestion: Inspect and fix syntax in "${path}", or remove the file to reset config.`
+      `Corrupted JSON config file at "${path}"${locText}: ${parseError.message}\n` +
+      `Fix suggestion: Inspect and fix syntax in "${path}", or remove the file to reset config.`,
+      { cause: parseError },
     )
   }
 }
@@ -149,11 +157,29 @@ function normalizeMcpServer(value: unknown): McpServerConfig | null {
   return { name: value.name, type, command: [...value.command], env, cwd }
 }
 
-function normalizeMcp(value: unknown): { servers: McpServerConfig[] } | undefined {
-  if (!isObject(value) || !Array.isArray(value.servers)) return undefined
-  const servers = value.servers
-    .map(normalizeMcpServer)
-    .filter((s): s is McpServerConfig => s !== null)
+function normalizeMcp(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): { servers: McpServerConfig[] } | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value) || !Array.isArray(value.servers)) {
+    if (file) diags.push({
+      file, field: 'mcp', severity: 'warning',
+      message: '"mcp.servers" must be an array — dropped',
+      fix: `Correct the "mcp" section in "${file}".`,
+    })
+    return undefined
+  }
+  const servers: McpServerConfig[] = []
+  value.servers.forEach((raw, i) => {
+    const s = normalizeMcpServer(raw)
+    if (s) {
+      servers.push(s)
+    } else if (file) {
+      diags.push({
+        file, field: `mcp.servers[${i}]`, severity: 'warning',
+        message: 'invalid MCP server entry dropped (needs non-empty "name" and non-empty "command" array)',
+        fix: `Correct or remove this entry in "${file}".`,
+      })
+    }
+  })
   return servers.length > 0 ? { servers } : undefined
 }
 
@@ -168,9 +194,23 @@ function normalizeProvider(value: unknown): ProviderConfig | undefined {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-function normalizeModels(value: unknown): { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } } | undefined {
-  if (!isObject(value) || !Array.isArray(value.profiles)) return undefined
+function normalizeModels(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } } | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value) || !Array.isArray(value.profiles)) {
+    if (file) diags.push({
+      file, field: 'models', severity: 'warning',
+      message: '"models.profiles" must be an array — dropped',
+      fix: `Correct the "models" section in "${file}".`,
+    })
+    return undefined
+  }
   const profiles = value.profiles.filter(isObject)
+  const dropped = value.profiles.length - profiles.length
+  if (dropped > 0 && file) diags.push({
+    file, field: 'models.profiles', severity: 'warning',
+    message: `${dropped} non-object profile entr${dropped === 1 ? 'y' : 'ies'} dropped`,
+    fix: `Each profile must be a JSON object — see "${file}".`,
+  })
   if (profiles.length === 0) return undefined
   const r = isObject(value.routing) ? value.routing : {}
   const routing: Record<string, unknown> = {}
@@ -180,25 +220,135 @@ function normalizeModels(value: unknown): { profiles: unknown[]; routing?: { ena
   return { profiles, routing }
 }
 
-function normalizeSettings(value: unknown): OvogoSettings {
+function normalizeHookEntry(value: unknown): HookEntry | null {
+  if (!isObject(value)) return null
+  if (typeof value.command !== 'string' || !value.command.trim()) return null
+  const matcher = typeof value.matcher === 'string' && value.matcher.trim() ? value.matcher : undefined
+  return { matcher, command: value.command }
+}
+
+function normalizeHooks(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): HooksConfig | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value)) {
+    if (file) diags.push({
+      file, field: 'hooks', severity: 'warning',
+      message: '"hooks" must be an object keyed by event name — dropped',
+      fix: `Correct the "hooks" section in "${file}".`,
+    })
+    return undefined
+  }
+  const out: HooksConfig = {}
+  let any = false
+  for (const event of HOOK_EVENTS) {
+    const arr = value[event]
+    if (arr === undefined) continue
+    if (!Array.isArray(arr)) {
+      if (file) diags.push({
+        file, field: `hooks.${event}`, severity: 'warning',
+        message: `"hooks.${event}" must be an array — dropped`,
+        fix: `Correct or remove "hooks.${event}" in "${file}".`,
+      })
+      continue
+    }
+    const valid: HookEntry[] = []
+    arr.forEach((raw, i) => {
+      const entry = normalizeHookEntry(raw)
+      if (entry) {
+        valid.push(entry)
+      } else if (file) {
+        diags.push({
+          file, field: `hooks.${event}[${i}]`, severity: 'warning',
+          message: 'invalid hook entry dropped (needs a non-empty "command" string)',
+          fix: `Correct or remove this entry in "${file}".`,
+        })
+      }
+    })
+    if (valid.length > 0) {
+      out[event] = valid
+      any = true
+    }
+  }
+  return any ? out : undefined
+}
+
+function normalizeTaskContext(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): TaskContext | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value)) {
+    if (file) diags.push({
+      file, field: 'taskContext', severity: 'warning',
+      message: '"taskContext" must be an object — dropped',
+      fix: `Correct the "taskContext" section in "${file}".`,
+    })
+    return undefined
+  }
+  const out: TaskContext = {}
+  const stringField = (key: 'name' | 'phase' | 'notes'): void => {
+    const v = value[key]
+    if (typeof v === 'string') out[key] = v
+    else if (v !== undefined && file) diags.push({
+      file, field: `taskContext.${key}`, severity: 'warning',
+      message: `"taskContext.${key}" must be a string — dropped`,
+      fix: `Correct or remove "taskContext.${key}" in "${file}".`,
+    })
+  }
+  stringField('name')
+  stringField('phase')
+  stringField('notes')
+  if (Array.isArray(value.scope) && value.scope.every((s) => typeof s === 'string')) {
+    out.scope = value.scope
+  } else if (value.scope !== undefined && file) {
+    diags.push({
+      file, field: 'taskContext.scope', severity: 'warning',
+      message: '"taskContext.scope" must be an array of strings — dropped',
+      fix: `Correct or remove "taskContext.scope" in "${file}".`,
+    })
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function normalizeSettings(value: unknown, file?: string): OvogoSettings {
   if (!isObject(value)) return {}
-  const settings = value as OvogoSettings
+  const diags: ConfigDiagnostic[] = []
   const rawPermissions = isObject(value.permissions) ? value.permissions : undefined
   const rawMode = rawPermissions?.mode
   const rawRules = Array.isArray(rawPermissions?.rules) ? rawPermissions.rules : []
-  const rules = rawRules
-    .map(normalizePermissionRule)
-    .filter((rule): rule is PermissionRule => rule !== null)
+  const rules: PermissionRule[] = []
+  rawRules.forEach((raw, i) => {
+    const rule = normalizePermissionRule(raw)
+    if (rule) {
+      rules.push(rule)
+    } else if (file) {
+      diags.push({
+        file, field: `permissions.rules[${i}]`, severity: 'warning',
+        message: 'invalid permission rule dropped (needs non-empty toolName/ruleContent, behavior allow|deny|ask, source builtin|user|project)',
+        fix: `Correct or remove this entry in "${file}".`,
+      })
+    }
+  })
+  const modeValid = typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
+  if (rawMode !== undefined && !modeValid && file) diags.push({
+    file, field: 'permissions.mode', severity: 'warning',
+    message: `"${typeof rawMode === 'string' ? rawMode : JSON.stringify(rawMode)}" is not a valid permission mode — dropped (valid: default, acceptEdits, plan, auto, bypassPermissions)`,
+    fix: `Correct "permissions.mode" in "${file}".`,
+  })
 
+  const settings = normalizeSettingsFields(value, file, diags, rules)
+  for (const d of diags) warnConfigOnce(d)
+  return settings
+}
+
+function normalizeSettingsFields(value: Record<string, unknown>, file: string | undefined, diags: ConfigDiagnostic[], rules: PermissionRule[]): OvogoSettings {
+  const rawPermissions = isObject(value.permissions) ? value.permissions : undefined
+  const rawMode = rawPermissions?.mode
   return {
-    hooks: settings.hooks,
-    taskContext: settings.taskContext,
+    hooks: normalizeHooks(value.hooks, file, diags),
+    taskContext: normalizeTaskContext(value.taskContext, file, diags),
     poor: isObject(value.poor) && typeof value.poor.enabled === 'boolean'
       ? { enabled: value.poor.enabled }
       : undefined,
-    mcp: normalizeMcp(value.mcp),
+    mcp: normalizeMcp(value.mcp, file, diags),
     provider: normalizeProvider(value.provider),
-    models: normalizeModels(value.models),
+    models: normalizeModels(value.models, file, diags),
     permissions: rawPermissions
       ? {
           mode: typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
@@ -315,7 +465,21 @@ export function getGlobalSettingsPath(): string {
 export function loadGlobalProvider(): ProviderConfig | undefined {
   const path = getGlobalSettingsPath()
   if (!existsSync(path)) return undefined
-  return tryParse(path).provider
+  try {
+    return tryParse(path).provider
+  } catch (err) {
+    // Corrupt or unreadable global settings must never crash the CLI:
+    // every entry point — even --version and --pipe — resolves the API
+    // environment through this function. Degrade to defaults/env vars and
+    // tell the user exactly once (stderr only — never stdout).
+    warnConfigOnce({
+      file: path,
+      severity: 'error',
+      message: `global settings unreadable — falling back to defaults/env vars (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}", or run \`ovolv999 init\` to reconfigure`,
+    })
+    return undefined
+  }
 }
 
 export function saveGlobalProvider(provider: ProviderConfig): void {

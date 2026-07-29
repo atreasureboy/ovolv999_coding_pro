@@ -76,6 +76,10 @@ export type RunEvent =
   | { type: 'REVIEW_COMPLETED'; verdict: string; findings: string[] }
   // v0.3.2 (run-scoped runtime contract §Phase 3): TaskIntent classification event
   | { type: 'TASK_INTENT_CLASSIFIED'; runId: string; intent: { kind: 'informational' | 'analysis' | 'mutation'; source: string; confidence: number } }
+  // v0.4.1 WS4 (ExecutionProfile): per-turn profile resolution, emitted
+  // before boot so the StatusBar chip, /why and EventLog all see which
+  // modules/tools/limits this turn runs under.
+  | { type: 'PROFILE_RESOLVED'; profile: 'fast' | 'standard' | 'deep' | 'autonomous'; source: 'override' | 'intent' | 'detected' | 'default'; modules: string[] }
   // v0.3.2 (run-scoped runtime contract §Phase 7): per-attempt model call events so the
   // fallback chain emits structured events for each hop.
   | { type: 'MODEL_ATTEMPT_STARTED'; model: string; attemptId: number }

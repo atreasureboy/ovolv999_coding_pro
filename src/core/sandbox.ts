@@ -22,6 +22,7 @@ import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir, tmpdir } from 'os'
 import { execSync } from 'child_process'
+import { warnConfigOnce } from '../config/diagnostics.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,12 @@ export function loadConfig(): SandboxConfig {
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as Partial<SandboxConfig>
     return { ...DEFAULT_CONFIG, ...raw }
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `sandbox config corrupt — using defaults (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return { ...DEFAULT_CONFIG }
   }
 }

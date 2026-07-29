@@ -22,6 +22,7 @@
 
 import type { Tool } from '../types.js'
 import type { ModelCapabilities } from '../modelCapabilities.js'
+import type { ExecutionProfile } from '../effort.js'
 
 export interface ActiveToolCall {
   callId: string
@@ -57,6 +58,14 @@ export class SharedRuntimeState {
   currentTurnAbortController: AbortController | null = null
   softAbortRequested = false
   softAbortOwner: AbortController | null = null
+
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): sticky per-engine profile override
+   * set by --profile / /profile (mirrors the /model manual-override
+   * contract — user choice always wins over intent/detection). null =
+   * resolve per turn from intent + prompt.
+   */
+  executionProfileOverride: ExecutionProfile | null = null
 
   /**
    * P2-9: claim a pending soft-abort for the given turn's controller.

@@ -19,6 +19,7 @@ import type OpenAI from 'openai'
 import { randomUUID } from 'crypto'
 import { ThinkingTagFilter } from '../thinkingTagFilter.js'
 import type { Renderer } from '../../ui/renderer.js'
+import type { EventLog } from '../eventLog.js'
 
 /**
  * StreamResult — the normalized output of consuming a streaming LLM
@@ -43,6 +44,8 @@ const STREAM_TIMEOUT_MS = 120_000
 
 export interface StreamConsumerDeps {
   renderer: Renderer
+  /** v0.4.1 C1: structured record for stream-protocol anomalies. */
+  eventLog?: EventLog
 }
 
 export class StreamConsumer {
@@ -169,12 +172,30 @@ export class StreamConsumer {
 
     const rawToolCalls = Array.from(toolCallsMap.values()).sort(
       (a, b) => a.index - b.index,
-    ).map((tc) => {
+    )
+    // v0.4.1 C1 (callId truth): missing ids are synthesized — the documented
+    // vLLM/Ollama compat contract, silently for the SINGLE-missing case. But
+    // when a response carries MULTIPLE id-less tool calls, tool_result→call
+    // attribution is unrecoverable: record it structurally (EventLog
+    // protocol_error), warn visibly once per offending model call, and NEVER
+    // fail the turn — the model's work still executes.
+    let missingIds = 0
+    for (const tc of rawToolCalls) {
       if (!tc.id) {
+        missingIds++
         tc.id = `call_${randomUUID()}`
       }
-      return tc
-    })
+    }
+    if (rawToolCalls.length > 1 && missingIds >= 2) {
+      this.deps.eventLog?.append('protocol', 'protocol_error', {
+        kind: 'multiple_missing_tool_call_ids',
+        toolCalls: rawToolCalls.length,
+        missingIds,
+      })
+      this.deps.renderer.warn?.(
+        `Stream protocol: ${missingIds}/${rawToolCalls.length} tool calls arrived without ids — their results may render as unattributed (provider quirk, the turn continues).`,
+      )
+    }
 
     return { assistantText, finishReason, rawToolCalls, usage }
   }

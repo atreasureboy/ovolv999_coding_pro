@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { join, basename } from 'path'
+import { warnConfigOnce } from '../config/diagnostics.js'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
 import { scanText, formatScanResult } from '../utils/secretScanner.js'
@@ -64,7 +65,12 @@ export function loadTeamConfig(): TeamMemoryConfig | null {
   if (!existsSync(path)) return null
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as TeamMemoryConfig
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `team-memory config corrupt — treating as unconfigured (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return null
   }
 }

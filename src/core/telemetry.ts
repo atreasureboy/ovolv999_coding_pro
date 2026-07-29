@@ -18,6 +18,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { warnConfigOnce } from '../config/diagnostics.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -93,7 +94,12 @@ export function loadConfig(): TelemetryConfig {
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }
   try {
     return { ...DEFAULT_CONFIG, ...(JSON.parse(readFileSync(path, 'utf8')) as Partial<TelemetryConfig>) }
-  } catch {
+  } catch (err) {
+    warnConfigOnce({
+      file: path, severity: 'warning',
+      message: `telemetry config corrupt — using defaults (${(err as Error).message.split('\n')[0]})`,
+      fix: `fix or remove "${path}"`,
+    })
     return { ...DEFAULT_CONFIG }
   }
 }

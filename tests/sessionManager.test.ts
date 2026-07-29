@@ -8,6 +8,7 @@ import {
   CURRENT_SESSION_SCHEMA,
   CURRENT_SESSION_VERSION,
   MIN_SUPPORTED_VERSION,
+  V1_SESSION_SCHEMA,
   SessionNotFoundError,
   UnknownSessionVersionError,
   createSessionDir,
@@ -649,13 +650,18 @@ describe('session envelope (versioning & migration)', () => {
   })
 
   it('envelope at version = minSupported still loads (lower edge of range)', () => {
+    // v0.4.1 WS7: the supported floor is v1, and gate (2) requires the
+    // canonical schema for THAT version — a v1 envelope carrying the v2
+    // schema name is corrupt, not loadable. v1 → v2 migration preserves
+    // the messages verbatim. (When the floor rises past 1, this test
+    // migrates with it — like the conditional guard below.)
     const cwd = freshDir('env-min')
     const dir = createSessionDir(cwd, FIXED_DATE)
     writeFileSync(
       join(dir, 'history.json'),
       JSON.stringify({
         version: MIN_SUPPORTED_VERSION,
-        schema: CURRENT_SESSION_SCHEMA,
+        schema: V1_SESSION_SCHEMA,
         updatedAt: '2026-07-13T00:00:00.000Z',
         messages: [{ role: 'user', content: 'q' }],
       }),

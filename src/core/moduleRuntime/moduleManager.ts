@@ -94,12 +94,29 @@ export function groupByDependencyDepth(modules: AgentModule[]): AgentModule[][] 
   return layers
 }
 
+export interface ModuleBootOptions {
+  /**
+   * v0.4.1 WS4 (ExecutionProfile): boot ONLY these module names this
+   * turn. The constructed `modules` list is NOT mutated — the next
+   * boot (gated or full) starts from the full set again, so per-turn
+   * profile gating can never permanently lose a module. Without this
+   * option the full constructed set boots (v0.4.0 behavior).
+   */
+  only?: string[]
+}
+
 export class ModuleManager {
   private readonly renderer: Renderer
   private readonly eventLog?: EventLog
   /** Modules array — settable for testing (boot-throw regression tests) */
   modules: AgentModule[]
   private bootResults: ModuleBootResult[] = []
+  /**
+   * Per-turn scoped view set by boot({only}); null = full set. All
+   * in-turn hooks (iteration / toolCall / complete) iterate THIS view
+   * so an unbooted module never runs its hooks. Reset on every boot().
+   */
+  private turnModules: AgentModule[] | null = null
 
   constructor(deps: ModuleManagerDeps) {
     this.modules = deps.modules
@@ -107,8 +124,13 @@ export class ModuleManager {
     this.eventLog = deps.eventLog
   }
 
+  /** Modules active for the current turn (gated view or the full set). */
+  get activeModules(): AgentModule[] {
+    return this.turnModules ?? this.modules
+  }
+
   get moduleNames(): string[] {
-    return this.modules.map(m => m.name)
+    return this.activeModules.map(m => m.name)
   }
 
   /**
@@ -118,13 +140,19 @@ export class ModuleManager {
    * Criticality policy (P0-7):
    *   - critical (default): boot failure aborts the engine (throws).
    *   - best_effort: boot failure is logged and the module is dropped
-   *     from this manager's `modules` list so subsequent iteration
-   *     and complete hooks skip it.
+   *     from this turn's active set so subsequent iteration and
+   *     complete hooks skip it. On a FULL boot (no `only`) the drop
+   *     mutates the constructed list (v0.4.0 behavior); on a GATED
+   *     boot the drop applies to the turn view only.
    */
-  async boot(bootCtx: ModuleBootContext): Promise<ModuleBootOutput> {
+  async boot(bootCtx: ModuleBootContext, opts: ModuleBootOptions = {}): Promise<ModuleBootOutput> {
     this.bootResults = []
     const stranded: string[] = []
-    const layers = groupByDependencyDepth(this.modules)
+    const scoped = opts.only
+      ? this.modules.filter(m => opts.only!.includes(m.name))
+      : this.modules
+    this.turnModules = opts.only ? scoped : null
+    const layers = groupByDependencyDepth(scoped)
     for (const layer of layers) {
       // Note: async arrow (not Promise.resolve(m.boot(...))) so a
       // SYNCHRONOUS throw from boot() rejects the promise instead of
@@ -157,7 +185,13 @@ export class ModuleManager {
     }
     if (stranded.length > 0) {
       const strandedSet = new Set(stranded)
-      this.modules = this.modules.filter(m => !strandedSet.has(m.name))
+      if (opts.only) {
+        // Gated boot: drop from the per-turn view only — the
+        // constructed list must survive for future turns.
+        this.turnModules = scoped.filter(m => !strandedSet.has(m.name))
+      } else {
+        this.modules = this.modules.filter(m => !strandedSet.has(m.name))
+      }
     }
 
     const systemPromptSections = this.bootResults.flatMap(r => r.systemPromptSections ?? [])
@@ -178,7 +212,7 @@ export class ModuleManager {
   }): Promise<void> {
     const { iteration, messages, abortSignal, criticRequested } = params
 
-    for (const module of this.modules) {
+    for (const module of this.activeModules) {
       if (!module.onIteration) continue
       const iterResult = await module.onIteration({
         iteration,
@@ -203,7 +237,7 @@ export class ModuleManager {
     result: ToolResult,
     turnNumber: number,
   ): void {
-    for (const module of this.modules) {
+    for (const module of this.activeModules) {
       module.onToolCall?.(toolName, input, result, turnNumber)
     }
   }
@@ -216,7 +250,7 @@ export class ModuleManager {
    * strictly better than wedging the whole engine.
    */
   notifyModelChanged(model: string): void {
-    for (const module of this.modules) {
+    for (const module of this.activeModules) {
       if (!module.onModelChanged) continue
       try {
         module.onModelChanged(model)
@@ -241,7 +275,7 @@ export class ModuleManager {
   }): Promise<void> {
     const { cwd, sessionDir, turnResult, outcome, messages, eventLog } = params
 
-    for (const module of this.modules) {
+    for (const module of this.activeModules) {
       try {
         await module.onComplete?.({
           cwd,

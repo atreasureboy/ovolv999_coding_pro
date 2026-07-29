@@ -1,8 +1,8 @@
 /**
  * Project Doctor — validates all .ovolv999/ configuration files.
  *
- * Scans keybindings, output styles, workflows, skills, and project
- * settings, then reports any issues found.
+ * Scans keybindings, workflows, skills, and project settings, then
+ * reports any issues found.
  *
  * Inspired by Claude Code's setup validation and npm doctor.
  */
@@ -11,7 +11,6 @@ import { existsSync, readdirSync, statSync } from 'fs'
 import { join, resolve, extname } from 'path'
 import { execSync } from 'child_process'
 import { loadKeybindings } from '../ui/keybindings.js'
-import { loadOutputStyles } from '../core/outputStyles.js'
 import { loadWorkflows } from '../core/workflow.js'
 import { loadSkills } from '../skills/loader.js'
 
@@ -57,16 +56,13 @@ export function runDoctorChecks(cwd: string): DoctorReport {
   // 2. Keybindings
   checkKeybindings(absCwd, results)
 
-  // 3. Output styles
-  checkOutputStyles(absCwd, results)
-
-  // 4. Workflows
+  // 3. Workflows
   checkWorkflows(absCwd, results)
 
-  // 5. Skills
+  // 4. Skills
   checkSkills(absCwd, results)
 
-  // 6. Git status
+  // 5. Git status
   checkGit(absCwd, results)
 
   // 7. Environment
@@ -157,38 +153,6 @@ function checkKeybindings(cwd: string, results: CheckResult[]): void {
       item: 'config',
       level: 'ok',
       message: 'Custom keybindings loaded successfully',
-    })
-  }
-}
-
-function checkOutputStyles(cwd: string, results: CheckResult[]): void {
-  const result = loadOutputStyles(cwd)
-
-  if (!result.hasConfig) {
-    results.push({
-      category: 'styles',
-      item: 'config',
-      level: 'ok',
-      message: `Using default output style (${result.active.name})`,
-    })
-    return
-  }
-
-  for (const err of result.errors) {
-    results.push({
-      category: 'styles',
-      item: 'config',
-      level: 'error',
-      message: err,
-    })
-  }
-
-  if (result.errors.length === 0) {
-    results.push({
-      category: 'styles',
-      item: 'config',
-      level: 'ok',
-      message: `Active style: ${result.active.name} (${result.styles.length} total)`,
     })
   }
 }
