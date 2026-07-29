@@ -78,6 +78,7 @@ export interface TaskDetail extends TaskInfo {
 
 interface InternalTask {
   info: TaskInfo
+  sequence: number
   process: ChildProcess | null
   output: string
   outputFile: string | null
@@ -244,6 +245,7 @@ export interface BackgroundTaskManagerOptions {
 
 export class BackgroundTaskManager {
   private tasks = new Map<string, InternalTask>()
+  private nextSequence = 0
   private readonly sigkillGraceMs: number
   private readonly maxOutputFileBytes: number
   /** Round 4: ExecutionRun registry (optional — back-compat when absent). */
@@ -371,7 +373,17 @@ export class BackgroundTaskManager {
       }
     }
 
-    const task: InternalTask = { info, process: null, output: '', outputFile, stopped: false, totalOutputBytes: 0, currentFileBytes: 0, killTimer: null }
+    const task: InternalTask = {
+      info,
+      sequence: this.nextSequence++,
+      process: null,
+      output: '',
+      outputFile,
+      stopped: false,
+      totalOutputBytes: 0,
+      currentFileBytes: 0,
+      killTimer: null,
+    }
 
     /** Rotate the on-disk log: rename current → .log.1, recreate empty log.
      *  Only resets currentFileBytes if the rename actually succeeded —
@@ -608,8 +620,8 @@ export class BackgroundTaskManager {
   /** List all tasks (newest first). */
   listTasks(): TaskInfo[] {
     return Array.from(this.tasks.values())
-      .map((t) => ({ ...t.info }))
-      .sort((a, b) => b.startTime - a.startTime)
+      .sort((a, b) => b.info.startTime - a.info.startTime || b.sequence - a.sequence)
+      .map((task) => ({ ...task.info }))
   }
 
   /** Update a task's description and/or metadata. Returns false if not found. */

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, readFileSync, statSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { join } from 'path'
@@ -127,8 +127,10 @@ describe('BackgroundTaskManager', () => {
     })
 
     it('lists all tasks sorted by start time (newest first)', () => {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
       const id1 = manager.createTask(ECHO, { description: 'first' })
       const id2 = manager.createTask(ECHO, { description: 'second' })
+      clock.mockRestore()
       const tasks = manager.listTasks()
       expect(tasks).toHaveLength(2)
       // Newest first
