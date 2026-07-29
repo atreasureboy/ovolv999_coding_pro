@@ -75,6 +75,8 @@ describe('system prompt — role-aware delegation truth', () => {
 
   it('requires capability roles, structured context, and parent-owned acceptance', () => {
     expect(prompt).toContain('Sub-agents default to secondary model roles')
+    expect(prompt).toContain('Model strength comes only from configured profile tier')
+    expect(prompt).toContain('Roles describe purpose, not strength')
     expect(prompt).toContain('Only the root main agent may request model_role architect')
     expect(prompt).toContain('must provide escalation_reason')
     expect(prompt).toContain('Nested agents cannot request architect')

@@ -182,6 +182,7 @@ export interface ToolContext {
       startedAt: number
       modelProfile?: string
       modelRole?: string
+      modelTier?: 'top' | 'secondary'
       model?: string
       provider?: string
     }>
@@ -191,6 +192,7 @@ export interface ToolContext {
       outcomeStatus?: string
       modelProfile?: string
       modelRole?: string
+      modelTier?: 'top' | 'secondary'
       model?: string
       provider?: string
       changedFiles?: string[]

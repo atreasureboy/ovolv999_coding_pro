@@ -23,6 +23,11 @@ import { saveProjectSettings } from '../config/settings.js'
 import { estimateTokens, calculateContextState, microCompact } from '../core/compact.js'
 import { EXECUTION_PROFILES, isExecutionProfile } from '../core/effort.js'
 import type { OpenAIMessage } from '../core/types.js'
+import {
+  listConfiguredModelTierProfiles,
+  resolveModelTier,
+  type ConfiguredModelTierProfile,
+} from '../core/model/modelTier.js'
 import { existsSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
@@ -225,23 +230,49 @@ registerCommand({
   usage: '/models',
   handler: (_args, ctx) => {
     const router = ctx.engine.getModelRouter()
-    const profiles = router.listProfiles()
+    const routedProfiles = router.listProfiles()
+    const config = ctx.engine.getConfig?.()
+    const configuredProfiles = listConfiguredModelTierProfiles(
+      config?.models?.profiles,
+      config?.provider ?? 'openai',
+    )
+    const profiles: ConfiguredModelTierProfile[] = configuredProfiles.length > 0
+      ? configuredProfiles
+      : routedProfiles.map((profile) => {
+        const resolution = resolveModelTier(profile as unknown as Record<string, unknown>)
+        return {
+          id: profile.id,
+          provider: profile.provider,
+          model: profile.model,
+          tier: resolution.tier,
+          tierInferred: resolution.inferred,
+          roles: profile.roles,
+          available: profile.available,
+          capabilities: profile.capabilities as unknown as Record<string, number>,
+        }
+      })
     if (profiles.length === 0) return text('No model profiles configured.')
     const bindingRegistry = ctx.engine.getBindingRegistry?.()
     const lines = profiles.map((p) => {
-      const h = router.getProfileHealth(p.id)
-      const health = h ? `${h.calls} calls, ${h.failures} fail, ${Math.round(h.ewmaLatency)}ms avg` : 'no data'
+      const routed = routedProfiles.find((profile) => profile.id === p.id)
+      const h = routed ? router.getProfileHealth(p.id) : null
+      const health = h
+        ? `${h.calls} calls, ${h.failures} fail, ${Math.round(h.ewmaLatency)}ms avg`
+        : routed
+          ? 'no data'
+          : 'assigned per sub-agent task'
       const caps = p.capabilities
       const binding = bindingRegistry?.get(p.id)
       const providerLabel = binding
         ? `provider=${binding.provider}${binding.baseURL ? ` baseURL=${binding.baseURL}` : ''}${binding.apiKeyRef ? ` key=${binding.apiKeyRef}` : ''}`
-        : `provider=${p.provider}`
-      return `  ${p.available ? '' : '(disabled) '}${p.model}  [${p.id}]  roles: ${p.roles.join(',')}` +
+        : `provider=${p.provider}${p.baseURL ? ` baseURL=${p.baseURL}` : ''}${p.apiKeyEnv ? ` key=${p.apiKeyEnv}` : ''}`
+      const capability = (name: string): string => caps[name] === undefined ? 'n/a' : String(caps[name])
+      return `  ${p.available ? '' : '(disabled) '}${p.model}  [${p.id}]  tier: ${p.tier}${p.tierInferred ? ' (legacy inferred)' : ''}  roles: ${p.roles.join(',') || 'general'}` +
         `\n      ${providerLabel}` +
-        `\n      reasoning=${caps.reasoning} coding=${caps.coding} ctx=${caps.contextWindow} tools=${caps.toolCalling} cost=${caps.cost} speed=${caps.speed}` +
+        `\n      reasoning=${capability('reasoning')} coding=${capability('coding')} ctx=${capability('contextWindow')} tools=${capability('toolCalling')} cost=${capability('cost')} speed=${capability('speed')}` +
         `\n      health: ${health}`
     })
-    return text(['Model profiles:', ...lines, '', `Routing enabled: ${router.isRoutingEnabled()}`].join('\n'))
+    return text(['Model profiles:', ...lines, '', `Main-agent routing enabled: ${router.isRoutingEnabled()}`].join('\n'))
   },
 })
 

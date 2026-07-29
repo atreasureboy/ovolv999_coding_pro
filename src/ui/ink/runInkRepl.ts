@@ -238,7 +238,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
             const isCurrent = p.id === currentModel || p.model === currentModel
             return {
               label: p.id,
-              description: `${p.provider}/${p.model} (${p.roles.join(', ') || 'general'})${isCurrent ? ' ← current' : ''}`,
+              description: `[${p.tier ?? 'top'}] ${p.provider}/${p.model} (${p.roles.join(', ') || 'general'})${isCurrent ? ' ← current' : ''}`,
               value: p.model || p.id,
             }
           })

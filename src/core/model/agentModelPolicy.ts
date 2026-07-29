@@ -1,4 +1,5 @@
 import type { EngineConfig } from '../types.js'
+import { resolveModelTier, type ModelTier } from './modelTier.js'
 
 export type AgentModelRole =
   | 'architect'
@@ -12,6 +13,7 @@ export interface AgentModelAssignment {
   source: 'role-profile' | 'parent-fallback'
   profileId: string
   role: AgentModelRole
+  tier: ModelTier
   provider: string
   model: string
   baseURL?: string
@@ -100,6 +102,7 @@ export function resolveAgentModelAssignment(
   const roles = options.requestedRole
     ? [options.requestedRole]
     : preferredModelRolesForAgent(options.agentPreset)
+  const requiredTier: ModelTier = options.requestedRole === 'architect' ? 'top' : 'secondary'
   const rawProfiles = config.models?.profiles ?? []
   const unavailableReasons: string[] = []
   const candidates: Array<{
@@ -119,6 +122,14 @@ export function resolveAgentModelAssignment(
       : []
     const roleIndex = roles.findIndex((role) => profileRoles.includes(role))
     if (roleIndex < 0) continue
+    const tier = resolveModelTier(profile).tier
+    if (tier !== requiredTier) {
+      const profileLabel = typeof profile.id === 'string' ? profile.id : profile.model
+      unavailableReasons.push(
+        `${profileLabel} is tier ${tier}, required ${requiredTier}`,
+      )
+      continue
+    }
     const apiKeyEnv = typeof profile.apiKeyEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(profile.apiKeyEnv)
       ? profile.apiKeyEnv
       : undefined
@@ -161,6 +172,7 @@ export function resolveAgentModelAssignment(
       source: 'role-profile',
       profileId,
       role: selected.role,
+      tier: requiredTier,
       provider,
       model: String(selected.profile.model),
       baseURL,
@@ -177,7 +189,7 @@ export function resolveAgentModelAssignment(
       ? Array.from(new Set(unavailableReasons)).join('; ')
       : `no configured profile matched roles ${roles.join(', ')}`
     throw new AgentModelAssignmentError(
-      `No eligible ${role} sub-agent model: ${detail}. Configure a secondary models.profiles entry instead of falling back to the main model.`,
+      `No eligible ${role} sub-agent model: ${detail}. Configure a ${requiredTier} models.profiles entry instead of falling back to another tier.`,
     )
   }
   const reason = `legacy single-model configuration has no role profiles for ${roles.join(', ')}`
@@ -185,6 +197,7 @@ export function resolveAgentModelAssignment(
     source: 'parent-fallback',
     profileId: 'parent',
     role,
+    tier: 'top',
     provider: config.provider ?? 'openai',
     model: config.model,
     baseURL: config.baseURL,

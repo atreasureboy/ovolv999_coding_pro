@@ -71,6 +71,7 @@ export interface TurnOutcome {
     outcomeStatus?: string
     modelProfile?: string
     modelRole?: string
+    modelTier?: 'top' | 'secondary'
     model?: string
     provider?: string
     changedFiles?: string[]

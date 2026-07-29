@@ -51,6 +51,7 @@ import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
 import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig, type BudgetAllocation } from './model/modelRouter.js'
 import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.js'
+import { resolveModelTier } from './model/modelTier.js'
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import type { TaskGraph } from './runtime/taskGraph.js'
 import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
@@ -98,10 +99,12 @@ function buildRouter(config: EngineConfig): ModelRouter {
       if (typeof p.model !== 'string' || !p.model) continue
       const cap = (p.capabilities ?? {}) as Record<string, unknown>
       const num = (v: unknown, d: number): number => typeof v === 'number' && Number.isFinite(v) ? v : d
+      const tier = resolveModelTier(p).tier
       profiles.push({
         id: typeof p.id === 'string' ? p.id : p.model,
         provider: typeof p.provider === 'string' ? p.provider : (config.provider ?? 'openai'),
         model: p.model,
+        tier,
         capabilities: {
           reasoning: num(cap.reasoning, 0.7),
           coding: num(cap.coding, 0.7),
@@ -118,9 +121,15 @@ function buildRouter(config: EngineConfig): ModelRouter {
       const activeProvider = config.provider ?? 'openai'
       const mainProfiles = profiles.filter((profile) =>
         profile.provider === activeProvider
-        && (profile.roles.includes('main') || profile.roles.includes('architect')),
+        && profile.tier === 'top'
+        && profile.available,
       )
-      if (mainProfiles.length === 0) return routerFromSingleModel(config.model, activeProvider)
+      if (mainProfiles.length === 0) {
+        throw new Error(
+          `No available top model profile is configured for provider ${activeProvider}. `
+          + 'Set models.profiles[].tier to "top" for the main agent.',
+        )
+      }
       validateProfiles({ activeProvider, profiles: mainProfiles })
       const r = config.models?.routing ?? {}
       const routing: RoutingConfig = {

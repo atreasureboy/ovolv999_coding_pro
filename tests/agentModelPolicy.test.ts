@@ -43,6 +43,7 @@ describe('agent model policy', () => {
       config([
         {
           id: 'architect',
+          tier: 'top',
           provider: 'openai',
           model: 'frontier-main',
           roles: ['main', 'architect'],
@@ -50,6 +51,7 @@ describe('agent model policy', () => {
         },
         {
           id: 'builder',
+          tier: 'secondary',
           provider: 'minimax',
           model: 'builder-model',
           baseURL: 'https://builder.example/v1',
@@ -65,6 +67,7 @@ describe('agent model policy', () => {
       source: 'role-profile',
       profileId: 'builder',
       role: 'builder',
+      tier: 'secondary',
       provider: 'minimax',
       model: 'builder-model',
       baseURL: 'https://builder.example/v1',
@@ -78,13 +81,14 @@ describe('agent model policy', () => {
     expect(() => resolveAgentModelAssignment(
       config([{
         id: 'builder',
+        tier: 'secondary',
         provider: 'minimax',
         model: 'builder-model',
         apiKeyEnv: 'MISSING_KEY',
         roles: ['builder'],
       }]),
       { agentPreset: 'general-purpose', env: {} },
-    )).toThrow(/MISSING_KEY.*secondary.*falling back/s)
+    )).toThrow(/MISSING_KEY.*secondary.*another tier/s)
   })
 
   it('keeps legacy single-model installs compatible when no profiles exist', () => {
@@ -102,10 +106,10 @@ describe('agent model policy', () => {
 
   it('does not select an architect profile for any default child preset', () => {
     const profiles = [
-      { id: 'architect', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
-      { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder', 'worker'] },
-      { id: 'reviewer', provider: 'openai', model: 'review-model', roles: ['reviewer', 'planner'] },
-      { id: 'utility', provider: 'openai', model: 'utility-model', roles: ['utility'] },
+      { id: 'architect', tier: 'top', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
+      { id: 'builder', tier: 'secondary', provider: 'openai', model: 'builder-model', roles: ['builder', 'worker'] },
+      { id: 'reviewer', tier: 'secondary', provider: 'openai', model: 'review-model', roles: ['reviewer', 'planner'] },
+      { id: 'utility', tier: 'secondary', provider: 'openai', model: 'utility-model', roles: ['utility'] },
     ]
     for (const preset of ['general-purpose', 'code-reviewer', 'explore', 'plan', 'coordinator']) {
       expect(resolveAgentModelAssignment(config(profiles), {
@@ -113,6 +117,91 @@ describe('agent model policy', () => {
         env: {},
       }).role).not.toBe('architect')
     }
+  })
+
+  it('uses configured tier as truth even when legacy roles conflict', () => {
+    const profiles = [
+      {
+        id: 'top-builder',
+        tier: 'top',
+        provider: 'openai',
+        model: 'top-model',
+        roles: ['builder', 'architect'],
+      },
+      {
+        id: 'secondary-main-builder',
+        tier: 'secondary',
+        provider: 'openai',
+        model: 'secondary-model',
+        roles: ['main', 'builder'],
+      },
+    ]
+
+    const child = resolveAgentModelAssignment(config(profiles), {
+      agentPreset: 'general-purpose',
+      env: {},
+    })
+    expect(child).toMatchObject({
+      profileId: 'secondary-main-builder',
+      tier: 'secondary',
+    })
+
+    const engine = new ExecutionEngine(
+      config(profiles),
+      {} as never,
+      { chat: { completions: { create: () => Promise.reject(new Error('not called')) } } } as never,
+    )
+    expect(engine.getModelRouter().listProfiles().map((profile) => profile.id)).toEqual(['top-builder'])
+    engine.dispose()
+  })
+
+  it('uses only a configured top profile for an architect request', () => {
+    const assignment = resolveAgentModelAssignment(
+      config([
+        {
+          id: 'top-architect',
+          tier: 'top',
+          provider: 'openai',
+          model: 'frontier-model',
+          roles: ['architect'],
+        },
+        {
+          id: 'secondary-architect',
+          tier: 'secondary',
+          provider: 'openai',
+          model: 'worker-model',
+          roles: ['architect'],
+        },
+      ]),
+      {
+        agentPreset: 'general-purpose',
+        requestedRole: 'architect',
+        env: {},
+      },
+    )
+
+    expect(assignment).toMatchObject({
+      profileId: 'top-architect',
+      role: 'architect',
+      tier: 'top',
+      model: 'frontier-model',
+    })
+  })
+
+  it('fails closed when configured profiles contain no available top model', () => {
+    expect(() => new ExecutionEngine(
+      config([
+        {
+          id: 'secondary-main',
+          tier: 'secondary',
+          provider: 'openai',
+          model: 'worker-model',
+          roles: ['main', 'builder'],
+        },
+      ]),
+      {} as never,
+      { chat: { completions: { create: () => Promise.reject(new Error('not called')) } } } as never,
+    )).toThrow(/No available top model profile.*tier.*top/s)
   })
 
   it('honors an explicit reviewer role without accepting arbitrary profile ids', () => {
@@ -133,6 +222,7 @@ describe('agent model policy', () => {
       config([
         {
           id: 'cheap-builder',
+          tier: 'secondary',
           provider: 'openai',
           model: 'cheap-model',
           roles: ['builder'],
@@ -140,6 +230,7 @@ describe('agent model policy', () => {
         },
         {
           id: 'quality-builder',
+          tier: 'secondary',
           provider: 'openai',
           model: 'quality-model',
           roles: ['builder'],
@@ -157,6 +248,7 @@ describe('agent model policy', () => {
       config([
         {
           id: 'weak-builder',
+          tier: 'secondary',
           provider: 'openai',
           model: 'weak-builder-model',
           roles: ['builder'],
@@ -164,6 +256,7 @@ describe('agent model policy', () => {
         },
         {
           id: 'strong-worker',
+          tier: 'secondary',
           provider: 'openai',
           model: 'strong-worker-model',
           roles: ['worker'],
@@ -180,9 +273,10 @@ describe('agent model policy', () => {
   it('keeps cross-provider worker profiles out of the main-agent router', () => {
     const engine = new ExecutionEngine(
       config([
-        { id: 'architect', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
+        { id: 'architect', tier: 'top', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
         {
           id: 'builder',
+          tier: 'secondary',
           provider: 'minimax',
           model: 'builder-model',
           apiKeyEnv: 'BUILDER_API_KEY',
@@ -199,8 +293,8 @@ describe('agent model policy', () => {
 
   it('pins a child engine to its assigned model instead of rerouting it to architect', () => {
     const childConfig = config([
-      { id: 'architect', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
-      { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder'] },
+      { id: 'architect', tier: 'top', provider: 'openai', model: 'frontier-main', roles: ['main', 'architect'] },
+      { id: 'builder', tier: 'secondary', provider: 'openai', model: 'builder-model', roles: ['builder'] },
     ])
     childConfig.model = 'builder-model'
     childConfig.agent = resolveAgentConfig({ preset: 'general-purpose' })

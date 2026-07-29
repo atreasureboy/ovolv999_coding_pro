@@ -49,6 +49,7 @@ export interface ModelProfile {
   id: string
   provider: string
   model: string
+  tier?: 'top' | 'secondary'
   capabilities: RoutingCapabilities
   /** Roles this profile can serve: 'main' | 'cheap' | 'long-context' | 'worker'. */
   roles: string[]
@@ -562,6 +563,7 @@ export function routerFromSingleModel(model: string, provider = 'openai'): Model
     id: 'default',
     provider,
     model,
+    tier: 'top',
     capabilities: { reasoning: 0.8, coding: 0.8, contextWindow: 128_000, toolCalling: 0.8, speed: 0.7, cost: 0.6 },
     roles: ['main', 'cheap', 'long-context', 'worker'],
     available: true,

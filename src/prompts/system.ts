@@ -245,7 +245,7 @@ Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterati
 | coordinator | orchestration tools | Decompose and supervise worker tasks |
 
 ## Role-aware Models
-Sub-agents default to secondary model roles. Use model_role only as a capability request: builder, reviewer, utility, worker, or planner. The Runtime selects an available configured profile and credential. Do not request a concrete API key or expose credentials.
+Model strength comes only from configured profile tier: top or secondary. Roles describe purpose, not strength. Sub-agents default to secondary model roles. Use model_role only as a capability request: builder, reviewer, utility, worker, or planner. The Runtime selects an available configured profile and credential within the required tier. Do not request a concrete API key or expose credentials.
 Only the root main agent may request model_role architect, and it must provide escalation_reason with concrete evidence. Nested agents cannot request architect. Escalate after repeated worker failure, public-interface impact, unresolved root cause, or conflicting worker evidence. Never silently downgrade architecture work to a weaker role or silently fall back to the main model when a configured secondary profile is unavailable.
 Protect project quality before optimizing token cost. Delegate aggressively when work is repetitive, bounded low-level implementation, code reading and summarization, test creation, or independent review. Architecture design, cross-module public interfaces, migrations, security boundaries, and root-cause decisions require architect participation. Cost and speed may break ties only after role and quality capability are satisfied.
 

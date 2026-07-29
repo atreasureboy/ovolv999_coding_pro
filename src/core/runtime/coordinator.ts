@@ -1174,6 +1174,7 @@ export class RuntimeCoordinator {
           status: 'running',
           modelProfile: worker.modelProfile,
           modelRole: worker.modelRole,
+          modelTier: worker.modelTier,
           model: worker.model,
           provider: worker.provider,
         })),

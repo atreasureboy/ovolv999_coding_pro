@@ -6,6 +6,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 - Added role-aware model assignment to the existing AgentTool child-engine path.
 - Added architect, builder, reviewer, utility, worker, and planner capability roles.
+- Added explicit `tier: top | secondary` as the model-strength source of truth.
 - Added cross-provider worker profiles with environment-referenced API keys.
 - Made every default child preset select secondary roles; architect requires a reasoned request from the root main agent.
 - Failed closed when a configured secondary profile is unavailable instead of silently using the main model.

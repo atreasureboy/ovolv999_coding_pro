@@ -136,6 +136,7 @@ describe('v0.3.6 reliability closure', () => {
           status: 'blocked',
           modelProfile: 'builder',
           modelRole: 'builder',
+          modelTier: 'secondary',
           model: 'coding-model',
           provider: 'minimax',
           worktree: '/tmp/wt',

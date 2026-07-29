@@ -46,6 +46,7 @@ export interface LoopCheckpoint {
     status: string
     modelProfile?: string
     modelRole?: string
+    modelTier?: 'top' | 'secondary'
     model?: string
     provider?: string
     worktree?: string

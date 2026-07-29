@@ -124,6 +124,7 @@ export interface WorkerResult {
   model?: {
     profileId: string
     role: string
+    tier: 'top' | 'secondary'
     provider: string
     model: string
     apiKeyEnv?: string

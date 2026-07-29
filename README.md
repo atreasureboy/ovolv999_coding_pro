@@ -51,12 +51,14 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
     "profiles": [
       {
         "id": "architect",
+        "tier": "top",
         "provider": "openai",
         "model": "frontier-model",
         "roles": ["main", "architect"]
       },
       {
         "id": "builder",
+        "tier": "secondary",
         "provider": "minimax",
         "model": "coding-model",
         "baseURL": "https://example.com/v1",
@@ -70,7 +72,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 
 主 Agent 通过 `model_role` 请求能力等级，通过 `delegation_context` 传递目标、约束、相关文件、架构决策和验收标准。子 Agent 返回结构化 Worker Result；最终完成权仍属于主 Agent。
 
-所有子 Agent 默认只能选择 `builder`、`reviewer`、`utility`、`worker` 或 `planner` 次级角色。只有根主 Agent 能显式申请 `architect`，且必须提供 `escalation_reason`；嵌套 Agent 的顶级模型申请会被 Runtime 拒绝。配置了次级 Profile 但凭据不可用时会直接返回诊断错误，不会静默改用主模型。没有配置任何模型 Profile 的旧版单模型安装仍保持兼容。
+模型层级由配置中的 `tier: "top" | "secondary"` 唯一决定，Runtime 不根据模型名称或价格猜测强弱。主 Agent 与 `architect` 只使用 `top`；所有普通子 Agent 只使用 `secondary`。只有根主 Agent 能显式申请 `architect`，且必须提供 `escalation_reason`；嵌套 Agent 的顶级模型申请会被 Runtime 拒绝。配置了次级 Profile 但凭据不可用时会直接返回诊断错误，不会静默跨层级回退。没有配置任何模型 Profile 的旧版单模型安装仍保持兼容；缺少 `tier` 的旧 Profile 暂按 `roles` 推导并输出迁移警告。
 
 项目能力优先于 Token 节约。Runtime 鼓励主 Agent 将重复劳动、范围明确的底层实现、代码阅读与摘要、测试补充和独立复核交给次级子 Agent；架构设计、跨模块公共接口、迁移、安全边界和根因级决策会被强制升级为 `architect`。同一角色存在多个 Profile 时，代码、推理和工具能力优先，成本与速度只用于质量满足后的弱同级决胜。
 

@@ -148,6 +148,7 @@ describe('ExecutionRunRegistry.create / get / require', () => {
     const run = registry.create(agentRun({
       modelProfile: 'builder',
       modelRole: 'builder',
+      modelTier: 'secondary',
       model: 'coding-model',
       provider: 'minimax',
     }))
@@ -155,6 +156,7 @@ describe('ExecutionRunRegistry.create / get / require', () => {
     expect(registry.require(run.runId)).toMatchObject({
       modelProfile: 'builder',
       modelRole: 'builder',
+      modelTier: 'secondary',
       model: 'coding-model',
       provider: 'minimax',
     })

@@ -316,7 +316,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
 
     expect(result).toMatchObject({ isError: true })
     expect(result.content).toContain('OVOLV999_INTENTIONALLY_MISSING_KEY')
-    expect(result.content).toContain('instead of falling back to the main model')
+    expect(result.content).toContain('instead of falling back to another tier')
     expect(recorder).toHaveLength(0)
   })
 

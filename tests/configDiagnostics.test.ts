@@ -226,7 +226,26 @@ describe('settings.ts — corrupt or invalid config is visible', () => {
     const profile = settings.models?.profiles[0] as Record<string, unknown>
     expect(profile.apiKey).toBeUndefined()
     expect(profile.apiKeyEnv).toBeUndefined()
-    expect(stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')).toContain('apiKey')
+    const warnings = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')
+    expect(warnings).toContain('apiKey')
+    expect(warnings).toContain('tier inferred from legacy roles')
+  })
+
+  it('accepts explicit model tiers and drops invalid tier values', () => {
+    writeProjectSettings(JSON.stringify({
+      models: {
+        profiles: [
+          { id: 'main', model: 'top-model', tier: 'top', roles: ['main'] },
+          { id: 'builder', model: 'worker-model', tier: 'secondary', roles: ['builder'] },
+          { id: 'invalid', model: 'invalid-model', tier: 'cheap', roles: ['worker'] },
+        ],
+      },
+    }))
+
+    const settings = loadProjectSettings(workDir)
+    const profiles = settings.models?.profiles as Array<Record<string, unknown>>
+    expect(profiles.map((profile) => profile.tier)).toEqual(['top', 'secondary', undefined])
+    expect(stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')).toContain('invalid model tier')
   })
 })
 

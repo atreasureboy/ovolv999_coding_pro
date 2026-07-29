@@ -37,6 +37,7 @@ export interface ActiveSubtask {
   startedAt: number
   modelProfile?: string
   modelRole?: string
+  modelTier?: 'top' | 'secondary'
   model?: string
   provider?: string
 }
@@ -47,6 +48,7 @@ export interface CompletedSubtask {
   outcomeStatus?: string
   modelProfile?: string
   modelRole?: string
+  modelTier?: 'top' | 'secondary'
   model?: string
   provider?: string
   changedFiles?: string[]

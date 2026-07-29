@@ -98,6 +98,44 @@ describe('Slash commands v0.3.1', () => {
     expect(r.value).toMatch(/OPENAI_API_KEY/)
   })
 
+  it('/models shows configured top and secondary tiers without offering workers to the main router', () => {
+    const main = {
+      id: 'main',
+      tier: 'top',
+      provider: 'openai',
+      model: 'frontier-model',
+      available: true,
+      roles: ['main', 'architect'],
+      capabilities: { reasoning: 1, coding: 1, contextWindow: 200_000, toolCalling: 1, speed: 0.5, cost: 0.2 },
+    }
+    const e = fakeEngine({ profiles: [main] })
+    e.getConfig = () => ({
+      provider: 'openai',
+      models: {
+        profiles: [
+          main,
+          {
+            id: 'builder',
+            tier: 'secondary',
+            provider: 'minimax',
+            model: 'builder-model',
+            baseURL: 'https://builder.example/v1',
+            apiKeyEnv: 'BUILDER_API_KEY',
+            available: true,
+            roles: ['builder', 'worker'],
+            capabilities: { reasoning: 0.8, coding: 0.9 },
+          },
+        ],
+      },
+    })
+
+    const r = getCommand('models')!.handler('', fakeCtx(e)) as any
+    expect(r.value).toMatch(/frontier-model.*tier: top/s)
+    expect(r.value).toMatch(/builder-model.*tier: secondary/s)
+    expect(r.value).toContain('key=BUILDER_API_KEY')
+    expect(r.value).toContain('assigned per sub-agent task')
+  })
+
   it('duplicate command registration throws when strict mode is on', () => {
     process.env.OVOLV999_NO_STRICT_SLASH = '0' // ensure strict
     delete process.env.OVOLV999_NO_STRICT_SLASH

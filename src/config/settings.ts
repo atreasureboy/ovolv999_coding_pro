@@ -233,6 +233,24 @@ function normalizeModels(value: unknown, file: string | undefined, diags: Config
         fix: 'Use an uppercase environment variable name such as OVOLV999_BUILDER_API_KEY.',
       })
     }
+    if (normalized.tier !== undefined && normalized.tier !== 'top' && normalized.tier !== 'secondary') {
+      delete normalized.tier
+      if (file) diags.push({
+        file,
+        field: `models.profiles[${index}].tier`,
+        severity: 'warning',
+        message: 'invalid model tier dropped',
+        fix: 'Set tier to "top" or "secondary".',
+      })
+    } else if (normalized.tier === undefined && file) {
+      diags.push({
+        file,
+        field: `models.profiles[${index}].tier`,
+        severity: 'warning',
+        message: 'model tier inferred from legacy roles',
+        fix: 'Add tier: "top" or tier: "secondary"; roles describe purpose, not model strength.',
+      })
+    }
     return normalized
   })
   const dropped = value.profiles.length - profiles.length

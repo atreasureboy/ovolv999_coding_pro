@@ -215,6 +215,7 @@ describe('AgentTool with a registry walks the canonical state machine', () => {
       model: {
         profileId: 'builder',
         role: 'builder',
+        tier: 'secondary',
         model: 'builder-model',
       },
     })
@@ -230,6 +231,7 @@ describe('AgentTool with a registry walks the canonical state machine', () => {
       outcomeStatus: 'completed',
       modelProfile: 'builder',
       modelRole: 'builder',
+      modelTier: 'secondary',
       model: 'builder-model',
       changedFiles: ['src/unit.ts'],
     })

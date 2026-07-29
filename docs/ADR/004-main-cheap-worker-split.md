@@ -20,8 +20,10 @@ on hard parts.
 ## Choice
 Option 3: `ModelRouter` with config-driven `ModelProfile[]` for the main
 runtime, plus role-aware profile assignment when the existing `AgentTool`
-constructs a child engine. Main profiles carry `main` or `architect`; worker
-profiles carry `builder`, `reviewer`, `utility`, `worker`, or `planner`.
+constructs a child engine. `tier: top | secondary` is the only configured
+source of model strength. Roles describe purpose: main profiles carry `main`
+or `architect`; worker profiles carry `builder`, `reviewer`, `utility`,
+`worker`, or `planner`.
 Cross-provider worker profiles resolve credentials only through `apiKeyEnv`.
 Every child preset defaults to a secondary role. The root main agent is the
 only caller allowed to request `architect`, and the request must carry an
@@ -35,7 +37,8 @@ decisions require `architect`. Profile scoring prioritizes coding, reasoning,
 and tool capability; cost and speed are weak tie-breakers only.
 
 ## Consequences
-+ Trivial tasks use the cheap model (saves tokens); hard tasks escalate.
++ Main turns route only among configured top profiles; bounded child work uses
+  configured secondary profiles.
 + Manual `--model`/`/model` always wins (predictable).
 + Fallback never replays side-effectful tools (fires at LLM-call boundary).
 + A frontier main agent can delegate implementation to a builder model and
@@ -46,8 +49,7 @@ and tool capability; cost and speed are weak tie-breakers only.
   model for compatibility.
 - Configured multi-model installs fail closed when the eligible secondary
   profile or credential is unavailable.
-- Embedding profiles are reserved for a future retrieval binding and are never
-  spawned as autonomous agents by the current runtime.
+- Embedding generation and vector storage are outside this runtime stage.
 - Requires the user to declare profiles in config (single-model default
   degrades gracefully).
 
@@ -59,24 +61,19 @@ and tool capability; cost and speed are weak tie-breakers only.
     "profiles": [
       {
         "id": "architect",
+        "tier": "top",
         "provider": "openai",
         "model": "frontier-model",
         "roles": ["main", "architect"]
       },
       {
         "id": "builder",
+        "tier": "secondary",
         "provider": "minimax",
         "model": "coding-model",
         "baseURL": "https://example.com/v1",
         "apiKeyEnv": "OVOLV999_BUILDER_API_KEY",
         "roles": ["builder", "worker"]
-      },
-      {
-        "id": "retrieval",
-        "provider": "openai",
-        "model": "embedding-model",
-        "apiKeyEnv": "OVOLV999_EMBEDDING_API_KEY",
-        "roles": ["embedding"]
       }
     ]
   }

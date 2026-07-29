@@ -202,6 +202,7 @@ export interface ExecutionRun {
   worker?: string
   modelProfile?: string
   modelRole?: string
+  modelTier?: 'top' | 'secondary'
   model?: string
   provider?: string
   workspace: WorkspaceRef
@@ -244,6 +245,7 @@ export type CreateRunInput =
     | 'status' | 'phase' | 'acceptance' | 'budget' | 'resources'
     | 'artifacts' | 'worker' | 'verification' | 'error' | 'parentRunId'
     | 'modelProfile' | 'modelRole' | 'model' | 'provider'
+    | 'modelTier'
     | 'createdAt' | 'updatedAt'
   >>
   // Optional runId is only used by crash-recovery replay — callers
@@ -306,6 +308,7 @@ export class ExecutionRunRegistry {
       worker: input.worker,
       modelProfile: input.modelProfile,
       modelRole: input.modelRole,
+      modelTier: input.modelTier,
       model: input.model,
       provider: input.provider,
       workspace: input.workspace,

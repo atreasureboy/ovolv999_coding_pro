@@ -577,7 +577,8 @@ Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterati
 
 Sub-agents default to secondary roles. Use model_role to request builder, reviewer, utility, worker, or planner capability.
 Only the root main agent may request architect, and it must include escalation_reason.
-The runtime resolves that role through configured models.profiles and API-key environment references.
+The runtime resolves that role within configured tier:"secondary"; architect resolves only within tier:"top".
+Tier is configured truth. Roles express purpose and never override tier.
 Use delegation_context to pass the global goal, constraints, relevant files, decisions, and acceptance criteria.
 Use secondary roles for repetitive work, bounded low-level implementation, code reading and summaries, tests, and independent review.
 Architecture, cross-module public interfaces, migrations, security boundaries, and root-cause design require architect participation.
@@ -800,7 +801,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       agentSummary:   (agentType: string, desc: string, summary: string) => void
       agentHeartbeat: (agentType: string, desc: string, elapsedSec: number) => void
     }
-    const agentDisplayLabel = `${agentLabel} · ${modelAssignment.role}/${modelAssignment.profileId}`
+    const agentDisplayLabel = `${agentLabel} · ${modelAssignment.tier}/${modelAssignment.role}/${modelAssignment.profileId}`
     mainRenderer.agentStart(description, agentDisplayLabel)
     const agentStartTime = Date.now()
 
@@ -826,6 +827,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         worker: agentLabel,
         modelProfile: modelAssignment.profileId,
         modelRole: modelAssignment.role,
+        modelTier: modelAssignment.tier,
         model: modelAssignment.model,
         provider: modelAssignment.provider,
         budget: {
@@ -866,6 +868,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         startedAt: agentStartTime,
         modelProfile: modelAssignment.profileId,
         modelRole: modelAssignment.role,
+        modelTier: modelAssignment.tier,
         model: modelAssignment.model,
         provider: modelAssignment.provider,
       })
@@ -879,6 +882,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       maxIterations: agentConfig.maxIterations,
       modelProfile: modelAssignment.profileId,
       modelRole: modelAssignment.role,
+      modelTier: modelAssignment.tier,
       model: modelAssignment.model,
       provider: modelAssignment.provider,
       modelAssignmentSource: modelAssignment.source,
@@ -989,6 +993,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       `- session_dir: ${parentConfig.sessionDir ?? 'not set'}`,
       `- call_depth: ${nextDepth}`,
       `- model_role: ${modelAssignment.role}`,
+      `- model_tier: ${modelAssignment.tier}`,
       `- model_profile: ${modelAssignment.profileId}`,
       `- model: ${modelAssignment.provider}/${modelAssignment.model}`,
       ...(escalationReason ? [`- escalation_reason: ${escalationReason}`] : []),
@@ -1029,6 +1034,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       call_depth: nextDepth,
       model_profile: modelAssignment.profileId,
       model_role: modelAssignment.role,
+      model_tier: modelAssignment.tier,
       model: modelAssignment.model,
       provider: modelAssignment.provider,
       escalation_reason: escalationReason,
@@ -1349,6 +1355,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         model: {
           profileId: modelAssignment.profileId,
           role: modelAssignment.role,
+          tier: modelAssignment.tier,
           provider: modelAssignment.provider,
           model: modelAssignment.model,
           apiKeyEnv: modelAssignment.apiKeyEnv,
@@ -1373,6 +1380,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           outcomeStatus: workerResult.outcomeStatus,
           modelProfile: workerResult.model?.profileId,
           modelRole: workerResult.model?.role,
+          modelTier: workerResult.model?.tier,
           model: workerResult.model?.model,
           provider: workerResult.model?.provider,
           changedFiles: workerResult.changedFiles,
@@ -1471,6 +1479,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         model: {
           profileId: modelAssignment.profileId,
           role: modelAssignment.role,
+          tier: modelAssignment.tier,
           provider: modelAssignment.provider,
           model: modelAssignment.model,
           apiKeyEnv: modelAssignment.apiKeyEnv,
@@ -1486,6 +1495,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           outcomeStatus: 'failed',
           modelProfile: modelAssignment.profileId,
           modelRole: modelAssignment.role,
+          modelTier: modelAssignment.tier,
           model: modelAssignment.model,
           provider: modelAssignment.provider,
           worktree: preservedWorktree?.path,
