@@ -69,7 +69,10 @@ export class InkRenderer {
       return
     }
     const candidates = this.store.getState().messages.filter(
-      (message) => message.type === 'tool' && message.name === name && message.result === undefined,
+      (message) => message.type === 'tool'
+        && message.callId === undefined
+        && message.name === name
+        && message.result === undefined,
     )
     this.store.setToolResult(candidates.length === 1 ? candidates[0].id : undefined, result, isError)
   }
@@ -115,7 +118,10 @@ export class InkRenderer {
       return
     }
     const candidates = this.store.getState().messages.filter(
-      (message) => message.type === 'agent' && message.desc === desc && message.status === 'running',
+      (message) => message.type === 'agent'
+        && message.runId === undefined
+        && message.desc === desc
+        && message.status === 'running',
     )
     this.store.setAgentDone(candidates.length === 1 ? candidates[0].id : undefined, ok)
   }
