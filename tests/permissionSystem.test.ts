@@ -7,8 +7,25 @@ import {
   matchRule,
   checkRules,
   PermissionManager,
+  resolvePermissionMode,
   type PermissionRule,
 } from '../src/core/permissionSystem.js'
+
+describe('Permission Profile resolution', () => {
+  it('maps one user profile identically for every frontend', () => {
+    expect(resolvePermissionMode('safe')).toBe('default')
+    expect(resolvePermissionMode('standard')).toBe('acceptEdits')
+    expect(resolvePermissionMode('autonomous')).toBe('auto')
+  })
+
+  it('uses the same standard default when no profile or legacy mode is configured', () => {
+    expect(resolvePermissionMode()).toBe('acceptEdits')
+  })
+
+  it('keeps a legacy mode compatible when no profile is configured', () => {
+    expect(resolvePermissionMode(undefined, 'bypassPermissions')).toBe('bypassPermissions')
+  })
+})
 
 describe('Permission Mode Cycling', () => {
   it('cycles through all 5 modes in order', () => {

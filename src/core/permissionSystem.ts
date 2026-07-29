@@ -32,6 +32,22 @@ export type PermissionMode =
   | 'auto'
   | 'bypassPermissions'
 
+export type PermissionProfile = 'safe' | 'standard' | 'autonomous'
+
+const PROFILE_MODES: Record<PermissionProfile, PermissionMode> = {
+  safe: 'default',
+  standard: 'acceptEdits',
+  autonomous: 'auto',
+}
+
+export function resolvePermissionMode(
+  profile?: PermissionProfile,
+  legacyMode?: PermissionMode,
+): PermissionMode {
+  if (profile) return PROFILE_MODES[profile]
+  return legacyMode ?? PROFILE_MODES.standard
+}
+
 export type PermissionBehavior = 'allow' | 'deny' | 'ask'
 
 export interface PermissionRule {

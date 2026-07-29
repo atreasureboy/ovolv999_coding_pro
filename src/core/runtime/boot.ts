@@ -35,6 +35,7 @@ import type { FileHistory } from '../fileHistory.js'
 import type { PermissionManager } from '../permissionSystem.js'
 import { getPlanModePrefix } from '../../prompts/system.js'
 import { normalizeCJKInput } from '../strings.js'
+import type { TaskKind } from './taskIntent.js'
 
 export interface BootParams {
   userMessage: string
@@ -62,6 +63,7 @@ export interface BootParams {
   executionProfile?: {
     modules: string[]
     excludedTools?: string[]
+    taskKind?: TaskKind
   }
 }
 
@@ -113,6 +115,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     toolRegistry.getAll(),
     planMode,
     executionProfile?.excludedTools,
+    executionProfile?.taskKind,
   )
 
   // ── Per-turn AbortController ──
@@ -158,6 +161,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     ...toolContextPatch,
     availableToolNames: toolDefs.map(t => t.function.name),
     excludedTools: executionProfile?.excludedTools,
+    taskKind: executionProfile?.taskKind,
     snipMessages: (keepRecent: number, reason?: string) =>
       contextManager.applySnip(messages, keepRecent, reason),
     getMessages: () => messages.map(m => ({ ...m })),

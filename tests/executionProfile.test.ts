@@ -57,6 +57,18 @@ describe('detectExecutionProfile', () => {
   })
 })
 
+describe('detectExecutionProfile multilingual complexity', () => {
+  it.each([
+    '全面重构认证与会话模块',
+    '跨模块迁移公共接口并调整整体架构',
+    '对这个仓库进行深度审计和根因分析',
+    '整体改造 the runtime across multiple directories',
+    'perform a root-cause analysis and cross-module migration',
+  ])('routes complex task to deep: %s', (prompt) => {
+    expect(detectExecutionProfile(prompt)).toBe('deep')
+  })
+})
+
 // ── 2. profile specs ──────────────────────────────────────────────────────────
 
 describe('EXECUTION_PROFILES', () => {
@@ -108,9 +120,9 @@ describe('resolveExecutionProfile', () => {
     expect(r).toEqual({ profile: 'deep', source: 'override' })
   })
 
-  it('informational intent sinks to fast even for deep-sounding text', () => {
+  it('complexity escalation wins over informational intent', () => {
     const r = resolveExecutionProfile('explain the migration strategy', { kind: 'informational' })
-    expect(r).toEqual({ profile: 'fast', source: 'intent' })
+    expect(r).toEqual({ profile: 'deep', source: 'detected' })
   })
 
   it('mutation intent + complex regex escalates to deep (detected)', () => {
@@ -210,7 +222,14 @@ function stubTool(name: string, readOnly = false): Tool {
 }
 
 describe('ToolPolicy excludedTools (profile tool gate)', () => {
-  const tools = [stubTool('Read', true), stubTool('Agent'), stubTool('TaskPlan'), stubTool('Bash')]
+  const tools = [
+    stubTool('Read', true),
+    stubTool('Agent'),
+    stubTool('TaskPlan'),
+    stubTool('Bash'),
+    stubTool('Edit'),
+    stubTool('Write'),
+  ]
   const policy = new ToolPolicy({})
 
   it('hides excluded tools from the definitions sent to the model', () => {
@@ -229,8 +248,25 @@ describe('ToolPolicy excludedTools (profile tool gate)', () => {
   })
 
   it('no exclusions → identical behavior to v0.4.0', () => {
-    expect(policy.getExposedDefinitions(tools, false).map(d => d.function.name)).toHaveLength(4)
+    expect(policy.getExposedDefinitions(tools, false).map(d => d.function.name)).toHaveLength(6)
     expect(policy.checkExecutionAllowed(tools, 'Agent', false)).toBeNull()
+  })
+
+  it.each(['informational', 'analysis'] as const)('%s intent exposes and executes read-only tools only', (intent) => {
+    const names = policy.getExposedDefinitions(tools, false, undefined, intent).map(d => d.function.name)
+    expect(names).toEqual(['Read'])
+    expect(policy.checkExecutionAllowed(tools, 'Read', false, undefined, intent)).toBeNull()
+    expect(policy.checkExecutionAllowed(tools, 'Edit', false, undefined, intent)).toContain('read-only')
+    expect(policy.checkExecutionAllowed(tools, 'Write', false, undefined, intent)).toContain('read-only')
+    expect(policy.checkExecutionAllowed(tools, 'Bash', false, undefined, intent)).toContain('read-only')
+  })
+
+  it('mutation intent preserves writable tools', () => {
+    const names = policy.getExposedDefinitions(tools, false, undefined, 'mutation').map(d => d.function.name)
+    expect(names).toContain('Edit')
+    expect(names).toContain('Write')
+    expect(names).toContain('Bash')
+    expect(policy.checkExecutionAllowed(tools, 'Edit', false, undefined, 'mutation')).toBeNull()
   })
 })
 
@@ -357,8 +393,19 @@ describe('ExecutionEngine per-turn profile gating (fake client e2e)', () => {
     const { newHistory } = await engine.runTurn('plan something', [])
     const toolResults = newHistory.filter(m => m.role === 'tool')
     expect(toolResults.length).toBeGreaterThan(0)
-    const blocked = toolResults.some(m => String(m.content).includes('execution profile'))
+    const blocked = toolResults.some(m =>
+      String(m.content).includes('execution profile') || String(m.content).includes('read-only analysis task'))
     expect(blocked).toBe(true)
+    engine.dispose()
+  })
+
+  it('informational turn blocks a fabricated Write call before workspace mutation', async () => {
+    fakeClient.push(toolCallStream('call_write', 'Write', { file_path: '/tmp/must-not-write', content: 'x' }))
+    fakeClient.push(stopStream('done'))
+    const engine = makeEngine()
+    const { newHistory } = await engine.runTurn('what is this project?', [])
+    const toolResults = newHistory.filter(m => m.role === 'tool')
+    expect(toolResults.some(m => String(m.content).includes('read-only informational task'))).toBe(true)
     engine.dispose()
   })
 

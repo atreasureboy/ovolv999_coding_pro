@@ -30,12 +30,13 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkS
 import { randomBytes } from 'crypto'
 import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
-import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
+import type { PermissionMode, PermissionProfile, PermissionRule } from '../core/permissionSystem.js'
 import type { McpServerConfig } from '../core/mcpClient.js'
 import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
 import type { ConfigDiagnostic } from './diagnostics.js'
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'])
+const PERMISSION_PROFILES = new Set(['safe', 'standard', 'autonomous'])
 const PERMISSION_BEHAVIORS = new Set(['allow', 'deny', 'ask'])
 const PERMISSION_SOURCES = new Set(['builtin', 'user', 'project'])
 const HOOK_EVENTS = ['PreToolCall', 'PostToolCall', 'UserPromptSubmit', 'OnError', 'OnComplete', 'OnContextOverflow'] as const
@@ -57,7 +58,7 @@ export interface HooksConfig {
 }
 
 export interface PermissionsConfig {
-  /** Runtime permission mode. Defaults to bypassPermissions for local personal use. */
+  profile?: PermissionProfile
   mode?: PermissionMode
   /** Ordered allow/deny rules. Later-loaded project settings append after global settings. */
   rules?: PermissionRule[]
@@ -311,6 +312,7 @@ function normalizeSettings(value: unknown, file?: string): OvogoSettings {
   const diags: ConfigDiagnostic[] = []
   const rawPermissions = isObject(value.permissions) ? value.permissions : undefined
   const rawMode = rawPermissions?.mode
+  const rawProfile = rawPermissions?.profile
   const rawRules = Array.isArray(rawPermissions?.rules) ? rawPermissions.rules : []
   const rules: PermissionRule[] = []
   rawRules.forEach((raw, i) => {
@@ -331,6 +333,12 @@ function normalizeSettings(value: unknown, file?: string): OvogoSettings {
     message: `"${typeof rawMode === 'string' ? rawMode : JSON.stringify(rawMode)}" is not a valid permission mode — dropped (valid: default, acceptEdits, plan, auto, bypassPermissions)`,
     fix: `Correct "permissions.mode" in "${file}".`,
   })
+  const profileValid = typeof rawProfile === 'string' && PERMISSION_PROFILES.has(rawProfile)
+  if (rawProfile !== undefined && !profileValid && file) diags.push({
+    file, field: 'permissions.profile', severity: 'warning',
+    message: `"${typeof rawProfile === 'string' ? rawProfile : JSON.stringify(rawProfile)}" is not a valid permission profile — dropped (valid: safe, standard, autonomous)`,
+    fix: `Correct "permissions.profile" in "${file}".`,
+  })
 
   const settings = normalizeSettingsFields(value, file, diags, rules)
   for (const d of diags) warnConfigOnce(d)
@@ -340,6 +348,7 @@ function normalizeSettings(value: unknown, file?: string): OvogoSettings {
 function normalizeSettingsFields(value: Record<string, unknown>, file: string | undefined, diags: ConfigDiagnostic[], rules: PermissionRule[]): OvogoSettings {
   const rawPermissions = isObject(value.permissions) ? value.permissions : undefined
   const rawMode = rawPermissions?.mode
+  const rawProfile = rawPermissions?.profile
   return {
     hooks: normalizeHooks(value.hooks, file, diags),
     taskContext: normalizeTaskContext(value.taskContext, file, diags),
@@ -351,6 +360,9 @@ function normalizeSettingsFields(value: Record<string, unknown>, file: string | 
     models: normalizeModels(value.models, file, diags),
     permissions: rawPermissions
       ? {
+          profile: typeof rawProfile === 'string' && PERMISSION_PROFILES.has(rawProfile)
+            ? rawProfile as PermissionProfile
+            : undefined,
           mode: typeof rawMode === 'string' && PERMISSION_MODES.has(rawMode)
             ? rawMode as PermissionMode
             : undefined,
@@ -371,6 +383,7 @@ function mergeSettings(a: OvogoSettings, b: OvogoSettings): OvogoSettings {
 
   const mergedPermissions = (a.permissions || b.permissions)
     ? {
+        profile: b.permissions?.profile ?? a.permissions?.profile,
         mode: b.permissions?.mode ?? a.permissions?.mode,
         rules: [...(a.permissions?.rules ?? []), ...(b.permissions?.rules ?? [])],
       }

@@ -18,6 +18,7 @@ import type { Tool, ToolDefinition } from '../types.js'
 import type { AgentConfig } from '../agentPresets.js'
 import { getToolDefinitions, findTool } from '../../tools/index.js'
 import { filterToolsForSubAgent } from '../agentToolFilter.js'
+import type { TaskKind } from '../runtime/taskIntent.js'
 
 const LEGACY_PLAN_MODE_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ExitPlanMode',
@@ -45,6 +46,7 @@ export class ToolPolicy {
     allTools: Tool[],
     planMode: boolean,
     excludedTools?: string[],
+    taskKind?: TaskKind,
   ): ToolDefinition[] {
     let defs = getToolDefinitions(allTools)
 
@@ -64,6 +66,10 @@ export class ToolPolicy {
         const tool = findTool(allTools, t.function.name)
         return tool?.metadata?.readOnly === true || LEGACY_PLAN_MODE_TOOLS.has(t.function.name)
       })
+    }
+
+    if (taskKind === 'informational' || taskKind === 'analysis') {
+      defs = defs.filter((t) => findTool(allTools, t.function.name)?.metadata?.readOnly === true)
     }
 
     if (excludedTools && excludedTools.length > 0) {
@@ -88,12 +94,20 @@ export class ToolPolicy {
     toolName: string,
     planMode: boolean,
     excludedTools?: string[],
+    taskKind?: TaskKind,
   ): string | null {
     // Plan mode defense-in-depth
     if (planMode) {
       const tool = findTool(allTools, toolName)
       if (!tool || !(tool.metadata?.readOnly === true || LEGACY_PLAN_MODE_TOOLS.has(toolName))) {
         return `Tool "${toolName}" is not available in plan mode. Only read-only tools are allowed. Output your plan as text.`
+      }
+    }
+
+    if (taskKind === 'informational' || taskKind === 'analysis') {
+      const tool = findTool(allTools, toolName)
+      if (!tool || tool.metadata?.readOnly !== true) {
+        return `Tool "${toolName}" is not available for a read-only ${taskKind} task. Explicitly request a workspace change to use write or execution tools.`
       }
     }
 

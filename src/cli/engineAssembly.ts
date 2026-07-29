@@ -56,7 +56,7 @@ import { detectProjectContext, formatProjectContext } from '../config/projectCon
 import { createLoadSkillTool } from '../tools/loadSkill.js'
 import { createTerminalAskUserHandler } from '../tools/askUser.js'
 import { tmuxLayout } from '../ui/tmuxLayout.js'
-import { PermissionManager } from '../core/permissionSystem.js'
+import { PermissionManager, resolvePermissionMode } from '../core/permissionSystem.js'
 import { createSessionDir } from '../core/sessionManager.js'
 
 export type EngineFrontend = 'ink' | 'classic' | 'headless'
@@ -180,7 +180,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   }
 
   const permissionManager = new PermissionManager()
-  permissionManager.setMode(settings.permissions?.mode ?? (frontend === 'ink' ? 'default' : 'bypassPermissions'))
+  permissionManager.setMode(resolvePermissionMode(settings.permissions?.profile, settings.permissions?.mode))
   for (const rule of settings.permissions?.rules ?? []) {
     permissionManager.addRule(rule)
   }
@@ -228,7 +228,16 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   const mode = getCurrentMode(modesDir)
   const verbosityPrompt = getVerbosityPrompt(mode.verbosity)
   const modePrompt = [mode.systemPrompt, verbosityPrompt].filter(Boolean).join('\n\n')
-  const systemPrompt = buildFullSystemPrompt(cwd, ovogoMdFiles, modePrompt, taskContext, sessionDir, skillIndex, projectCtxSection)
+  const systemPrompt = buildFullSystemPrompt(
+    cwd,
+    ovogoMdFiles,
+    modePrompt,
+    taskContext,
+    sessionDir,
+    skillIndex,
+    projectCtxSection,
+    permissionManager.getMode(),
+  )
 
   // Initialize optimization components
   const eventLog = new EventLog(sessionDir)

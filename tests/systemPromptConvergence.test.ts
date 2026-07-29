@@ -51,3 +51,21 @@ describe('system prompt — /style removed (third parallel brevity system)', () 
     expect(listCommands().some((c) => c.name === 'style')).toBe(false)
   })
 })
+
+describe('system prompt — runtime permission and critic truth', () => {
+  it('describes the active permission mode without claiming fixed full access', () => {
+    const safe = getSystemPrompt('/tmp/project', undefined, undefined, undefined, 'default')
+    const autonomous = getSystemPrompt('/tmp/project', undefined, undefined, undefined, 'auto')
+    expect(safe).toContain('Current runtime permission mode: **default**')
+    expect(autonomous).toContain('Current runtime permission mode: **auto**')
+    expect(safe).not.toContain('FULL ACCESS')
+    expect(autonomous).not.toContain('FULL ACCESS')
+  })
+
+  it('describes critic triggers and cancellation without pause/resume claims', () => {
+    const prompt = getSystemPrompt('/tmp/project')
+    expect(prompt).toContain('triggered by risk, stalled progress, repeated errors')
+    expect(prompt).not.toContain('runs every few iterations')
+    expect(prompt).toContain('do not describe this as pause/resume')
+  })
+})

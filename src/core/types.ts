@@ -11,6 +11,7 @@ import type { FileHistory } from './fileHistory.js'
 import type { PermissionManager } from './permissionSystem.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
+import type { TaskKind } from './runtime/taskIntent.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -169,6 +170,7 @@ export interface ToolContext {
    * profile excludes tools (standard/deep → v0.4.0 behavior).
    */
   excludedTools?: string[]
+  taskKind?: TaskKind
   /** Background task manager — for async long-running task lifecycle */
   backgroundTaskManager?: BackgroundTaskManager
   /**

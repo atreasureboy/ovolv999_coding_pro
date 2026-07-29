@@ -336,6 +336,7 @@ export class RuntimeCoordinator {
         executionProfile: {
           modules: profileModules,
           excludedTools: profileSpec.excludedTools,
+          taskKind: taskIntent.kind,
         },
       })
     } catch (bootErr) {

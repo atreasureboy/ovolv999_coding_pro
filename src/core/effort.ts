@@ -213,7 +213,7 @@ export const EXECUTION_PROFILES: Record<ExecutionProfile, ExecutionProfileSpec> 
     modules: ['memory', 'workspace'],
     maxIterations: 30,
     excludedTools: ['Agent', 'TaskPlan'],
-    description: 'Read-only / Q&A: no Critic, no Reflection, no sub-agents, no task graph.',
+    description: 'Lightweight turn: no Critic, no Reflection, no sub-agents, no task graph. Write access follows TaskIntent.',
   },
   standard: {
     // EXACTLY the pre-v0.4.1 default module set — a standard turn must
@@ -245,7 +245,7 @@ export function detectExecutionProfile(taskPrompt: string, isLoop = false): Exec
   if (!prompt) return 'fast'
 
   // Deep profile: complex refactoring, multi-module architecture, major migrations
-  const isComplex = /(architect|refactor|migrate|redesign|multi-file|cross-module|rewrite system|end-to-end|security audit)/.test(prompt)
+  const isComplex = /(architect|refactor|migrat|redesign|multi-file|multiple directories|cross-module|rewrite system|end-to-end|security audit|root-cause|root cause)|(全面重构|跨模块|迁移|架构调整|架构改造|深度审计|根因分析|整体改造|公共接口|跨目录)/.test(prompt)
   if (isComplex) {
     return 'deep'
   }
@@ -280,9 +280,9 @@ export function resolveExecutionProfile(
   override?: ExecutionProfile | null,
 ): { profile: ExecutionProfile; source: ProfileSource } {
   if (override) return { profile: override, source: 'override' }
-  if (intent?.kind === 'informational') return { profile: 'fast', source: 'intent' }
   const detected = detectExecutionProfile(message)
+  if (detected === 'deep') return { profile: 'deep', source: 'detected' }
+  if (intent?.kind === 'informational') return { profile: 'fast', source: 'intent' }
   if (detected !== 'standard') return { profile: detected, source: 'detected' }
   return { profile: 'standard', source: 'default' }
 }
-

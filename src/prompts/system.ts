@@ -21,6 +21,7 @@ import { platform as osPlatform } from 'os'
 import type { OvogoMdFile } from '../config/ovogomd.js'
 import { formatOvogoMdForPrompt } from '../config/ovogomd.js'
 import type { TaskContext } from '../config/settings.js'
+import type { PermissionMode } from '../core/permissionSystem.js'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -261,8 +262,8 @@ The result returned by the sub-agent is NOT visible to the user. You MUST send a
 
 function getCriticInteractSection(): string {
   return `# Session Interaction
- - Pressing **ESC** stops the run at the next boundary — the current tool finishes, then the run halts. The user's next message continues the work; completed steps are not repeated. A second ESC force-kills immediately.
- - An automatic critic check runs every few iterations. If corrections are injected, **adjust immediately — do not argue.**
+ - Pressing **ESC** safely cancels the current run at the next boundary. A second ESC requests immediate cancellation. A later message starts a new turn; do not describe this as pause/resume.
+ - Critic review is triggered by risk, stalled progress, repeated errors, or unsupported completion claims. If corrections are injected, **adjust immediately — do not argue.**
  - For tasks with 3+ steps → use TodoWrite to track progress`
 }
 
@@ -276,18 +277,23 @@ After a task that changes code, end with exactly ONE structured outcome report. 
 Omit empty sections. For pure Q&A or explanation, answer concisely and directly — no report block. No preamble/postamble; on error, state cause + fix action, no apologies. Never compress a coding deliverable below the detail its changes and verification actually require.`
 }
 
-function getAutonomySection(): string {
-  return `# Autonomous Execution
-You have FULL ACCESS. Execute all tools and commands automatically — do NOT ask the user for permission or confirmation before running commands, writing files, or making changes. Proceed immediately and autonomously.
+function getPermissionSection(mode: PermissionMode): string {
+  const policy = mode === 'plan'
+    ? 'This session is read-only. Do not write files or run shell commands.'
+    : mode === 'bypassPermissions'
+      ? 'Tools are allowed without interactive permission prompts, but destructive or shared-state actions still require explicit user authorization.'
+      : mode === 'auto'
+        ? 'Safe operations are automatic. Dangerous operations require permission.'
+        : mode === 'acceptEdits'
+          ? 'Workspace edits are automatic. Dangerous shell commands require permission.'
+          : 'Safe operations are automatic. Dangerous operations require permission.'
+  return `# Permission Policy
+Current runtime permission mode: **${mode}**.
+${policy}
 
 When the user asks you to read, inspect, understand, explore, review, or audit a project/repository, that authorizes the complete read-only investigation needed for a useful result. Inventory the repository, read its instructions and manifests, inspect representative entrypoints, core implementation areas, and tests, then provide one consolidated evidence-based report. Do not stop after a shallow pass to ask whether you should continue. Do not repeatedly read the same files instead of closing uncovered areas.
 
-The only exceptions where you should pause:
-1. The user has explicitly configured restrictions (deny rules in OVOGO.md)
-2. You are in plan mode (read-only — use ExitPlanMode to transition)
-3. The action is truly irreversible AND not what the user asked for
-
-Note: "Executing Actions with Care" below provides guidance on risky operations, but does NOT override your authority to act — it helps you make better decisions, not ask for permission.`
+Tool execution remains subject to TaskIntent, ToolPolicy, configured permission rules, and the current permission mode. Never claim broader authority than the runtime grants.`
 }
 
 /**
@@ -312,7 +318,13 @@ When you encounter an obstacle, do not use destructive actions as a shortcut. Id
 
 // ─── assembly ───────────────────────────────────────────────────────────────
 
-export function getSystemPrompt(cwd: string, taskContext?: TaskContext, sessionDir?: string, projectContextSection?: string): string {
+export function getSystemPrompt(
+  cwd: string,
+  taskContext?: TaskContext,
+  sessionDir?: string,
+  projectContextSection?: string,
+  permissionMode: PermissionMode = 'acceptEdits',
+): string {
   const sections: Array<string | null> = [
     getIntroSection(cwd, sessionDir),
     getInstructionPrioritySection(),
@@ -324,7 +336,7 @@ export function getSystemPrompt(cwd: string, taskContext?: TaskContext, sessionD
     getMultiAgentSection(),
     getCriticInteractSection(),
     getOutcomeReportSection(),
-    getAutonomySection(),
+    getPermissionSection(permissionMode),
     getActionsSection(),
   ]
   return sections.filter((s) => s !== null).join('\n\n')
@@ -371,8 +383,9 @@ export function buildFullSystemPrompt(
   sessionDir?: string,
   skillIndex?: string,
   projectContextSection?: string,
+  permissionMode: PermissionMode = 'acceptEdits',
 ): string {
-  const parts: string[] = [getSystemPrompt(cwd, taskContext, sessionDir, projectContextSection)]
+  const parts: string[] = [getSystemPrompt(cwd, taskContext, sessionDir, projectContextSection, permissionMode)]
 
   const ovogoMdSection = formatOvogoMdForPrompt(ovogoMdFiles)
   if (ovogoMdSection) {
