@@ -299,8 +299,14 @@ export class RuntimeCoordinator {
       // (which reflects the previous turn's gated view).
       ...(this.deps.moduleManager.modules.some(m => m.name === 'mcp') ? ['mcp'] : []),
     ]
-    const effectiveMaxIterations = profileSpec.maxIterations ?? config.maxIterations
-    const effectiveMaxOutputTokens = profileSpec.maxOutputTokens ?? config.maxOutputTokens
+    const effectiveMaxIterations = profileSpec.maxIterations === undefined
+      ? config.maxIterations
+      : Math.min(config.maxIterations, profileSpec.maxIterations)
+    const effectiveMaxOutputTokens = config.maxOutputTokens === undefined
+      ? profileSpec.maxOutputTokens
+      : profileSpec.maxOutputTokens === undefined
+        ? config.maxOutputTokens
+        : Math.min(config.maxOutputTokens, profileSpec.maxOutputTokens)
     eventEmitter.emit({
       type: 'PROFILE_RESOLVED',
       profile: profileResolution.profile,
@@ -386,14 +392,7 @@ export class RuntimeCoordinator {
         },
       } as never)
     }
-    if (profileResolution.profile === 'fast') {
-      // v0.4.1 WS4: fast turns skip per-run TaskGraph / scoped-context
-      // creation — a Q&A turn doesn't plan. Every downstream consumer
-      // already treats runContext as optional (control messages fall
-      // back to a local log, progress monitoring to the shared
-      // monitor, routing signals to "no graph").
-      this.deps.taskGraph?.reset()
-    } else if (runId) {
+    if (runId) {
       const ctxStore = this.deps.runContextStore
       if (ctxStore) {
         runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
