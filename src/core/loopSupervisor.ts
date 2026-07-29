@@ -41,7 +41,16 @@ export interface LoopCheckpoint {
     lastFailureAt?: number
   }
   recentCommands?: string[]
-  workerReferences?: Array<{ runId: string; status: string; worktree?: string; branch?: string }>
+  workerReferences?: Array<{
+    runId: string
+    status: string
+    modelProfile?: string
+    modelRole?: string
+    model?: string
+    provider?: string
+    worktree?: string
+    branch?: string
+  }>
   progressEvidenceHash?: string
   workspaceEvidenceHash?: string
   goalHash: string

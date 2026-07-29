@@ -86,6 +86,9 @@ import {
  * unconfigured, and override/health/`/route` still function.
  */
 function buildRouter(config: EngineConfig): ModelRouter {
+  if (config.agent) {
+    return routerFromSingleModel(config.model, config.provider ?? 'openai')
+  }
   const rawProfiles = config.models?.profiles
   if (Array.isArray(rawProfiles) && rawProfiles.length > 0) {
     const profiles: ModelProfile[] = []
@@ -112,19 +115,20 @@ function buildRouter(config: EngineConfig): ModelRouter {
       })
     }
     if (profiles.length > 0) {
-      // v0.3.1 (runtime truth contract §三.1.2): reject cross-provider profiles up
-      // front so the runtime never has to swap transports. The current
-      // engine has only one OpenAI-compatible transport — multi-
-      // provider rebinding is explicitly out of scope until the
-      // ProviderRuntime abstraction lands.
-      validateProfiles({ activeProvider: config.provider ?? 'openai', profiles })
+      const activeProvider = config.provider ?? 'openai'
+      const mainProfiles = profiles.filter((profile) =>
+        profile.provider === activeProvider
+        && (profile.roles.includes('main') || profile.roles.includes('architect')),
+      )
+      if (mainProfiles.length === 0) return routerFromSingleModel(config.model, activeProvider)
+      validateProfiles({ activeProvider, profiles: mainProfiles })
       const r = config.models?.routing ?? {}
       const routing: RoutingConfig = {
         enabled: r.enabled !== false,
         longContextThreshold: r.longContextThreshold,
         failureEscalationThreshold: r.failureEscalationThreshold,
       }
-      return new ModelRouter(profiles, routing)
+      return new ModelRouter(mainProfiles, routing)
     }
   }
   return routerFromSingleModel(config.model, config.provider ?? 'openai')

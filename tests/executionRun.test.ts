@@ -143,6 +143,23 @@ describe('canTransition', () => {
 // ── ExecutionRunRegistry.create / get / require ───────────────────────────
 
 describe('ExecutionRunRegistry.create / get / require', () => {
+  it('retains the assigned worker model identity', () => {
+    const registry = new ExecutionRunRegistry()
+    const run = registry.create(agentRun({
+      modelProfile: 'builder',
+      modelRole: 'builder',
+      model: 'coding-model',
+      provider: 'minimax',
+    }))
+
+    expect(registry.require(run.runId)).toMatchObject({
+      modelProfile: 'builder',
+      modelRole: 'builder',
+      model: 'coding-model',
+      provider: 'minimax',
+    })
+  })
+
   it('creates a run with default status=queued and phase=created', () => {
     const reg = new ExecutionRunRegistry()
     const run = reg.create(agentRun())

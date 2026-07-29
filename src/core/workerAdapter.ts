@@ -97,9 +97,39 @@ export interface WorkerTask {
 export interface WorkerResult {
   runId: string
   status: WorkerStatus
+  outcomeStatus?: string
   output?: string
   artifacts?: WorkerArtifact[]
   error?: string
+  summary?: string
+  changedFiles?: string[]
+  verification?: {
+    executed: boolean
+    passed: boolean
+    commands: string[]
+    output?: string
+  }
+  blockers?: string[]
+  requiredNextActions?: string[]
+  modelAttempts?: Array<{
+    provider: string
+    model: string
+    status: string
+    latencyMs: number
+    estimatedCost: number
+    usage?: { inputTokens: number; outputTokens: number }
+  }>
+  estimatedCost?: number
+  worktree?: { branch?: string; path?: string; delivery: string }
+  model?: {
+    profileId: string
+    role: string
+    provider: string
+    model: string
+    apiKeyEnv?: string
+    source?: string
+    reason?: string
+  }
 }
 
 /** Reference to an out-of-band artifact (diff, patch, log file). */

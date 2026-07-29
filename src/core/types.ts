@@ -34,7 +34,10 @@ export interface ToolCall {
  * in tests that don't model background work.
  */
 export interface ChildEngineLike {
-  runTurn: (msg: string, history: never[]) => Promise<{ result: { output: string; reason: string; completionStatus?: string } }>
+  runTurn: (msg: string, history: never[]) => Promise<{
+    result: { output: string; reason: string; completionStatus?: string }
+    outcome?: TurnOutcome
+  }>
   abort: () => void
   /**
    * Tear down engine-owned side effects (background tasks, transient
@@ -171,6 +174,35 @@ export interface ToolContext {
    */
   excludedTools?: string[]
   taskKind?: TaskKind
+  sharedState?: {
+    activeSubtasks: Map<string, {
+      subtaskId: string
+      description: string
+      agentLabel: string
+      startedAt: number
+      modelProfile?: string
+      modelRole?: string
+      model?: string
+      provider?: string
+    }>
+    completedSubtasks: Map<string, {
+      runId: string
+      status: string
+      outcomeStatus?: string
+      modelProfile?: string
+      modelRole?: string
+      model?: string
+      provider?: string
+      changedFiles?: string[]
+      worktree?: string
+      branch?: string
+    }>
+  }
+  recordModelUsage?: (
+    model: string,
+    usage: { inputTokens: number; outputTokens: number },
+    durationMs: number,
+  ) => void
   /** Background task manager — for async long-running task lifecycle */
   backgroundTaskManager?: BackgroundTaskManager
   /**

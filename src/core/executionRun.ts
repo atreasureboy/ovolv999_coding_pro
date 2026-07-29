@@ -200,6 +200,10 @@ export interface ExecutionRun {
    */
   phase: string
   worker?: string
+  modelProfile?: string
+  modelRole?: string
+  model?: string
+  provider?: string
   workspace: WorkspaceRef
   acceptance: AcceptanceRule[]
   budget: RunBudget
@@ -239,6 +243,7 @@ export type CreateRunInput =
     ExecutionRun,
     | 'status' | 'phase' | 'acceptance' | 'budget' | 'resources'
     | 'artifacts' | 'worker' | 'verification' | 'error' | 'parentRunId'
+    | 'modelProfile' | 'modelRole' | 'model' | 'provider'
     | 'createdAt' | 'updatedAt'
   >>
   // Optional runId is only used by crash-recovery replay — callers
@@ -299,6 +304,10 @@ export class ExecutionRunRegistry {
       status: input.status ?? 'queued',
       phase: input.phase ?? 'created',
       worker: input.worker,
+      modelProfile: input.modelProfile,
+      modelRole: input.modelRole,
+      model: input.model,
+      provider: input.provider,
       workspace: input.workspace,
       acceptance: input.acceptance ?? [],
       budget: input.budget ?? {},

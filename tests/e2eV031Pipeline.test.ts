@@ -147,21 +147,30 @@ describe('v0.3.1 end-to-end pipeline (audit pass 2)', () => {
     expect(router.getManualOverride()).toBeNull()
   })
 
-  it('cross-provider profile is rejected at config-validation', () => {
-    expect(() => {
-      new ExecutionEngine({
-        apiKey: 'test', model: 'gpt-4o',
-        cwd: '/tmp', permissionMode: 'auto', enabledModules: [],
-        models: {
-          profiles: [
-            { id: 'a', provider: 'openai', model: 'gpt-4o',
-              capabilities: { reasoning: 0.9, coding: 0.9, contextWindow: 128_000, toolCalling: 0.9, speed: 0.5, cost: 0.5 } },
-            { id: 'b', provider: 'anthropic', model: 'claude-sonnet',
-              capabilities: { reasoning: 0.9, coding: 0.9, contextWindow: 128_000, toolCalling: 0.9, speed: 0.5, cost: 0.5 } },
-          ],
-        },
-      } as any, fakeRenderer())
-    }).toThrow(/Cross-provider|Profile validation|profile/i)
+  it('isolates cross-provider worker profiles from the main router', () => {
+    const engine = new ExecutionEngine({
+      apiKey: 'test', model: 'gpt-4o', provider: 'openai',
+      cwd: '/tmp', permissionMode: 'auto', enabledModules: [],
+      models: {
+        profiles: [
+          { id: 'a', provider: 'openai', model: 'gpt-4o', roles: ['main', 'architect'],
+            capabilities: { reasoning: 0.9, coding: 0.9, contextWindow: 128_000, toolCalling: 0.9, speed: 0.5, cost: 0.5 } },
+          { id: 'b', provider: 'anthropic', model: 'claude-sonnet', apiKeyEnv: 'ANTHROPIC_API_KEY', roles: ['builder'],
+            capabilities: { reasoning: 0.9, coding: 0.9, contextWindow: 128_000, toolCalling: 0.9, speed: 0.5, cost: 0.5 } },
+        ],
+      },
+    } as any, fakeRenderer())
+
+    expect(engine.getModelRouter().listProfiles().map((profile) => ({
+      id: profile.id,
+      provider: profile.provider,
+      roles: profile.roles,
+    }))).toEqual([{
+      id: 'a',
+      provider: 'openai',
+      roles: ['main', 'architect'],
+    }])
+    engine.dispose()
   })
 
   it('TaskGraphStore per-runId isolation across two runs', async () => {

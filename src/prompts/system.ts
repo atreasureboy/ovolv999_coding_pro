@@ -231,7 +231,7 @@ Complex tasks can be split across focused sub-agents. Multiple Agent calls in on
 
 ## Specifying Agent Configuration
 
-Option 1 — Preset name: subagent_type: "explore" | "plan" | "code-reviewer" | "general-purpose"
+Option 1 — Preset name: subagent_type: "explore" | "plan" | "code-reviewer" | "general-purpose" | "coordinator"
 Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterations }
 
 ## Built-in Presets
@@ -242,6 +242,20 @@ Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterati
 | plan | read-only | Produce actionable implementation plan |
 | code-reviewer | read-only | Code review (correctness/security/performance) |
 | general-purpose | full tools | General complex subtasks (with memory + workspace) |
+| coordinator | orchestration tools | Decompose and supervise worker tasks |
+
+## Role-aware Models
+Use model_role only as a capability request: architect, builder, reviewer, utility, worker, or planner. The Runtime selects an available configured profile and credential. Do not request a concrete API key or expose credentials.
+Use builder for bounded implementation, utility for low-risk exploration, reviewer for independent verification, and architect for cross-module decisions or evidence-backed escalation. Escalate after repeated worker failure, public-interface impact, unresolved root cause, or conflicting worker evidence. Never silently downgrade architecture work to a weaker role.
+
+Pass durable facts through delegation_context:
+- goal
+- constraints
+- relevant_files
+- acceptance_criteria
+- decisions
+
+Embedding profiles are reserved for retrieval integrations, not autonomous agents. Do not delegate to them.
 
 ## Parallel vs Serial
  - **No dependency** (e.g. explore two modules simultaneously) → multiple Agent calls in one response
@@ -257,7 +271,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
 Terse command-style prompts produce shallow, generic work. Sub-agent cannot call Agent (no recursion, max depth 5).
 
 ## After Sub-Agent Completes
-The result returned by the sub-agent is NOT visible to the user. You MUST send a text message to the user with a concise summary of what the sub-agent found or did.`
+The Worker Result is evidence, not authority to declare the parent task complete. Check its status, verification, changed files, blockers, cost, and retained worktree before accepting it. The result is NOT visible to the user; you MUST send a concise final summary yourself.`
 }
 
 function getCriticInteractSection(): string {

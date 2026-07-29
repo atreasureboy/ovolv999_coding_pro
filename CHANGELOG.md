@@ -2,6 +2,17 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.5.0
+
+- Added role-aware model assignment to the existing AgentTool child-engine path.
+- Added architect, builder, reviewer, utility, worker, and planner capability roles.
+- Added cross-provider worker profiles with environment-referenced API keys.
+- Added structured delegation context for goals, constraints, relevant files, decisions, and acceptance criteria.
+- Added durable Worker Result handoff with status, changed files, verification, blockers, model attempts, cost, and retained worktree evidence.
+- Aggregated child-model token usage into parent session cost accounting.
+- Kept worker-only and embedding profiles out of the main-agent router.
+- Preserved modified worktrees when a child engine throws before completion.
+
 ## 0.4.2
 
 - Closed the first-run readline lifecycle and stdin ownership gap.

@@ -1,4 +1,4 @@
-# ovolv999 (v0.4.2) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.5.0) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -29,6 +29,48 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 - 当前模型来自 Runtime；自动路由或 fallback 后，状态栏、标题和结果卡同步成功模型。
 - Session 加载错误按损坏、截断、schema、权限和消息格式分类，并保留上一版 `.bak`。
 - 包管理、锁文件、CI、安装脚本和验收命令统一为 pnpm。
+
+### v0.5 Role-aware Multi-Agent
+
+主 Agent 可以保持顶级模型，现有 `AgentTool` 创建子 Agent 时按能力角色选择独立模型 Profile：
+
+| 角色 | 默认用途 |
+|---|---|
+| `architect` | 全局架构、复杂决策、最终审查 |
+| `builder` | 具体实现、测试与局部重构 |
+| `reviewer` | 独立代码审查与风险检查 |
+| `utility` | 探索、摘要和低成本辅助 |
+| `planner` | 只读规划 |
+| `embedding` | 预留给检索模块，不会被启动为 Agent |
+
+多 Provider 与多 API Key 通过环境变量引用配置，真实 Key 不写入配置、事件或 Worker Result：
+
+```json
+{
+  "models": {
+    "profiles": [
+      {
+        "id": "architect",
+        "provider": "openai",
+        "model": "frontier-model",
+        "roles": ["main", "architect"]
+      },
+      {
+        "id": "builder",
+        "provider": "minimax",
+        "model": "coding-model",
+        "baseURL": "https://example.com/v1",
+        "apiKeyEnv": "OVOLV999_BUILDER_API_KEY",
+        "roles": ["builder", "worker"]
+      }
+    ]
+  }
+}
+```
+
+主 Agent 通过 `model_role` 请求能力等级，通过 `delegation_context` 传递目标、约束、相关文件、架构决策和验收标准。子 Agent 返回结构化 Worker Result；最终完成权仍属于主 Agent。
+
+当前版本接通的是生成模型的角色分工。`embedding` Profile 只会被隔离在 Agent 路由之外，内置向量生成与向量数据库适配尚未接通。
 
 ## 运行时核心能力
 

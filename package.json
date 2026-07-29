@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.4.2",
-  "description": "v0.4.2 Interaction Truth Closure — Autonomous Coding Agent REPL & Execution Engine",
+  "version": "0.5.0",
+  "description": "v0.5 Role-aware Multi-Agent Runtime — Autonomous Coding Agent REPL & Execution Engine",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",

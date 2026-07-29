@@ -283,6 +283,7 @@ export class RuntimeCoordinator {
     // fast) > prompt-shape detection (deep escalation) > standard.
     // This is the resource-depth axis; TaskKind (below) stays the
     // completion-semantics axis — two axes, one verdict each.
+    sharedState.completedSubtasks.clear()
     const taskIntent = this.deps.classifyIntent
       ? this.deps.classifyIntent(userMessage, { planMode: sharedState.planModeActive })
       : classifyTaskIntent(userMessage, { planMode: sharedState.planModeActive })
@@ -333,6 +334,7 @@ export class RuntimeCoordinator {
         fileHistory: this.deps.fileHistory,
         eventLog,
         eventEmitter,
+        costTracker: this.deps.costTracker,
         executionProfile: {
           modules: profileModules,
           excludedTools: profileSpec.excludedTools,
@@ -1165,10 +1167,17 @@ export class RuntimeCoordinator {
       changedFiles: [...wsFinal.filesChanged],
       artifacts: [],
       taskGraph: currentGraph && currentGraph.size() > 0 ? currentGraph.snapshot() : undefined,
-      workerReferences: [...sharedState.activeSubtasks.keys()].map((workerRunId) => ({
-        runId: workerRunId,
-        status: 'running',
-      })),
+      workerReferences: [
+        ...[...sharedState.completedSubtasks.values()].map((worker) => ({ ...worker })),
+        ...[...sharedState.activeSubtasks.entries()].map(([workerRunId, worker]) => ({
+          runId: workerRunId,
+          status: 'running',
+          modelProfile: worker.modelProfile,
+          modelRole: worker.modelRole,
+          model: worker.model,
+          provider: worker.provider,
+        })),
+      ],
       verification: {
         executed: wsFinal.verification.passed.length + wsFinal.verification.failed.length > 0,
         passed: wsFinal.verification.failed.length === 0,

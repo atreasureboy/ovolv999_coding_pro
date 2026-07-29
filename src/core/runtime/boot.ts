@@ -36,6 +36,7 @@ import type { PermissionManager } from '../permissionSystem.js'
 import { getPlanModePrefix } from '../../prompts/system.js'
 import { normalizeCJKInput } from '../strings.js'
 import type { TaskKind } from './taskIntent.js'
+import type { CostTracker } from '../costTracker.js'
 
 export interface BootParams {
   userMessage: string
@@ -65,6 +66,7 @@ export interface BootParams {
     excludedTools?: string[]
     taskKind?: TaskKind
   }
+  costTracker?: CostTracker
 }
 
 export interface BootResult {
@@ -80,7 +82,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     userMessage, history, images, config, baseTools, sharedState,
     moduleManager, contextManager, toolPolicy, toolRegistry,
     permissionManager, backgroundTaskManager, fileHistory,
-    eventLog, eventEmitter, executionProfile,
+    eventLog, eventEmitter, executionProfile, costTracker,
   } = params
 
   const planMode = sharedState.planModeActive
@@ -162,6 +164,12 @@ export async function boot(params: BootParams): Promise<BootResult> {
     availableToolNames: toolDefs.map(t => t.function.name),
     excludedTools: executionProfile?.excludedTools,
     taskKind: executionProfile?.taskKind,
+    sharedState,
+    recordModelUsage: costTracker
+      ? (model, usage, durationMs) => {
+          costTracker.addUsage(model, usage, durationMs)
+        }
+      : undefined,
     snipMessages: (keepRecent: number, reason?: string) =>
       contextManager.applySnip(messages, keepRecent, reason),
     getMessages: () => messages.map(m => ({ ...m })),

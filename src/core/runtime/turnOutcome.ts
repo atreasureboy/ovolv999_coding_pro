@@ -65,7 +65,18 @@ export interface TurnOutcome {
   changedFiles: string[]
   artifacts: string[]
   taskGraph?: unknown
-  workerReferences?: Array<{ runId: string; status: string }>
+  workerReferences?: Array<{
+    runId: string
+    status: string
+    outcomeStatus?: string
+    modelProfile?: string
+    modelRole?: string
+    model?: string
+    provider?: string
+    changedFiles?: string[]
+    worktree?: string
+    branch?: string
+  }>
   verification: VerificationState
   modelAttempts: ModelCallAttempt[]
   /**

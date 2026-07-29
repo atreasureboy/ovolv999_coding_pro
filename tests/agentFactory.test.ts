@@ -36,6 +36,9 @@ interface RecordedCall {
   initialDepth: number | undefined
   promptContains: string
   promptHasParentCallDepth: number
+  model?: string
+  provider?: string
+  apiKey?: string
 }
 
 function makeParentConfig(overrides: Partial<EngineConfig> = {}): EngineConfig {
@@ -67,6 +70,9 @@ function capturingFactory(tag: string, recorder: RecordedCall[], opts: {
           initialDepth: config.initialAgentDepth,
           promptContains: '', // populated by runTurn args below
           promptHasParentCallDepth: 0,
+          model: config.model,
+          provider: config.provider,
+          apiKey: config.apiKey,
         }
         if (opts.delayMs) {
           await new Promise((r) => setTimeout(r, opts.delayMs))
@@ -106,6 +112,89 @@ function recordingPromptFactory(inner: AgentChildEngineFactory, recorder: Record
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe('AgentTool per-instance wiring — concurrency isolation', () => {
+  it('binds a builder model profile to a general-purpose child engine', async () => {
+    const recorder: RecordedCall[] = []
+    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const parent = makeParentConfig({
+      model: 'architect-model',
+      provider: 'openai',
+      apiKey: 'shared-key',
+      models: {
+        profiles: [
+          { id: 'architect', provider: 'openai', model: 'architect-model', roles: ['main', 'architect'] },
+          { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder', 'worker'] },
+        ],
+      },
+    })
+    const tool = new AgentTool({
+      factory: capturingFactory('builder', recorder),
+      parentConfig: parent,
+      parentRenderer: renderer,
+    })
+
+    const result = await tool.execute({
+      description: 'implement unit',
+      prompt: 'modify the assigned unit',
+      subagent_type: 'general-purpose',
+      delegation_context: {
+        goal: 'complete the unit',
+        constraints: ['do not change public APIs'],
+        acceptance_criteria: ['tests pass'],
+      },
+    }, makeContext('/context'))
+
+    expect(result.isError).toBe(false)
+    expect(recorder[0]).toMatchObject({
+      model: 'builder-model',
+      provider: 'openai',
+      apiKey: 'shared-key',
+    })
+  })
+
+  it('uses a cross-provider env credential without exposing it in the worker result', async () => {
+    const envName = 'OVOLV999_TEST_BUILDER_API_KEY'
+    const previous = process.env[envName]
+    process.env[envName] = 'builder-secret-value'
+    try {
+      const recorder: RecordedCall[] = []
+      const tool = new AgentTool({
+        factory: capturingFactory('builder', recorder),
+        parentConfig: makeParentConfig({
+          model: 'architect-model',
+          provider: 'openai',
+          apiKey: 'architect-secret-value',
+          models: {
+            profiles: [{
+              id: 'builder',
+              provider: 'minimax',
+              model: 'builder-model',
+              apiKeyEnv: envName,
+              roles: ['builder'],
+            }],
+          },
+        }),
+        parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+      })
+
+      const result = await tool.execute(
+        { description: 'implement unit', prompt: 'do it', subagent_type: 'general-purpose' },
+        makeContext('/context'),
+      )
+
+      expect(recorder[0]).toMatchObject({
+        model: 'builder-model',
+        provider: 'minimax',
+        apiKey: 'builder-secret-value',
+      })
+      expect(result.content).not.toContain('builder-secret-value')
+      expect(result.content).not.toContain('architect-secret-value')
+      expect(result.content).toContain(envName)
+    } finally {
+      if (previous === undefined) delete process.env[envName]
+      else process.env[envName] = previous
+    }
+  })
+
   it('two AgentTool instances with distinct factories do not cross-talk under Promise.all', async () => {
     const recorderA: RecordedCall[] = []
     const recorderB: RecordedCall[] = []

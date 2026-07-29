@@ -207,7 +207,34 @@ function normalizeModels(value: unknown, file: string | undefined, diags: Config
     })
     return undefined
   }
-  const profiles = value.profiles.filter(isObject)
+  const profiles = value.profiles.filter(isObject).map((profile, index) => {
+    const normalized = { ...profile }
+    if ('apiKey' in normalized) {
+      delete normalized.apiKey
+      if (file) diags.push({
+        file,
+        field: `models.profiles[${index}].apiKey`,
+        severity: 'warning',
+        message: 'literal API key dropped',
+        fix: 'Store the key in an environment variable and configure apiKeyEnv instead.',
+      })
+    }
+    if (
+      normalized.apiKeyEnv !== undefined
+      && (typeof normalized.apiKeyEnv !== 'string'
+        || !/^[A-Z_][A-Z0-9_]*$/.test(normalized.apiKeyEnv))
+    ) {
+      delete normalized.apiKeyEnv
+      if (file) diags.push({
+        file,
+        field: `models.profiles[${index}].apiKeyEnv`,
+        severity: 'warning',
+        message: 'invalid API-key environment variable name dropped',
+        fix: 'Use an uppercase environment variable name such as OVOLV999_BUILDER_API_KEY.',
+      })
+    }
+    return normalized
+  })
   const dropped = value.profiles.length - profiles.length
   if (dropped > 0 && file) diags.push({
     file, field: 'models.profiles', severity: 'warning',

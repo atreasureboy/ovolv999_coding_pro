@@ -32,6 +32,11 @@ import type { ExecutionRunRegistry} from '../core/executionRun.js';
 import { type RunStatus } from '../core/executionRun.js'
 import { isTerminalRunStatus } from '../core/executionRun.js'
 import type { WorkerAdapter, SteerEventEmitter, WorkerHandle, WorkerStatus, WorkerResult, WorkerDescriptor, WorkerTask } from '../core/workerAdapter.js'
+import {
+  resolveAgentModelAssignment,
+  type AgentModelAssignment,
+  type AgentModelRole,
+} from '../core/model/agentModelPolicy.js'
 
 /** Hard cap on agent call chain depth (across nesting).
  * The depth is threaded through `EngineConfig.initialAgentDepth` so the
@@ -156,6 +161,34 @@ function normalizeDelegatedPrompt(prompt: string, config: EngineConfig): string 
   return normalized
 }
 
+interface DelegationContext {
+  goal?: string
+  constraints?: string[]
+  relevantFiles?: string[]
+  acceptanceCriteria?: string[]
+  decisions?: string[]
+}
+
+function normalizeDelegationContext(value: unknown): DelegationContext | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const input = value as Record<string, unknown>
+  const strings = (entry: unknown): string[] | undefined => {
+    if (!Array.isArray(entry)) return undefined
+    const values = entry
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim())
+    return values.length > 0 ? values : undefined
+  }
+  const context: DelegationContext = {
+    goal: typeof input.goal === 'string' && input.goal.trim() ? input.goal.trim() : undefined,
+    constraints: strings(input.constraints),
+    relevantFiles: strings(input.relevant_files),
+    acceptanceCriteria: strings(input.acceptance_criteria),
+    decisions: strings(input.decisions),
+  }
+  return Object.values(context).some((entry) => entry !== undefined) ? context : undefined
+}
+
 function appendAgentEvent(config: EngineConfig, event: Record<string, unknown>): void {
   if (!config.sessionDir) return
   const logPath = join(config.sessionDir, AGENT_EVENT_LOG_FILE)
@@ -226,6 +259,18 @@ function extractMergeConflicts(repoCwd: string): string[] {
     return out.split('\n').map(s => s.trim()).filter(Boolean)
   } catch {
     return []
+  }
+}
+
+function worktreeHasChanges(worktreePath: string): boolean {
+  try {
+    return execSync('git status --porcelain', {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    }).trim().length > 0
+  } catch {
+    return false
   }
 }
 
@@ -341,6 +386,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * to the in-flight `runTurn()`.
    */
   private readonly childAborts = new Map<string, () => void>()
+  private readonly completedResults = new Map<string, WorkerResult>()
   private readonly onSteeredHook?: SteerEventEmitter
 
   /** Immutable per-instance wiring — captured once in the constructor and
@@ -490,8 +536,19 @@ export class AgentTool implements Tool, WorkerAdapter {
    * retained beyond the execute() return.
    */
   async collect(runId: string): Promise<WorkerResult> {
+    const completed = this.completedResults.get(runId)
+    if (completed) return completed
     const st = await this.status(runId)
     return { runId, status: st }
+  }
+
+  private rememberResult(result: WorkerResult): void {
+    this.completedResults.set(result.runId, result)
+    while (this.completedResults.size > 128) {
+      const oldest = this.completedResults.keys().next().value
+      if (!oldest) break
+      this.completedResults.delete(oldest)
+    }
   }
 
   /**
@@ -511,8 +568,14 @@ export class AgentTool implements Tool, WorkerAdapter {
 
 ## Agent Configuration
 
-Option 1 — Preset name: subagent_type: "explore" | "plan" | "code-reviewer" | "general-purpose"
+Option 1 — Preset name: subagent_type: "explore" | "plan" | "code-reviewer" | "general-purpose" | "coordinator"
 Option 2 — Custom config: agent_config: { identity, modules, tools, maxIterations }
+
+## Role-aware model assignment
+
+Use model_role to request architect, builder, reviewer, utility, worker, or planner capability.
+The runtime resolves that role through configured models.profiles and API-key environment references.
+Use delegation_context to pass the global goal, constraints, relevant files, decisions, and acceptance criteria.
 
 ## Verification Gate
 
@@ -545,6 +608,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
 
 ## Rules
 - prompt must be fully self-contained (sub-agent has no parent context)
+- Prefer delegation_context for durable facts instead of copying the whole conversation
+- Treat the returned Worker Result as evidence; the main agent owns final acceptance
 - Sub-agent cannot call Agent (no recursion, max depth 5)
 - Independent tasks can run concurrently (multiple Agent calls in one response)`,
       parameters: {
@@ -559,6 +624,18 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           modifies_state: { type: 'boolean', description: '(Deprecated alias for task_mode:"modify") Task edits files — Runtime auto-creates an isolated git worktree and merges on success. Prefer task_mode.' },
           task_mode: { type: 'string', enum: ['read_only', 'modify'], description: 'P0-4: Task mode. "modify" enforces isolated worktree + verification + structured delivery (default "read_only").' },
           merge_on_success: { type: 'boolean', description: 'When task_mode:"modify", merge the worktree branch back on success (default true). Set false to keep the worktree for manual review.' },
+          model_role: { type: 'string', enum: ['architect', 'builder', 'reviewer', 'utility', 'worker', 'planner'], description: 'Capability role used to select the sub-agent model profile. Defaults from subagent_type.' },
+          delegation_context: {
+            type: 'object',
+            description: 'Structured handoff from the main agent.',
+            properties: {
+              goal: { type: 'string' },
+              constraints: { type: 'array', items: { type: 'string' } },
+              relevant_files: { type: 'array', items: { type: 'string' } },
+              acceptance_criteria: { type: 'array', items: { type: 'string' } },
+              decisions: { type: 'array', items: { type: 'string' } },
+            },
+          },
         },
         required: ['description', 'prompt'],
       },
@@ -611,12 +688,33 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       config: customConfig,
     })
     const agentLabel = customConfig ? 'custom' : (presetName ?? 'general-purpose')
+    const requestedRole = typeof input.model_role === 'string'
+      && ['architect', 'builder', 'reviewer', 'utility', 'worker', 'planner'].includes(input.model_role)
+      ? input.model_role as AgentModelRole
+      : undefined
+    const modelAssignment = resolveAgentModelAssignment(this.parentConfig, {
+      agentPreset: agentLabel,
+      requestedRole,
+    })
+    const delegationContext = normalizeDelegationContext(input.delegation_context)
 
     if (typeof input.max_iterations === 'number') {
       agentConfig.maxIterations = Math.min(input.max_iterations, 200)
     }
 
-    return this.runAgentTask(description, prompt, agentConfig, agentLabel, verify, modifiesState, mergeOnSuccess, taskMode, context)
+    return this.runAgentTask(
+      description,
+      prompt,
+      agentConfig,
+      agentLabel,
+      modelAssignment,
+      delegationContext,
+      verify,
+      modifiesState,
+      mergeOnSuccess,
+      taskMode,
+      context,
+    )
   }
 
   // ── runAgentTask — depth is derived, not mutated ─────────────────────────
@@ -634,6 +732,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     prompt: string,
     agentConfig: AgentConfig,
     agentLabel: string,
+    modelAssignment: AgentModelAssignment,
+    delegationContext: DelegationContext | undefined,
     verify: boolean,
     modifiesState: boolean,
     mergeOnSuccess: boolean,
@@ -661,7 +761,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       agentSummary:   (agentType: string, desc: string, summary: string) => void
       agentHeartbeat: (agentType: string, desc: string, elapsedSec: number) => void
     }
-    mainRenderer.agentStart(description, agentLabel)
+    const agentDisplayLabel = `${agentLabel} · ${modelAssignment.role}/${modelAssignment.profileId}`
+    mainRenderer.agentStart(description, agentDisplayLabel)
     const agentStartTime = Date.now()
 
     // ── ExecutionRun lifecycle (runtime architecture contract §三 Phase 2) ───────────────
@@ -684,6 +785,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         goal: description,
         workspace: { cwd: context.cwd },
         worker: agentLabel,
+        modelProfile: modelAssignment.profileId,
+        modelRole: modelAssignment.role,
+        model: modelAssignment.model,
+        provider: modelAssignment.provider,
         budget: {
           maxIterations: agentConfig.maxIterations,
         },
@@ -713,11 +818,18 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     // unconditionally in the finally block below — same pattern as
     // ToolScheduler's activeToolCalls tracking.
     const subtaskId = `${description.slice(0, 40)}|d${nextDepth}|t${agentStartTime}`
-    const sharedRuntimeState = (context as unknown as {
-      sharedState?: { activeSubtasks: Map<string, { description: string; agentLabel: string; startedAt: number }> }
-    }).sharedState
+    const sharedRuntimeState = context.sharedState
     if (sharedRuntimeState?.activeSubtasks) {
-      sharedRuntimeState.activeSubtasks.set(subtaskId, { description, agentLabel, startedAt: agentStartTime })
+      sharedRuntimeState.activeSubtasks.set(subtaskId, {
+        subtaskId,
+        description,
+        agentLabel,
+        startedAt: agentStartTime,
+        modelProfile: modelAssignment.profileId,
+        modelRole: modelAssignment.role,
+        model: modelAssignment.model,
+        provider: modelAssignment.provider,
+      })
     }
 
     // Structured communication event: INVOKE_SENT (with call depth)
@@ -726,11 +838,17 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       modules: agentConfig.modules ? Object.keys(agentConfig.modules) : [],
       planMode: agentConfig.identity.planMode ?? false,
       maxIterations: agentConfig.maxIterations,
+      modelProfile: modelAssignment.profileId,
+      modelRole: modelAssignment.role,
+      model: modelAssignment.model,
+      provider: modelAssignment.provider,
+      modelAssignmentSource: modelAssignment.source,
+      modelAssignmentReason: modelAssignment.reason,
       call_depth: nextDepth,
       verify_enabled: verify,
     }, [agentLabel, 'invoke'])
 
-    const paneLabel = `[${agentLabel}] ${description}`
+    const paneLabel = `[${agentDisplayLabel}] ${description}`
     const paneSlot = tmuxLayout.acquireSlot(paneLabel)
     const childRenderer = paneSlot
       ? Renderer.forFile(paneSlot.logFile)
@@ -794,6 +912,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const childConfig: EngineConfig = {
       ...parentConfig,
       agent: agentConfig,
+      model: modelAssignment.model,
+      provider: modelAssignment.provider,
+      apiKey: modelAssignment.apiKey,
+      baseURL: modelAssignment.baseURL,
       // P0-4: when a worktree was created, the child runs INSIDE it.
       // All child tool calls (Bash/Read/Write/Edit) resolve paths
       // against this cwd, so modifications land on the isolated
@@ -827,6 +949,9 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const inheritedContextLines = [
       `- session_dir: ${parentConfig.sessionDir ?? 'not set'}`,
       `- call_depth: ${nextDepth}`,
+      `- model_role: ${modelAssignment.role}`,
+      `- model_profile: ${modelAssignment.profileId}`,
+      `- model: ${modelAssignment.provider}/${modelAssignment.model}`,
     ]
 
     const sessionDirHint = parentConfig.sessionDir
@@ -845,6 +970,11 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       '',
       '[Task Description]',
       description,
+      ...(delegationContext ? [
+        '',
+        '[Structured Context]',
+        JSON.stringify(delegationContext, null, 2),
+      ] : []),
       '',
       '[Task Instructions]',
       normalizedPrompt,
@@ -856,6 +986,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       description,
       max_iterations: agentConfig.maxIterations,
       call_depth: nextDepth,
+      model_profile: modelAssignment.profileId,
+      model_role: modelAssignment.role,
+      model: modelAssignment.model,
+      provider: modelAssignment.provider,
       verify_enabled: verify,
       placeholders_replaced: placeholdersReplaced,
       prompt_preview: normalizedPrompt.slice(0, 500),
@@ -877,7 +1011,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const HEARTBEAT_MS = 2 * 60 * 1000
     const heartbeatTimer = setInterval(() => {
       const elapsedSec = Math.round((Date.now() - agentStartTime) / 1000)
-      mainRenderer.agentHeartbeat(agentLabel, description, elapsedSec)
+      mainRenderer.agentHeartbeat(agentDisplayLabel, description, elapsedSec)
     }, HEARTBEAT_MS)
     if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref()
 
@@ -919,7 +1053,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       }
 
       transitionRun('running', { phase: 'child-turn' })
-      const { result } = await childEngine.runTurn(delegatedPrompt, [])
+      const { result, outcome: childOutcome } = await childEngine.runTurn(delegatedPrompt, [])
       const durationMs = Date.now() - agentStartTime
 
       // ── P0-5 (runtime invariants §五): three-phase outcome split ───────────────
@@ -946,6 +1080,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       const workerFailed = result.reason === 'error'
         || (result.completionStatus !== undefined && result.completionStatus !== 'completed')
       let verifyOutcome: { ran: boolean; passed: boolean } = { ran: false, passed: true }
+      let verificationCommands: string[] = []
+      let verificationOutput: string | undefined
       let deliveryOutcome:
         | { status: 'delivered'; branch: string }
         | { status: 'kept_for_review'; branch: string; path: string }
@@ -963,11 +1099,13 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       let verifySection = ''
       if (verify && !workerFailed && !agentConfig.identity.planMode) {
         transitionRun('verifying', { phase: 'verify-commands' })
+        verificationCommands = detectVerifyCommands(effectiveCwd)
         const verifyResult = runVerification(effectiveCwd)
         if (verifyResult) {
           const icon = verifyResult.passed ? '✓' : '✗'
           verifySection = `\n\n---\n[Verify Gate] ${icon}\n${verifyResult.output}`
           verifyOutcome = { ran: true, passed: verifyResult.passed }
+          verificationOutput = verifyResult.output
 
       context.eventLog?.append('invoke_completed', agentLabel, {
             description,
@@ -1126,11 +1264,103 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         output_preview: result.output.slice(0, 500),
       }, [agentLabel, 'invoke', !isError ? 'success' : 'error'])
 
+      const summaryLines = result.output
+        .split('\n')
+        .map((l: string) => l.trimEnd())
+        .filter((l: string) => l.trim().length > 0)
+        .slice(0, 8)
+        .join('\n')
+      const workerResult: WorkerResult = {
+        runId: runId ?? `untracked-${agentStartTime}`,
+        status: finalStatus === 'succeeded' ? 'succeeded' : 'failed',
+        outcomeStatus: childOutcome?.completion.status ?? finalStatus,
+        output: result.output || undefined,
+        summary: summaryLines || `${description}: ${finalStatus}`,
+        changedFiles: childOutcome?.changedFiles ?? [],
+        verification: {
+          executed: verifyOutcome.ran,
+          passed: verifyOutcome.passed,
+          commands: verificationCommands,
+          output: verificationOutput,
+        },
+        blockers: childOutcome?.completion.reasons ?? [],
+        requiredNextActions: childOutcome?.completion.requiredNextActions ?? [],
+        modelAttempts: childOutcome?.modelAttempts?.map((attempt) => ({
+          provider: attempt.provider,
+          model: attempt.model,
+          status: attempt.status,
+          latencyMs: Math.max(0, attempt.endedAt - attempt.startedAt),
+          estimatedCost: attempt.estimatedCost ?? 0,
+          usage: attempt.usage,
+        })) ?? [],
+        estimatedCost: childOutcome?.modelAttempts?.reduce(
+          (total, attempt) => total + (attempt.estimatedCost ?? 0),
+          0,
+        ) ?? 0,
+        worktree: deliveryOutcome.status === 'not_required'
+          ? undefined
+          : {
+              branch: deliveryOutcome.branch,
+              path: deliveryOutcome.status === 'kept_for_review' ? deliveryOutcome.path : undefined,
+              delivery: deliveryOutcome.status,
+            },
+        model: {
+          profileId: modelAssignment.profileId,
+          role: modelAssignment.role,
+          provider: modelAssignment.provider,
+          model: modelAssignment.model,
+          apiKeyEnv: modelAssignment.apiKeyEnv,
+          source: modelAssignment.source,
+          reason: modelAssignment.reason,
+        },
+      }
+      if (runId) this.rememberResult(workerResult)
+      for (const attempt of childOutcome?.modelAttempts ?? []) {
+        if (attempt.usage) {
+          context.recordModelUsage?.(
+            attempt.model,
+            attempt.usage,
+            Math.max(0, attempt.endedAt - attempt.startedAt),
+          )
+        }
+      }
+      if (sharedRuntimeState?.completedSubtasks) {
+        sharedRuntimeState.completedSubtasks.set(workerResult.runId, {
+          runId: workerResult.runId,
+          status: workerResult.status,
+          outcomeStatus: workerResult.outcomeStatus,
+          modelProfile: workerResult.model?.profileId,
+          modelRole: workerResult.model?.role,
+          model: workerResult.model?.model,
+          provider: workerResult.model?.provider,
+          changedFiles: workerResult.changedFiles,
+          worktree: workerResult.worktree?.path,
+          branch: workerResult.worktree?.branch,
+        })
+      }
+      const handoff = {
+        runId: workerResult.runId,
+        status: workerResult.status,
+        outcomeStatus: workerResult.outcomeStatus,
+        summary: workerResult.summary,
+        changedFiles: workerResult.changedFiles,
+        verification: workerResult.verification,
+        blockers: workerResult.blockers,
+        requiredNextActions: workerResult.requiredNextActions,
+        modelAttempts: workerResult.modelAttempts,
+        estimatedCost: workerResult.estimatedCost,
+        worktree: workerResult.worktree,
+        model: workerResult.model,
+      }
+      const handoffSection = `\n\n---\n[Worker Result]\n${JSON.stringify(handoff, null, 2)}`
+
       if (!result.output) {
         return {
-          content: `[${agentLabel}] "${description}" done (${result.reason}), no text output.${verifySection}${worktreeSection}`,
+          content: `[${agentLabel}] "${description}" done (${result.reason}), no text output.${verifySection}${worktreeSection}${handoffSection}`,
           isError,
           status: finalStatus,
+          runId: workerResult.runId,
+          workerResult,
           summary: deliveryOutcome.status === 'conflict'
             ? `delivery blocked: ${deliveryOutcome.message}`
             : undefined,
@@ -1138,20 +1368,16 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         } as ToolResult & { status: RunStatus; summary?: string; retryable?: boolean }
       }
 
-      const summaryLines = result.output
-        .split('\n')
-        .map((l: string) => l.trimEnd())
-        .filter((l: string) => l.trim().length > 0)
-        .slice(0, 8)
-        .join('\n')
       if (summaryLines) {
-        mainRenderer.agentSummary(agentLabel, description, summaryLines)
+        mainRenderer.agentSummary(agentDisplayLabel, description, summaryLines)
       }
 
       return {
-        content: `[${agentLabel}] "${description}":\n\n${result.output}${verifySection}${worktreeSection}`,
+        content: `[${agentLabel}] "${description}":\n\n${result.output}${verifySection}${worktreeSection}${handoffSection}`,
         isError,
         status: finalStatus,
+        runId: workerResult.runId,
+        workerResult,
         summary: deliveryOutcome.status === 'conflict'
           ? `delivery blocked: ${deliveryOutcome.message}`
           : undefined,
@@ -1164,14 +1390,16 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       mainRenderer.agentDone(description, false)
       if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
       transitionRun('failed', { phase: 'thrown', error: (err as Error).message })
-      // P0-4: a thrown error means the subtask failed mid-run — discard
-      // the worktree without merging so a half-applied branch can't leak
-      // into the parent's working tree.
+      let preservedWorktree: { branch: string; path: string } | undefined
       if (wtInfo) {
-        try {
-          getWorktreeManager(context.cwd).removeWorktree(wtInfo.name, { deleteBranch: true })
-        } catch {
-          // best-effort cleanup; the error return below takes priority
+        if (worktreeHasChanges(wtInfo.path)) {
+          preservedWorktree = { branch: wtInfo.branch, path: wtInfo.path }
+        } else {
+          try {
+            getWorktreeManager(context.cwd).removeWorktree(wtInfo.name, { deleteBranch: true })
+          } catch (cleanupError) {
+            void cleanupError
+          }
         }
         wtInfo = null
       }
@@ -1183,10 +1411,51 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         duration_ms: Date.now() - agentStartTime,
         error: (err as Error).message,
       })
-      return {
-        content: `[${agentLabel}] "${description}" error: ${(err as Error).message}`,
-        isError: true,
+      const failedWorkerResult: WorkerResult = {
+        runId: runId ?? `untracked-${agentStartTime}`,
+        status: 'failed',
+        outcomeStatus: 'failed',
+        summary: `${description}: ${(err as Error).message}`,
+        error: (err as Error).message,
+        changedFiles: [],
+        verification: { executed: false, passed: false, commands: [] },
+        blockers: [(err as Error).message],
+        requiredNextActions: preservedWorktree
+          ? [`Inspect and continue from ${preservedWorktree.path}`]
+          : ['Retry with corrected instructions or configuration'],
+        worktree: preservedWorktree
+          ? { ...preservedWorktree, delivery: 'kept_for_review' }
+          : undefined,
+        model: {
+          profileId: modelAssignment.profileId,
+          role: modelAssignment.role,
+          provider: modelAssignment.provider,
+          model: modelAssignment.model,
+          apiKeyEnv: modelAssignment.apiKeyEnv,
+          source: modelAssignment.source,
+          reason: modelAssignment.reason,
+        },
       }
+      if (runId) this.rememberResult(failedWorkerResult)
+      if (sharedRuntimeState?.completedSubtasks) {
+        sharedRuntimeState.completedSubtasks.set(failedWorkerResult.runId, {
+          runId: failedWorkerResult.runId,
+          status: 'failed',
+          outcomeStatus: 'failed',
+          modelProfile: modelAssignment.profileId,
+          modelRole: modelAssignment.role,
+          model: modelAssignment.model,
+          provider: modelAssignment.provider,
+          worktree: preservedWorktree?.path,
+          branch: preservedWorktree?.branch,
+        })
+      }
+      return {
+        content: `[${agentLabel}] "${description}" error: ${(err as Error).message}\n\n[Worker Result]\n${JSON.stringify(failedWorkerResult, null, 2)}`,
+        isError: true,
+        runId: failedWorkerResult.runId,
+        workerResult: failedWorkerResult,
+      } as ToolResult & { runId: string; workerResult: WorkerResult }
     } finally {
       // ── Always tear down timer + listener + child engine ──────────
       // Three pieces of teardown that MUST happen on every exit path

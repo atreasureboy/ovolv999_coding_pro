@@ -206,6 +206,28 @@ describe('settings.ts — corrupt or invalid config is visible', () => {
     expect(s.taskContext?.phase).toBe('impl')
     expect(stderrSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('drops literal model API keys and invalid apiKeyEnv names', () => {
+    writeProjectSettings(JSON.stringify({
+      models: {
+        profiles: [
+          {
+            id: 'builder',
+            model: 'builder-model',
+            roles: ['builder'],
+            apiKey: 'must-not-survive',
+            apiKeyEnv: 'bad-key-name',
+          },
+        ],
+      },
+    }))
+
+    const settings = loadProjectSettings(workDir)
+    const profile = settings.models?.profiles[0] as Record<string, unknown>
+    expect(profile.apiKey).toBeUndefined()
+    expect(profile.apiKeyEnv).toBeUndefined()
+    expect(stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')).toContain('apiKey')
+  })
 })
 
 describe('projectConfig — corrupt or invalid .ovolv999.json warns and continues', () => {

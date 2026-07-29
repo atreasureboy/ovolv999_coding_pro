@@ -33,7 +33,25 @@ export interface ActiveToolCall {
 export interface ActiveSubtask {
   subtaskId: string
   description: string
+  agentLabel: string
   startedAt: number
+  modelProfile?: string
+  modelRole?: string
+  model?: string
+  provider?: string
+}
+
+export interface CompletedSubtask {
+  runId: string
+  status: string
+  outcomeStatus?: string
+  modelProfile?: string
+  modelRole?: string
+  model?: string
+  provider?: string
+  changedFiles?: string[]
+  worktree?: string
+  branch?: string
 }
 
 /**
@@ -87,6 +105,7 @@ export class SharedRuntimeState {
   allTools: Tool[] = []
   readonly activeToolCalls = new Map<string, ActiveToolCall>()
   readonly activeSubtasks = new Map<string, ActiveSubtask>()
+  readonly completedSubtasks = new Map<string, CompletedSubtask>()
 
   /** P2-4: canonical model state. Components subscribe via onModelStateChanged. */
   modelState: RuntimeModelState

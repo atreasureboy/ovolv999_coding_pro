@@ -69,3 +69,14 @@ describe('system prompt — runtime permission and critic truth', () => {
     expect(prompt).toContain('do not describe this as pause/resume')
   })
 })
+
+describe('system prompt — role-aware delegation truth', () => {
+  const prompt = getSystemPrompt('/tmp/project')
+
+  it('requires capability roles, structured context, and parent-owned acceptance', () => {
+    expect(prompt).toContain('Use model_role only as a capability request')
+    expect(prompt).toContain('delegation_context')
+    expect(prompt).toContain('Embedding profiles are reserved for retrieval integrations, not autonomous agents')
+    expect(prompt).toContain('The Worker Result is evidence, not authority')
+  })
+})

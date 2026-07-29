@@ -154,6 +154,90 @@ describe('AgentTool with a registry walks the canonical state machine', () => {
     expect(isTerminalRunStatus(run.status)).toBe(true)
   })
 
+  it('retains a structured worker result for the main agent to collect', async () => {
+    const registry = new ExecutionRunRegistry()
+    const recordedUsage: Array<{ model: string; inputTokens: number; outputTokens: number }> = []
+    const tool = new AgentTool({
+      factory: () => ({
+        runTurn: () => Promise.resolve({
+          result: { output: 'implemented module', reason: 'stop_sequence' },
+          outcome: {
+            completion: { status: 'completed', reasons: [], requiredNextActions: [] },
+            changedFiles: ['src/unit.ts'],
+            modelAttempts: [{
+              profileId: 'builder',
+              model: 'builder-model',
+              provider: 'openai',
+              startedAt: 10,
+              endedAt: 30,
+              status: 'succeeded',
+              usage: { inputTokens: 100, outputTokens: 25 },
+              estimatedCost: 0.02,
+            }],
+          },
+        }) as never,
+        abort: () => undefined,
+      }),
+      parentConfig: baseConfig({
+        cwd: gitRoot,
+        models: {
+          profiles: [
+            { id: 'builder', provider: 'openai', model: 'builder-model', roles: ['builder'] },
+          ],
+        },
+      }),
+      parentRenderer: fakeRenderer(),
+      runRegistry: registry,
+    })
+    const activeSubtasks = new Map()
+    const completedSubtasks = new Map()
+
+    const output = await tool.execute(
+      { description: 'structured handoff', prompt: 'do it', subagent_type: 'general-purpose' },
+      {
+        cwd: gitRoot,
+        permissionMode: 'auto',
+        sharedState: { activeSubtasks, completedSubtasks },
+        recordModelUsage: (model, usage) => {
+          recordedUsage.push({ model, ...usage })
+        },
+      },
+    ) as unknown as { runId: string }
+    const collected = await tool.collect(output.runId)
+
+    expect(collected).toMatchObject({
+      runId: output.runId,
+      status: 'succeeded',
+      outcomeStatus: 'completed',
+      summary: 'implemented module',
+      changedFiles: ['src/unit.ts'],
+      estimatedCost: 0.02,
+      model: {
+        profileId: 'builder',
+        role: 'builder',
+        model: 'builder-model',
+      },
+    })
+    expect(collected.verification).toEqual({
+      executed: false,
+      passed: true,
+      commands: [],
+      output: undefined,
+    })
+    expect(activeSubtasks.size).toBe(0)
+    expect(completedSubtasks.get(output.runId)).toMatchObject({
+      status: 'succeeded',
+      outcomeStatus: 'completed',
+      modelProfile: 'builder',
+      modelRole: 'builder',
+      model: 'builder-model',
+      changedFiles: ['src/unit.ts'],
+    })
+    expect(recordedUsage).toEqual([
+      { model: 'builder-model', inputTokens: 100, outputTokens: 25 },
+    ])
+  })
+
   it('stamps the run with the parentRunId when supplied', async () => {
     const registry = new ExecutionRunRegistry()
     const tool = new AgentTool({

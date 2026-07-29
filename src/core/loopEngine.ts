@@ -439,6 +439,10 @@ export async function runLoop(
         .map((run) => ({
           runId: run.runId,
           status: run.status,
+          modelProfile: run.modelProfile,
+          modelRole: run.modelRole,
+          model: run.model,
+          provider: run.provider,
           worktree: run.workspace.worktreePath,
           branch: run.workspace.branch,
         }))
@@ -501,6 +505,10 @@ export async function runLoop(
         .map((run) => ({
           runId: run.runId,
           status: run.status,
+          modelProfile: run.modelProfile,
+          modelRole: run.modelRole,
+          model: run.model,
+          provider: run.provider,
           worktree: run.workspace.worktreePath,
           branch: run.workspace.branch,
         }))
@@ -844,6 +852,10 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
         .map((run) => ({
           runId: run.runId,
           status: run.status,
+          modelProfile: run.modelProfile,
+          modelRole: run.modelRole,
+          model: run.model,
+          provider: run.provider,
           worktree: run.workspace.worktreePath,
           branch: run.workspace.branch,
         }))
