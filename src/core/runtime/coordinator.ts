@@ -517,6 +517,7 @@ export class RuntimeCoordinator {
 
     let result: TurnResult
     const turnStartMs = Date.now()
+    const turnStartHighResolutionMs = performance.now()
     let stallInterventionApplied = false // dedupe: one system nudge per stall episode
     // v0.3.1 (runtime truth contract §七): typed control messages. The provider sees
     // a snapshot rendered for THIS call; the log is drained after the
@@ -1198,7 +1199,7 @@ export class RuntimeCoordinator {
       })),
       // v0.4.1 WS7 (session truth): wall-clock turn duration for the
       // session envelope's lastOutcome and the outcome card.
-      durationMs: Date.now() - turnStartMs,
+      durationMs: performance.now() - turnStartHighResolutionMs,
       // Deprecated compat
       stopped: result.stopped,
       reason: result.reason,
