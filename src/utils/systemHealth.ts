@@ -307,9 +307,9 @@ function checkShell(): SystemCheck {
 function checkNetworkConnectivity(): SystemCheck {
   const start = Date.now()
   try {
-    execSync('ping -c 1 -W 2 8.8.8.8 2>/dev/null || ping -n 1 -w 2000 8.8.8.8 2>nul', {
+    execSync('ping -c 1 -W 1 8.8.8.8 2>/dev/null || ping -n 1 -w 1000 8.8.8.8 2>nul', {
       encoding: 'utf8',
-      timeout: 5000,
+      timeout: 2000,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const latency = Date.now() - start
@@ -407,7 +407,14 @@ function checkMcpConfig(): SystemCheck {
 
 // ── Main Runner ─────────────────────────────────────────────────────────────
 
+let cachedReport: { createdAt: number; report: SystemHealthReport } | undefined
+
 export function runSystemHealthChecks(): SystemHealthReport {
+  const now = Date.now()
+  if (cachedReport && now - cachedReport.createdAt < 5000) {
+    return cachedReport.report
+  }
+
   const checks: SystemCheck[] = [
     checkNodeVersion(),
     checkNpm(),
@@ -431,7 +438,7 @@ export function runSystemHealthChecks(): SystemHealthReport {
     infos: checks.filter(c => c.level === 'info').length,
   }
 
-  return {
+  const report = {
     checks,
     summary,
     environment: {
@@ -445,6 +452,8 @@ export function runSystemHealthChecks(): SystemHealthReport {
       memoryTotalMB: totalmem() / (1024 * 1024),
     },
   }
+  cachedReport = { createdAt: now, report }
+  return report
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
