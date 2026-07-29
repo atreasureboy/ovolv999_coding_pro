@@ -61,7 +61,7 @@ export function SlashMenu({
       {entries.length > maxVisible ? (
         <Box paddingLeft={1}>
           <Text dimColor>
-            ↑↓ navigate · {selected + 1}/{entries.length} · Tab/Enter select
+            ↑↓ navigate · {selected + 1}/{entries.length} · Tab/Enter select · /? shows all
           </Text>
         </Box>
       ) : null}
