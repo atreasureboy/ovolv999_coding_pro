@@ -11,13 +11,14 @@ describe('release artifacts', () => {
       engines: { node: string }
       repository: { url: string }
       files: string[]
-      scripts: { prepack: string }
+      scripts: { build: string; prepack: string }
     }
     expect(pkg.name).toBe('ovolv999')
     expect(pkg.engines.node).toBe('>=20')
     expect(pkg.repository.url).toContain('atreasureboy/ovolv999_coding_pro')
     expect(pkg.files).toEqual(expect.arrayContaining(['dist/bin', 'dist/src', 'dist/package.json']))
     expect(pkg.scripts.prepack).toContain('pnpm check')
+    expect(pkg.scripts.build).toContain("rmSync('dist',{recursive:true,force:true})")
   })
 
   it('keeps development sources out of the publish allowlist', () => {

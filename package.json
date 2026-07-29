@@ -26,7 +26,7 @@
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@11.17.0",
+  "packageManager": "pnpm@10.34.5",
   "keywords": [
     "coding-agent",
     "cli",
@@ -39,7 +39,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"const fs=require('fs');fs.copyFileSync('package.json','dist/package.json');fs.chmodSync('dist/bin/ovogogogo.js',0o755)\"",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node -e \"const fs=require('fs');fs.copyFileSync('package.json','dist/package.json');fs.chmodSync('dist/bin/ovogogogo.js',0o755)\"",
     "package:verify": "node scripts/verify-package.mjs",
     "start": "node dist/bin/ovogogogo.js",
     "dev": "tsx bin/ovogogogo.ts",

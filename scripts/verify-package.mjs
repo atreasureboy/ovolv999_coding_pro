@@ -1,22 +1,23 @@
 import { execFileSync } from 'node:child_process'
 
-const npmCli = process.env.npm_execpath
-if (!npmCli) {
-  throw new Error('npm_execpath is unavailable; run package verification through npm')
+const packageManagerCli = process.env.npm_execpath
+if (!packageManagerCli) {
+  throw new Error('package manager executable is unavailable; run package verification through pnpm')
 }
-const output = execFileSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
+const output = execFileSync(process.execPath, [packageManagerCli, '--config.ignore-scripts=true', 'pack', '--dry-run', '--json'], {
   encoding: 'utf8',
 })
-const [pack] = JSON.parse(output)
+const parsed = JSON.parse(output)
+const pack = Array.isArray(parsed) ? parsed[0] : parsed
 const paths = pack.files.map((file) => file.path)
 for (const required of ['dist/bin/ovogogogo.js', 'dist/package.json']) {
   if (!paths.includes(required)) {
-    throw new Error(`npm package is missing ${required}`)
+    throw new Error(`published package is missing ${required}`)
   }
 }
 for (const path of paths) {
-  if (path.startsWith('tests/') || path.startsWith('src/')) {
-    throw new Error(`npm package contains development source: ${path}`)
+  if (path.startsWith('tests/') || path.startsWith('src/') || path.includes('/__tests__/')) {
+    throw new Error(`published package contains development source: ${path}`)
   }
 }
-process.stdout.write(`verified ${pack.entryCount} npm package files\n`)
+process.stdout.write(`verified ${paths.length} published package files\n`)

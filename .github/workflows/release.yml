@@ -28,7 +28,7 @@ jobs:
       - name: Build package artifact
         run: |
           pnpm package:verify
-          pnpm pack --ignore-scripts
+          pnpm --config.ignore-scripts=true pack
           sha256sum ovolv999-*.tgz > SHA256SUMS
       - name: Smoke test package artifact
         run: |

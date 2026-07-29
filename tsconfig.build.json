@@ -4,5 +4,5 @@
     "declarationMap": false
   },
   "include": ["bin/**/*.ts", "bin/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "tests", "evals"]
+  "exclude": ["node_modules", "dist", "tests", "evals", "src/**/__tests__/**"]
 }
