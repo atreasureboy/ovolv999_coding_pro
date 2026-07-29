@@ -265,7 +265,7 @@ export function App({
           // v0.4.1 C2 (interrupt truth): soft abort stops the turn at the next
           // boundary — it does NOT pause-and-inject in Ink (feedback injection
           // is classic-only in v0.4.1). Continuation = the user's next message.
-          store.setInterrupt(true, '任务暂停中——当前步骤完成后停止;发送消息即可继续 (再按 ESC 立即强杀)')
+          store.setInterrupt(true, '正在安全中断当前任务；当前步骤结束后返回 cancelled（再次 ESC 强制中断）')
           onSoftAbort?.()
         } else {
           abortCount.current = 2

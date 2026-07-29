@@ -81,9 +81,9 @@ describe('App — interrupt flow truth (v0.4.1 C2)', () => {
       }, 2000)
       const first = store.getState().interrupt
       expect(first?.active).toBe(true)
-      expect(first?.feedback).toContain('任务暂停中')
-      expect(first?.feedback).toContain('发送消息即可继续')
-      expect(first?.feedback).toContain('再按 ESC 立即强杀')
+      expect(first?.feedback).toContain('正在安全中断当前任务')
+      expect(first?.feedback).toContain('cancelled')
+      expect(first?.feedback).toContain('再次 ESC 强制中断')
       // The pre-C2 lie ("type guidance to resume in place") must be gone:
       expect(first?.feedback).not.toContain('输入指导后重新继续')
       expect(instance.lastFrame()).toContain('Interrupted')

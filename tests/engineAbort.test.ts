@@ -203,7 +203,10 @@ describe('ExecutionEngine — abort() lifecycle', () => {
     engine.abort()
     expect(signal.aborted).toBe(true)
 
-    await t
+    const turn = await t
+    expect(turn.result.reason).toBe('interrupted')
+    expect(turn.outcome.completion.status).toBe('cancelled')
+    expect(turn.outcome.stopReason).toBe('cancelled')
     // After convergence, the next abort must be a safe no-op (no controller installed).
     expect(() => engine.abort()).not.toThrow()
   })
@@ -453,7 +456,9 @@ describe('ExecutionEngine — abort() lifecycle', () => {
     engine.softAbort()
     engine.abort()
     const t1Result = await t1
-    expect(t1Result.result.reason).toBe('error') // hard abort surfaces as error
+    expect(t1Result.result.reason).toBe('interrupted')
+    expect(t1Result.outcome.completion.status).toBe('cancelled')
+    expect(t1Result.outcome.stopReason).toBe('cancelled')
     expect(client.createCalls[0].signal.aborted).toBe(true)
 
     // Turn 2 must NOT soft-abort. If the soft-flag had leaked, turn 2 would

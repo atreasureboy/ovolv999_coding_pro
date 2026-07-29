@@ -28,9 +28,9 @@ describe('transitionQueryState — boot', () => {
 describe('transitionQueryState — check_abort', () => {
   const state: QueryState = { kind: 'check_abort', iteration: 3 }
 
-  it('hard_abort → complete(error)', () => {
+  it('hard_abort → complete(interrupted)', () => {
     const next = transitionQueryState(state, { type: 'hard_abort', output: 'done' })
-    expect(next).toEqual({ kind: 'complete', reason: 'error', output: 'done' })
+    expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'done' })
   })
 
   it('soft_abort → complete(interrupted)', () => {
@@ -109,9 +109,9 @@ describe('transitionQueryState — llm_call', () => {
     expect(next).toEqual({ kind: 'parse_response', iteration: 1 })
   })
 
-  it('hard_abort during llm_call → complete(error)', () => {
+  it('hard_abort during llm_call → complete(interrupted)', () => {
     const next = transitionQueryState(state, { type: 'hard_abort', output: 'x' })
-    expect(next).toEqual({ kind: 'complete', reason: 'error', output: 'x' })
+    expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'x' })
   })
 
   it('error during llm_call → complete(error)', () => {
@@ -135,9 +135,9 @@ describe('transitionQueryState — continuation_check', () => {
     expect(next).toEqual({ kind: 'complete', reason: 'stop_sequence', output: 'result' })
   })
 
-  it('hard_abort → complete(error)', () => {
+  it('hard_abort → complete(interrupted)', () => {
     const next = transitionQueryState(state, { type: 'hard_abort', output: 'aborted' })
-    expect(next).toEqual({ kind: 'complete', reason: 'error', output: 'aborted' })
+    expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'aborted' })
   })
 
   it('soft_abort → complete(stop_sequence) with soft_abort output', () => {
@@ -173,12 +173,20 @@ describe('transitionQueryState — parse_response & tool_execution', () => {
     expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'partial' })
   })
 
-  it('tool_execution + tools_done(hard aborted) → complete(error)', () => {
+  it('tool_execution + tools_done(hard aborted) → complete(interrupted)', () => {
+    const next = transitionQueryState(
+      { kind: 'tool_execution', iteration: 1 },
+      { type: 'tools_done', aborted: true, hardAborted: true, output: 'partial' },
+    )
+    expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'partial' })
+  })
+
+  it('tool_execution + tools_done(hard aborted) → complete(interrupted)', () => {
     const next = transitionQueryState(
       { kind: 'tool_execution', iteration: 3 },
       { type: 'tools_done', aborted: true, hardAborted: true, output: 'partial' },
     )
-    expect(next).toEqual({ kind: 'complete', reason: 'error', output: 'partial' })
+    expect(next).toEqual({ kind: 'complete', reason: 'interrupted', output: 'partial' })
   })
 })
 

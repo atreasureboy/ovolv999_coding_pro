@@ -63,7 +63,7 @@ export function transitionQueryState(state: QueryState, event: QueryEvent): Quer
 
     case 'check_abort': {
       if (event.type === 'hard_abort')
-        return { kind: 'complete', reason: 'error', output: event.output }
+        return { kind: 'complete', reason: 'interrupted', output: event.output }
       if (event.type === 'soft_abort')
         return { kind: 'complete', reason: 'interrupted', output: event.output }
       if (event.type === 'max_iterations')
@@ -87,7 +87,7 @@ export function transitionQueryState(state: QueryState, event: QueryEvent): Quer
 
     case 'llm_call': {
       if (event.type === 'hard_abort')
-        return { kind: 'complete', reason: 'error', output: event.output }
+        return { kind: 'complete', reason: 'interrupted', output: event.output }
       if (event.type === 'error')
         return { kind: 'complete', reason: 'error', output: event.output }
       if (event.type === 'llm_done') {
@@ -103,7 +103,7 @@ export function transitionQueryState(state: QueryState, event: QueryEvent): Quer
       if (event.type === 'continue')
         return { kind: 'llm_call', iteration: state.iteration }
       if (event.type === 'hard_abort')
-        return { kind: 'complete', reason: 'error', output: event.output }
+        return { kind: 'complete', reason: 'interrupted', output: event.output }
       // 'stop' or any other event → complete
       return {
         kind: 'complete',
@@ -121,7 +121,7 @@ export function transitionQueryState(state: QueryState, event: QueryEvent): Quer
         if (event.aborted) {
           return {
             kind: 'complete',
-            reason: event.hardAborted ? 'error' : 'interrupted',
+            reason: 'interrupted',
             output: event.output,
           }
         }

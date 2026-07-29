@@ -27,6 +27,7 @@ const c = {
 interface WizardIO {
   ask: (q: string, def?: string) => Promise<string>
   say: (s: string) => void
+  close: () => void
 }
 
 function makeIO(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): WizardIO {
@@ -68,6 +69,7 @@ function makeIO(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): Wi
       waiters.push(settle)
     }),
     say: (s: string) => output.write(s + '\n'),
+    close: () => rl.close(),
   }
 }
 
@@ -91,6 +93,7 @@ export async function runFirstRunWizard(opts: {
   const io = makeIO(opts.input ?? process.stdin, opts.output ?? process.stdout)
   const out = (s: string) => io.say(s)
 
+  try {
   out('')
   out(c.bold(c.cyan('  ovolv999 — first-run setup')))
   out(c.dim('  Configure which LLM provider ovolv999 talks to.'))
@@ -172,4 +175,7 @@ export async function runFirstRunWizard(opts: {
   out(c.green('  ✓ saved to ~/.ovogo/settings.json'))
   out(c.dim('  Run `ovolv999` to start. Edit ~/.ovogo/settings.json to change later.'))
   return { configured: true, provider }
+  } finally {
+    io.close()
+  }
 }

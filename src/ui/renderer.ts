@@ -553,7 +553,7 @@ export class Renderer {
     this.w('\n\x07')
     this.w(`  ${this.hr()}\n`)
     this.w(`  ${C.byellow}⚡ Interrupted${R}\n`)
-    this.w(`  ${D}Feedback + Enter to inject · Enter to resume${R}\n`)
+    this.w(`  ${D}Enter feedback to start a new turn · Enter to finish cancellation${R}\n`)
     this.w(`  ${C.byellow}❯${R} `)
   }
 

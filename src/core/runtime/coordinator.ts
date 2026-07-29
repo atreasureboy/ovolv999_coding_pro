@@ -889,6 +889,10 @@ export class RuntimeCoordinator {
     } catch (err) {
       const errMsg = (err as Error).message || String(err)
       const errorIteration = 'iteration' in state ? state.iteration : 0
+      if (turnAbortController.signal.aborted) {
+        result = { stopped: true, reason: 'interrupted', output: computeFinalOutput() }
+        eventEmitter.emit({ type: 'RUN_CANCELLED', reason: 'user/system cancelled' } as never)
+      } else {
       config.hookRunner?.runOnError?.(err as Error, {
         turnNumber: errorIteration,
         lastToolName,
@@ -902,6 +906,7 @@ export class RuntimeCoordinator {
       const errOutput = computeFinalOutput()
       eventEmitter.emit({ type: 'RUN_FAILED', error: errMsg, output: errOutput })
       result = { stopped: true, reason: 'error', output: errOutput || `[Error: ${errMsg}]` }
+      }
     } finally {
       if (sharedState.currentTurnAbortController === turnAbortController) {
         sharedState.currentTurnAbortController = null

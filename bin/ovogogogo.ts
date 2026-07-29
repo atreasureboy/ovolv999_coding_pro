@@ -889,7 +889,7 @@ async function runRepl(
   // (prevents a second ESC from re-triggering softAbort while reading feedback)
   let awaitingInput = false
 
-  // ── ESC key: soft pause — now interrupts immediately ──────────
+  // ── ESC key: interrupt current turn ──────────
   let lastEscMs = 0
   process.stdin.on('keypress', (_str: unknown, key: { name?: string }) => {
     if (key?.name === 'escape' && running && !awaitingInput) {
@@ -900,7 +900,7 @@ async function runRepl(
       engine.abort()
       renderer.stopSpinner()
       process.stdout.write('\n')
-      renderer.warn('Interrupted. Type feedback or press Enter to resume.')
+      renderer.warn('正在安全中断当前任务。可输入补充要求以开始新一轮。')
     }
   })
 
@@ -917,12 +917,10 @@ async function runRepl(
     const rapid = now - lastSigintMs < 1500
     lastSigintMs = now
     if (running && !rapid) {
-      // First SIGINT during a turn: ask the engine to abort. Soft cancel —
-      // the runTask loop will surface the interrupt, let the user provide
-      // feedback, then resume.
+      // First SIGINT during a turn asks the engine to cancel cleanly.
       engine.abort()
       renderer.stopSpinner()
-      renderer.warn('Cancelled. Press Ctrl+C again within 1.5s to force exit.')
+      renderer.warn('正在安全中断当前任务。1.5 秒内再次按 Ctrl+C 可强制退出。')
       return
     }
     // Either we're idle, OR the user just hit Ctrl+C a second time quickly.

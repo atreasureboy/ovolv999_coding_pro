@@ -85,6 +85,17 @@ describe('runFirstRunWizard (v0.4.1 WS2)', () => {
     })
   })
 
+  it('closes its readline after successful setup without waiting for stdin EOF', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const baselineDataListeners = stdin.listenerCount('data')
+    const done = runFirstRunWizard({ input: stdin, output: stdout })
+    stdin.write('1\nsk-live\n\n\n')
+    await expect(done).resolves.toMatchObject({ configured: true })
+    expect(stdin.listenerCount('data')).toBe(baselineDataListeners)
+    expect(stdin.listenerCount('readable')).toBe(0)
+  })
+
   it('detected OPENAI_API_KEY: one Y + model default → openai provider saved', async () => {
     process.env.OPENAI_API_KEY = 'sk-env-x'
     const { done } = feed('Y\n\n') // "Use OpenAI with it?" Y, model default
