@@ -197,7 +197,8 @@ describe('RUNTIME-FIX priority-1: ExecutionEngine rejects concurrent runTurn', (
     await settle()
     engine.abort()
     const r1 = await t1
-    expect(r1.result.reason).toBe('error')
+    expect(r1.result.reason).toBe('interrupted')
+    expect(r1.outcome.completion.status).toBe('cancelled')
 
     // After convergence, a fresh runTurn must NOT throw and must reach
     // create() on the next LLM call. Abort again for clean teardown.
@@ -206,7 +207,8 @@ describe('RUNTIME-FIX priority-1: ExecutionEngine rejects concurrent runTurn', (
     expect(client.createCalls).toHaveLength(2)
     engine.abort()
     const r2 = await t2
-    expect(r2.result.reason).toBe('error')
+    expect(r2.result.reason).toBe('interrupted')
+    expect(r2.outcome.completion.status).toBe('cancelled')
   })
 
   it('releases the in-flight flag after a thrown turn (error path through finally)', async () => {

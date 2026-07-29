@@ -167,7 +167,7 @@ function blockingTool(): { tool: Tool; release: (value: string) => void } {
       function: { name: 'Blocking', description: '', parameters: { type: 'object', properties: {} } },
     },
     execute: (_input, _ctx) => block.promise.then((v) => ({ content: v, isError: false })),
-    metadata: { concurrencySafe: false },
+    metadata: { concurrencySafe: false, readOnly: true },
   }
   return { tool, release: (v: string) => block.resolve(v) }
 }

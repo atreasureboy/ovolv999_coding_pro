@@ -74,7 +74,7 @@ const noop = (onExec: (i: Record<string, unknown>) => void): Tool => ({
   name: 'Noop',
   definition: { type: 'function', function: { name: 'Noop', description: '', parameters: { type: 'object', properties: {} } } },
   execute: (i) => { onExec(i); return Promise.resolve({ content: 'ok', isError: false }) },
-  metadata: { concurrencySafe: true },
+  metadata: { concurrencySafe: true, readOnly: true },
 })
 
 // ─────────────────────────────────────────────────────────────────────
