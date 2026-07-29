@@ -63,11 +63,15 @@ export class InkRenderer {
     this.store.addToolStart(name, input, callId)
   }
 
-  toolResult(_name: string, result: string, isError: boolean, callId?: string): void {
-    // v0.4.1 C1 (callId truth): NEVER `callId ?? name` — matching the tool
-    // NAME against the callId field hit nothing real and slid into the
-    // store's position guess. No callId → visible orphan row instead.
-    this.store.setToolResult(callId, result, isError)
+  toolResult(name: string, result: string, isError: boolean, callId?: string): void {
+    if (callId) {
+      this.store.setToolResult(callId, result, isError)
+      return
+    }
+    const candidates = this.store.getState().messages.filter(
+      (message) => message.type === 'tool' && message.name === name && message.result === undefined,
+    )
+    this.store.setToolResult(candidates.length === 1 ? candidates[0].id : undefined, result, isError)
   }
 
   // ── Spinner ───────────────────────────────────────────────────────────────
@@ -105,19 +109,27 @@ export class InkRenderer {
     this.store.addAgentStart(desc, type, runId)
   }
 
-  agentDone(_desc: string, ok: boolean, runId?: string): void {
-    // v0.4.1 C1: no `runId ?? desc` — a desc matched against the runId
-    // field is a guess. No runId → the store renders a visible orphan.
-    this.store.setAgentDone(runId, ok, undefined, runId)
+  agentDone(desc: string, ok: boolean, runId?: string): void {
+    if (runId) {
+      this.store.setAgentDone(runId, ok, undefined, runId)
+      return
+    }
+    const candidates = this.store.getState().messages.filter(
+      (message) => message.type === 'agent' && message.desc === desc && message.status === 'running',
+    )
+    this.store.setAgentDone(candidates.length === 1 ? candidates[0].id : undefined, ok)
   }
 
-  agentSummary(_type: string, _desc: string, summary: string): void {
-    const msgs = this.store.getState().messages
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]
-      if (m.type === 'agent' && (m.status === 'done' || m.status === 'failed')) {
-        this.store.setAgentDone(m.id, m.status === 'done', summary)
-        return
+  agentSummary(_type: string, desc: string, summary: string): void {
+    const candidates = this.store.getState().messages.filter(
+      (message) => message.type === 'agent'
+        && message.desc === desc
+        && (message.status === 'done' || message.status === 'failed'),
+    )
+    if (candidates.length === 1) {
+      const candidate = candidates[0]
+      if (candidate.type === 'agent') {
+        this.store.setAgentDone(candidate.id, candidate.status === 'done', summary)
       }
     }
   }

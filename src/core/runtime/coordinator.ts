@@ -294,10 +294,10 @@ export class RuntimeCoordinator {
     const profileSpec = EXECUTION_PROFILES[profileResolution.profile]
     const profileModules = [
       ...profileSpec.modules,
-      // mcp is config-gated: append whenever the engine constructed
-      // it — read the CONSTRUCTED list (modules), not moduleNames
-      // (which reflects the previous turn's gated view).
       ...(this.deps.moduleManager.modules.some(m => m.name === 'mcp') ? ['mcp'] : []),
+      ...this.deps.moduleManager.modules
+        .map((module) => module.name)
+        .filter((name) => !['memory', 'workspace', 'critic', 'reflection', 'mcp'].includes(name)),
     ]
     const effectiveMaxIterations = profileSpec.maxIterations === undefined
       ? config.maxIterations
