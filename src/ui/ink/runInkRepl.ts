@@ -23,7 +23,7 @@ import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/i
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
 import { wireModelBridge } from './modelBridge.js'
-import { saveSession, summarizeOutcome } from '../../core/sessionManager.js'
+import { formatSessionLoadDiagnostic, saveSession, summarizeOutcome } from '../../core/sessionManager.js'
 import { warnOnce } from '../../utils/warnOnce.js'
 
 export interface InkReplOptions {
@@ -50,6 +50,7 @@ export function completionAwareReason(
 }
 
 export async function runInkRepl(opts: InkReplOptions): Promise<void> {
+  let sessionLoadDiagnosticRendered = false
   const { store, engine } = opts
 
   // ── Slash command context ─────────────────────────────────────────────────
@@ -101,7 +102,9 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       if (!sessionPath) return null
       try {
         return loadSessionFile(sessionPath)
-      } catch {
+      } catch (error) {
+        store.addError(formatSessionLoadDiagnostic(error, sessionPath))
+        sessionLoadDiagnosticRendered = true
         return null
       }
     },
@@ -218,7 +221,10 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
               store.clearMessages()
               store.addInfo(`Resumed session: ${selected} (${loaded.length} messages)`)
             } else {
-              store.addError(`Failed to load session: ${selected}`)
+              if (!sessionLoadDiagnosticRendered) {
+                store.addError(`Session not found: ${selected}`)
+              }
+              sessionLoadDiagnosticRendered = false
             }
           }
           return true
@@ -261,7 +267,8 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
         if (result === null) return false
         switch (result.type) {
           case 'text':
-            store.addInfo(result.value)
+            if (!sessionLoadDiagnosticRendered) store.addInfo(result.value)
+            sessionLoadDiagnosticRendered = false
             return true
           case 'exit':
             instance.unmount()

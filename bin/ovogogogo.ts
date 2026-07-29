@@ -80,6 +80,7 @@ import {
   AmbiguousSessionError,
   SessionNotFoundError,
   findLatestSession,
+  formatSessionLoadDiagnostic,
   listSessions,
   loadSession,
   resolveSessionPath,
@@ -847,8 +848,7 @@ async function runRepl(
       if (err instanceof SessionNotFoundError || err instanceof AmbiguousSessionError) {
         return null
       }
-      renderer.warn(`Failed to resume session: ${(err as Error).message}`)
-      return null
+      throw err
     }
   }
 
@@ -1943,12 +1943,24 @@ async function main(): Promise<void> {
       }
       throw err
     }
-    assemblySession = { mode: 'existing', dir: resumedDir, history: loadSession(resumedDir), label: 'resumed' }
+    try {
+      assemblySession = { mode: 'existing', dir: resumedDir, history: loadSession(resumedDir), label: 'resumed' }
+    } catch (err) {
+      process.stderr.write(formatSessionLoadDiagnostic(err, resumedDir) + '\n')
+      process.exit(1)
+    }
   } else if (continueSession) {
     const latest = findLatestSession(cwd)
-    assemblySession = latest
-      ? { mode: 'existing', dir: latest, history: loadSession(latest), label: 'continued' }
-      : { mode: 'new' }
+    if (latest) {
+      try {
+        assemblySession = { mode: 'existing', dir: latest, history: loadSession(latest), label: 'continued' }
+      } catch (err) {
+        process.stderr.write(formatSessionLoadDiagnostic(err, latest) + '\n')
+        process.exit(1)
+      }
+    } else {
+      assemblySession = { mode: 'new' }
+    }
   } else {
     assemblySession = { mode: 'new' }
   }

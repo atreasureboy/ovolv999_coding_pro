@@ -14,6 +14,7 @@ import {
   createSessionDir,
   findLatestSession,
   findSessionByPrefix,
+  formatSessionLoadDiagnostic,
   listSessions,
   loadSession,
   resolveSessionPath,
@@ -41,6 +42,52 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true })
+})
+
+describe('session load diagnostics', () => {
+  it('classifies truncated JSON and names its path, recovery, and backup', () => {
+    const dir = freshDir('truncated')
+    writeFileSync(join(dir, 'history.json'), '{"version":2')
+
+    let caught: unknown
+    try {
+      loadSession(dir)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CorruptSessionError)
+    expect((caught as CorruptSessionError).kind).toBe('truncated')
+    const diagnostic = formatSessionLoadDiagnostic(caught, dir)
+    expect(diagnostic).toContain(`Path: ${join(dir, 'history.json')}`)
+    expect(diagnostic).toContain('Reason: truncated:')
+    expect(diagnostic).toContain(`Backup: ${join(dir, 'history.json.bak')}`)
+    expect(diagnostic).toContain('Recovery:')
+  })
+
+  it('classifies invalid messages separately from schema errors', () => {
+    const dir = freshDir('invalid-message')
+    writeFileSync(join(dir, 'history.json'), JSON.stringify({
+      version: CURRENT_SESSION_VERSION,
+      schema: CURRENT_SESSION_SCHEMA,
+      updatedAt: new Date().toISOString(),
+      messages: [{ role: 'tool', content: 'orphan' }],
+    }))
+
+    expect(() => loadSession(dir)).toThrowError(
+      expect.objectContaining({ kind: 'invalid-message' }),
+    )
+  })
+
+  it('keeps the previous valid envelope as the documented backup', () => {
+    const dir = freshDir('backup')
+    saveSession(dir, [mkMessage('user', 'first')])
+    const first = readFileSync(join(dir, 'history.json'), 'utf8')
+    saveSession(dir, [mkMessage('user', 'second')])
+
+    expect(readFileSync(join(dir, 'history.json.bak'), 'utf8')).toBe(first)
+    expect(loadSession(dir)[0].content).toBe('second')
+  })
 })
 
 // ── createSessionDir ──────────────────────────────────────────────────────

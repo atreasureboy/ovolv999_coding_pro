@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync, statSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync, statSync } from 'fs'
 import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
@@ -120,11 +120,35 @@ export class AmbiguousSessionError extends Error {
 export class CorruptSessionError extends Error {
   constructor(
     readonly sessionDir: string,
+    readonly kind: 'json-corrupt' | 'schema-incompatible' | 'permission-denied' | 'truncated' | 'invalid-message' | 'io-error',
     cause: unknown,
   ) {
-    super(`Session at ${sessionDir} contains malformed history.json: ${(cause as Error)?.message ?? String(cause)}`)
+    super((cause as Error)?.message ?? String(cause))
     this.name = 'CorruptSessionError'
   }
+}
+
+export function formatSessionLoadDiagnostic(error: unknown, sessionDir: string): string {
+  const historyPath = join(sessionDir, 'history.json')
+  const backupPath = `${historyPath}.bak`
+  let reason = error instanceof Error ? error.message : String(error)
+  let recovery = `Restore ${backupPath}, or move the damaged session directory aside.`
+  if (error instanceof UnknownSessionVersionError) {
+    reason = `schema-incompatible: history version ${error.version} is outside supported range ${error.minSupported}..${error.maxSupported}`
+    recovery = `Upgrade ovolv999, or move ${sessionDir} aside before starting a new session.`
+  } else if (error instanceof CorruptSessionError) {
+    reason = `${error.kind}: ${error.message}`
+    if (error.kind === 'permission-denied') {
+      recovery = `Grant read access to ${historyPath}, then retry.`
+    }
+  }
+  return [
+    'Session load failed.',
+    `Path: ${historyPath}`,
+    `Reason: ${reason}`,
+    `Recovery: ${recovery}`,
+    `Backup: ${backupPath}`,
+  ].join('\n')
 }
 
 function assertNonEmpty(value: string, name: string): void {
@@ -297,6 +321,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
       if (!isValidMessageShape(parsed[i])) {
         throw new CorruptSessionError(
           sessionDir,
+          'invalid-message',
           new Error(`history[${i}] does not match OpenAIMessage shape (role/content invalid)`),
         )
       }
@@ -307,6 +332,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
   if (!isEnvelope(parsed)) {
     throw new CorruptSessionError(
       sessionDir,
+      'schema-incompatible',
       new Error('history root is neither an envelope object nor a legacy array'),
     )
   }
@@ -331,6 +357,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     const observed = typeof env.schema === 'string' ? env.schema : '<missing>'
     throw new CorruptSessionError(
       sessionDir,
+      'schema-incompatible',
       new Error(`history schema "${observed}" does not match expected "${expectedSchema}" for version ${version}`),
     )
   }
@@ -339,6 +366,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
   if (!isValidIsoTimestamp(env.updatedAt)) {
     throw new CorruptSessionError(
       sessionDir,
+      'schema-incompatible',
       new Error(
         `history.updatedAt ${JSON.stringify(env.updatedAt)} is not a valid ISO-8601 timestamp`,
       ),
@@ -349,6 +377,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
   if (!Array.isArray(env.messages)) {
     throw new CorruptSessionError(
       sessionDir,
+      'schema-incompatible',
       new Error('history.messages must be an array'),
     )
   }
@@ -357,6 +386,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     if (!isValidMessageShape(messages[i])) {
       throw new CorruptSessionError(
         sessionDir,
+        'invalid-message',
         new Error(`history[${i}] does not match OpenAIMessage shape (role/content invalid)`),
       )
     }
@@ -368,6 +398,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
   if (env.lastOutcome !== undefined && !isValidOutcomeSummary(env.lastOutcome)) {
     throw new CorruptSessionError(
       sessionDir,
+      'schema-incompatible',
       new Error('history.lastOutcome does not match the OutcomeSummary shape'),
     )
   }
@@ -553,6 +584,7 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[], outcom
     fsyncSync(tmpFd)
     closeSync(tmpFd)
     tmpFd = null
+    if (existsSync(historyPath)) copyFileSync(historyPath, `${historyPath}.bak`)
     renameSync(tmpPath, historyPath)
   } catch (err) {
     // Best-effort: remove OUR orphan tmp file so we don't leak it on disk.
@@ -608,14 +640,20 @@ export function loadSessionEnvelope(sessionDir: string): SessionEnvelope | null 
   try {
     raw = readFileSync(historyPath, 'utf8')
   } catch (err) {
-    throw new CorruptSessionError(sessionDir, err)
+    const code = (err as NodeJS.ErrnoException).code
+    throw new CorruptSessionError(
+      sessionDir,
+      code === 'EACCES' || code === 'EPERM' ? 'permission-denied' : 'io-error',
+      err,
+    )
   }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch (err) {
-    throw new CorruptSessionError(sessionDir, err)
+    const truncated = raw.trim().length === 0 || /end of JSON|unexpected end|unterminated|expected .+ after property value/i.test((err as Error).message)
+    throw new CorruptSessionError(sessionDir, truncated ? 'truncated' : 'json-corrupt', err)
   }
 
   return migrateToCurrent(parsed, sessionDir)
