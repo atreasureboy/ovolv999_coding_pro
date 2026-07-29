@@ -116,7 +116,7 @@ const echoTool: Tool = {
     content: `echo: ${input.text as string}`,
     isError: false,
   }),
-  metadata: { concurrencySafe: true },
+  metadata: { concurrencySafe: true, readOnly: true },
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

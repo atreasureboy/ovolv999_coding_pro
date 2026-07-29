@@ -23,17 +23,20 @@ const TIMEOUT = 90_000
 describe('--pipe real CLI (echo fixture)', () => {
   let echo: { port: number; baseURL: string; close: () => Promise<void> }
   let authFail: { port: number; baseURL: string; close: () => Promise<void> }
+  let planTool: { port: number; baseURL: string; close: () => Promise<void> }
   let tmpHome: string
   let tmpProj: string
 
   beforeAll(async () => {
     echo = await startEchoServer({ mode: 'echo' })
     authFail = await startEchoServer({ mode: '401' })
+    planTool = await startEchoServer({ mode: 'plan-tool' })
   }, TIMEOUT)
 
   afterAll(async () => {
     await echo.close()
     await authFail.close()
+    await planTool.close()
   })
 
   beforeEach(() => {
@@ -80,6 +83,19 @@ describe('--pipe real CLI (echo fixture)', () => {
     expect(parsed.stats.inputTokens).toBeGreaterThan(0)
     expect(parsed.stats.outputTokens).toBeGreaterThan(0)
     expect(parsed.stats.durationMs).toBeGreaterThanOrEqual(0)
+  }, TIMEOUT)
+
+  it('Plan output stays on stderr and JSON stdout remains parseable', async () => {
+    const run = await runCli(['--pipe', '--format', 'json', 'analyze the plan'], {
+      stdin: '',
+      cwd: tmpProj,
+      env: isolatedEnv(tmpHome, { OPENAI_API_KEY: 'test-key', OPENAI_BASE_URL: planTool.baseURL }),
+    })
+    expect(run.timedOut).toBe(false)
+    expect(run.code).toBe(0)
+    expect(() => JSON.parse(run.stdout)).not.toThrow()
+    expect(run.stdout).not.toContain('Plan (auto-approved')
+    expect(run.stderr).toContain('Plan (auto-approved')
   }, TIMEOUT)
 
   it('API 401 → exit 2 with the error on stderr, stdout empty', async () => {

@@ -118,6 +118,7 @@ export interface AssembledEngine {
 
 export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEngine> {
   const { cwd, frontend, loop = false, quiet = false, skills } = opts
+  const interactionStream = frontend === 'headless' ? process.stderr : process.stdout
 
   const renderer = opts.renderer ?? new Renderer({
     stream: frontend === 'headless'
@@ -348,7 +349,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
         },
         close: () => opts.getActivePrompt()?.close(),
       },
-      writeOut: (s) => process.stdout.write(s),
+      writeOut: (s) => interactionStream.write(s),
     }),
     exitPlanMode: async (plan: string): Promise<boolean> => {
       // Ink UI mode: show plan approval overlay
@@ -360,18 +361,18 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
       // wait for stdin to produce a "y" because nobody is typing.
       const activePrompt = opts.getActivePrompt()
       if (!activePrompt || !activePrompt.isTTY) {
-        process.stdout.write('\n\x1b[95m❯❯ Plan (auto-approved in non-interactive mode):\x1b[0m\n')
-        process.stdout.write(plan + '\n')
+        interactionStream.write('\n\x1b[95m❯❯ Plan (auto-approved in non-interactive mode):\x1b[0m\n')
+        interactionStream.write(plan + '\n')
         return true
       }
       // Interactive: use the REPL's readline, not a second readline.
-      process.stdout.write('\n\x1b[95m❯❯ Plan:\x1b[0m\n')
-      process.stdout.write(plan + '\n')
-      process.stdout.write('\n\x1b[93mApprove this plan? (y/n):\x1b[0m ')
+      interactionStream.write('\n\x1b[95m❯❯ Plan:\x1b[0m\n')
+      interactionStream.write(plan + '\n')
+      interactionStream.write('\n\x1b[93mApprove this plan? (y/n):\x1b[0m ')
       const { text: answer, eof } = await activePrompt.readLine('')
       if (eof) {
         // Ctrl+D during approval — treat as rejection so the LLM revises
-        process.stdout.write('\n')
+        interactionStream.write('\n')
         return false
       }
       return answer.trim().toLowerCase().startsWith('y')

@@ -152,7 +152,7 @@ export function App({
       store.setRunning(true)
       store.setSpinner(true, 'Thinking')
       turnStartTime.current = Date.now()
-      updateTerminalTitle(model, true)
+      updateTerminalTitle(store.getState().banner?.model ?? model, true)
 
       try {
         const result = await runTurn(expandedText, history, images.length > 0 ? images : undefined)
@@ -163,7 +163,7 @@ export function App({
           const card = formatOutcomeCardText({
             outcome: result.outcome,
             elapsedSec: elapsed,
-            model,
+            model: store.getState().banner?.model ?? model,
             costStr: `$${store.getState().cost.toFixed(4)}`,
           })
           const status = result.outcome.completion?.status ?? 'completed'
@@ -198,11 +198,11 @@ export function App({
         // the user pressed ESC again — a stuck "Interrupted" banner over a
         // fresh prompt.
         store.setInterrupt(false)
-        updateTerminalTitle(model, false)
+        updateTerminalTitle(store.getState().banner?.model ?? model, false)
         // Bell notification for long-running turns (>5s)
         const elapsed = Date.now() - turnStartTime.current
         if (elapsed > 5000) {
-          process.stdout.write('\x07')
+          if (process.stdout.isTTY) process.stdout.write('\x07')
         }
       }
     },

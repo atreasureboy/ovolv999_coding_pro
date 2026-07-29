@@ -59,9 +59,25 @@ function streamChunks(model, text) {
   return lines
 }
 
+function streamToolCall(model, id, name, args) {
+  const base = { id: 'chatcmpl-fixture-tool', object: 'chat.completion.chunk', created: 1, model }
+  return [
+    `data: ${JSON.stringify({
+      ...base,
+      choices: [{
+        index: 0,
+        delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
+        finish_reason: null,
+      }],
+    })}\n\n`,
+    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]
+}
+
 /**
  * Start the echo server.
- * @param {{ mode?: 'echo' | '401' }} [opts]
+ * @param {{ mode?: 'echo' | '401' | 'plan-tool' }} [opts]
  * @returns {Promise<{ port: number, baseURL: string, close: () => Promise<void>, requests: Array<{ model: string, stream: boolean }> }>}
  *   baseURL already includes the `/v1` suffix expected by OPENAI_BASE_URL.
  *   `requests` logs every completions request body summary (v0.4.1 C4:
@@ -92,7 +108,10 @@ export function startEchoServer(opts = {}) {
         const text = `ECHO: ${lastUserText(body)}`
         if (body.stream === true) {
           res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-          for (const line of streamChunks(model, text)) res.write(line)
+          const chunks = mode === 'plan-tool' && requests.length === 1
+            ? streamToolCall(model, 'call_plan', 'ExitPlanMode', { plan: 'Inspect, implement, verify.' })
+            : streamChunks(model, text)
+          for (const line of chunks) res.write(line)
           res.end()
         } else {
           res.writeHead(200, { 'content-type': 'application/json' })

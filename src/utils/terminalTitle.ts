@@ -13,6 +13,7 @@ let originalTitle: string | null = null
  * Set the terminal title.
  */
 export function setTerminalTitle(title: string): void {
+  if (!process.stdout.isTTY) return
   try {
     process.stdout.write(`\x1b]0;${title}\x07`)
   } catch {
