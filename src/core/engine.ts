@@ -222,6 +222,8 @@ export class ExecutionEngine {
    * R/W/X) are acquired before execution and released in finally.
    */
   private readonly resourceScheduler: ResourceScheduler
+  /** R5: lazy lookup of current run's ControlMessageLog. Set in constructor. */
+  private getCurrentControlMessageLog: () => import('./runtime/internalControlMessage.js').ControlMessageLog | undefined = () => undefined
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     this.config = applyAgentToConfig(config)
@@ -336,6 +338,13 @@ export class ExecutionEngine {
     // graph via runId without holding a fixed reference.
     const taskGraphResolver = new RunScopedTaskGraphResolver(this.runContextStore)
     const evidenceResolver = new RunScopedEvidenceResolver(this.runContextStore)
+
+    // R5: lazy helper to get the current run's ControlMessageLog.
+    this.getCurrentControlMessageLog = (): import('./runtime/internalControlMessage.js').ControlMessageLog | undefined => {
+      const id = this.sharedState.activeRunId
+      if (!id) return undefined
+      return this.runContextStore.get(id)?.controlMessages
+    }
     // v0.3.1 (runtime truth contract §五 + §六.1 + §十一.14): wire TaskGraph events
     // into BOTH the RunEventEmitter (for /trace + EventStore replay)
     // and a hook that records node transitions on the ProgressMonitor
@@ -379,8 +388,7 @@ export class ExecutionEngine {
     this.permissionManager = config.permissionManager ?? new PermissionManager()
     if (!config.permissionManager) {
       if (config.permissionMode === 'auto') this.permissionManager.setMode('bypassPermissions')
-      else if (config.permissionMode === 'deny') this.permissionManager.setMode('plan')
-      else this.permissionManager.setMode('default')
+      else this.permissionManager.setMode(config.permissionMode)
     }
 
     const enabledNames = this.deriveEnabledModules()
@@ -493,12 +501,19 @@ export class ExecutionEngine {
         this.moduleManager.notifyToolCall(toolName, input, result, turnNumber),
       hookRunner: this.config.hookRunner,
       eventEmitter: this.eventEmitter,
+      eventLog: this.eventLog,
       progressMonitor: this.progressMonitor,
       resolveProgressMonitor: (context) => {
         const runId = context.execution?.runId
         return runId ? this.runContextStore.get(runId)?.progressMonitor : undefined
       },
       renderer: this.renderer,
+      // R5: write hook additionalContext into the per-run ControlMessageLog
+      // so the next LLM call sees it. Resolved lazily via the run context.
+      appendHookContext: (toolName, hookName, additionalContext) => {
+        const log = this.getCurrentControlMessageLog()
+        if (log) log.append({ kind: 'hook_additional_context', hookName, context: `[${hookName} on ${toolName}] ${additionalContext}` })
+      },
     })
     this.toolScheduler = new ToolScheduler({
       executor: toolExecutor,
@@ -718,6 +733,10 @@ export class ExecutionEngine {
     if (this.config.sessionDir) {
       auto.push('workspace')
     }
+    // P2.2: workspace_watcher is non-critical by default — tracks skill
+    // and settings changes, invalidates toolSearch cache. Skipped when
+    // the user explicitly opts out via enabledModules.
+    auto.push('workspace_watcher')
     return auto
   }
 
@@ -744,6 +763,10 @@ export class ExecutionEngine {
    * disposeAsync().
    */
   dispose(): void {
+    // R7: SessionEnd hook fires once at engine dispose (best-effort).
+    if (this.config.hookRunner?.runSessionEnd) {
+      try { void this.config.hookRunner.runSessionEnd('dispose') } catch { /* best-effort */ }
+    }
     try {
       this.backgroundTaskManager.dispose()
     } catch {
@@ -1033,6 +1056,10 @@ export class ExecutionEngine {
 
   getPermissionManager(): PermissionManager {
     return this.permissionManager
+  }
+
+  getEventLog(): EngineConfig['eventLog'] {
+    return this.eventLog
   }
 
   isPlanMode(): boolean {

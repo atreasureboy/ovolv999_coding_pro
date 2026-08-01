@@ -32,6 +32,8 @@ export type InternalControlMessage =
   | { kind: 'provider_fallback'; from: string; to: string; reason: string }
   | { kind: 'project_exploration_continue'; missing: string[]; filesRead: number; target: number }
   | { kind: 'task_completion_continue'; reason: string }
+  | { kind: 'hook_additional_context'; hookName: string; context: string }
+  | { kind: 'available_deferred_tools'; tools: string[] }
 
 const KEEP_ACROSS_COMPACTION: ReadonlySet<InternalControlMessage['kind']> = new Set([
   'budget_warning',
@@ -115,6 +117,10 @@ export function formatControlMessage(msg: InternalControlMessage): string {
       return `[runtime control · project_exploration_continue] The user already authorized a thorough project reading. Do not ask whether to continue and do not repeat files already inspected. Continue using read-only tools until these coverage gaps are closed: ${msg.missing.join('; ')}. Unique project files inspected: ${msg.filesRead}/${msg.target}. Then provide one consolidated architecture summary with evidence.`
     case 'task_completion_continue':
       return `[runtime control · task_completion_continue] ${msg.reason} Do not ask whether to continue. Continue the already-authorized in-scope work now. Stop only after producing evidence that the task is complete, or report a concrete blocker that cannot be resolved with available tools.`
+    case 'hook_additional_context':
+      return `[runtime control · hook_additional_context · ${msg.hookName}] ${msg.context}`
+    case 'available_deferred_tools':
+      return `[runtime control · available_deferred_tools] The following tools are NOT loaded by default — call search_extra_tools("select:<name>") to load: ${msg.tools.join(', ')}.`
   }
 }
 

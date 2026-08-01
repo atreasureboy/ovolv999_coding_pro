@@ -24,6 +24,9 @@
 
 import type OpenAI from 'openai'
 import type { ToolDefinition } from '../types.js'
+import { AnthropicAdapter } from './anthropicAdapter.js'
+
+export { AnthropicAdapter } from './anthropicAdapter.js'
 
 export type ProviderId = string
 
@@ -146,6 +149,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
  * OpenAI-compatible (OpenAI, MiniMax via /v1, OpenRouter, Ollama, …);
  * the factory is the extension point for native Anthropic / Gemini
  * adapters. `providerId` is surfaced for logging/diagnostics.
+ *
+ * Phase 3: native Anthropic adapter. The factory inspects `provider`:
+ *   - "anthropic" → AnthropicAdapter (uses cfg.client.apiKey as x-api-key)
+ *   - everything else → OpenAICompatibleAdapter
+ *
+ * The Anthropic branch still accepts an OpenAI client for the apiKey
+ * fallback path; new code can call `createProviderAdapter` with just
+ * `{ provider: 'anthropic', client }`.
  */
 export interface ProviderAdapterConfig {
   provider?: string
@@ -154,8 +165,48 @@ export interface ProviderAdapterConfig {
 
 export function createProviderAdapter(cfg: ProviderAdapterConfig): ProviderAdapter {
   const pid = (cfg.provider ?? 'openai-compatible').toLowerCase()
-  // All currently-supported providers speak the OpenAI Chat Completions
-  // shape. When a native adapter lands (e.g. anthropic-messages), branch
-  // here on pid/baseURL.
+  if (pid === 'anthropic') {
+    return new AnthropicAdapter({
+      apiKey: cfg.client.apiKey ?? '',
+      baseURL: (cfg.client.baseURL ?? 'https://api.anthropic.com').replace(/\/v1\/?$/, ''),
+    })
+  }
+  if (pid === 'bedrock' || pid === 'vertex' || pid === 'foundry') {
+    return new StubProviderAdapter(pid)
+  }
   return new OpenAICompatibleAdapter(cfg.client, pid)
+}
+
+/**
+ * Placeholder adapter for providers whose native support isn't wired yet.
+ * Reports the gap honestly instead of silently falling back to OpenAI compat.
+ * Listed explicitly so users can see which providers are roadmap items.
+ */
+export class StubProviderAdapter implements ProviderAdapter {
+  readonly providerId: string
+  private _streamUsageSupported = false
+
+  constructor(providerId: string) {
+    this.providerId = providerId
+  }
+
+  get streamUsageSupported(): boolean {
+    return this._streamUsageSupported
+  }
+
+  resetStreamUsageLatch(): void {
+    this._streamUsageSupported = false
+  }
+
+  markStreamUsageUnsupported(): void {
+    this._streamUsageSupported = false
+  }
+
+  async stream(): Promise<AsyncIterable<never>> {
+    throw new Error(
+      `Provider "${this.providerId}" is not wired in this build of ovolv999. ` +
+      'OpenAI-compatible providers and Anthropic are supported today; ' +
+      'Bedrock / Vertex / Foundry are tracked in docs/roadmap.md (planned 0.6.0).',
+    )
+  }
 }

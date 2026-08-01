@@ -37,6 +37,8 @@ import { DiagnosticsTool } from './diagnostics.js'
 import { ListMcpResourcesTool, ReadMcpResourceTool } from './mcpResources.js'
 import { GoalTool } from './goal.js'
 import { TaskPlanTool } from './taskPlan.js'
+import { createSearchExtraToolsTool } from './searchExtraTools.js'
+import { createLspTool, loadLspServersFromSettings } from './lspTool.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
 
 /**
@@ -121,6 +123,8 @@ export function createTools(
     new ReadMcpResourceTool(),
     new GoalTool(),
     new TaskPlanTool(agentWiring?.taskGraphResolver, agentWiring?.evidenceResolver),
+    createSearchExtraToolsTool(),
+    createLspTool({ servers: loadLspServersFromSettings() }),
     ...extraTools,
   ]
 }
@@ -167,3 +171,4 @@ export {
   ReadMcpResourceTool,
   GoalTool,
 }
+export { createSearchExtraToolsTool, SEARCH_EXTRA_TOOLS_NAME } from './searchExtraTools.js'

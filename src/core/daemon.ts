@@ -30,7 +30,7 @@ export interface DaemonInfo {
 }
 
 export interface DaemonCommand {
-  action: 'status' | 'stop' | 'ping' | 'health' | 'list-workers' | 'restart-worker'
+  action: 'status' | 'stop' | 'ping' | 'health' | 'list-workers' | 'restart-worker' | 'tag-stats' | 'tag-uptime' | 'validate'
   payload?: Record<string, unknown>
 }
 
@@ -47,6 +47,28 @@ interface WorkerEntry {
   status: 'starting' | 'running' | 'stopped' | 'failed'
   startedAt: string
   command?: string
+  /** R18: optional tag for batch-restart by tag (e.g. 'tag:cli'). */
+  tag?: string
+  /** R28: optional tags array for AND selection (e.g. 'tag:cli+web').
+   * Each tag in the array is an additional "label" the worker carries.
+   * A worker with both `tag: 'cli'` and `tags: ['web']` would match
+   * `tag:cli`, `tag:web`, and `tag:cli+web`. */
+  tags?: string[]
+  /** R29: optional aliases for legacy name compatibility. A worker
+   * tagged 'cli' with aliases ['cli-handler'] would match `tag:cli-handler`
+   * too. Aliased labels are virtual — they don't appear in tag-stats
+   * results, only on-join resolution. */
+  aliases?: string[]
+  /** R32: optional parentId. When set, the worker inherits tags
+   * from its parent for selector matching. Cycles are not
+   * prevented — the caller is responsible for not creating them. */
+  parentId?: string
+  /** R34: number of restarts this worker has had. 0 = never
+   * restarted. Incremented on every restart-worker call. */
+  restartCount: number
+  /** R34: cumulative uptime in ms across all past restart cycles
+   * plus the current cycle. Updated on every restart. */
+  cumulativeUptimeMs: number
 }
 
 export type { WorkerEntry }
@@ -124,7 +146,7 @@ export class Daemon {
     }
   }
 
-  addWorker(name: string, command?: string): WorkerEntry {
+  addWorker(name: string, command?: string, tag?: string, tags?: string[], aliases?: string[], parentId?: string): WorkerEntry {
     const id = `worker-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     const worker: WorkerEntry = {
       id,
@@ -132,9 +154,15 @@ export class Daemon {
       status: 'starting',
       startedAt: new Date().toISOString(),
       command,
+      tag,
+      tags,
+      aliases,
+      parentId,
+      restartCount: 0,
+      cumulativeUptimeMs: 0,
     }
     this.workers.set(id, worker)
-    this.log(`Worker added: ${name} (${id})`)
+    this.log(`Worker added: ${name} (${id})${tag ? ` tag=${tag}` : ''}${tags ? ` tags=${JSON.stringify(tags)}` : ''}${aliases ? ` aliases=${JSON.stringify(aliases)}` : ''}${parentId ? ` parent=${parentId}` : ''}`)
     return worker
   }
 
@@ -154,6 +182,29 @@ export class Daemon {
       worker.status = status
       if (pid !== undefined) worker.pid = pid
     }
+  }
+
+  /** R32: collect a worker's labels (tag + tags + aliases). Used
+   * for parent-id inheritance when matching selectors.
+   * R33: walk the parent chain, accumulating ancestor labels with
+   * cycle detection. A worker that is its own ancestor (via
+   * `parentId` cycle) is detected and the chain terminates to
+   * prevent infinite recursion. */
+  private collectLabels(w: WorkerEntry | undefined, visited?: Set<string>): string[] {
+    if (!w) return []
+    const seen = visited ?? new Set<string>()
+    if (seen.has(w.id)) return []  // cycle break
+    seen.add(w.id)
+    const parts: string[] = []
+    if (w.tag !== undefined) parts.push(w.tag)
+    if (w.tags) parts.push(...w.tags)
+    if (w.aliases) parts.push(...w.aliases)
+    if (w.parentId !== undefined) {
+      const parent = this.workers.get(w.parentId)
+      const parentLabels = this.collectLabels(parent, seen)
+      parts.push(...parentLabels)
+    }
+    return parts
   }
 
   private handleConnection(socket: Socket): void {
@@ -205,8 +256,468 @@ export class Daemon {
       case 'stop':
         this.stop().catch(() => {})
         return { ok: true, data: 'stopping' }
-      case 'list-workers':
-        return { ok: true, data: this.listWorkers() }
+      case 'list-workers': {
+        // R37: optional sortBy. Default insertion order (Map).
+        const sortBy = cmd.payload?.sortBy
+        let workers = this.listWorkers()
+        if (sortBy === 'name') {
+          workers = [...workers].sort((a, b) => a.name.localeCompare(b.name))
+        } else if (sortBy === 'status') {
+          const statusOrder: Record<string, number> = { starting: 0, running: 1, stopped: 2, failed: 3 }
+          workers = [...workers].sort((a, b) => (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99))
+        } else if (sortBy === 'createdAt') {
+          workers = [...workers].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        } else if (sortBy !== undefined && sortBy !== 'insertion') {
+          return { ok: false, error: `list-workers invalid sortBy: ${String(sortBy)}` }
+        }
+        return { ok: true, data: workers }
+      }
+      case 'tag-stats': {
+        // R20: aggregate per-tag stats. Returns one entry per tag
+        // plus an `untagged` summary for workers without a tag.
+        // Each entry includes total count + per-status breakdown so
+        // callers can spot 'failed' workers per tag without iterating
+        // the worker list themselves.
+        // R21: optional payload.status filter — only count workers
+        // matching the given status. The byStatus breakdown returns
+        // zero buckets for non-matching statuses since totals are
+        // post-filter.
+        // R22: payload.status accepts a string[] for multi-status
+        // filtering. Each worker matches if its status is in the
+        // list (OR semantics). The single string form (R21) is
+        // preserved as a backward-compatible shorthand.
+        // R23: payload.tag filters the aggregation to a single tag.
+        // Combined with payload.status (R21/R22) for focused queries.
+        // Theotagged counter is dropped when a tag filter is active
+        // because the caller's intent is "this tag only".
+        // R31: payload.statusGte / payload.statusLte for range
+        // filtering. Lifecycle ordering: starting(0) < running(1) <
+        // stopped(2) < failed(3). Gte ≤ Lte for a valid range.
+        const STATUS_ORDER: Record<string, number> = { starting: 0, running: 1, stopped: 2, failed: 3 }
+        const statusFilter = cmd.payload?.status
+        let allowedStatuses: string[] | null = null
+        if (statusFilter !== undefined) {
+          if (typeof statusFilter === 'string') {
+            allowedStatuses = [statusFilter]
+          } else if (Array.isArray(statusFilter) && statusFilter.every((s) => typeof s === 'string')) {
+            allowedStatuses = statusFilter as string[]
+          } else {
+            return { ok: false, error: `tag-stats invalid status: ${String(statusFilter)}` }
+          }
+          const valid = ['starting', 'running', 'stopped', 'failed']
+          const allValid = allowedStatuses.every((s) => valid.includes(s))
+          if (!allValid) {
+            return { ok: false, error: `tag-stats invalid status in list: ${JSON.stringify(allowedStatuses)}` }
+          }
+        }
+        const statusGteRaw = cmd.payload?.statusGte
+        const statusLteRaw = cmd.payload?.statusLte
+        let statusGte: number | null = null
+        let statusLte: number | null = null
+        if (statusGteRaw !== undefined) {
+          if (typeof statusGteRaw !== 'string' || !(statusGteRaw in STATUS_ORDER)) {
+            return { ok: false, error: `tag-stats invalid statusGte: ${String(statusGteRaw)}` }
+          }
+          statusGte = STATUS_ORDER[statusGteRaw]!
+        }
+        if (statusLteRaw !== undefined) {
+          if (typeof statusLteRaw !== 'string' || !(statusLteRaw in STATUS_ORDER)) {
+            return { ok: false, error: `tag-stats invalid statusLte: ${String(statusLteRaw)}` }
+          }
+          statusLte = STATUS_ORDER[statusLteRaw]!
+        }
+        if (statusGte !== null && statusLte !== null && statusGte > statusLte) {
+          return { ok: false, error: `tag-stats statusGte (${statusGte}) > statusLte (${statusLte})` }
+        }
+        const passesRange = (s: string): boolean => {
+          if (statusGte === null && statusLte === null) return true
+          const order = STATUS_ORDER[s]!
+          if (statusGte !== null && order < statusGte) return false
+          if (statusLte !== null && order > statusLte) return false
+          return true
+        }
+        const tagFilter = cmd.payload?.tag
+        if (tagFilter !== undefined && typeof tagFilter !== 'string') {
+          return { ok: false, error: `tag-stats invalid tag: ${String(tagFilter)}` }
+        }
+        // R25: exclude-status filter. Symmetric to R21/R22 include.
+        // Validated against the same status whitelist.
+        const excludeFilter = cmd.payload?.exclude
+        let excludedStatuses: string[] | null = null
+        if (excludeFilter !== undefined) {
+          if (typeof excludeFilter === 'string') {
+            excludedStatuses = [excludeFilter]
+          } else if (Array.isArray(excludeFilter) && excludeFilter.every((s) => typeof s === 'string')) {
+            excludedStatuses = excludeFilter as string[]
+          } else {
+            return { ok: false, error: `tag-stats invalid exclude: ${String(excludeFilter)}` }
+          }
+          const validE = ['starting', 'running', 'stopped', 'failed']
+          if (!excludedStatuses.every((s) => validE.includes(s))) {
+            return { ok: false, error: `tag-stats invalid exclude in list: ${JSON.stringify(excludedStatuses)}` }
+          }
+        }
+        const buckets = new Map<string, { total: number; byStatus: Record<string, number> }>()
+        let untagged = 0
+        let totalWorkers = 0
+        for (const w of this.workers.values()) {
+          if (allowedStatuses !== null && !allowedStatuses.includes(w.status)) continue
+          if (!passesRange(w.status)) continue
+          if (tagFilter !== undefined && w.tag !== tagFilter) continue
+          if (excludedStatuses !== null && excludedStatuses.includes(w.status)) continue
+          totalWorkers++
+          if (w.tag === undefined) {
+            untagged++
+            continue
+          }
+          let bucket = buckets.get(w.tag)
+          if (!bucket) {
+            bucket = { total: 0, byStatus: {} }
+            buckets.set(w.tag, bucket)
+          }
+          bucket.total++
+          bucket.byStatus[w.status] = (bucket.byStatus[w.status] ?? 0) + 1
+        }
+        const tags = Array.from(buckets.entries()).map(([tag, stats]) => ({
+          tag,
+          total: stats.total,
+          byStatus: stats.byStatus,
+        })).sort((a, b) => a.tag.localeCompare(b.tag))
+        return {
+          ok: true,
+          data: {
+            totalWorkers,
+            untagged: tagFilter === undefined ? untagged : 0,
+            tags,
+            statusFilter: allowedStatuses,
+            excludeFilter: excludedStatuses,
+            tagFilter: tagFilter ?? null,
+            statusGte: statusGteRaw ?? null,
+            statusLte: statusLteRaw ?? null,
+          },
+        }
+      }
+      case 'validate': {
+        // R35: walk the parent graph and detect cycles. Returns
+        // ok=true with cycleCount=0 if the graph is a DAG, or
+        // ok=false with the cycle path. Per-worker validation is
+        // reported via workerId list.
+        const inCycle = new Set<string>()
+        const cyclePaths: string[][] = []
+        for (const w of this.workers.values()) {
+          if (inCycle.has(w.id)) continue
+          const seen = new Set<string>()
+          const path: string[] = []
+          let cur: WorkerEntry | undefined = w
+          while (cur !== undefined) {
+            if (seen.has(cur.id)) {
+              // found a cycle starting at path[seen.size]
+              const startIdx = path.indexOf(cur.id)
+              if (startIdx >= 0) {
+                cyclePaths.push(path.slice(startIdx).concat([cur.id]))
+                for (const id of path.slice(startIdx)) inCycle.add(id)
+                inCycle.add(cur.id)
+              }
+              break
+            }
+            seen.add(cur.id)
+            path.push(cur.id)
+            cur = cur.parentId !== undefined ? this.workers.get(cur.parentId) : undefined
+          }
+        }
+        return {
+          ok: cyclePaths.length === 0,
+          data: {
+            cycleCount: cyclePaths.length,
+            cycles: cyclePaths,
+            inCycleCount: inCycle.size,
+          },
+        }
+      }
+      case 'tag-uptime': {
+        // R30: per-tag aggregate uptime. Returns average age in ms
+        // computed from each worker's startedAt. Workers without a
+        // tag are excluded from per-tag aggregation but counted in
+        // totalWorkers. The age is "wall-clock since startedAt" —
+        // the daemon doesn't track restart history, so this is the
+        // current-uptime-since-last-restart metric.
+        // R34: cumulativeMs extends this by adding the worker's
+        // cumulativeUptimeMs (sum of past restart cycles' uptime)
+        // to the current cycle. totalRestartCount is the sum of
+        // restart cycles across all workers.
+        const now = Date.now()
+        const tagAges = new Map<string, { total: number; count: number; oldestMs: number; newestMs: number; cumulativeMs: number; restartCount: number }>()
+        let totalUp = 0
+        let totalCount = 0
+        let totalCumulative = 0
+        let totalRestartCount = 0
+        for (const w of this.workers.values()) {
+          const age = Math.max(0, now - new Date(w.startedAt).getTime())
+          totalUp += age
+          totalCount++
+          totalCumulative += w.cumulativeUptimeMs + age
+          totalRestartCount += w.restartCount
+          if (w.tag === undefined) continue
+          let entry = tagAges.get(w.tag)
+          if (!entry) {
+            entry = { total: 0, count: 0, oldestMs: 0, newestMs: Number.MAX_SAFE_INTEGER, cumulativeMs: 0, restartCount: 0 }
+            tagAges.set(w.tag, entry)
+          }
+          entry.total += age
+          entry.count++
+          entry.cumulativeMs += w.cumulativeUptimeMs + age
+          entry.restartCount += w.restartCount
+          if (age > entry.oldestMs) entry.oldestMs = age
+          if (age < entry.newestMs) entry.newestMs = age
+        }
+        const tags = Array.from(tagAges.entries()).map(([tag, agg]) => ({
+          tag,
+          averageMs: agg.count > 0 ? Math.round(agg.total / agg.count) : 0,
+          oldestMs: agg.oldestMs,
+          newestMs: agg.newestMs === Number.MAX_SAFE_INTEGER ? 0 : agg.newestMs,
+          count: agg.count,
+          cumulativeMs: agg.cumulativeMs,
+          restartCount: agg.restartCount,
+        })).sort((a, b) => a.tag.localeCompare(b.tag))
+        return {
+          ok: true,
+          data: {
+            totalWorkers: totalCount,
+            averageMs: totalCount > 0 ? Math.round(totalUp / totalCount) : 0,
+            totalCumulativeMs: totalCumulative,
+            totalRestartCount,
+            tags,
+          },
+        }
+      }
+      case 'restart-worker': {
+        // R14: payload validation. Without a workerId the action is
+        // a no-op (return ok=false) so the caller can retry.
+        // R16: payload.workerId === 'all' triggers a bulk restart.
+        // R24: payload.tag + payload.status filters apply BEFORE
+        // the workerId selector. tag is a single string equality
+        // (use workerId='tag:foo,bar' for multi-tag union).
+        // status uses the same string[] OR semantics as
+        // tag-stats (R22). The intersection of tag + status +
+        // workerId forms the working set.
+        const workerId = cmd.payload?.workerId
+        if (typeof workerId !== 'string' || workerId.length === 0) {
+          return { ok: false, error: 'restart-worker requires payload.workerId' }
+        }
+        const tagFilter = cmd.payload?.tag
+        if (tagFilter !== undefined && typeof tagFilter !== 'string') {
+          return { ok: false, error: 'restart-worker invalid tag: must be a string' }
+        }
+        const statusFilter = cmd.payload?.status
+        let allowedStatuses: string[] | null = null
+        if (statusFilter !== undefined) {
+          if (typeof statusFilter === 'string') {
+            allowedStatuses = [statusFilter]
+          } else if (Array.isArray(statusFilter) && statusFilter.every((s) => typeof s === 'string')) {
+            allowedStatuses = statusFilter as string[]
+          } else {
+            return { ok: false, error: 'restart-worker invalid status payload' }
+          }
+          const validStatuses = ['starting', 'running', 'stopped', 'failed']
+          if (!allowedStatuses.every((s) => validStatuses.includes(s))) {
+            return { ok: false, error: `restart-worker invalid status: ${JSON.stringify(allowedStatuses)}` }
+          }
+        }
+        // R26: exclude-status filter, symmetric to tag-stats (R25).
+        // Validated against the same status whitelist.
+        const excludeFilter = cmd.payload?.exclude
+        let excludedStatuses: string[] | null = null
+        if (excludeFilter !== undefined) {
+          if (typeof excludeFilter === 'string') {
+            excludedStatuses = [excludeFilter]
+          } else if (Array.isArray(excludeFilter) && excludeFilter.every((s) => typeof s === 'string')) {
+            excludedStatuses = excludeFilter as string[]
+          } else {
+            return { ok: false, error: 'restart-worker invalid exclude payload' }
+          }
+          const validExcludes = ['starting', 'running', 'stopped', 'failed']
+          if (!excludedStatuses.every((s) => validExcludes.includes(s))) {
+            return { ok: false, error: `restart-worker invalid exclude: ${JSON.stringify(excludedStatuses)}` }
+          }
+        }
+        // R24: filter helper applied to bulk paths.
+        // R26: include excludeStatuses — workers matching any
+        // excluded status are also filtered out.
+        const passesFilter = (w: WorkerEntry): boolean => {
+          if (tagFilter !== undefined && w.tag !== tagFilter) return false
+          if (allowedStatuses !== null && !allowedStatuses.includes(w.status)) return false
+          if (excludedStatuses !== null && excludedStatuses.includes(w.status)) return false
+          return true
+        }
+        if (workerId === 'all') {
+          const ids = Array.from(this.workers.values()).filter(passesFilter).map((w) => w.id)
+          if (ids.length === 0) {
+            return { ok: true, data: { workerId: 'all', restarted: 0, requestedAt: new Date().toISOString() } }
+          }
+          // R17: honor `concurrency` payload option. Default 1 (serial).
+          // For 100 workers, concurrency=1 spawns 100 setTimeout(50ms)
+          // serially over 5s. concurrency=4 (typical) does 25 batches
+          // of 4 → 1.25s total. Clamped to [1, 16] to avoid pathological
+          // values.
+          const rawConcurrency = cmd.payload?.concurrency
+          const parsedConcurrency = typeof rawConcurrency === 'number' && Number.isFinite(rawConcurrency)
+            ? Math.floor(rawConcurrency)
+            : 1
+          const concurrency = Math.max(1, Math.min(16, parsedConcurrency))
+          const results: Array<{ workerId: string; ok: boolean }> = []
+          for (let i = 0; i < ids.length; i += concurrency) {
+            const batch = ids.slice(i, i + concurrency)
+            for (const id of batch) {
+              const r = this.handleCommand({ action: 'restart-worker', payload: { workerId: id } })
+              results.push({ workerId: id, ok: r.ok })
+            }
+          }
+          const failures = results.filter((r) => !r.ok).length
+          return {
+            ok: failures === 0,
+            data: {
+              workerId: 'all',
+              requested: ids.length,
+              failed: failures,
+              concurrency,
+              results,
+              tagFilter: tagFilter ?? null,
+              statusFilter: allowedStatuses,
+              excludeFilter: excludedStatuses,
+              requestedAt: new Date().toISOString(),
+            },
+          }
+        }
+        // R18: tag selector. `tag:foo` restarts every worker whose tag
+        // matches (exact match). Returns ok=false with a clear error
+        // if no workers match the tag.
+        // R19: multi-tag via comma-separated `tag:foo,bar`. Workers
+        // matching ANY of the listed tags are restarted (union).
+        // R27: tag negation via `tag:!foo` or comma-separated
+        // `tag:!foo,!bar`. Workers whose tag matches ANY of the
+        // listed negative tags are excluded. Positive + negative can
+        // be combined in a single selector e.g. `tag:cli,!web`.
+        // R24: status filter applies on top of tag selector.
+        if (workerId.startsWith('tag:')) {
+          const rawTags = workerId.slice(4)
+          if (rawTags.length === 0) {
+            return { ok: false, error: 'tag: requires a non-empty tag (e.g. tag:cli)' }
+          }
+          const tokens = rawTags.split(',').map((t) => t.trim()).filter((t) => t.length > 0)
+          if (tokens.length === 0) {
+            return { ok: false, error: 'tag: requires at least one non-empty tag after split' }
+          }
+          // R28: tokens containing '+' are AND sub-selectors. A
+          // worker must match ALL tags in the sub-selector. e.g.
+          // `tag:cli+web` requires the worker to have both 'cli' and
+          // 'web' (either as primary tag or in the tags[] array).
+          const positive: string[] = []
+          const negative: string[] = []
+          const ands: string[][] = []
+          for (const t of tokens) {
+            if (t.startsWith('!')) {
+              const tag = t.slice(1)
+              if (tag.length === 0) {
+                return { ok: false, error: 'tag:! requires a non-empty tag (e.g. tag:!cli)' }
+              }
+              negative.push(tag)
+            } else if (t.includes('+')) {
+              const parts = t.split('+').map((p) => p.trim()).filter((p) => p.length > 0)
+              if (parts.length === 0) {
+                return { ok: false, error: 'tag:foo+ requires at least one non-empty tag' }
+              }
+              ands.push(parts)
+            } else {
+              positive.push(t)
+            }
+          }
+          const tagged = Array.from(this.workers.values()).filter((w) => {
+            // R32: labels include the worker's own tag + tags + aliases,
+            // plus the parent's labels (one level up). Cycles are
+            // caller's responsibility — we don't recurse.
+            const parentLabels = w.parentId !== undefined
+              ? this.collectLabels(this.workers.get(w.parentId))
+              : []
+            const labels = w.tag !== undefined
+              ? [w.tag, ...(w.tags ?? []), ...(w.aliases ?? []), ...parentLabels]
+              : [...(w.tags ?? []), ...(w.aliases ?? []), ...parentLabels]
+            if (labels.length === 0) return false
+            if (negative.some((n) => labels.includes(n))) return false
+            if (positive.length > 0 && !positive.some((p) => labels.includes(p))) return false
+            for (const andGroup of ands) {
+              if (!andGroup.every((t) => labels.includes(t))) return false
+            }
+            return passesFilter(w)
+          })
+          if (tagged.length === 0) {
+            const desc = [
+              positive.length > 0 ? `tags ${JSON.stringify(positive)}` : '',
+              negative.length > 0 ? `excluding ${JSON.stringify(negative)}` : '',
+            ].filter(Boolean).join(' ')
+            return { ok: false, error: `No workers found with ${desc}` }
+          }
+          const results: Array<{ workerId: string; ok: boolean }> = []
+          for (const w of tagged) {
+            const r = this.handleCommand({ action: 'restart-worker', payload: { workerId: w.id } })
+            results.push({ workerId: w.id, ok: r.ok })
+          }
+          const failures = results.filter((r) => !r.ok).length
+          return {
+            ok: failures === 0,
+            data: {
+              workerId: `tag:${tokens.join(',')}`,
+              requested: tagged.length,
+              failed: failures,
+              results,
+              statusFilter: allowedStatuses,
+              excludeFilter: excludedStatuses,
+              requestedAt: new Date().toISOString(),
+            },
+          }
+        }
+        const worker = this.workers.get(workerId)
+        if (!worker) {
+          return { ok: false, error: `Worker not found: ${workerId}` }
+        }
+        // R36: max-restarts policy. If the worker has already
+        // exceeded the threshold, refuse the restart. Default 3
+        // (configurable via payload.maxRestarts). maxRestarts=0
+        // means unlimited (no cap). Reset on success would be a
+        // future round — for now, the cap is per-worker lifetime.
+        const rawMaxRestarts = cmd.payload?.maxRestarts
+        const maxRestarts = typeof rawMaxRestarts === 'number' && Number.isFinite(rawMaxRestarts)
+          ? Math.floor(rawMaxRestarts)
+          : 3
+        if (maxRestarts > 0 && worker.restartCount >= maxRestarts) {
+          return { ok: false, error: `Worker ${workerId} has reached max-restarts (${maxRestarts})` }
+        }
+        // The daemon doesn't actually spawn subprocesses for workers
+        // (that's a future capability). What we can do is reset the
+        // worker's lifecycle atomically: mark it 'starting' with a
+        // fresh startedAt, then immediately 'running' once the
+        // restart cycle completes. This unblocks the type union and
+        // gives the caller a confirmation that the action was
+        // processed.
+        // R34: capture cumulative uptime before resetting startedAt.
+        const prevStartedAt = new Date(worker.startedAt).getTime()
+        const prevUptime = Math.max(0, Date.now() - prevStartedAt)
+        worker.cumulativeUptimeMs += prevUptime
+        worker.restartCount += 1
+        const now = new Date().toISOString()
+        worker.status = 'starting'
+        worker.startedAt = now
+        // Simulate restart cycle: schedule the 'running' state 50ms
+        // later. In a real subprocess world this would track the
+        // child's spawn + health probe completion.
+        const status = worker.status
+        setTimeout(() => {
+          if (this.workers.get(workerId)?.status === 'starting') {
+            this.updateWorkerStatus(workerId, 'running')
+          }
+        }, 50)
+        this.log(`Worker restart requested: ${worker.name} (${workerId})`)
+        return { ok: true, data: { workerId, status, requestedAt: now } }
+      }
       default:
         return { ok: false, error: `Unknown action: ${cmd.action}` }
     }

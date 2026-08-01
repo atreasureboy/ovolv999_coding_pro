@@ -28,16 +28,18 @@ describe('Permission Profile resolution', () => {
 })
 
 describe('Permission Mode Cycling', () => {
-  it('cycles through all 5 modes in order', () => {
+  it('cycles through all 7 modes in order', () => {
     expect(getNextPermissionMode('default')).toBe('acceptEdits')
     expect(getNextPermissionMode('acceptEdits')).toBe('plan')
     expect(getNextPermissionMode('plan')).toBe('auto')
     expect(getNextPermissionMode('auto')).toBe('bypassPermissions')
-    expect(getNextPermissionMode('bypassPermissions')).toBe('default')
+    expect(getNextPermissionMode('bypassPermissions')).toBe('dontAsk')
+    expect(getNextPermissionMode('dontAsk')).toBe('bubble')
+    expect(getNextPermissionMode('bubble')).toBe('default')
   })
 
   it('wraps around', () => {
-    expect(getNextPermissionMode('bypassPermissions')).toBe('default')
+    expect(getNextPermissionMode('bubble')).toBe('default')
   })
 
   it('returns default for unknown mode', () => {

@@ -626,7 +626,10 @@ registerCommand({
     if (action === 'mode') {
       const mode = parts[1] as PermissionMode | undefined
       if (!mode) return text(mgr.formatMode())
-      if (!['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].includes(mode)) {
+      // R12: 7-mode union (was 5-mode legacy list). Including
+      // `dontAsk` (auto-approve without prompt) and `bubble`
+      // (sandbox-wrap shell) closes the gap with the type union.
+      if (!['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'].includes(mode)) {
         return text('Unknown permission mode: ' + mode)
       }
       mgr.setMode(mode)
@@ -2996,12 +2999,72 @@ registerCommand({
 
 registerCommand({
   name: 'daemon',
-  description: 'Manage daemon mode. Usage: /daemon [status | start | stop | workers]',
-  handler: () => {
-    const daemonModule = require('../core/daemon.js') as typeof import('../core/daemon.js')
-    const { isDaemonRunning, getDaemonSocketPath } = daemonModule
+  description: 'Daemon control. Usage: /daemon [status | workers | restart <id|all> | logs]',
+  handler: async (args, ctx) => {
+    const daemonModule = await import('../core/daemon.js')
+    const { isDaemonRunning, getDaemonSocketPath, getDaemonLogPath, formatDaemonInfo, formatWorkers, DaemonClient } = daemonModule
+    const parts = args.trim().split(/\s+/)
+    const sub = parts[0] ?? 'status'
 
-    return text('Daemon control requires running ovolv999 --daemon. Socket: ' + getDaemonSocketPath() + '\nRunning: ' + isDaemonRunning())
+    // status / workers / logs need a running daemon + live socket.
+    if (!isDaemonRunning()) {
+      return text('Daemon is not running. Start with: ovolv999 --daemon\nSocket: ' + getDaemonSocketPath() + '\nLog: ' + getDaemonLogPath())
+    }
+
+    // R13: route through DaemonClient so the slash command actually
+    // talks to the long-running supervisor process. Uses the IPC
+    // socket the daemon is listening on.
+    const client = new DaemonClient(getDaemonSocketPath())
+
+    if (sub === 'status') {
+      const info = await client.status()
+      if (!info) return text('Daemon reachable but status request failed.')
+      return text(formatDaemonInfo(info))
+    }
+
+    if (sub === 'workers') {
+      const res = await client.send({ action: 'list-workers' })
+      if (!res.ok) return text('Failed to list workers: ' + (res.error ?? 'unknown'))
+      return text(formatWorkers(res.data as never[]))
+    }
+
+    if (sub === 'restart') {
+      // R14: route restart-worker IPC action. The slash command
+      // forwards the workerId into the daemon's payload, surfaces
+      // the daemon's response (or error string) verbatim.
+      // R16: bulk restart via workerId === 'all'.
+      const workerId = parts[1]
+      if (!workerId) return text('Usage: /daemon restart <workerId|all>')
+      const res = await client.send({ action: 'restart-worker', payload: { workerId } })
+      // R15: emit a worker_restart event to the engine's EventLog so
+      // /trace can see daemon lifecycle events alongside permission
+      // decisions. Best-effort — never fail the slash command on a
+      // log failure.
+      const eventLog = ctx.engine.getEventLog?.()
+      eventLog?.append('worker_restart', 'daemon_slash', {
+        workerId,
+        outcome: res.ok ? 'requested' : 'failed',
+        error: res.ok ? null : (res.error ?? 'unknown'),
+        socketPath: getDaemonSocketPath(),
+      })
+      if (!res.ok) return text('Restart failed: ' + (res.error ?? 'unknown'))
+      return text('Restart requested for ' + workerId + '.\n' + JSON.stringify(res.data, null, 2))
+    }
+
+    if (sub === 'logs') {
+      const fs = await import('fs')
+      const path = getDaemonLogPath()
+      if (!fs.existsSync(path)) return text('No log file at ' + path)
+      const content = fs.readFileSync(path, 'utf8')
+      const lines = content.split('\n').slice(-30)
+      return text('Last 30 log lines from ' + path + ':\n\n' + lines.join('\n'))
+    }
+
+    if (sub === 'start' || sub === 'stop') {
+      return text('Inside a REPL, daemon ' + sub + ' is not delegated to the existing process.\nUse the CLI: ovolv999 daemon ' + sub)
+    }
+
+    return text('Usage: /daemon [status | workers | logs]')
   },
 })
 
@@ -3285,7 +3348,7 @@ registerCommand({
   name: 'lsp',
   description: 'Language server status. Usage: /lsp [status | symbols <query>]',
   handler: async (args) => {
-    const lsp = require('../core/lspClient.js') as typeof import('../core/lspClient.js')
+    const lsp = require('../core/lsp/client.js') as typeof import('../core/lsp/client.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'status'
 

@@ -2,6 +2,16 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.5.1 (unreleased)
+
+- **TF-IDF tool discovery (`search_extra_tools`)** — defer rarely-used tools out of the system prompt and let the model discover them via TF-IDF keyword search. Pure TypeScript implementation, zero deps. See `docs/TOOL-SEARCH.md` and `docs/ADR/008-tfidf-tool-search.md`.
+- **Skill search upgraded to TF-IDF** — better multilingual recall and field weighting (name 3.0 / whenToUse 2.0 / description 1.0 / allowedTools 0.3). Public `searchSkills` API unchanged.
+- **Hook protocol (PreToolUse / PostToolUse / UserPromptSubmit / SessionStart / PostToolUseFailure)** — JSON-stdin/stdout child-process protocol. Hooks can `deny` / `modify input` / `inject additionalContext` into the next LLM round. Config in `~/.ovogo/settings.json` under `hooks.*`. See `docs/HOOKS.md` and `docs/ADR/009-hook-protocol.md`.
+- **Anthropic native adapter** — first-party Messages API via zero-deps `fetch` + SSE. Supports prompt caching and extended-thinking beta headers via `providerOptions.anthropicBeta`. See `docs/ADR/010-anthropic-adapter.md`.
+- **ACP WebSocket transport** — `--acp-ws --port 8765` runs the same JSON-RPC 2.0 protocol as stdio, but on RFC 6455 WebSocket so browsers / dashboards / Python can drive the engine. Zero deps. See `docs/ACP-WS.md`.
+- **MCP HTTP transport + OAuth 2.1 PKCE** — `McpHttpClient` for HTTP-based MCP servers with `Authorization: Bearer` from `~/.ovogo/mcp-tokens.json`. Tokens auto-refresh 60s before expiry. See `docs/MCP-OAUTH.md`.
+- **Provider stubs for Bedrock / Vertex / Foundry** — honest "not wired in this build" error rather than silent fallback to OpenAI compat. Tracked for 0.6.0.
+
 ## 0.5.0
 
 - Added role-aware model assignment to the existing AgentTool child-engine path.

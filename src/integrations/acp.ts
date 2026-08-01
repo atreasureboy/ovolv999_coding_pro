@@ -167,17 +167,31 @@ export class ACPServer extends EventEmitter {
     this.rl = createInterface({ input, terminal: false })
 
     this.rl.on('line', (line: string) => {
-      const msg = parseMessage(line)
-      if (msg) {
-        this.handleMessage(msg).catch(err => {
-          this.emit('error', err)
-        })
-      }
+      this.handleFrame(line).catch(err => {
+        this.emit('error', err)
+      })
     })
 
     this.rl.on('close', () => {
       this.emit('close')
     })
+  }
+
+  /**
+   * Process a single JSON-RPC frame from any transport (stdio line,
+   * WebSocket text frame, etc.). Returns void; errors are emitted via
+   * `error` event.
+   */
+  async handleFrame(line: string): Promise<void> {
+    const msg = parseMessage(line)
+    if (msg) {
+      await this.handleMessage(msg)
+    }
+  }
+
+  /** Write a JSON-RPC frame directly to the configured writer. */
+  writeFrame(data: string): void {
+    this.writeFn(data)
   }
 
   /** Stop the server */

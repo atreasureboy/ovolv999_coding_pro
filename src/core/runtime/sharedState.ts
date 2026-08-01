@@ -76,6 +76,12 @@ type ModelStateListener = (state: RuntimeModelState) => void
 export class SharedRuntimeState {
   planModeActive: boolean
   currentTurnAbortController: AbortController | null = null
+  /**
+   * R5: id of the run currently being executed (set by coordinator
+   * at run start, cleared at run end). Tools read this to look up
+   * the per-run ControlMessageLog and TaskGraph.
+   */
+  activeRunId: string | null = null
   softAbortRequested = false
   softAbortOwner: AbortController | null = null
 

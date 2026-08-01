@@ -3,12 +3,50 @@
  *
  * Provides fuzzy search over loaded skills, ranking by relevance,
  * usage frequency, and recency.
+ *
+ * Phase 1.6: searchSkills now uses TF-IDF (cosine similarity over
+ * weighted term vectors) on top of core/localSearch, replacing the
+ * previous simple term-frequency heuristic. The SkillSearchResult
+ * interface is unchanged for back-compat with consumers.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { loadSkills, type Skill } from '../skills/loader.js'
+import {
+  computeIdf,
+  computeWeightedTf,
+  cosineSimilarity,
+  tokenizeAndStem,
+  applyCjkFilter,
+  buildQueryTfIdf,
+  getQueryTokenSeparators,
+  normalizeName,
+  splitHyphenatedName,
+  type WeightedTfField,
+} from './localSearch.js'
+
+const SKILL_FIELD_WEIGHT = {
+  name: 3.0,
+  whenToUse: 2.0,
+  description: 1.0,
+  allowedTools: 0.3,
+} as const
+
+const NAME_MATCH_MIN_LENGTH = 4
+const DISPLAY_MIN_SCORE = 0.10
+
+interface SkillIndexEntry {
+  skill: Skill
+  normalizedName: string
+  matchedFields: string[]
+  tfVector: Map<string, number>
+  tokens: string[]
+  nameTokens: string[]
+  descriptionTokens: string[]
+  toolsTokens: string[]
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -73,74 +111,91 @@ export function recordSkillUsage(name: string, success: boolean): void {
 
 // ── Search ──────────────────────────────────────────────────────────────────
 
+function buildSkillIndex(skills: Map<string, Skill>): SkillIndexEntry[] {
+  const entries: SkillIndexEntry[] = []
+  for (const [name, skill] of skills) {
+    const description = skill.description ?? ''
+    const allowedTools = (skill.tools ?? []).join(' ')
+    const normalizedName = normalizeName(name)
+    const nameTokens = tokenizeAndStem(name)
+    const nameParts = splitHyphenatedName(name).map(s => s).filter(t => t.length >= 3)
+    const nameWithParts = [...nameTokens, ...nameParts]
+    const descriptionTokens = tokenizeAndStem(description)
+    const toolsTokens = tokenizeAndStem(allowedTools)
+    const promptTokens = tokenizeAndStem(skill.prompt ?? '')
+    const allTokens = Array.from(new Set([
+      ...nameWithParts,
+      ...descriptionTokens,
+      ...toolsTokens,
+      ...promptTokens,
+    ]))
+
+    const fields: WeightedTfField[] = [
+      { tokens: nameWithParts, weight: SKILL_FIELD_WEIGHT.name },
+      { tokens: descriptionTokens, weight: SKILL_FIELD_WEIGHT.description },
+      { tokens: toolsTokens, weight: SKILL_FIELD_WEIGHT.allowedTools },
+    ]
+
+    const tfVector = computeWeightedTf(fields)
+    entries.push({
+      skill,
+      normalizedName,
+      matchedFields: [],
+      tfVector,
+      tokens: allTokens,
+      nameTokens: nameWithParts,
+      descriptionTokens,
+      toolsTokens,
+    })
+  }
+
+  const idf = computeIdf(entries)
+  for (const entry of entries) {
+    for (const [term, tf] of entry.tfVector) {
+      entry.tfVector.set(term, tf * (idf.get(term) ?? 0))
+    }
+  }
+  return entries
+}
+
 export function searchSkills(cwd: string, query: string, limit = 10): SkillSearchResult[] {
+  if (!query?.trim()) return []
   const skills = loadSkills(cwd)
   const usageStats = loadUsageStats()
+  const index = buildSkillIndex(skills)
+  if (index.length === 0) return []
+
+  const idf = computeIdf(index)
+  const { tfIdf: queryTfIdf, tokens: queryTokens } = buildQueryTfIdf(query, idf)
+  if (queryTokens.length === 0) return []
+  const { cjk: queryCjk, ascii: queryAscii } = getQueryTokenSeparators(queryTokens)
+  const queryLower = query.toLowerCase().replace(/[-_]/g, ' ')
+
   const results: SkillSearchResult[] = []
+  for (const entry of index) {
+    let score = cosineSimilarity(queryTfIdf, entry.tfVector)
+    score = applyCjkFilter(entry, queryCjk, queryAscii, score)
+    if (entry.skill.name.length >= NAME_MATCH_MIN_LENGTH && queryLower.includes(entry.normalizedName)) {
+      score = Math.max(score, 0.75)
+    }
 
-  const queryLower = query.toLowerCase()
-  const queryTerms = queryLower.split(/\s+/).filter(Boolean)
-
-  for (const [name, skill] of skills) {
     const matchedFields: string[] = []
-    let score = 0
-
-    // Exact name match
-    if (name.toLowerCase() === queryLower) {
-      score += 100
-      matchedFields.push('name:exact')
-    } else if (name.toLowerCase().includes(queryLower)) {
-      score += 50
-      matchedFields.push('name:partial')
+    if (queryLower.includes(entry.normalizedName)) {
+      const normalizedQuery = queryLower.trim()
+      matchedFields.push(entry.normalizedName === normalizedQuery ? 'name:exact' : 'name:partial')
     }
+    if (entry.descriptionTokens.some(t => queryTokens.includes(t))) matchedFields.push('description')
+    if (entry.toolsTokens.some(t => queryTokens.includes(t))) matchedFields.push('tools')
 
-    // Description match
-    const descLower = (skill.description ?? '').toLowerCase()
-    if (descLower.includes(queryLower)) {
-      score += 30
-      matchedFields.push('description')
-    }
-
-    // Term matches in description
-    for (const term of queryTerms) {
-      if (descLower.includes(term)) {
-        score += 10
-        if (!matchedFields.includes('description:terms')) {
-          matchedFields.push('description:terms')
-        }
-      }
-    }
-
-    // Prompt content match
-    const promptLower = (skill.prompt ?? '').toLowerCase()
-    for (const term of queryTerms) {
-      if (promptLower.includes(term)) {
-        score += 5
-        if (!matchedFields.includes('prompt')) {
-          matchedFields.push('prompt')
-        }
-      }
-    }
-
-    // Tag matches (if skill has tags via tools array)
-    const tags = skill.tools ?? []
-    for (const tag of tags) {
-      if (tag.toLowerCase().includes(queryLower)) {
-        score += 20
-        matchedFields.push('tag')
-      }
-    }
-
-    // Boost by usage
-    const usage = usageStats.get(name)
+    const usage = usageStats.get(entry.skill.name)
     if (usage) {
-      score += Math.min(usage.useCount * 2, 20)
-      // Boost by success rate
-      score += Math.round(usage.successRate * 10)
+      score += Math.min(usage.useCount * 0.05, 0.20)
+      score += usage.successRate * 0.10
+      if (usage.useCount > 0) matchedFields.push('usage')
     }
 
-    if (score > 0) {
-      results.push({ skill, score, matchedFields })
+    if (score >= DISPLAY_MIN_SCORE) {
+      results.push({ skill: entry.skill, score, matchedFields })
     }
   }
 

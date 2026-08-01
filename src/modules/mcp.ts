@@ -21,12 +21,20 @@
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../core/module.js'
 import type { Tool } from '../core/types.js'
 import { McpStdioClient, type McpServerConfig } from '../core/mcpClient.js'
+import { McpHttpClient } from '../core/mcpHttpClient.js'
 import { McpToolAdapter } from '../tools/mcpToolAdapter.js'
+
+interface McpClient {
+  connect(): Promise<void>
+  close(): Promise<void>
+  listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>
+  callTool(name: string, args: Record<string, unknown>): Promise<unknown>
+}
 
 export class McpModule implements AgentModule {
   readonly name = 'mcp'
 
-  private clients: McpStdioClient[] = []
+  private clients: McpClient[] = []
 
   async boot(ctx: ModuleBootContext): Promise<ModuleBootResult> {
     const servers = ctx.config.mcp?.servers ?? []
@@ -35,22 +43,29 @@ export class McpModule implements AgentModule {
     const tools: Tool[] = []
     for (const server of servers) {
       try {
-        const client = new McpStdioClient(server)
+        const client = this.createClient(server)
         await client.connect()
         const toolInfos = await client.listTools()
         this.clients.push(client)
         for (const info of toolInfos) {
-          tools.push(new McpToolAdapter(server.name, info, client))
+          tools.push(new McpToolAdapter(server.name, info, client as unknown as McpStdioClient))
         }
       } catch (err) {
-        // Isolate failures: warn and continue. Never block boot.
+        const detail = server.type === 'http' ? (server.url ?? '') : (server.command ?? []).join(' ')
         process.stderr.write(
-          `[mcp] failed to connect server "${server.name}" (${server.command.join(' ')}): ${(err as Error).message}\n`,
+          `[mcp] failed to connect server "${server.name}" (${detail}): ${(err as Error).message}\n`,
         )
       }
     }
 
     return tools.length > 0 ? { tools } : {}
+  }
+
+  private createClient(server: McpServerConfig): McpClient {
+    if (server.type === 'http') {
+      return new McpHttpClient(server)
+    }
+    return new McpStdioClient(server)
   }
 
   /**

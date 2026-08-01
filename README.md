@@ -30,6 +30,42 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 - Session 加载错误按损坏、截断、schema、权限和消息格式分类，并保留上一版 `.bak`。
 - 包管理、锁文件、CI、安装脚本和验收命令统一为 pnpm。
 
+## v0.5.1 — 从 Claude Code 借鉴的能力（5 Round 收尾）
+
+参照 `docs/comparison/claude-code-vs-ovolv999.md` 的差距分析，我们借鉴了 Claude Code 5 大能力。按"借鉴为主、创新为辅、保持我们更强项"原则实施：
+
+| 借鉴 | Round | 文档 |
+|---|---|---|
+| **TF-IDF 工具检索 + Defer 加载** (`search_extra_tools`) | R1 | [ADR-008](docs/ADR/008-tfidf-tool-search.md) · [TOOL-SEARCH.md](docs/TOOL-SEARCH.md) |
+| **Hook 协议** (PreToolUse / PostToolUse / UserPromptSubmit 等 9 种事件,JSON stdin/stdout) | R2 | [ADR-009](docs/ADR/009-hook-protocol.md) · [HOOKS.md](docs/HOOKS.md) |
+| **7 种 Permission Modes** (default / acceptEdits / plan / auto / bypassPermissions / dontAsk / bubble) | R3 + R5 | [PERMISSION-MODES.md](docs/PERMISSION-MODES.md) |
+| **Sandbox/Bubble 模式** (macOS sandbox-exec + Linux Landlock helper) | R3 + R4 + R5 | [SANDBOX.md](docs/SANDBOX.md) |
+| **ACP WebSocket 传输** (`--acp-ws --port 8765`) + **MCP HTTP + OAuth PKCE** + **Daemon 长会话** | R4 + R5 + R6 | [ACP-WS.md](docs/ACP-WS.md) · [MCP-OAUTH.md](docs/MCP-OAUTH.md) · [DAEMON.md](docs/DAEMON.md) |
+| **Anthropic 原生适配器** (zero-deps fetch + SSE,支持 thinking + cache beta headers) | R3 | [ADR-010](docs/ADR/010-anthropic-adapter.md) |
+| **LSP 集成** (`lsp` tool: definition / references / hover / documentSymbol) | R3 + R5 | [LSP.md](docs/LSP.md) |
+
+### 我们保持更强(借鉴原则中的"用我们自己的")
+
+下列是 ovolv999 自有的反假成功纵深机制,**不替换**为 Claude Code 等价物:
+
+- **DONE.flag 抗伪造**(ADR-007)— nonce + checkpoint 双路径绑定,Claude Code 没等价机制
+- **7 态完成契约 + 确定性 Reviewer** — 比 Claude Code "模型说 done = done" 严格
+- **Internal Control Messages(10+ 类)** — 与 ControlMessageLog 集成,绝不污染用户历史
+- **Claim R/W/X 调度** — 比 `isConcurrencySafe: boolean` 粒度细
+- **Capability-first Agent Tiers**(6 角色 × 2 tier)— Claude Code 是 2 态 coordinator/worker
+
+### 审计记录(变更追溯)
+
+每次借鉴都写 `docs/change/round-N-*.md`,记录新文件、修改文件、不在范围、风险、验证方式。
+
+### 5 Round 收尾原则
+
+- **不重复造轮子**:成熟的工具直接借用(`fs.watch` 应替换我们的 polling watcher,但我们没装,所以改注释)
+- **借鉴为主,创新为辅**:借鉴 ~80%,创新 ~20%(指纹规避)
+- **架构/UX/模块设计 直接抄**:协议、UX 模式可借鉴
+
+测试增量:**4744 / 4744 pass**(从 4501 起 +243 个),5 依赖约束保持。
+
 ### v0.5 Role-aware Multi-Agent
 
 主 Agent 可以保持顶级模型，现有 `AgentTool` 创建子 Agent 时按能力角色选择独立模型 Profile：

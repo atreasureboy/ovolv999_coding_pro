@@ -20,6 +20,9 @@
 import type { ToolContext, ToolResult, IHookRunner } from '../types.js'
 import type { PermissionManager } from '../permissionSystem.js'
 import { classifyCommandRisk } from '../riskClassifier.js'
+import { gateByPermissionMode } from './permissionModeGate.js'
+import { evaluateDefaultGlobRule, sessionApprovalCache, extractPrimaryArg } from '../permissionRules.js'
+import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
 import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
@@ -48,10 +51,19 @@ export interface ToolExecutorDeps {
   notifyToolCall: NotifyToolCall
   hookRunner?: IHookRunner
   eventEmitter?: RunEventEmitter
+  /** R11: emit one permission_decision event per layer decision. */
+  eventLog?: EventLog
   /** Phase 4: records every tool result for stall detection. */
   progressMonitor?: ProgressMonitor
   resolveProgressMonitor?: (context: ToolContext) => ProgressMonitor | undefined
   renderer: Renderer
+  /**
+   * R5: hook additionalContext sink. Wired by the coordinator to
+   * append `hook_additional_context` messages to the per-run
+   * ControlMessageLog so the next LLM call sees them.
+   * Optional — absent means hooks' additionalContext is dropped.
+   */
+  appendHookContext?: (toolName: string, hookName: string, context: string) => void
 }
 
 export class ToolExecutor {
@@ -69,8 +81,23 @@ export class ToolExecutor {
     planMode: boolean,
     turnNumber: number,
   ): Promise<ToolResult> {
-    const { toolRegistry, toolPolicy, permissionManager, renderer, eventEmitter } = this.deps
+    const { toolRegistry, toolPolicy, permissionManager, renderer, eventEmitter, eventLog } = this.deps
     const allTools = toolRegistry.getAll()
+
+    // R11: helper to emit a permission_decision event. Always best-
+    // effort — never block the tool path on a log failure.
+    const recordDecision = (layer: 'mode_gate' | 'glob_engine' | 'permission_manager' | 'session_approval' | 'hook', outcome: 'allow' | 'deny' | 'ask', reason: string, ruleId?: string): void => {
+      if (!eventLog) return
+      eventLog.append('permission_decision', layer, {
+        callId,
+        tool: toolName,
+        primaryArg: extractPrimaryArg(input),
+        mode: context.permissionMode,
+        outcome,
+        reason,
+        ruleId: ruleId ?? null,
+      })
+    }
 
     const tool = toolRegistry.get(toolName)
     if (!tool) {
@@ -93,42 +120,154 @@ export class ToolExecutor {
       return result
     }
 
-    // Permission check
-    const isDangerous =
-      toolName === 'Bash' && typeof input.command === 'string'
-        ? classifyCommandRisk(input.command) === 'dangerous'
-        : false
-    const permission = permissionManager.check(toolName, input, isDangerous)
-    if (permission === 'deny') {
+    // R5: Permission mode gating — coarse knob before permissionManager.
+    // mode 'plan' is already enforced by toolPolicy above (planMode=true).
+    const modeGated = gateByPermissionMode(context.permissionMode, toolName)
+    if (modeGated === 'deny') {
+      recordDecision('mode_gate', 'deny', `mode '${context.permissionMode}' denies ${toolName}`)
       const result: ToolResult = {
-        content: `Permission denied for ${toolName}. Current mode: ${permissionManager.formatMode()}`,
+        content: `Permission mode '${context.permissionMode}' denies ${toolName}`,
         isError: true,
       }
       eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
       return result
     }
-    if (permission === 'ask') {
-      if (this.deps.requestPermission) {
-        const riskLevel = isDangerous ? 'dangerous' : 'needs-approval'
-        const permResult = await this.deps.requestPermission(toolName, input, riskLevel)
+    if (modeGated === 'allow') {
+      recordDecision('mode_gate', 'allow', `mode '${context.permissionMode}' allows ${toolName}`)
+    }
+
+    // R9.2: Glob-engine fine-grained rules. Sits BETWEEN the coarse mode
+    // gate and the permissionManager. Deny WINS over mode (defense in
+    // depth — the user said "don't rm -rf", we don't rm -rf regardless
+    // of mode). Allow skips the manager. Ask falls through to the
+    // manager. Priority is honored via the rule order in
+    // DEFAULT_PERMISSION_CONFIG.
+    const globResult = evaluateDefaultGlobRule(toolName, input)
+    if (globResult.decision === 'deny') {
+      recordDecision('glob_engine', 'deny', globResult.reason, globResult.matchedRule?.id)
+      const result: ToolResult = {
+        content: `Permission rule denied: ${globResult.reason}`,
+        isError: true,
+      }
+      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+      return result
+    }
+    if (globResult.decision === 'allow') {
+      recordDecision('glob_engine', 'allow', globResult.reason, globResult.matchedRule?.id)
+    }
+    // If the glob rule explicitly allows OR the user has session-approved
+    // this pattern, skip the permission manager entirely.
+    const sessionApproved = sessionApprovalCache.isApproved(toolName, extractPrimaryArg(input))
+    if (globResult.decision === 'allow' || sessionApproved) {
+      if (sessionApproved) {
+        recordDecision('session_approval', 'allow', 'session-scoped approval cache')
+      }
+      // explicit glob allow OR session approval — execute without prompt
+    } else if (modeGated === 'allow') {
+      // mode explicitly allows this tool — skip permission check
+      // fall through to tool execution
+    } else {
+      // Permission check
+      const isDangerous =
+        toolName === 'Bash' && typeof input.command === 'string'
+          ? classifyCommandRisk(input.command) === 'dangerous'
+          : false
+      const permission = permissionManager.check(toolName, input, isDangerous)
+      if (permission === 'deny') {
+        recordDecision('permission_manager', 'deny', `mode '${permissionManager.formatMode()}' denies for ${toolName}`)
+        const result: ToolResult = {
+          content: `Permission denied for ${toolName}. Current mode: ${permissionManager.formatMode()}`,
+          isError: true,
+        }
+        eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+        return result
+      }
+      if (permission === 'ask') {
+        recordDecision('permission_manager', 'ask', 'mode suggests ask')
+      }
+      if (permission === 'ask') {
+        if (this.deps.requestPermission) {
+          const riskLevel = isDangerous ? 'dangerous' : 'needs-approval'
+          const permResult = await this.deps.requestPermission(toolName, input, riskLevel)
+          if (!permResult.approved) {
+            const feedback = permResult.feedback?.trim()
+            const result: ToolResult = {
+              content: feedback
+                ? `Permission denied by user for ${toolName}. Feedback: ${feedback}`
+                : `Permission denied by user for ${toolName}.`,
+              isError: true,
+            }
+            eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+            return result
+          }
+        } else {
+          renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
+        }
+      }
+    } // end of permission check branch
+
+    // Phase 2: Pre-tool hook with outcome (allow/deny/modify/context).
+    // If the runner implements runPreToolUse, prefer it over the legacy
+    // runPreToolCall (which is fire-and-forget observation only). Legacy
+    // runner path is preserved for back-compat — when no runPreToolUse
+    // is defined, fire the legacy form for telemetry and continue.
+    const hookOutcomes = this.deps.hookRunner?.runPreToolUse
+      ? await this.deps.hookRunner.runPreToolUse(toolName, input, context.signal ?? new AbortController().signal)
+      : null
+    if (hookOutcomes) {
+      const deny = hookOutcomes.find((o) => o.decision === 'deny')
+      if (deny) {
+        const reason = deny.reason ?? deny.error ?? `Denied by hook ${deny.hookName}`
+        const result: ToolResult = {
+          content: `Tool "${toolName}" denied by hook (${deny.hookName}): ${reason}`,
+          isError: true,
+        }
+        eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+        return result
+      }
+      const ask = hookOutcomes.find((o) => o.decision === 'ask')
+      if (ask && this.deps.requestPermission) {
+        const permResult = await this.deps.requestPermission(toolName, input, 'needs-approval')
         if (!permResult.approved) {
-          const feedback = permResult.feedback?.trim()
+          const reason = permResult.feedback?.trim() ?? ask.reason ?? 'hook asked for approval'
           const result: ToolResult = {
-            content: feedback
-              ? `Permission denied by user for ${toolName}. Feedback: ${feedback}`
-              : `Permission denied by user for ${toolName}.`,
+            content: `Tool "${toolName}" denied by hook (${ask.hookName}): ${reason}`,
             isError: true,
           }
           eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
           return result
         }
-      } else {
-        renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
       }
+      const firstWithUpdate = hookOutcomes.find((o) => o.updatedInput)
+      if (firstWithUpdate?.updatedInput) {
+        input = firstWithUpdate.updatedInput
+      }
+      // additionalContext is buffered in ControlMessageLog (next LLM call
+      // renders it then clears). Engine injects via toolContext hookContext.
+      const hookContext = hookOutcomes
+        .map((o) => o.additionalContext)
+        .filter((s): s is string => typeof s === 'string' && s.length > 0)
+        .join('\n\n')
+      if (hookContext) {
+        // R5: write each hook's additionalContext to ControlMessageLog
+        // so the next LLM round sees it. The legacy context.hookContext
+        // field is kept as a fallback for tools that read it directly.
+        ;(context as { hookContext?: string }).hookContext =
+          ((context as { hookContext?: string }).hookContext ?? '') + hookContext
+        if (this.deps.appendHookContext) {
+          for (const o of hookOutcomes) {
+            if (o.additionalContext && o.additionalContext.length > 0) {
+              this.deps.appendHookContext(toolName, o.hookName, o.additionalContext)
+            }
+          }
+        }
+      }
+    } else if (this.deps.hookRunner) {
+      const legacyResults = await Promise.resolve(
+        this.deps.hookRunner.runPreToolCall(toolName, input),
+      )
+      void legacyResults
     }
-
-    // Pre-tool hook
-    this.deps.hookRunner?.runPreToolCall(toolName, input)
     eventEmitter?.emit({ type: 'TOOL_STARTED', callId, toolName, input })
 
     let result: ToolResult
@@ -163,13 +302,52 @@ export class ToolExecutor {
         content: `Tool execution error: ${(err as Error).message || String(err)}`,
         isError: true,
       }
+      // PostToolUseFailure hook — best-effort, fires only on exception path.
+      if (this.deps.hookRunner?.runPostToolCall) {
+        try {
+          const failureResults = await Promise.resolve(
+            this.deps.hookRunner.runPostToolCall(toolName, (err as Error).message ?? '', true),
+          )
+          void failureResults
+        } catch { /* best-effort */ }
+      }
     }
 
     // Individual tool result truncation (aggregate budget is scheduler's job)
     result = { ...result, content: this.deps.contextManager.truncateToolResult(result.content) }
 
-    // Post-tool hook
-    this.deps.hookRunner?.runPostToolCall(toolName, result.content, result.isError)
+    // Post-tool hook with additionalContext outcome (Phase 2).
+    // additionalContext is buffered for the next LLM call; never
+    // pollutes user-visible history.
+    if (this.deps.hookRunner?.runPostToolUse) {
+      const postOutcomes = await this.deps.hookRunner.runPostToolUse(
+        toolName,
+        result.content,
+        result.isError,
+        context.signal ?? new AbortController().signal,
+      )
+      const ctx = postOutcomes
+        .map((o) => o.additionalContext)
+        .filter((s): s is string => typeof s === 'string' && s.length > 0)
+        .join('\n\n')
+      if (ctx) {
+        // R5: write each post-hook's additionalContext to ControlMessageLog.
+        ;(context as { hookContext?: string }).hookContext =
+          ((context as { hookContext?: string }).hookContext ?? '') + ctx
+        if (this.deps.appendHookContext) {
+          for (const o of postOutcomes) {
+            if (o.additionalContext && o.additionalContext.length > 0) {
+              this.deps.appendHookContext(toolName, o.hookName, o.additionalContext)
+            }
+          }
+        }
+      }
+    } else if (this.deps.hookRunner) {
+      const legacyResults = await Promise.resolve(
+        this.deps.hookRunner.runPostToolCall(toolName, result.content, result.isError),
+      )
+      void legacyResults
+    }
     eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)

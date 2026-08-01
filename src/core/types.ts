@@ -103,6 +103,12 @@ export interface ToolMetadata {
   longRunning?: boolean
   /** Tool may access network resources. */
   requiresNetwork?: boolean
+  /** Search hint — 1-line capability phrase for the search_extra_tools keyword index. 3-10 words, no trailing period. */
+  searchHint?: string
+  /** Mark tool as deferred: schema not exposed in system prompt unless discovered via search_extra_tools. */
+  shouldDefer?: boolean
+  /** Override: even when shouldDefer is set, always include schema. */
+  alwaysLoad?: boolean
   /**
    * GAP-D: Per-input resource claims (runtime contract §五). When provided,
    * the engine can route the tool's execution through the
@@ -135,7 +141,12 @@ export interface Tool {
 
 export interface ToolContext {
   cwd: string
-  permissionMode: 'auto' | 'ask' | 'deny'
+  /**
+   * Round 5: extended permission mode (7 states). Phase 0's 3-state
+   * union is kept as a subtype alias for back-compat with any tools
+   * that pattern-match against `'auto' | 'ask' | 'deny'` directly.
+   */
+  permissionMode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
   /** Unified permission manager used by the engine before tool execution. */
   permissionManager?: PermissionManager
   /** AbortSignal — tools should honour this to support Ctrl+C cancellation */
@@ -241,6 +252,18 @@ export interface ToolContext {
    * tools can't accidentally alter the live array.
    */
   getMessages?: () => OpenAIMessage[]
+  /**
+   * Tool discovery — returns the current registered tool list for tools
+   * that need to search/index across all tools (e.g. search_extra_tools).
+   * Provided by the engine; absent in sub-agents / tests.
+   */
+  getRegisteredTools?: () => Tool[]
+  /**
+   * Mark a tool as discovered this session — its schema will then be
+   * exposed by ToolPolicy's defer filter even if originally deferred.
+   * Wired by boot.ts to the engine's ToolRegistry.markDiscovered.
+   */
+  markToolDiscovered?: (name: string) => void
 }
 
 // ── AskUserQuestion types (shared between tool, context, and REPL) ──────────
@@ -293,23 +316,71 @@ export type HookErrorCode =
   | 'unknown'
 
 /**
+ * Phase 2 (hook protocol): outcome from a PreToolUse hook.
+ * The engine reads decision / updatedInput / additionalContext from
+ * these to gate, mutate, or annotate tool invocations.
+ */
+export interface PreToolUseOutcome {
+  decision: 'allow' | 'deny' | 'ask'
+  reason?: string
+  updatedInput?: Record<string, unknown>
+  additionalContext?: string
+  hookName: string
+  error?: string
+}
+
+/**
+ * Phase 2 (hook protocol): outcome from a PostToolUse hook.
+ * The engine reads additionalContext from these to inject into
+ * the next LLM call (without polluting user history).
+ */
+export interface PostToolUseOutcome {
+  additionalContext?: string
+  hookName: string
+  error?: string
+}
+
+/**
  * Interface for hook runners — decouples engine from config layer.
  * Hooks are best-effort: implementations must never throw. Each method
  * returns the structured outcome of every hook entry that fired so callers
  * (and tests) can inspect success or failure without aborting the agent loop.
+ *
+ * Phase 2 (hook protocol): runners MAY implement runPreToolUse and
+ * runPostToolUse to participate in the outcome-driven control loop.
+ * When both forms exist, ToolExecutor prefers the outcome form and
+ * uses the legacy form for telemetry only.
+ *
+ * Legacy methods runPreToolCall / runPostToolCall / runUserPromptSubmit
+ * may return either sync or async — the type uses `Promise | T` to
+ * accept both. Existing sync implementations keep working unchanged.
  */
 export interface IHookRunner {
-  runPreToolCall(toolName: string, input: Record<string, unknown>): HookResult[]
-  runPostToolCall(toolName: string, result: string, isError: boolean): HookResult[]
-  runUserPromptSubmit(prompt: string): HookResult[]
+  runPreToolCall(toolName: string, input: Record<string, unknown>): HookResult[] | Promise<HookResult[]>
+  runPostToolCall(toolName: string, result: string, isError: boolean): HookResult[] | Promise<HookResult[]>
+  runUserPromptSubmit(prompt: string): HookResult[] | Promise<HookResult[]>
   /** Called when the engine encounters an unrecoverable error */
-  runOnError?(error: Error, context: { turnNumber: number; lastToolName?: string }): HookResult[]
+  runOnError?(error: Error, context: { turnNumber: number; lastToolName?: string }): HookResult[] | Promise<HookResult[]>
   /** Called when a run completes (any reason: stop, max_iterations, error, interrupted) */
-  runOnComplete?(result: TurnResult): HookResult[]
+  runOnComplete?(result: TurnResult): HookResult[] | Promise<HookResult[]>
   /** v0.3.4: Called with the full TurnOutcome (carries completion.status) */
-  runOnCompleteWithOutcome?(result: TurnResult, outcome?: TurnOutcome): HookResult[]
+  runOnCompleteWithOutcome?(result: TurnResult, outcome?: TurnOutcome): HookResult[] | Promise<HookResult[]>
   /** Called after context compaction (auto-summary of older messages) */
-  runOnContextOverflow?(tokensBefore: number, tokensAfter: number): HookResult[]
+  runOnContextOverflow?(tokensBefore: number, tokensAfter: number): HookResult[] | Promise<HookResult[]>
+  /** Phase 2: PreToolUse hook with outcome (allow/deny/modify/context). Optional — absent = legacy runner. */
+  runPreToolUse?(toolName: string, input: Record<string, unknown>, signal: AbortSignal): Promise<PreToolUseOutcome[]>
+  /** Phase 2: PostToolUse hook with additionalContext outcome. Optional. */
+  runPostToolUse?(toolName: string, content: string, isError: boolean, signal: AbortSignal): Promise<PostToolUseOutcome[]>
+  /** R7: SessionStart — fires once at engine boot. Optional. */
+  runSessionStart?(source: 'startup' | 'resume' | 'clear' | 'compact'): Promise<void>
+  /** R7: SessionEnd — fires once at engine dispose. Optional. */
+  runSessionEnd?(reason: string): Promise<void>
+  /** R7: Stop — fires when the model decides to stop. Optional. */
+  runStop?(reason: string): Promise<void>
+  /** R7: PreCompact — fires before context window compaction. Optional. */
+  runPreCompact?(trigger: 'auto' | 'manual'): Promise<void>
+  /** R7: PostCompact — fires after context window compaction. Optional. */
+  runPostCompact?(trigger: 'auto' | 'manual'): Promise<void>
 }
 
 export interface EngineConfig {
@@ -334,7 +405,8 @@ export interface EngineConfig {
   models?: { profiles: unknown[]; routing?: { enabled?: boolean; longContextThreshold?: number; failureEscalationThreshold?: number } }
   maxIterations: number
   cwd: string
-  permissionMode: 'auto' | 'ask' | 'deny'
+  /** Round 5: extended permission mode (7 states). */
+  permissionMode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
   /** Unified permission manager; if omitted the engine creates one from permissionMode. */
   permissionManager?: PermissionManager
   systemPrompt?: string

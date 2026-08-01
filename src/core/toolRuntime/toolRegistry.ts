@@ -21,6 +21,7 @@ import type { Renderer } from '../../ui/renderer.js'
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>()
+  private readonly discovered = new Set<string>()
   private readonly renderer?: Renderer
 
   constructor(renderer?: Renderer) {
@@ -53,7 +54,8 @@ export class ToolRegistry {
 
   /**
    * Reset the registry to base + module tools. Called during boot when
-   * module tools are re-collected each turn.
+   * module tools are re-collected each turn. Discovery set is preserved
+   * across resets so the LLM's prior discoveries stay valid.
    */
   reset(baseTools: Tool[], moduleTools: Tool[] = []): void {
     this.tools.clear()
@@ -74,5 +76,23 @@ export class ToolRegistry {
   /** Number of registered tools. */
   get size(): number {
     return this.tools.size
+  }
+
+  /**
+   * Mark a tool as discovered this session — its schema will be exposed
+   * in the LLM request even if it was originally deferred. Idempotent.
+   */
+  markDiscovered(name: string): void {
+    this.discovered.add(name)
+  }
+
+  /** Get the read-only discovered set (used by ToolPolicy defer filter). */
+  getDiscovered(): ReadonlySet<string> {
+    return this.discovered
+  }
+
+  /** Clear the discovery cache (rare — e.g. session reset). */
+  clearDiscovered(): void {
+    this.discovered.clear()
   }
 }

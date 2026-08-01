@@ -50,6 +50,7 @@ import { globalModuleRegistry } from '../core/moduleRegistry.js'
 import { MemoryModule } from '../modules/memory.js'
 import { CriticModule } from '../modules/critic.js'
 import { WorkspaceModule } from '../modules/workspace.js'
+import { WorkspaceWatcherModule } from '../modules/workspaceWatcher.js'
 import { ReflectionModule } from '../modules/reflection.js'
 import { McpModule } from '../modules/mcp.js'
 import { detectProjectContext, formatProjectContext } from '../config/projectContext.js'
@@ -262,6 +263,11 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   globalModuleRegistry.register('reflection', (ctx) =>
     new ReflectionModule(ctx.client, ctx.model, ctx.config.semanticMemory!, ctx.config))
   globalModuleRegistry.register('mcp', () => new McpModule())
+  // P2.2: workspace_watcher turns the R8 chokidar-based WorkspaceWatcher
+  // into a real runtime capability. It watches the cwd and user skills
+  // directory, invalidates the toolSearch cache on file change, and
+  // records `workspace_change` events to the EventLog.
+  globalModuleRegistry.register('workspace_watcher', () => new WorkspaceWatcherModule())
 
   const maxCtxTokens = process.env.OVOGO_MAX_CONTEXT_TOKENS
     ? parseInt(process.env.OVOGO_MAX_CONTEXT_TOKENS, 10)
@@ -289,6 +295,9 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     inkRendererInstance = new InkRendererClass(uiStore)
   }
 
+  const resolvedPermissionMode = (projectConfig?.permissionMode ?? 'auto') as
+    'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
+
   const config: EngineConfig = {
     model: projectConfig?.model ?? opts.model,
     apiKey: opts.apiKey,
@@ -301,7 +310,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     models: settings.models,
     maxIterations: projectConfig?.maxIterations ?? opts.maxIterations,
     cwd,
-    permissionMode: projectConfig?.permissionMode ?? 'auto',
+    permissionMode: resolvedPermissionMode,
     permissionManager,
     hookRunner,
     systemPrompt: projectConfig?.systemPrompt
@@ -379,6 +388,15 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     },
     requestPermission: uiStore
       ? async (toolName, input, riskLevel) => {
+          // R9.3: dontAsk mode NEVER shows a dialog — auto-approve so
+          // the headless / automation workflows don't hang on a prompt.
+          // bypassPermissions mode still goes through the dialog so the
+          // user sees what's happening (audit / log purposes); the user
+          // can still approve. The real difference is "show another
+          // prompt" vs "trust model + hooks".
+          if (resolvedPermissionMode === 'dontAsk') {
+            return { approved: true, feedback: 'auto-approved (dontAsk mode)' }
+          }
           const preview = toolName === 'Bash' && typeof input.command === 'string'
             ? input.command
             : JSON.stringify(input).slice(0, 100)

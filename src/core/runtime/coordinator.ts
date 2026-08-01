@@ -66,6 +66,7 @@ import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
 import type { TaskGraphStore } from './taskGraphStore.js'
 import { ControlMessageLog } from './internalControlMessage.js'
+import { collectDeferredToolNames } from './deferredToolsReminder.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
 import {
   type RunScopedRuntimeContext,
@@ -245,6 +246,19 @@ export class RuntimeCoordinator {
 
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
 
+    // R7: SessionStart hook (best-effort, fires once at run start).
+    if (config.hookRunner?.runSessionStart) {
+      try {
+        await config.hookRunner.runSessionStart('startup')
+      } catch { /* best-effort */ }
+    }
+
+    if (config.hookRunner?.runUserPromptSubmit) {
+      try {
+        await config.hookRunner.runUserPromptSubmit(userMessage)
+      } catch { /* best-effort */ }
+    }
+
     // ── ExecutionRun tracking (GAP-C) ──
     // If a registry is wired in, mint a `kind='turn'` run that
     // reflects this turn's lifecycle. The registry is optional so
@@ -260,6 +274,16 @@ export class RuntimeCoordinator {
           parentRunId: effectiveParentRunId,
         }).runId
       : undefined
+    if (!runId) {
+      // R5 fallback: when no registry, mint a local id so tools can
+      // resolve the per-run ControlMessageLog. Same prefix as
+      // RunScopedRuntimeContextStore.create() for parity.
+      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      this.deps.runContextStore!.create(localId, { taskKind: 'informational' })
+      this.deps.sharedState.activeRunId = localId
+    } else {
+      this.deps.sharedState.activeRunId = runId
+    }
     if (runId && registry) {
       try {
         registry.transition(runId, 'preparing', { phase: 'boot' })
@@ -527,6 +551,24 @@ export class RuntimeCoordinator {
     // This ensures all components share the same control-message channel.
     const controlMessageLog = runContext?.controlMessages ?? new ControlMessageLog()
 
+    // R6: inject `<available-deferred-tools>` so the model knows it can
+    // call search_extra_tools("select:<name>") to load them. Borrowed
+    // from claude-code's deferred-tool system reminder. Deduped via
+    // controlMessageLog.compact() — emitting the same set twice is a no-op.
+    try {
+      const deferredNames = collectDeferredToolNames(this.deps.toolRegistry ?? null)
+      if (deferredNames.length > 0) {
+        const alreadyAnnounced = controlMessageLog.peek().some(
+          (m) => m.kind === 'available_deferred_tools'
+            && m.tools.length === deferredNames.length
+            && m.tools.every((t, i) => t === deferredNames[i]),
+        )
+        if (!alreadyAnnounced) {
+          controlMessageLog.append({ kind: 'available_deferred_tools', tools: deferredNames })
+        }
+      }
+    } catch { /* best-effort */ }
+
     try {
       while (!isTerminal(state)) {
         switch (state.kind) {
@@ -594,7 +636,15 @@ export class RuntimeCoordinator {
           }
 
           case 'budget_check': {
+            // R7: PreCompact fires before context compaction (auto/manual).
+            const compactTrigger: 'auto' | 'manual' = 'auto'
+            if (config.hookRunner?.runPreCompact) {
+              try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
+            }
             await this.deps.contextManager.evaluateBudget({ messages, toolDefs, abortSignal: turnAbortController.signal })
+            if (config.hookRunner?.runPostCompact) {
+              try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
+            }
             state = transitionQueryState(state, { type: 'continue' })
             break
           }
@@ -897,7 +947,7 @@ export class RuntimeCoordinator {
         result = { stopped: true, reason: 'interrupted', output: computeFinalOutput() }
         eventEmitter.emit({ type: 'RUN_CANCELLED', reason: 'user/system cancelled' } as never)
       } else {
-      config.hookRunner?.runOnError?.(err as Error, {
+      void config.hookRunner?.runOnError?.(err as Error, {
         turnNumber: errorIteration,
         lastToolName,
       })
@@ -1209,6 +1259,11 @@ export class RuntimeCoordinator {
     const terminalStatus = status
     eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
 
+    // R7: Stop hook fires on stop_sequence (model decides to stop).
+    if (result.reason === 'stop_sequence' && config.hookRunner?.runStop) {
+      try { await config.hookRunner.runStop('model_stopped') } catch { /* best-effort */ }
+    }
+
     await this.deps.moduleManager.runComplete({
       cwd: config.cwd,
       sessionDir: config.sessionDir,
@@ -1218,9 +1273,9 @@ export class RuntimeCoordinator {
       eventLog,
     })
 
-    config.hookRunner?.runOnComplete?.(result)
+    void config.hookRunner?.runOnComplete?.(result)
     // v0.3.4 (durable supervisor contract §Phase 1): Hook receives the full TurnOutcome
-    config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
+    void config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
 
     return { result, newHistory: messages, outcome }
     } finally {

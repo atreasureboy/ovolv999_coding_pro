@@ -118,6 +118,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     planMode,
     executionProfile?.excludedTools,
     executionProfile?.taskKind,
+    toolRegistry.getDiscovered(),
   )
 
   // ── Per-turn AbortController ──
@@ -173,6 +174,8 @@ export async function boot(params: BootParams): Promise<BootResult> {
     snipMessages: (keepRecent: number, reason?: string) =>
       contextManager.applySnip(messages, keepRecent, reason),
     getMessages: () => messages.map(m => ({ ...m })),
+    getRegisteredTools: () => toolRegistry.getAll(),
+    markToolDiscovered: (name: string) => toolRegistry.markDiscovered(name),
   }
 
   eventEmitter?.emit({

@@ -31,6 +31,8 @@ export type PermissionMode =
   | 'plan'
   | 'auto'
   | 'bypassPermissions'
+  | 'dontAsk'
+  | 'bubble'
 
 export type PermissionProfile = 'safe' | 'standard' | 'autonomous'
 
@@ -70,12 +72,18 @@ const CYCLE_ORDER: PermissionMode[] = [
   'plan',
   'auto',
   'bypassPermissions',
+  'dontAsk',
+  'bubble',
 ]
 
 export function getNextPermissionMode(current: PermissionMode): PermissionMode {
   const idx = CYCLE_ORDER.indexOf(current)
   if (idx === -1) return 'default'
   return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.length]
+}
+
+export function isValidPermissionMode(value: string): value is PermissionMode {
+  return CYCLE_ORDER.includes(value as PermissionMode)
 }
 
 export function permissionModeLabel(mode: PermissionMode): string {
@@ -85,6 +93,8 @@ export function permissionModeLabel(mode: PermissionMode): string {
     case 'plan':              return 'Plan Mode'
     case 'auto':              return 'Auto'
     case 'bypassPermissions': return 'Bypass'
+    case 'dontAsk':           return 'Don\'t Ask'
+    case 'bubble':            return 'Bubble (Sandbox)'
   }
 }
 
@@ -95,6 +105,8 @@ export function permissionModeSymbol(mode: PermissionMode): string {
     case 'plan':              return '||'
     case 'auto':              return '>>>'
     case 'bypassPermissions': return '>>>>'
+    case 'dontAsk':           return '?!'
+    case 'bubble':            return '[][]'
   }
 }
 
@@ -105,7 +117,17 @@ export function permissionModeDescription(mode: PermissionMode): string {
     case 'plan':              return 'Read-only analysis (no writes/edits/bash)'
     case 'auto':              return 'Auto-approve everything except dangerous commands'
     case 'bypassPermissions': return 'Approve everything (use with caution)'
+    case 'dontAsk':           return 'No prompts: trust the model + hooks only'
+    case 'bubble':            return 'Shell commands run in OS-level sandbox'
   }
+}
+
+export function isSandboxMode(mode: PermissionMode): boolean {
+  return mode === 'bubble'
+}
+
+export function isBypassMode(mode: PermissionMode): boolean {
+  return mode === 'bypassPermissions' || mode === 'dontAsk'
 }
 
 // ── Mode → behavior resolution ──────────────────────────────────────────────

@@ -1,0 +1,216 @@
+/**
+ * lspTool — exposes LSP navigation methods (definition / references /
+ * hover / documentSymbol) to the LLM.
+ *
+ * Wire-up:
+ *   - Server config from ~/.ovogo/settings.json `lsp.servers[name]`
+ *     - command, args, cwd, env, fileExtensions
+ *   - First matching server (by file extension) handles the request
+ *   - LSP processes are spawned lazily on first request per server
+ *   - Each session creates its own LspClient (per-server)
+ *
+ * When no LSP server matches the file's extension, the tool returns
+ * an explanatory message — never crashes the turn.
+ */
+
+import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
+import { LspClient, pathToFileUri } from '../core/lsp/client.js'
+import { LSP_SYMBOL_KIND_NAMES } from '../core/lsp/protocol.js'
+import { str } from '../core/strings.js'
+import { homedir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+export interface LspServerConfig {
+  command: string
+  args?: string[]
+  cwd?: string
+  env?: Record<string, string>
+  fileExtensions?: string[]
+}
+
+export interface LspToolOptions {
+  /** Map of server name -> config. Loaded from settings.lsp.servers. */
+  servers: Record<string, LspServerConfig>
+}
+
+interface ServerState {
+  client: LspClient
+  initializedFor: Set<string>
+}
+
+export function loadLspServersFromSettings(): Record<string, LspServerConfig> {
+  const settingsPath = join(homedir(), '.ovogo', 'settings.json')
+  if (!existsSync(settingsPath)) return {}
+  try {
+    const raw = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      lsp?: { servers?: Record<string, LspServerConfig> }
+    }
+    return raw.lsp?.servers ?? {}
+  } catch {
+    return {}
+  }
+}
+
+export function findServerFor(uri: string, servers: Record<string, LspServerConfig>): { name: string; config: LspServerConfig } | null {
+  const ext = uri.match(/\.[a-zA-Z0-9]+$/)?.[0]?.toLowerCase()
+  if (!ext) return null
+  for (const [name, config] of Object.entries(servers)) {
+    if (config.fileExtensions?.some((e) => e.toLowerCase() === ext)) {
+      return { name, config }
+    }
+  }
+  return null
+}
+
+export function createLspTool(options: LspToolOptions): Tool {
+  const serverStates = new Map<string, ServerState>()
+
+  async function getOrInitServer(
+    name: string,
+    config: LspServerConfig,
+    cwd: string,
+  ): Promise<ServerState | { error: string }> {
+    const existing = serverStates.get(name)
+    if (existing && existing.initializedFor.has(cwd)) return existing
+    const client = new LspClient({
+      command: config.command,
+      args: config.args,
+      cwd: config.cwd ?? cwd,
+      env: config.env,
+    })
+    try {
+      const started = await client.start(pathToFileUri(cwd))
+      if (!started) {
+        return { error: `LSP server '${name}' failed to start (binary not found or spawn error)` }
+      }
+      const state: ServerState = existing ?? { client, initializedFor: new Set() }
+      state.initializedFor.add(cwd)
+      serverStates.set(name, state)
+      return state
+    } catch (err) {
+      return { error: `LSP server '${name}' failed to start: ${(err as Error).message}` }
+    }
+  }
+
+  return {
+    name: 'lsp',
+    metadata: { readOnly: true, concurrencySafe: false, searchHint: 'language server go to definition find references hover symbol' },
+    definition: {
+      type: 'function',
+      function: {
+        name: 'lsp',
+        description: `Language Server Protocol navigation. Use these to find code definitions, references, type info, and document symbols without reading every file. Configure LSP servers in ~/.ovogo/settings.json under 'lsp.servers'.
+
+Methods:
+  - definition: Find where a symbol is defined
+  - references: Find all uses of a symbol
+  - hover: Get type signature / docs for a position
+  - documentSymbol: List top-level symbols in a file
+
+Server is selected by file extension.`,
+        parameters: {
+          type: 'object',
+          properties: {
+            method: {
+              type: 'string',
+              enum: ['definition', 'references', 'hover', 'documentSymbol'],
+              description: 'Which LSP method to invoke',
+            },
+            uri: {
+              type: 'string',
+              description: 'File URI (e.g. file:///path/to/file.ts)',
+            },
+            line: {
+              type: 'number',
+              description: 'Zero-indexed line number (required for definition/references/hover)',
+            },
+            character: {
+              type: 'number',
+              description: 'Zero-indexed character offset on the line (required for definition/references/hover)',
+            },
+          },
+          required: ['method', 'uri'],
+        },
+      },
+    } satisfies ToolDefinition,
+
+    execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+      const method = str(input.method)
+      const uri = str(input.uri)
+      if (!method || !uri) {
+        return Promise.resolve({
+          content: 'Error: method and uri are required',
+          isError: true,
+        })
+      }
+
+      const serverEntry = findServerFor(uri, options.servers)
+      if (!serverEntry) {
+        return Promise.resolve({
+          content: `Error: no LSP server configured for ${uri}. Add one in ~/.ovogo/settings.json.`,
+          isError: true,
+        })
+      }
+
+      return (async () => {
+        const cwd = context.cwd
+        const initResult = await getOrInitServer(serverEntry.name, serverEntry.config, cwd)
+        if ('error' in initResult) {
+          return { content: initResult.error, isError: true }
+        }
+        const state = initResult
+        const line = typeof input.line === 'number' ? input.line : -1
+        const character = typeof input.character === 'number' ? input.character : -1
+        try {
+          switch (method) {
+            case 'definition': {
+              if (line < 0 || character < 0) return { content: 'Error: line and character required', isError: true }
+              const locations = await state.client.definition(uri, { line, character })
+              return {
+                content: locations.length === 0
+                  ? 'No definition found'
+                  : locations.map((l) => `${l.uri}:${l.range.start.line}:${l.range.start.character}`).join('\n'),
+                isError: false,
+              }
+            }
+            case 'references': {
+              if (line < 0 || character < 0) return { content: 'Error: line and character required', isError: true }
+              const locations = await state.client.references(uri, { line, character })
+              return {
+                content: locations.length === 0
+                  ? 'No references found'
+                  : locations.map((l) => `${l.uri}:${l.range.start.line}:${l.range.start.character}`).join('\n'),
+                isError: false,
+              }
+            }
+            case 'hover': {
+              if (line < 0 || character < 0) return { content: 'Error: line and character required', isError: true }
+              const hover = await state.client.hover(uri, { line, character })
+              if (!hover) return { content: 'No hover info', isError: false }
+              const content = typeof hover.contents === 'string'
+                ? hover.contents
+                : Array.isArray(hover.contents)
+                  ? hover.contents.map((c) => typeof c === 'string' ? c : c.value).join('\n')
+                  : hover.contents.value
+              return { content, isError: false }
+            }
+            case 'documentSymbol': {
+              const symbols = await state.client.documentSymbols(uri)
+              return {
+                content: symbols.length === 0
+                  ? 'No symbols'
+                  : symbols.map((s) => `${LSP_SYMBOL_KIND_NAMES[s.kind] ?? '?'}: ${s.name} @ ${s.location.uri}:${s.location.range.start.line}`).join('\n'),
+                isError: false,
+              }
+            }
+            default:
+              return { content: `Error: unknown method ${method}`, isError: true }
+          }
+        } catch (err) {
+          return { content: `LSP ${method} failed: ${(err as Error).message}`, isError: true }
+        }
+      })()
+    },
+  }
+}

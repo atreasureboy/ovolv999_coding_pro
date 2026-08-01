@@ -16,14 +16,27 @@ import { spawn, type ChildProcess } from 'child_process'
 export interface McpServerConfig {
   /** Logical name; used to namespace tool names (mcp__<name>__<tool>) */
   name: string
-  /** Transport type. v1 only supports 'stdio'. */
-  type: 'stdio'
-  /** Command vector: command[0] is the executable, rest are args. */
-  command: string[]
-  /** Optional env overrides merged onto process.env. */
+  /** Transport type. v0.5 supports 'stdio' + 'http' (with OAuth). */
+  type: 'stdio' | 'http'
+  /** stdio-only: Command vector: command[0] is the executable, rest are args. */
+  command?: string[]
+  /** http-only: server URL. */
+  url?: string
+  /** Optional HTTP headers (e.g. for static auth tokens). */
+  headers?: Record<string, string>
+  /** Optional env overrides merged onto process.env (stdio only). */
   env?: Record<string, string>
-  /** Optional working directory for the server process. */
+  /** Optional working directory for the server process (stdio only). */
   cwd?: string
+  /** http+oauth: OAuth config. When set, an Authorization: Bearer header is attached. */
+  oauth?: {
+    authorizationEndpoint: string
+    tokenEndpoint: string
+    clientId: string
+    clientSecret?: string
+    scope?: string
+    redirectUri: string
+  }
 }
 
 export interface McpToolInfo {
@@ -76,12 +89,16 @@ export class McpStdioClient {
   /** Spawn the server and run the MCP initialize handshake. */
   async connect(): Promise<void> {
     if (this.proc) return
-    if (this.server.command.length === 0) {
+    if (this.server.type !== 'stdio') {
+      throw new Error(`McpStdioClient cannot connect to non-stdio server "${this.server.name}"`)
+    }
+    const cmd = this.server.command ?? []
+    if (cmd.length === 0) {
       throw new Error(`MCP server "${this.server.name}": empty command`)
     }
 
     const env = { ...process.env, ...(this.server.env ?? {}) }
-    this.proc = spawn(this.server.command[0], this.server.command.slice(1), {
+    this.proc = spawn(cmd[0], cmd.slice(1), {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
       cwd: this.server.cwd,

@@ -19,6 +19,8 @@ import type { AgentConfig } from '../agentPresets.js'
 import { getToolDefinitions, findTool } from '../../tools/index.js'
 import { filterToolsForSubAgent } from '../agentToolFilter.js'
 import type { TaskKind } from '../runtime/taskIntent.js'
+import { isDeferredTool } from '../toolSearch.js'
+import { SEARCH_EXTRA_TOOLS_NAME } from '../../tools/searchExtraTools.js'
 
 const LEGACY_PLAN_MODE_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ExitPlanMode',
@@ -40,13 +42,23 @@ export class ToolPolicy {
   /**
    * Filter tool definitions for the LLM request.
    * Applies sub-agent allowlist (if agent config is set), plan mode,
-   * and the per-turn execution-profile exclusion set (v0.4.1 WS4).
+   * the per-turn execution-profile exclusion set (v0.4.1 WS4),
+   * and the deferred-tool filter (Phase 1: search_extra_tools).
+   *
+   * Defer filter:
+   *   - Tools marked shouldDefer are HIDDEN from the LLM schema unless
+   *     they have been explicitly discovered this session via
+   *     ToolRegistry.markDiscovered().
+   *   - search_extra_tools itself is ALWAYS exposed so the LLM can
+   *     discover deferred tools.
+   *   - Tools flagged alwaysLoad are never filtered out by defer logic.
    */
   getExposedDefinitions(
     allTools: Tool[],
     planMode: boolean,
     excludedTools?: string[],
     taskKind?: TaskKind,
+    discovered?: ReadonlySet<string>,
   ): ToolDefinition[] {
     let defs = getToolDefinitions(allTools)
 
@@ -76,6 +88,15 @@ export class ToolPolicy {
       const excludedSet = new Set(excludedTools)
       defs = defs.filter(t => !excludedSet.has(t.function.name))
     }
+
+    defs = defs.filter((t) => {
+      const tool = findTool(allTools, t.function.name)
+      if (!tool) return true
+      if (t.function.name === SEARCH_EXTRA_TOOLS_NAME) return true
+      if (tool.metadata?.alwaysLoad === true) return true
+      if (!isDeferredTool(tool)) return true
+      return discovered?.has(t.function.name) === true
+    })
 
     return defs
   }

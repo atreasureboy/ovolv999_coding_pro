@@ -264,3 +264,53 @@ export function createQuickConfig(
     })),
   }
 }
+
+// ── Convenience: Primary Arg Extraction ────────────────────────────────────
+
+/**
+ * Standard tool input fields that we treat as the "primary argument" for
+ * glob matching. Ordered by likelihood — first non-empty match wins.
+ *
+ *   Bash       → command
+ *   Read/Write/Edit → file_path / path / filepath
+ *   Glob/Grep  → pattern
+ *   Notebook   → notebook_path
+ */
+const PRIMARY_ARG_FIELDS = [
+  'command',
+  'file_path',
+  'filepath',
+  'path',
+  'pattern',
+  'query',
+  'notebook_path',
+  'url',
+] as const
+
+export function extractPrimaryArg(input: Record<string, unknown>): string {
+  for (const field of PRIMARY_ARG_FIELDS) {
+    const value = input[field]
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return ''
+}
+
+/**
+ * P2.1 (R9.2): one-call entry to the glob engine. Extracts the primary
+ * argument from the tool input, then runs the priority-sorted default
+ * rule set. The result is the FIRST matching rule's decision, or the
+ * default decision if no rule matches.
+ */
+export function evaluateDefaultGlobRule(
+  toolName: string,
+  input: Record<string, unknown>,
+): PermissionResult {
+  const primaryArg = extractPrimaryArg(input)
+  return evaluatePermission(toolName, primaryArg, DEFAULT_PERMISSION_CONFIG)
+}
+
+/**
+ * Session-scoped approvals — useful when the user approves a "{Bash,git
+ * status}" pattern and we want subsequent calls to skip the prompt.
+ */
+export const sessionApprovalCache = new ApprovalCache()

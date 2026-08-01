@@ -517,15 +517,20 @@ export class BashTool implements Tool {
         } catch { /* tmux not available, degrade gracefully */ }
       }
 
-      // P1-6 fix: apply the OS-level sandbox wrapper (sandbox-exec on
-      // macOS, bwrap on Linux) when the user has enabled it in
-      // ~/.ovolv999/sandbox.json. wrapCommand() is a no-op (returns the
-      // command unchanged) when sandbox is disabled (the default), so
-      // this preserves existing behaviour unless explicitly opted in.
+      // P1-6 + R5 fix: apply the OS-level sandbox wrapper when EITHER
+      //   (a) sandbox.json has enabled:true, OR
+      //   (b) permissionMode === 'bubble' (Round 3 mode → real execution)
+      // wrapCommand() is a no-op when neither is true.
       // Only the foreground execution path is wrapped — background
       // detached tasks keep their raw redirection semantics.
+      const bubbleMode = context.permissionMode === 'bubble'
       if (!IS_WIN_CMD) {
-        actualCommand = sandboxWrap(actualCommand, context.cwd)
+        actualCommand = bubbleMode
+          ? sandboxWrap(actualCommand, context.cwd, { enabled: true, level: 'strict', readOnlyPaths: [], writablePaths: [], deniedPaths: [], allowNetwork: false })
+          : sandboxWrap(actualCommand, context.cwd)
+      } else if (bubbleMode) {
+        // Windows: bubble mode unsupported; warn once via stderr.
+        process.stderr.write('[bash] bubble mode requires macOS/Linux; running unsandboxed\n')
       }
 
       // Choose shell args based on platform

@@ -47,6 +47,9 @@ export type EventType =
   | 'user_interrupt'
   | 'agent_completion'
   | 'protocol'
+  | 'workspace_change'
+  | 'permission_decision'
+  | 'worker_restart'
 
 /** Runtime whitelist — used by isValidEntry to reject unknown event types. */
 const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
@@ -62,6 +65,9 @@ const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   'user_interrupt',
   'agent_completion',
   'protocol',
+  'workspace_change',
+  'permission_decision',
+  'worker_restart',
 ])
 
 export interface EventLogEntry {

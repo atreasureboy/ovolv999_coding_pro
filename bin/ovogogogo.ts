@@ -172,6 +172,9 @@ interface Args {
   llmOnly: boolean
   /** v0.4.1 WS4: sticky execution-profile override (wins over intent/detection). */
   profile?: ExecutionProfile
+  /** v0.5: ACP WebSocket transport. When set, runs as a WS server (no REPL). */
+  acpWsPort?: number
+  acpWsBind?: string
 }
 
 /**
@@ -388,6 +391,8 @@ export function parseArgs(argv: string[]): Args {
   let pipe = false
   let pipeFormat: 'text' | 'json' = 'text'
   let bg = false
+  let acpWsPort: number | undefined
+  let acpWsBind: string | undefined
   let init = false
   let maxStdinBytes: number | undefined
   let noContext = false
@@ -444,6 +449,19 @@ export function parseArgs(argv: string[]): Args {
         case '--pipe': pipe = true; break
         case '--llm-only': llmOnly = true; break
         case '--bg': bg = true; break
+        case '--acp-ws':
+          {
+            const raw = requireValue(arg, args[++i])
+            const n = parseInt(raw, 10)
+            if (isNaN(n) || n <= 0 || n > 65535) {
+              throw new ArgError(`Error: --acp-ws requires a port number 1-65535 (got "${raw}")`)
+            }
+            acpWsPort = n
+          }
+          break
+        case '--acp-ws-bind':
+          acpWsBind = requireValue(arg, args[++i])
+          break
         case '--init': init = true; break
         case '--no-context': noContext = true; break
         case '--max-stdin':
@@ -498,7 +516,7 @@ export function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind }
 }
 
 interface ResolvedApiEnvironment {
@@ -1505,6 +1523,84 @@ async function runSingleTask(
 // ─────────────────────────────────────────────────────────────
 // Background session subcommand handler
 // ─────────────────────────────────────────────────────────────
+interface DaemonSubOptions {
+  apiKey: string | undefined
+  cwd: string
+  model: string | undefined
+  baseURL: string | undefined
+  provider: string | undefined
+}
+
+async function handleDaemonSubcommand(args: string[], opts: DaemonSubOptions): Promise<void> {
+  const sub = args[0]
+  if (sub === 'start' || sub === 'run') {
+    const { startAcpWebSocketServer } = await import('../src/cli/acpServer.js')
+    await startAcpWebSocketServer({
+      port: 8765,
+      host: '127.0.0.1',
+      cwd: opts.cwd,
+      apiKey: opts.apiKey,
+      model: opts.model,
+      baseURL: opts.baseURL,
+      provider: opts.provider,
+    })
+    return
+  }
+  if (sub === 'ps' || sub === 'list') {
+    const { listSessions } = await import('../src/core/daemon/sessionStore.js')
+    const sessions = listSessions()
+    process.stdout.write('ID                                    STARTED          STATUS  GOAL\n')
+    for (const s of sessions) {
+      process.stdout.write(`${s.sessionId}  ${new Date(s.startedAt).toISOString().slice(0, 16)}  ${s.status.padEnd(7)}  ${s.goal.slice(0, 60)}\n`)
+    }
+    return
+  }
+  if (sub === 'attach') {
+    const sessionId = args[1]
+    if (!sessionId) {
+      process.stderr.write('Usage: ovolv999 daemon attach <sessionId>\n')
+      process.exit(1)
+    }
+    const { DaemonClient } = await import('../src/core/daemon/daemonClient.js')
+    const port = parseInt(process.env.OVOGO_DAEMON_PORT ?? '0', 10)
+    if (!port) {
+      process.stderr.write('Error: OVOGO_DAEMON_PORT not set — is the daemon running?\n')
+      process.exit(1)
+    }
+    const client = new DaemonClient({ port })
+    const result = await client.send({ id: 1, op: 'attach', sessionId })
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+    return
+  }
+  if (sub === 'kill' || sub === 'rm') {
+    const sessionId = args[1]
+    if (!sessionId) {
+      process.stderr.write('Usage: ovolv999 daemon kill <sessionId>\n')
+      process.exit(1)
+    }
+    const { deleteSession } = await import('../src/core/daemon/sessionStore.js')
+    const ok = deleteSession(sessionId)
+    process.stdout.write(ok ? `deleted ${sessionId}\n` : `not found: ${sessionId}\n`)
+    return
+  }
+  if (sub === 'help' || sub === '--help' || sub === '-h' || !sub) {
+    process.stdout.write(`ovolv999 daemon <subcommand>
+
+Subcommands:
+  start                  Start the daemon (alias: run)
+  ps, list               List persisted sessions
+  attach <sessionId>     Attach to a running session
+  kill <sessionId>       Delete a persisted session (alias: rm)
+
+Daemon config: ~/.ovolv999/daemon.sock
+Sessions dir:  ~/.ovolv999/sessions/
+`)
+    return
+  }
+  process.stderr.write(`Unknown daemon subcommand: ${sub}\nRun 'ovolv999 daemon help' for usage.\n`)
+  process.exit(1)
+}
+
 async function handleSessionSubcommand(cmd: string, args: string[]): Promise<void> {
   const {
     listSessions, getSession, readSessionLogs, attachToSession,
@@ -1624,6 +1720,24 @@ async function main(): Promise<void> {
     await handleSessionSubcommand('stop', process.argv.slice(3))
     return
   }
+
+  // R6: Daemon subcommand (`ovolv999 daemon <sub>`). Distinct from
+  // the bg-session subcommands above — daemon is the long-running
+  // supervisor (Round 4 + Round 6). Run before parseArgs so bare
+  // subcommands aren't swallowed as the task argument.
+  if (sub === 'daemon') {
+    const apiKey = process.env.OPENAI_API_KEY
+      ?? process.env.ANTHROPIC_API_KEY
+      ?? process.env.OVOGO_API_KEY
+    await handleDaemonSubcommand(process.argv.slice(3), {
+      apiKey,
+      cwd: process.cwd(),
+      model: process.env.OVOGO_MODEL,
+      baseURL: process.env.OPENAI_BASE_URL,
+      provider: process.env.OVOGO_PROVIDER,
+    })
+    return
+  }
   if (sub === 'rm' || sub === 'remove') {
     await handleSessionSubcommand('rm', process.argv.slice(3))
     return
@@ -1637,7 +1751,7 @@ async function main(): Promise<void> {
   const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
   initChildLogCapture()
 
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
@@ -1755,6 +1869,25 @@ async function main(): Promise<void> {
   //   0 completed · 1 partial/blocked/exhausted/cancelled/failed · 2 API throw
   // No project session dir is written and no durable session state remains
   // (assembleEngine gives this path a scratch dir it removes on dispose).
+  if (acpWsPort !== undefined) {
+    if (help) {
+      const { getAcpWsHelp } = await import('../src/cli/acpServer.js')
+      process.stdout.write(getAcpWsHelp() + '\n')
+      process.exit(0)
+    }
+    const { startAcpWebSocketServer } = await import('../src/cli/acpServer.js')
+    await startAcpWebSocketServer({
+      port: acpWsPort,
+      host: acpWsBind ?? '127.0.0.1',
+      cwd,
+      apiKey: apiEnvironment.apiKey,
+      model,
+      baseURL: baseURLFlag ?? apiEnvironment.baseURL,
+      provider: process.env.OVOGO_PROVIDER,
+    })
+    return
+  }
+
   if (pipe) {
     if (help) {
       const { getPipeHelp } = await import('../src/integrations/pipeMode.js')

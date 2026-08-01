@@ -171,6 +171,24 @@ mkdir -p "$BIN_DIR"
 ln -sfn "$ENTRY" "$BIN_DIR/$BIN_NAME"
 ok "linked $C_BOLD$BIN_NAME$C_RESET -> $ENTRY"
 
+# ── Build the Linux sandbox helper (Round 4) ─────────────────────────
+# Pure-C Landlock wrapper for `bubble` permission mode. macOS uses
+# sandbox-exec built-in; Windows falls back to no-op.
+if [ "$(uname -s 2>/dev/null)" = "Linux" ] && command -v cc >/dev/null 2>&1; then
+  HELPER_SRC="$STAGING_DIR/scripts/sandbox-helper.c"
+  HELPER_DST_DIR="$INSTALL_DIR/bin"
+  HELPER_DST="$HELPER_DST_DIR/ovolv999-sandbox-helper"
+  if [ -f "$HELPER_SRC" ]; then
+    mkdir -p "$HELPER_DST_DIR"
+    if cc -O2 -o "$HELPER_DST" "$HELPER_SRC" 2>/dev/null; then
+      chmod +x "$HELPER_DST"
+      ok "built sandbox-helper (Landlock) at $HELPER_DST"
+    else
+      printf "%s[sandbox-helper] build failed — bubble mode will warn on Linux%s\n" "$C_YELLOW" "$C_RESET" >&2
+    fi
+  fi
+fi
+
 # If we used ~/.local/bin (or ~/bin) and it's not on PATH, add it to shell rc.
 add_to_path_rc() {
   local dir="$1" rc=""

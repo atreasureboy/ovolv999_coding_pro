@@ -308,7 +308,7 @@ export class ContextManager {
         })
         this.consecutiveCompactFailures = 0
         this.suppressCompactWarning = true
-        this.deps.hookRunner?.runOnContextOverflow?.(
+        void this.deps.hookRunner?.runOnContextOverflow?.(
           compactResult.originalTokens,
           compactResult.summaryTokens,
         )
