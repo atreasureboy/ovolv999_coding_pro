@@ -68,6 +68,7 @@ import type { TaskGraphStore } from './taskGraphStore.js'
 import { ControlMessageLog } from './internalControlMessage.js'
 import { collectDeferredToolNames } from './deferredToolsReminder.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
+import type { RepoStatsService } from '../repoStats.js'
 import {
   type RunScopedRuntimeContext,
   type RunScopedRuntimeContextStore,
@@ -158,6 +159,13 @@ export interface CoordinatorDeps {
    * absence just means no live health signals.
    */
   modelRouter?: ModelRouter
+  /**
+   * v0.5.2 (Stage 2.2): cached repository statistics. When supplied,
+   * the routing signal collector uses the real `sourceFileCount`
+   * instead of the `filesTouched * 10` proxy. The Router only reads
+   * the snapshot; the walk + cache live in this service.
+   */
+  repoStats?: RepoStatsService
   /**
    * Parent run id (e.g. a `kind='loop'` run from runLoop). When set,
    * the per-turn run records it as parentRunId for hierarchical queries.
@@ -465,6 +473,24 @@ export class RuntimeCoordinator {
         const ws = this.deps.contextManager.getWorkingState()
         const tg = currentGraph
         const router = this.deps.modelRouter
+        // v0.5.2 (Stage 2.1): pull REAL context budget state from
+        // ContextManager. Before evaluateBudget() runs, snapshot.initialized
+        // is false; the collector keeps the values as undefined so the
+        // Router treats them as 'unknown' rather than fabricated zeros.
+        const budgetSnapshot = this.deps.contextManager.getBudgetSnapshot()
+        const cmSignals = budgetSnapshot.initialized
+          ? {
+              contextUsageRatio: budgetSnapshot.usageRatio,
+              budgetRemaining: budgetSnapshot.remainingRatio,
+              recentFailureCount: ws.verification.failed.length,
+            }
+          : {
+              // Pre-evaluation: no fabrication. Router scores these as
+              // neutral (long-context/budget pressure signals = 0).
+              contextUsageRatio: undefined,
+              budgetRemaining: undefined,
+              recentFailureCount: ws.verification.failed.length,
+            }
         const signals = collectRoutingSignals({
           userMessage,
           workingState: {
@@ -473,21 +499,51 @@ export class RuntimeCoordinator {
             verification: { passed: [...ws.verification.passed], failed: [...ws.verification.failed] },
             unresolved: [...ws.unresolved],
           },
-          contextManager: {
-            // v0.3.5: do NOT fabricate values. undefined means "no data
-            // available" — the collector + router treat undefined as
-            // neutral (no long-context pressure, no budget pressure).
-            contextUsageRatio: undefined,
-            budgetRemaining: undefined,
-            recentFailureCount: ws.verification.failed.length,
-          },
+          contextManager: cmSignals,
+          // v0.5.2 (Stage 2.2): real repository stats via the service.
+          // repoFileCount falls back to the legacy proxy only when this
+          // service is absent (pre-wiring tests).
+          repoStats: this.deps.repoStats
+            ? (() => {
+                const snap = this.deps.repoStats!.snapshot(config.cwd)
+                if (snap.state !== 'ready' || !snap.stats) return undefined
+                return {
+                  rootDir: snap.stats.rootDir,
+                  sourceFileCount: snap.stats.sourceFileCount,
+                  totalFileCount: snap.stats.totalFileCount,
+                }
+              })()
+            : undefined,
           taskGraph: tg ? {
             nodeCount: tg.size(),
             preferredRoles: tg.list().map((n: { preferredRole?: string }) => n.preferredRole ?? '').filter(Boolean),
-            hasConfigChanges: false,
-            hasCrossModuleEdits: false,
-            hasPublicInterfaceEdits: false,
-            hasRootCauseNode: false,
+            // v0.5.2 (Stage 2.3): real structural impact from
+            // TaskGraph.aggregateImpact(). When the graph has nodes
+            // with `impact` metadata, these flags reflect that
+            // structure; otherwise they fall back to the conservative
+            // "all false" state (keyword-only routing).
+            ...(() => {
+              const agg = tg.aggregateImpact()
+              if (!agg) {
+                return {
+                  hasConfigChanges: false,
+                  hasCrossModuleEdits: false,
+                  hasPublicInterfaceEdits: false,
+                  hasRootCauseNode: false,
+                  aggregateImpact: null,
+                }
+              }
+              return {
+                hasConfigChanges: agg.hasConfigChanges,
+                hasCrossModuleEdits: agg.hasCrossModuleEdits,
+                hasPublicInterfaceEdits: agg.hasPublicInterfaceEdits,
+                hasRootCauseNode: agg.hasRootCauseNode,
+                aggregateImpact: {
+                  maxScope: agg.maxScope,
+                  estimatedFiles: agg.estimatedFiles,
+                },
+              }
+            })(),
           } : undefined,
           routerHealth: router ? {
             providerHealth: router.listProfiles().map((p: { id: string }) => {
@@ -498,7 +554,30 @@ export class RuntimeCoordinator {
                 avgLatencyMs: h?.ewmaLatency ?? 0,
               }
             }),
-            previousRoutingFailures: 0,
+            // v0.5.2 (Stage 2.4): real previousRoutingFailures from
+            // the Router's failure counters (fallback + retry total).
+            // Previous behavior hardcoded 0; now the signal collector
+            // sees the truth.
+            previousRoutingFailures: router.getRoutingFailureStats().totalFailures,
+            // v0.5.2 (Stage 2.4): also expose fallback + retry
+            // breakdowns so the Router can break out of failing
+            // chains before they're exhausted. The Router uses these
+            // to know whether auto-routing should escalate.
+            totalFallbacksApplied: router.getRoutingFailureStats().totalFallbacksApplied,
+            totalRetryAttempts: router.getRoutingFailureStats().totalRetryAttempts,
+            // v0.5.2 (Stage 2.4): real circuit-breaker state. The
+            // Router already reads consecutiveProviderFailures but
+            // only this Coordinator knew it; the signal collector
+            // previously had no access. We expose it now so the
+            // Router can prefer a different profile while the
+            // circuit is OPEN.
+            circuitState: this.circuitState,
+            consecutiveProviderFailures: this.consecutiveProviderFailures,
+            // v0.5.2 (Stage 2.4): distinguish manual override from
+            // auto routing. When a manual override is in effect, the
+            // signal collector downgrades some signals so the Router
+            // does NOT try to fight the user's choice.
+            manualOverrideActive: router.getManualOverride() !== null,
           } : undefined,
         })
         if (runContext) runContext.routingSignals = signals
@@ -1382,9 +1461,17 @@ export class RuntimeCoordinator {
           // Gateway surfaces the original error.
           onProviderError: (failedModel, err) => {
             this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
+            // v0.5.2 (Stage 2.4): increment retry counter BEFORE
+            // deciding whether to advance. A retry on the same model
+            // counts as a retry; only an advancement to the next
+            // profile in the chain counts as a fallback.
+            this.deps.modelRouter?.recordRetry()
             if (!this.deps.modelRouter) return null
             const next = this.deps.modelRouter.nextFallback(failedModel)
             if (next) {
+              // v0.5.2 (Stage 2.4): the Router now logs the
+              // transition and bumps its failure counters.
+              this.deps.modelRouter.emitFallback(failedModel, next, err.message)
               // Apply the fallback model to the engine so the next
               // LLM call uses it. This is an automatic (NOT manual)
               // change so we route through applyRoutingDecision via

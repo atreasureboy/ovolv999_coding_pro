@@ -48,6 +48,14 @@ export interface RoutingSignals {
   needsArchitecture: boolean
   providerHealth: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
   previousRoutingFailures: number
+  // v0.5.2 (Stage 2.4): extended router-health signals. Optional
+  // — pre-wiring callers omit them and the Router treats them as
+  // 'unknown' (neutral).
+  totalFallbacksApplied?: number
+  totalRetryAttempts?: number
+  circuitState?: 'closed' | 'open' | 'half-open'
+  consecutiveProviderFailures?: number
+  manualOverrideActive?: boolean
   // expected tool requirement
   expectedToolRequirement: 'none' | 'read-only' | 'mixed' | 'side-effect'
   // secondary signals (runtime truth contract §1.3 second paragraph)
@@ -75,6 +83,13 @@ export interface TaskGraphSnapshot {
   hasCrossModuleEdits: boolean
   hasPublicInterfaceEdits: boolean
   hasRootCauseNode: boolean
+  /** v0.5.2 (Stage 2.3): precomputed structural impact from the graph.
+   *  When supplied, the collector uses it INSTEAD of the booleans
+   *  above; the booleans remain for backwards compatibility. */
+  aggregateImpact?: {
+    maxScope: 'local' | 'module' | 'cross-module' | 'repository' | null
+    estimatedFiles: number
+  } | null
 }
 
 /** Minimal view of ContextManager the collector reads. */
@@ -91,6 +106,26 @@ export interface ContextManagerSnapshot {
 export interface RouterHealthSnapshot {
   providerHealth: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
   previousRoutingFailures: number
+  // v0.5.2 (Stage 2.4): optional extended health signals. When omitted,
+  // the collector treats them as 'unknown' (neutral).
+  totalFallbacksApplied?: number
+  totalRetryAttempts?: number
+  circuitState?: 'closed' | 'open' | 'half-open'
+  consecutiveProviderFailures?: number
+  manualOverrideActive?: boolean
+}
+
+/**
+ * v0.5.2 (Stage 2.2): real repository statistics. The Router treats
+ * `repoFileCount` as a complexity signal, but the previous proxy
+ * (`filesTouched * 10`) was wildly wrong on cold-start. When supplied,
+ * `sourceFileCount` overrides the proxy. `undefined` means "unknown"
+ * (failure open, not 0 or 100).
+ */
+export interface RepoStatsSnapshot {
+  rootDir: string
+  sourceFileCount?: number
+  totalFileCount?: number
 }
 
 /** Optional inputs the collector consumes; all may be omitted. */
@@ -100,6 +135,8 @@ export interface CollectRoutingSignalsOptions {
   contextManager?: ContextManagerSnapshot
   taskGraph?: TaskGraphSnapshot
   routerHealth?: RouterHealthSnapshot
+  /** v0.5.2 (Stage 2.2): real repo stats. Omit when unavailable. */
+  repoStats?: RepoStatsSnapshot
 }
 
 const ARCHITECTURE_KEYWORDS = /\b(architect|refactor|redesign|root[\s_-]?cause|migration|design[\s_-]?decision|restructure|rebuild|overhaul)\b/i
@@ -134,7 +171,14 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
   const filesTouched = ws
     ? ws.filesRead.length + ws.filesChanged.length
     : 0
-  const repoFileCount = Math.max(filesTouched * 10, 100) // cheap proxy until a real count exists
+  // v0.5.2 (Stage 2.2): prefer real repo stats when supplied. The proxy
+  // path is preserved as a *weak fallback* — keyword-derivable signals
+  // still want a non-zero complexity number on cold start. If neither
+  // path produces a number, the Router treats repoFileCount as unknown.
+  const realCount = opts.repoStats?.sourceFileCount
+  const repoFileCount = typeof realCount === 'number' && realCount >= 0
+    ? realCount
+    : Math.max(filesTouched * 10, 100)
 
   // Static analysis — combine keyword evidence with task-graph
   // evidence so a single keyword match isn't a license to charge
@@ -145,6 +189,14 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
   const keywordPublic = PUBLIC_INTERFACE_KEYWORDS.test(goal)
   const keywordRootCause = ROOT_CAUSE_KEYWORDS.test(goal)
 
+  // v0.5.2 (Stage 2.3): structured impact wins over the legacy booleans.
+  // aggregateImpact is computed off TaskNode.impact[] (see TaskGraph.
+  // aggregateImpact). When the graph has nodes WITH impact metadata,
+  // it is the source of truth; keyword analysis is only a fallback
+  // for goals with no decomposed graph.
+  const hasStructuralImpact = Boolean(
+    tg?.aggregateImpact && tg.aggregateImpact.maxScope !== null,
+  )
   const tgArchitecture = tg ? (
     tg.hasConfigChanges
     || tg.hasCrossModuleEdits
@@ -152,8 +204,14 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
     || tg.hasRootCauseNode
   ) : false
 
-  // Estimated impact: number of files expected to change.
-  const estimatedImpactFiles = ws ? ws.filesChanged.length + Math.min(filesTouched, 12) : Math.min(goal.length / 240, 12)
+  // Estimated impact: prefer the TaskGraph's precomputed estimate when
+  // structural impact exists; otherwise use the legacy heuristic that
+  // blends filesChanged + filesRead.
+  const estimatedImpactFiles = hasStructuralImpact && tg?.aggregateImpact
+    ? Math.max(tg.aggregateImpact.estimatedFiles, ws ? ws.filesChanged.length + Math.min(filesTouched, 12) : 0)
+    : ws
+      ? ws.filesChanged.length + Math.min(filesTouched, 12)
+      : Math.min(goal.length / 240, 12)
 
   // Multi-file signal that hints at architecture work (runtime truth contract §1.3).
   const manyFiles = filesTouched > 8 || estimatedImpactFiles > 8
@@ -169,6 +227,14 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
     needsArchitecture: keywordArchitecture || tgArchitecture || (keywordConfig && manyFiles),
     providerHealth: rh?.providerHealth ?? [],
     previousRoutingFailures: rh?.previousRoutingFailures ?? 0,
+    // v0.5.2 (Stage 2.4): extended router-health signals. Pass
+    // through unchanged so the Router can break out of failing
+    // chains. Omitted fields stay undefined (neutral).
+    totalFallbacksApplied: rh?.totalFallbacksApplied,
+    totalRetryAttempts: rh?.totalRetryAttempts,
+    circuitState: rh?.circuitState,
+    consecutiveProviderFailures: rh?.consecutiveProviderFailures,
+    manualOverrideActive: rh?.manualOverrideActive,
     expectedToolRequirement: classifyExpectedToolRequirement(goal, ws),
     affectsPublicInterface: keywordPublic || (tg?.hasPublicInterfaceEdits ?? false),
     isCrossModule: keywordCrossModule || (tg?.hasCrossModuleEdits ?? false),
@@ -192,6 +258,12 @@ export function signalsToRoutingInput(s: RoutingSignals): RoutingInput {
     needsArchitecture: s.needsArchitecture,
     providerHealth: s.providerHealth,
     previousRoutingFailures: s.previousRoutingFailures,
+    // v0.5.2 (Stage 2.4): propagate extended health signals.
+    totalFallbacksApplied: s.totalFallbacksApplied,
+    totalRetryAttempts: s.totalRetryAttempts,
+    circuitState: s.circuitState,
+    consecutiveProviderFailures: s.consecutiveProviderFailures,
+    manualOverrideActive: s.manualOverrideActive,
     expectedToolRequirement: s.expectedToolRequirement,
     affectsPublicInterface: s.affectsPublicInterface,
     isCrossModule: s.isCrossModule,

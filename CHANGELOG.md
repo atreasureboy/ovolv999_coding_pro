@@ -2,7 +2,74 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
-## 0.5.1 (unreleased)
+## 0.5.2 (unreleased)
+
+Reality Closure — wiring production main chain to the data sources
+the routing + completion signals have always claimed to consume.
+
+### Added
+
+- **`ContextBudgetSnapshot`** (`src/core/context/contextManager.ts`): a
+  read-only snapshot published by `ContextManager.evaluateBudget()`
+  and read by the routing signal collector. The Router and the
+  Coordinator now share the same source for `contextUsageRatio` and
+  `budgetRemaining`; no more fabricated `undefined` values.
+- **`RepoStatsService`** (`src/core/repoStats.ts`): a cached,
+  walk-based repository file counter. The previous `filesTouched * 10`
+  proxy is gone — the Router now reads a real `sourceFileCount` with
+  `.git`, `node_modules`, `dist`, `coverage`, `session` and worktree
+  directories excluded. Cache invalidates via `WorkspaceWatcher` so
+  changes do NOT trigger a per-turn re-glob.
+- **`TaskGraph.aggregateImpact()`** + `TaskNode.impact`:
+  structured impact metadata (scope, affectsPublicInterface,
+  changesConfiguration, requiresRootCause, estimatedFiles). The
+  Router prefers real impact data over keyword-only heuristics when
+  the planner supplies it.
+- **Real provider-failure signals**: `ModelRouter` now tracks
+  `totalFailures`, `totalFallbacksApplied`, and `totalRetryAttempts`
+  via `getRoutingFailureStats()`. The Coordinator wires these into
+  `RouterHealthSnapshot` so `/why` and `/route` can explain the
+  decision from real data. The signal collector also receives
+  `circuitState`, `consecutiveProviderFailures`, and
+  `manualOverrideActive`.
+- **`LongTermMemory` write gate** wired into `MemoryModule`:
+  every `memory_write` tool call now passes through R1 (verification)
+  and R5 (conflict-aware merge) gates. R2 source marking is
+  satisfied because `origin` carries `memory_write:<source>`. R3
+  (commit binding) is currently downgraded to allow pre-existing
+  flows; tightening is a future round.
+- **`RuntimeErrorInfo`** (`src/core/runtimeError.ts`): unified
+  error shape for permission / hook / tool / provider / daemon /
+  worker / verification / memory / routing / context / taskGraph
+  subsystems. Categorizes provider errors by status + code,
+  eliminating string-prefix sniffing in downstream consumers.
+- **`scripts/verify-runtime-truth.mjs`**: machine-checkable
+  documentation/code consistency. Catches drift between
+  `package.json` version vs README, runtime dependency count vs
+  CLAUDE.md, EventType whitelist union alignment, PermissionMode
+  single-source-of-truth, ADR path existence, and golden-path test
+  presence. Wired into `pnpm check` as the final gate.
+- **`tests/v052GoldenPath.test.ts`** — 13 golden-path tests
+  exercising RepoStatsService walks, TaskGraph impact aggregation,
+  ContextManager snapshot lifecycle, RoutingSignalCollector
+  pass-through, and RuntimeErrorInfo classification.
+
+### Changed
+
+- The `providerHealth` signal now also carries `circuitState`,
+  `consecutiveProviderFailures`, `totalFallbacksApplied`,
+  `totalRetryAttempts`, and `manualOverrideActive`. The Router
+  uses these to break out of failing chains before they're
+  exhausted.
+- The WorkspaceWatcher module now invalidates the RepoStatsService
+  cache on every recorded change so cached counts reflect the
+  current cwd state.
+- The `ContextManager.evaluateBudget()` flow publishes its budget
+  snapshot BEFORE deciding whether to compact, so any consumer that
+  reads via `getBudgetSnapshot()` after the call sees the same
+  numbers the compact decision used.
+
+## 0.5.1
 
 - **TF-IDF tool discovery (`search_extra_tools`)** — defer rarely-used tools out of the system prompt and let the model discover them via TF-IDF keyword search. Pure TypeScript implementation, zero deps. See `docs/TOOL-SEARCH.md` and `docs/ADR/008-tfidf-tool-search.md`.
 - **Skill search upgraded to TF-IDF** — better multilingual recall and field weighting (name 3.0 / whenToUse 2.0 / description 1.0 / allowedTools 0.3). Public `searchSkills` API unchanged.

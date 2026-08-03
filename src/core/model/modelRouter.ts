@@ -77,6 +77,16 @@ export interface RoutingInput {
   providerHealth?: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
   /** Number of times routing fell back this session. */
   previousRoutingFailures?: number
+  // v0.5.2 (Stage 2.4): extended failure/health signals. Optional
+  // — pre-wiring callers omit them. The Router uses these to break
+  // out of a failing chain before the chain is exhausted.
+  totalFallbacksApplied?: number
+  totalRetryAttempts?: number
+  circuitState?: 'closed' | 'open' | 'half-open'
+  consecutiveProviderFailures?: number
+  /** True when the user has manually overridden the model. The Router
+   *  honors the override (and these signals are advisory only). */
+  manualOverrideActive?: boolean
   /** What kind of tools the model is likely to call. */
   expectedToolRequirement?: 'none' | 'read-only' | 'mixed' | 'side-effect'
   /** True if the change affects an exported / public surface. */
@@ -166,6 +176,16 @@ export class ModelRouter {
   /** Last applied (post-sink) model + allocation; used for dedup so
    *  re-applying the same routing decision doesn't spam events. */
   private lastApplied: { model: string; allocation?: BudgetAllocation } | null = null
+  /**
+   * v0.5.2 (Stage 2.4): real routing-failure counters. The Coordinator
+   * used to hardcode `previousRoutingFailures: 0` into the signal
+   * collector; these fields track every fallback advancement so the
+   * Router can break out of a failing chain. Reset only on cold
+   * Router construction (per-session lifetime).
+   */
+  private totalRoutingFailures = 0
+  private totalFallbacksApplied = 0
+  private totalRetryAttempts = 0
 
   constructor(profiles: ModelProfile[], routing: RoutingConfig = { enabled: true }) {
     this.profiles = profiles.length > 0 ? profiles : []
@@ -250,7 +270,42 @@ export class ModelRouter {
    * drives this; the router just logs.
    */
   emitFallback(from: string, to: string, error: string): void {
+    // v0.5.2 (Stage 2.4): real counter. A fallback means the previous
+    // model failed AND we advanced; both failure AND fallback counters
+    // increment. Distinct signals for /why and routing-event payload.
+    this.totalRoutingFailures++
+    this.totalFallbacksApplied++
     this.emit('ROUTING_FALLBACK_APPLIED', { from, to, error })
+  }
+
+  /**
+   * v0.5.2 (Stage 2.4): record a retry attempt on the same model
+   * (within-circuit, NOT a fallback). Distinct from emitFallback:
+   * a retry keeps the same profile; a fallback moves to a new one.
+   * The Router treats retries as a separate counter so the signal
+   * collector can distinguish "model is flaky" from "this chain
+   * is exhausted".
+   */
+  recordRetry(): void {
+    this.totalRetryAttempts++
+  }
+
+  /**
+   * v0.5.2 (Stage 2.4): counter accessors. The Coordinator's signal
+   * collector previously hardcoded `previousRoutingFailures: 0`;
+   * the public getter lets it read real values without re-exporting
+   * private state.
+   */
+  getRoutingFailureStats(): {
+    totalFailures: number
+    totalFallbacksApplied: number
+    totalRetryAttempts: number
+  } {
+    return {
+      totalFailures: this.totalRoutingFailures,
+      totalFallbacksApplied: this.totalFallbacksApplied,
+      totalRetryAttempts: this.totalRetryAttempts,
+    }
   }
 
   /**

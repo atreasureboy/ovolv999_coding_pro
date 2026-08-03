@@ -33,6 +33,27 @@ import {
   clampMaxOutputTokens,
   effectiveInputBudget,
 } from '../compact.js'
+
+/**
+ * Read-only snapshot of context budget state. Single source of truth
+ * for the Router + Coordinator so the routing signal collector never
+ * receives `undefined` for contextUsageRatio / budgetRemaining when
+ * ContextManager is wired in. Both Router and evaluateBudget() read
+ * from the same underlying estimation functions (estimateTokens +
+ * effectiveInputBudget) so the values cannot diverge.
+ */
+export interface ContextBudgetSnapshot {
+  contextWindow: number
+  estimatedInputTokens: number
+  inputBudget: number
+  usageRatio: number
+  remainingTokens: number
+  remainingRatio: number
+  /** Last observed count of consecutive compaction failures (0..3). */
+  compactFailureCount: number
+  /** True when at least one evaluateBudget() call has run. */
+  initialized: boolean
+}
 import { truncateToolResult, enforceAggregateToolResultBudget } from './toolResultBudget.js'
 import {
   emptyWorkingState,
@@ -63,6 +84,22 @@ export class ContextManager {
   private suppressCompactWarning = false
   private resolvedContextWindow: number | null = null
   private pendingSnipCount: number | null = null
+  /**
+   * v0.5.2 (Stage 2.1): last computed context snapshot. Updated by
+   * evaluateBudget() each iteration; read by Router and Coordinator
+   * via getBudgetSnapshot(). Avoids passing `undefined` into the
+   * routing signal collector when ContextManager is wired in.
+   */
+  private lastBudgetSnapshot: ContextBudgetSnapshot = {
+    contextWindow: 0,
+    estimatedInputTokens: 0,
+    inputBudget: 0,
+    usageRatio: 0,
+    remainingTokens: 0,
+    remainingRatio: 0,
+    compactFailureCount: 0,
+    initialized: false,
+  }
   /**
    * P1-6 (runtime invariants §十): structured task state. Updated deterministically
    * from tool events via applyToolEvent() and re-rendered into every
@@ -216,6 +253,20 @@ export class ContextManager {
     this.lastAssistantTs = Date.now()
   }
 
+  /**
+   * v0.5.2 (Stage 2.1): read-only budget snapshot. The single
+   * source of truth that the Router and Coordinator read to compute
+   * contextUsageRatio / budgetRemaining. Reuses the same estimation
+   * functions as evaluateBudget() so the values cannot drift.
+   *
+   * Before evaluateBudget() has run at least once, `initialized=false`
+   * and ratio fields are 0 — callers must check `initialized` and
+   * treat the snapshot as 'unknown' rather than 'empty context'.
+   */
+  getBudgetSnapshot(): ContextBudgetSnapshot {
+    return this.lastBudgetSnapshot
+  }
+
   // ── Budget evaluation ──────────────────────────────────────────────────
 
   async evaluateBudget(params: {
@@ -234,6 +285,23 @@ export class ContextManager {
     const totalTokens = messageTokens + this.systemPromptTokens + toolDefTokens
     const inputBudget = effectiveInputBudget(maxCtxTokens, this.deps.maxOutputTokens)
     const pct = totalTokens / inputBudget
+
+    // v0.5.2 (Stage 2.1): publish a fresh budget snapshot so the Router
+    // and Coordinator can read contextUsageRatio / budgetRemaining from
+    // a single source instead of fabricating undefined values. The same
+    // estimation functions back both this snapshot and the budget
+    // decision (compact at 85%) so the values cannot drift.
+    const remainingTokens = Math.max(0, inputBudget - totalTokens)
+    this.lastBudgetSnapshot = {
+      contextWindow: maxCtxTokens,
+      estimatedInputTokens: totalTokens,
+      inputBudget,
+      usageRatio: pct,
+      remainingTokens,
+      remainingRatio: Math.max(0, Math.min(1, remainingTokens / inputBudget)),
+      compactFailureCount: this.consecutiveCompactFailures,
+      initialized: true,
+    }
 
     const shouldMicroCompact = pct >= CONTEXT_MICROCOMPACT_PCT
     const shouldWarn = pct >= CONTEXT_WARN_PCT

@@ -25,6 +25,23 @@ export interface RetryPolicy {
   cooldownMs?: number
 }
 
+/**
+ * v0.5.2 (Stage 2.3): structured task impact metadata. The previous
+ * keyword-only signal ("if the goal mentions 'config' or 'api'") was
+ * noisy: a single keyword match could charge "architecture" complexity.
+ * Real impact data flows from the planner or from deterministic
+ * derivation off the working-state filesChanged set. Keywords remain
+ * a weak fallback when no structured metadata exists.
+ */
+export interface TaskImpact {
+  scope: 'local' | 'module' | 'cross-module' | 'repository'
+  affectsPublicInterface: boolean
+  changesConfiguration: boolean
+  requiresRootCause: boolean
+  /** Optional estimate of files this node will touch. 0 = unknown. */
+  estimatedFiles?: number
+}
+
 export interface TaskNode {
   id: string
   title: string
@@ -40,6 +57,10 @@ export interface TaskNode {
   attempts: number
   blockReason?: string
   failReason?: string
+  /** v0.5.2 (Stage 2.3): structured impact metadata. When set,
+   *  RoutingSignalCollector reads it directly; when absent, falls
+   *  back to keyword-only heuristics over the user goal. */
+  impact?: TaskImpact
   /**
    * v0.3.2 (run-scoped runtime contract §Phase 5): per-criterion evidence. The same
    * criterionId may have multiple evidence records (e.g. a test
@@ -344,6 +365,69 @@ export class TaskGraph {
   /** Every node is in a terminal state (the graph is finished). */
   isDone(): boolean {
     return this.size() > 0 && this.list().every((n) => TERMINAL.has(n.status))
+  }
+
+  /**
+   * v0.5.2 (Stage 2.3): aggregate structural impact across all nodes.
+   * The RoutingSignalCollector reads this instead of the legacy
+   * hardcoded-false placeholders in the Coordinator. Returns null
+   * when the graph has no nodes — callers then fall back to
+   * keyword-only heuristics over the user goal.
+   *
+   * Aggregation rules: a graph-wide flag is true when ANY node has
+   * it true. Scope is the maximum across nodes (local → module →
+   * cross-module → repository). estimatedFiles sums across nodes
+   * that carry a positive estimate.
+   */
+  aggregateImpact(): {
+    hasConfigChanges: boolean
+    hasCrossModuleEdits: boolean
+    hasPublicInterfaceEdits: boolean
+    hasRootCauseNode: boolean
+    maxScope: TaskImpact['scope'] | null
+    estimatedFiles: number
+  } | null {
+    const nodes = this.list()
+    if (nodes.length === 0) return null
+    const SCOPE_RANK: Record<TaskImpact['scope'], number> = {
+      local: 0,
+      module: 1,
+      'cross-module': 2,
+      repository: 3,
+    }
+    let hasConfigChanges = false
+    let hasCrossModuleEdits = false
+    let hasPublicInterfaceEdits = false
+    let hasRootCauseNode = false
+    let maxScope: TaskImpact['scope'] | null = null
+    let maxScopeRank = -1
+    let estimatedFiles = 0
+    for (const node of nodes) {
+      const impact = node.impact
+      if (!impact) continue
+      if (impact.changesConfiguration) hasConfigChanges = true
+      if (impact.scope === 'cross-module' || impact.scope === 'repository') {
+        hasCrossModuleEdits = true
+      }
+      if (impact.affectsPublicInterface) hasPublicInterfaceEdits = true
+      if (impact.requiresRootCause) hasRootCauseNode = true
+      const rank = SCOPE_RANK[impact.scope]
+      if (rank > maxScopeRank) {
+        maxScopeRank = rank
+        maxScope = impact.scope
+      }
+      if (typeof impact.estimatedFiles === 'number' && impact.estimatedFiles > 0) {
+        estimatedFiles += impact.estimatedFiles
+      }
+    }
+    return {
+      hasConfigChanges,
+      hasCrossModuleEdits,
+      hasPublicInterfaceEdits,
+      hasRootCauseNode,
+      maxScope,
+      estimatedFiles,
+    }
   }
 
   /** Unfinished = any node not terminal (gates CompletionContract). */

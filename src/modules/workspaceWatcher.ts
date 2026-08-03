@@ -25,6 +25,7 @@ import { homedir } from 'node:os'
 import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleIterationContext, ModuleIterationResult, ModuleRunContext } from '../core/module.js'
 import { WorkspaceWatcher, type WorkspaceChange } from '../core/workspaceWatcher.js'
 import { clearToolIndexCache } from '../core/toolSearch.js'
+import { RepoStatsService } from '../core/repoStats.js'
 
 const SKILL_DIRS = [
   join(homedir(), '.ovogo', 'skills'),
@@ -47,6 +48,9 @@ export class WorkspaceWatcherModule implements AgentModule {
   private lastChanges: WorkspaceChange[] = []
   private lastChangeAt = 0
   private injectedForRun = false
+  /** v0.5.2 (Stage 2.2): shared service instance so the cache
+   *  invalidation is observable by the Engine's coordinator. */
+  private readonly repoStats = new RepoStatsService()
 
   async boot(ctx: ModuleBootContext): Promise<ModuleBootResult> {
     const roots = collectWatchRoots(ctx.cwd)
@@ -86,6 +90,12 @@ export class WorkspaceWatcherModule implements AgentModule {
     this.lastChangeAt = Date.now()
     // real cache invalidation: next search_extra_tools sees fresh tool defs
     clearToolIndexCache()
+    // v0.5.2 (Stage 2.2): invalidate the cached repoFileCount so the
+    // next Router signal collection re-walks the cwd. We use a
+    // per-process singleton (RepoStatsService is constructed once
+    // per Engine); the watcher can fire from many roots but the
+    // service only walks the cwd on the next snapshot() call.
+    this.repoStats.invalidate()
   }
 
   /**

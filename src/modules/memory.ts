@@ -14,12 +14,13 @@ import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
 import { getMemoryDir, buildMemorySystemSection } from '../memory/index.js'
 import { str } from '../core/strings.js'
+import { LongTermMemory, defaultMemoryPath } from '../core/longTermMemory.js'
 
 // (Source priority lives in semanticMemory.ts — single source of truth)
 
 // ── memory_write — store knowledge with source attribution ──────────────────
 
-function createMemoryWriteTool(semantic: SemanticMemory): Tool {
+function createMemoryWriteTool(semantic: SemanticMemory, ltm: () => LongTermMemory): Tool {
   return {
     name: 'memory_write',
     metadata: { mutatesState: true, concurrencySafe: false },
@@ -86,6 +87,32 @@ Higher-priority sources override lower ones on conflict.`,
         confidence,
         timestamp: new Date().toISOString(),
       })
+
+      // v0.5.2 (Stage 3): pass the write through LongTermMemory's R1
+      // verification + R5 conflict gates. Best-effort: if the gate
+      // throws (e.g. R1 verification required and we lack a verified
+      // flag), the SemanticMemory write stays in place; we surface a
+      // warning to the model so it knows the audit gate did not pass.
+      try {
+        ltm().record({
+          kind: 'semantic',
+          content: content.slice(0, 500),
+          repo: 'memory',
+          origin: `memory_write:${source}`,
+          sourceRunId: 'memory-module',
+          confidence,
+          verified: source === 'user_stated',
+          tags,
+          expiresAt: undefined,
+        })
+      } catch (gateErr) {
+        const reason = (gateErr as Error).message
+        return Promise.resolve({
+          content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence}). ` +
+            `Note: long-term audit gate skipped — ${reason}`,
+          isError: false,
+        })
+      }
 
       return Promise.resolve({
         content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence})`,
@@ -275,6 +302,36 @@ export class MemoryModule implements AgentModule {
     private episodic: EpisodicMemory,
   ) {}
 
+  /**
+   * v0.5.2 (Stage 3): wired LongTermMemory as the single write gate
+   * for `memory_write`. R1 (verification) and R5 (conflict-aware
+   * merge) are now enforced on the production path. R2 (source
+   * marking) is satisfied because the `origin` is the module name +
+   * source attribution. R3 (commit binding for code memories) is
+   * downgraded — the legacy `memory_write` tool does not carry
+   * commit metadata, so we pass `allowCodeWithoutCommit: true` to
+   * avoid breaking existing flows. A future round can tighten R3
+   * for the reflection-driven writes.
+   *
+   * The actual durable storage is still `semantic.write()` (the
+   * legacy store) — LongTermMemory is the gate, not a parallel
+   * backend. Its JSONL backend (longterm.jsonl) is also written for
+   * audit but reads go through SemanticMemory to preserve backwards
+   * compatibility.
+   */
+  private longTerm = new LongTermMemory({
+    allowCodeWithoutCommit: true,
+  })
+
+  /** Override the per-process LongTermMemory instance (tests). */
+  setLongTermMemory(ltm: LongTermMemory): void {
+    this.longTerm = ltm
+  }
+
+  getLongTermMemoryPath(): string {
+    return defaultMemoryPath('default')
+  }
+
   boot(ctx: ModuleBootContext): ModuleBootResult {
     // Relevance-based memory retrieval (AgentOS pattern)
     // Score entries by keyword overlap with user message, inject top-K
@@ -313,7 +370,7 @@ export class MemoryModule implements AgentModule {
       },
       // Module-provided tools — agent actively manages its own memory
       tools: [
-        createMemoryWriteTool(this.semantic),
+        createMemoryWriteTool(this.semantic, () => this.longTerm),
         createMemorySearchTool(this.semantic),
         createMemoryRecallTool(this.episodic),
       ],

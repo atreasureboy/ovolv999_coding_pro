@@ -62,6 +62,7 @@ import {
 } from './runtime/runScopedContext.js'
 import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
+import { RepoStatsService } from './repoStats.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
 import { ToolScheduler } from './toolRuntime/toolScheduler.js'
@@ -181,6 +182,13 @@ export class ExecutionEngine {
    */
   private readonly runContextStore: RunScopedRuntimeContextStore
   /**
+   * v0.5.2 (Stage 2.2): cached repository statistics. The Router
+   * reads `repoFileCount` from this service instead of the legacy
+   * `filesTouched * 10` proxy. The walk runs once per cwd; the
+   * WorkspaceWatcher integration invalidates the cache on change.
+   */
+  private readonly repoStats: RepoStatsService
+  /**
    * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
    * result here; the coordinator queries detectStall() each iteration.
    * Drives /progress and the soft/hard-stall interventions.
@@ -283,6 +291,10 @@ export class ExecutionEngine {
     // Phase 3/4: progress monitor + task graph must exist BEFORE
     // createTools (the TaskPlan tool receives the graph handle).
     this.modelRouter = buildRouter(this.config)
+    // v0.5.2 (Stage 2.2): cache repository statistics for the Router.
+    // The walk runs lazily on first snapshot(); the WorkspaceWatcher
+    // module calls `invalidate()` whenever the cwd mutates.
+    this.repoStats = new RepoStatsService()
     // v0.3.1 (runtime truth contract §三.1.2): resolve ProviderRuntimeBindings for
     // every profile so /models + /route can report the actual
     // transport, baseURL, and capabilities tied to the active engine.
@@ -554,6 +566,9 @@ export class ExecutionEngine {
       // v0.3.1 (runtime truth contract §三.1.3): expose ModelRouter to the coordinator
       // so the signal collector can read live provider health.
       modelRouter: this.modelRouter,
+      // v0.5.2 (Stage 2.2): real repo stats. Routed into the per-turn
+      // signal collector so Router no longer sees filesTouched * 10.
+      repoStats: this.repoStats,
       // Phase 2: per-turn adaptive routing. The callback runs the router
       // and, when routing is enabled with no manual override and the
       // decision differs from the current model, transactionally switches
