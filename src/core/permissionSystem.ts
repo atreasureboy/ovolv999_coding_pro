@@ -141,8 +141,15 @@ export function getModeBehavior(
   toolName: string,
   isDangerous: boolean,
 ): PermissionBehavior {
-  // Bypass: allow everything
-  if (mode === 'bypassPermissions') return 'allow'
+  // Bypass: allow everything (bypassPermissions + dontAsk both
+  // skip prompts). R19 fix: explicit branch — without this,
+  // dontAsk falls through to default and triggers prompts even
+  // though the intent is "no prompts ever".
+  if (isBypassMode(mode)) return 'allow'
+
+  // Bubble: allow everything; the bash tool wraps the command in
+  // a sandbox at execution time (tools/bash.ts:526).
+  if (mode === 'bubble') return 'allow'
 
   // Plan: deny everything except read-only tools
   if (mode === 'plan') {

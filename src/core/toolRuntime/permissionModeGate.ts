@@ -12,12 +12,14 @@
  *   bubble            → check + Bash tool wraps sandbox (see tools/bash.ts)
  */
 
+import type { PermissionMode } from '../permissionSystem.js'
+
 export type ModeGateResult = 'allow' | 'deny' | 'check'
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 
 export function gateByPermissionMode(
-  mode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble',
+  mode: PermissionMode,
   toolName: string,
 ): ModeGateResult {
   switch (mode) {

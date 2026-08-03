@@ -12,6 +12,77 @@ All notable changes are documented here. This project follows Semantic Versionin
 - **MCP HTTP transport + OAuth 2.1 PKCE** — `McpHttpClient` for HTTP-based MCP servers with `Authorization: Bearer` from `~/.ovogo/mcp-tokens.json`. Tokens auto-refresh 60s before expiry. See `docs/MCP-OAUTH.md`.
 - **Provider stubs for Bedrock / Vertex / Foundry** — honest "not wired in this build" error rather than silent fallback to OpenAI compat. Tracked for 0.6.0.
 
+### R8 — SDK upgrade (2026-07-30)
+
+3 new runtime dependencies added (`@anthropic-ai/sdk`, `chokidar`, `vscode-jsonrpc`).
+Total deps: 5 → 8. ADR-010 was rewritten in 2026-08 to reflect the SDK-based
+implementation rather than the originally-designed zero-deps hand-rolled
+fetch/SSE approach.
+
+### R9 — Permission system (2026-07-31)
+
+5-layer permission flow (toolPolicy → mode gate → glob engine → permissionManager
+→ UI prompt). `permissionRules.ts` glob engine wired as Layer 3 (R9.2).
+7-mode union (`default / acceptEdits / plan / auto / bypassPermissions / dontAsk
+/ bubble`).
+
+### R10 — Permission rules user configuration (2026-07-31)
+
+`settings.permissions.rules` loaded into `PermissionManager` at engine boot.
+`/permissions` slash command with `list / add <tool> <pattern> <behavior> /
+remove <index> / reset / mode <name>` sub-commands.
+
+### R11 — Permission decision audit log (2026-07-31)
+
+`permission_decision` EventLog event emitted at every permission layer
+deny/allow decision. Layer attribution in the event detail.
+
+### R12 — `/permissions mode` extended to 7 modes (2026-07-31)
+
+R12 fix: `dontAsk` and `bubble` modes added to `/permissions mode`
+allowlist (was legacy 5-mode). `dontAsk` skips UI prompts; `bubble`
+sandbox-wraps Bash tool execution.
+
+### R13-R37 — Daemon supervisor (2026-07-31 to 2026-08-02)
+
+`/daemon` slash command wired to a long-running supervisor over Unix socket.
+Worker model: addWorker / removeWorker / listWorkers. 28 incremental rounds:
+  - R13: `/daemon status|workers|logs` IPC
+  - R14: `restart-worker` per-worker action
+  - R15: `worker_restart` EventLog entry
+  - R16: `restart-worker all` bulk action
+  - R17: `daemon restart-worker` ADR documentation
+  - R18: `/daemon restart` audit event
+  - R19: `restart-worker all` bulk aggregation
+  - R20: `concurrency` throttle (clamped 1-16)
+  - R21: `tag:foo` selector
+  - R22: `tag:foo,bar` multi-tag selector
+  - R23: `tag-stats` aggregation
+  - R24: `tag-stats` status filter
+  - R25: `tag-stats` multi-status filter
+  - R26: `tag-stats` bulk filter (tag + status)
+  - R27: `restart-worker` bulk filter
+  - R28: `tag-stats` exclude-status filter
+  - R29: `restart-worker` exclude-status filter
+  - R30: `tag-uptime` per-tag aggregate uptime
+  - R31: `statusGte` / `statusLte` lifecycle range filter
+  - R32: `parentId` tag inheritance (one level)
+  - R33: multi-level parent traversal with cycle detection
+  - R34: cumulative uptime across restarts
+  - R35: `validate` action for parent-graph cycle detection
+  - R36: `maxRestarts` policy (default 3, 0 = unlimited)
+  - R37: `list-workers sortBy=name|status|createdAt|insertion`
+  - R38: `list-workers sortDir=asc|desc`
+  - R39: `sortBy=status` name tie-breaker (deterministic)
+  - R40: `list-workers limit|offset` pagination
+  - R41: `tag-stats limit|offset` pagination
+
+**Breaking change (R40)**: `list-workers` response shape changed from
+`data: WorkerEntry[]` to `data: {workers, total, offset, limit}`. All
+callers (slash command `/daemon workers`, tests) updated. Documented
+in `docs/audit/2026-08-03-architecture-audit.md` Finding 33
+(operational regression if not updated).
+
 ## 0.5.0
 
 - Added role-aware model assignment to the existing AgentTool child-engine path.

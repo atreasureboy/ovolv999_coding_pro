@@ -258,19 +258,54 @@ export class Daemon {
         return { ok: true, data: 'stopping' }
       case 'list-workers': {
         // R37: optional sortBy. Default insertion order (Map).
+        // R38: optional sortDir. Default 'asc'. 'desc' reverses.
+        // R40: optional limit/offset for pagination. default limit=100,
+        // offset=0. Out-of-range offset → empty result.
         const sortBy = cmd.payload?.sortBy
+        const sortDir = cmd.payload?.sortDir
+        if (sortDir !== undefined && sortDir !== 'asc' && sortDir !== 'desc') {
+          return { ok: false, error: `list-workers invalid sortDir: ${String(sortDir)}` }
+        }
+        const rawLimit = cmd.payload?.limit
+        const rawOffset = cmd.payload?.offset
+        const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? Math.max(0, Math.floor(rawLimit)) : 100
+        const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0
         let workers = this.listWorkers()
         if (sortBy === 'name') {
           workers = [...workers].sort((a, b) => a.name.localeCompare(b.name))
         } else if (sortBy === 'status') {
+          // R39: tie-break by name for deterministic output. Two
+          // workers with the same status were order-dependent on
+          // insertion order (interpreter-level Array.sort is stable
+          // in V8, but the contract wasn't explicit). Adding the
+          // secondary name key makes the output reproducible across
+          // daemon restarts and across scripts.
           const statusOrder: Record<string, number> = { starting: 0, running: 1, stopped: 2, failed: 3 }
-          workers = [...workers].sort((a, b) => (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99))
+          workers = [...workers].sort((a, b) => {
+            const sa = statusOrder[a.status] ?? 99
+            const sb = statusOrder[b.status] ?? 99
+            if (sa !== sb) return sa - sb
+            return a.name.localeCompare(b.name)
+          })
         } else if (sortBy === 'createdAt') {
           workers = [...workers].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
         } else if (sortBy !== undefined && sortBy !== 'insertion') {
           return { ok: false, error: `list-workers invalid sortBy: ${String(sortBy)}` }
         }
-        return { ok: true, data: workers }
+        if (sortDir === 'desc') {
+          workers = workers.slice().reverse()
+        }
+        const total = workers.length
+        const paged = workers.slice(offset, offset + limit)
+        return {
+          ok: true,
+          data: {
+            workers: paged,
+            total,
+            offset,
+            limit,
+          },
+        }
       }
       case 'tag-stats': {
         // R20: aggregate per-tag stats. Returns one entry per tag
@@ -383,12 +418,24 @@ export class Daemon {
           total: stats.total,
           byStatus: stats.byStatus,
         })).sort((a, b) => a.tag.localeCompare(b.tag))
+        // R41: pagination for the tags[] array. limit/offset apply
+        // post-sort. totalTags is the unfiltered count.
+        const tagLimit = typeof cmd.payload?.limit === 'number' && Number.isFinite(cmd.payload.limit)
+          ? Math.max(0, Math.floor(cmd.payload.limit))
+          : 100
+        const tagOffset = typeof cmd.payload?.offset === 'number' && Number.isFinite(cmd.payload.offset)
+          ? Math.max(0, Math.floor(cmd.payload.offset))
+          : 0
+        const pagedTags = tags.slice(tagOffset, tagOffset + tagLimit)
         return {
           ok: true,
           data: {
             totalWorkers,
             untagged: tagFilter === undefined ? untagged : 0,
-            tags,
+            tags: pagedTags,
+            totalTags: tags.length,
+            limit: tagLimit,
+            offset: tagOffset,
             statusFilter: allowedStatuses,
             excludeFilter: excludedStatuses,
             tagFilter: tagFilter ?? null,
@@ -568,7 +615,10 @@ export class Daemon {
           for (let i = 0; i < ids.length; i += concurrency) {
             const batch = ids.slice(i, i + concurrency)
             for (const id of batch) {
-              const r = this.handleCommand({ action: 'restart-worker', payload: { workerId: id } })
+              // R34: propagate maxRestarts (and other options) to the
+              // per-worker recursive call. Without this, the cap from
+              // the outer payload is silently dropped on bulk paths.
+              const r = this.handleCommand({ action: 'restart-worker', payload: cmd.payload ? { ...cmd.payload, workerId: id } : { workerId: id } })
               results.push({ workerId: id, ok: r.ok })
             }
           }
@@ -658,7 +708,10 @@ export class Daemon {
           }
           const results: Array<{ workerId: string; ok: boolean }> = []
           for (const w of tagged) {
-            const r = this.handleCommand({ action: 'restart-worker', payload: { workerId: w.id } })
+            // R34: propagate maxRestarts to the per-worker recursive
+            // call. Without this, the cap is silently bypassed on
+            // tag: selectors.
+            const r = this.handleCommand({ action: 'restart-worker', payload: cmd.payload ? { ...cmd.payload, workerId: w.id } : { workerId: w.id } })
             results.push({ workerId: w.id, ok: r.ok })
           }
           const failures = results.filter((r) => !r.ok).length

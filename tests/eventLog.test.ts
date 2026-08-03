@@ -121,7 +121,8 @@ describe('isValidEntry', () => {
   it('accepts every documented EventType value', () => {
     const allTypes = [
       'tool_call', 'tool_result', 'boot_context', 'invoke_sent', 'invoke_completed',
-      'memory_write', 'context_compact', 'module_flag', 'user_input', 'user_interrupt',
+      'memory_write', 'context_compact', 'module_flag', 'agent_completion', 'protocol',
+      'workspace_change', 'permission_decision', 'worker_restart', 'llm_api', 'llm_api_usage_missing',
     ]
     for (const t of allTypes) {
       expect(isValidEntry({

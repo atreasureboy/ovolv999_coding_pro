@@ -19,6 +19,7 @@ import type { SlashCommandContext, SlashCommandResult } from './index.js'
 import { listCommands } from './index.js'
 import { getCurrentMode, setCurrentMode, cycleMode, getAllModes, type Mode } from '../core/modes.js'
 import type { PermissionMode } from '../core/permissionSystem.js'
+import { isValidPermissionMode } from '../core/permissionSystem.js'
 import { saveProjectSettings } from '../config/settings.js'
 import { estimateTokens, calculateContextState, microCompact } from '../core/compact.js'
 import { EXECUTION_PROFILES, isExecutionProfile } from '../core/effort.js'
@@ -629,7 +630,7 @@ registerCommand({
       // R12: 7-mode union (was 5-mode legacy list). Including
       // `dontAsk` (auto-approve without prompt) and `bubble`
       // (sandbox-wrap shell) closes the gap with the type union.
-      if (!['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'].includes(mode)) {
+      if (!isValidPermissionMode(mode)) {
         return text('Unknown permission mode: ' + mode)
       }
       mgr.setMode(mode)
@@ -3025,7 +3026,10 @@ registerCommand({
     if (sub === 'workers') {
       const res = await client.send({ action: 'list-workers' })
       if (!res.ok) return text('Failed to list workers: ' + (res.error ?? 'unknown'))
-      return text(formatWorkers(res.data as never[]))
+      // R40 changed the list-workers response to a {workers,total,offset,limit}
+      // envelope. Unwrap the workers array before formatting.
+      const wrapper = res.data as { workers: unknown[] }
+      return text(formatWorkers(wrapper.workers as never[]))
     }
 
     if (sub === 'restart') {

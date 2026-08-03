@@ -1449,7 +1449,9 @@ export class RuntimeCoordinator {
     usage: TokenUsage | null
   }): void {
     const startedAt = Date.now() - attempt.latencyMs
-    const retryable = !attempt.success && /\b(429|5\d\d|ETIMEDOUT|rate limit|timeout)\b/i.test(attempt.error ?? '')
+    // R7 fix: delegate to modelGateway's retryable classifier so the
+    // gateway and coordinator agree on what counts as retryable.
+    const retryable = !attempt.success && this.deps.modelGateway.isRetryableProviderError(attempt.error ?? '')
     const usage = attempt.usage ?? undefined
     this.modelCallsThisRun.push({
       model: attempt.model,
@@ -1471,7 +1473,7 @@ export class RuntimeCoordinator {
     // total is visibly an under-report rather than a lie.
     if (attempt.success && !attempt.usage) {
       this.modelCallsThisRun[attemptId].usageMissing = true
-      this.deps.eventLog?.append('tool_call', 'llm_api_usage_missing', {
+      this.deps.eventLog?.append('llm_api_usage_missing', 'coordinator', {
         model: attempt.model,
         provider: attempt.provider,
       })
@@ -1513,7 +1515,7 @@ export class RuntimeCoordinator {
     if (usage) {
       const durationMs = Date.now() - callStartMs
       this.deps.costTracker.addUsage(model, usage, durationMs)
-      this.deps.eventLog?.append('tool_call', 'llm_api', {
+      this.deps.eventLog?.append('llm_api', 'coordinator', {
         input_tokens: usage.inputTokens,
         output_tokens: usage.outputTokens,
         duration_ms: durationMs,

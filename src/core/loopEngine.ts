@@ -463,7 +463,7 @@ export async function runLoop(
         progressEvidenceHash,
         workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
+        consecutiveProviderFailures: circuit.consecutiveFailures,
         createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })
@@ -530,7 +530,7 @@ export async function runLoop(
         progressEvidenceHash,
         workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
+        consecutiveProviderFailures: circuit.consecutiveFailures,
         createdAt: restoredCp?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(),
       })
     } catch { /* best-effort */ }
@@ -879,7 +879,7 @@ ${acceptanceRaw || '(none — propose one based on GOAL)'}`
         progressEvidenceHash,
         workspaceEvidenceHash: gitProgressEvidence(cwd),
         consecutiveNoProgress,
-        consecutiveProviderFailures: circuit.consecutiveFailures, consecutiveCommandFailures: 0,
+        consecutiveProviderFailures: circuit.consecutiveFailures,
         createdAt: restoredCp?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })

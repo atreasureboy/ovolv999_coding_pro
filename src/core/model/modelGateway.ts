@@ -239,8 +239,11 @@ export class ModelGateway {
    * marker. False positives are cheap (the next attempt just fails
    * the same way); false negatives mean the loop sits on a dead
    * profile.
+   * R7 fix: exported as public helper so the coordinator can reuse
+   * the same regex set. Without this, the gateway would retry a
+   * profile the coordinator classified as non-retryable.
    */
-  private isRetryableProviderError(errMsg: string): boolean {
+  isRetryableProviderError(errMsg: string): boolean {
     return (
       /\b429\b/.test(errMsg)
       || /\b5\d\d\b/.test(errMsg)

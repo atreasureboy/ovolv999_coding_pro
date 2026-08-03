@@ -41,7 +41,7 @@ function mkCheckpoint(over: Partial<LoopCheckpoint> = {}): LoopCheckpoint {
     passedQualityGates: ['typecheck', 'lint', 'test', 'build'],
     goalHash: 'a1b2c3d4', acceptanceHash: 'e5f60718',
     changedFiles: [], consecutiveNoProgress: 0,
-    consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+    consecutiveProviderFailures: 0,
     createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',
     ...over,
   }

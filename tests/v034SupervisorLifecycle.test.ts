@@ -16,7 +16,7 @@ function makeCheckpoint(iteration: number, opts: Partial<LoopCheckpoint> = {}): 
   return {
     schemaVersion: 1, sequence: Date.now(), taskId: 'test', branch: 'main', worktree: '/tmp',
     iteration, phase: 'iteration-complete', goalHash: hashContract('goal'), acceptanceHash: hashContract('acc'),
-    changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+    changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     ...opts,
   }

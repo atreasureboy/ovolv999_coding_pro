@@ -103,7 +103,8 @@ describe('R13: /daemon slash command', () => {
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'list-workers' })
     expect(res.ok).toBe(true)
-    const list = (res.data as Array<{ name: string }>) ?? []
+    const data = res.data as { workers: Array<{ name: string }> }
+    const list = data.workers
     expect(list.length).toBe(2)
     expect(list.map((w) => w.name).sort()).toEqual(['worker-A', 'worker-B'])
     expect(formatWorkers(list as never)).toContain('worker-A')
@@ -143,7 +144,7 @@ describe('R13: /daemon slash command', () => {
     // Wait for the simulated restart cycle to complete
     await new Promise((resolve) => setTimeout(resolve, 100))
     const list = await client.send({ action: 'list-workers' })
-    const workers = (list.data as Array<{ id: string; status: string }>) ?? []
+    const workers = (list.data as { workers: Array<{ id: string; status: string }> }).workers ?? []
     const found = workers.find((w) => w.id === worker.id)
     expect(found?.status).toBe('running')
 
@@ -262,7 +263,7 @@ describe('R13: /daemon slash command', () => {
     // Wait for the simulated restart cycle
     await new Promise((resolve) => setTimeout(resolve, 100))
     const list = await client.send({ action: 'list-workers' })
-    const workers = (list.data as Array<{ id: string; status: string }>) ?? []
+    const workers = (list.data as { workers: Array<{ id: string; status: string }> }).workers ?? []
     expect(workers.find((w) => w.id === w1.id)?.status).toBe('running')
     expect(workers.find((w) => w.id === w2.id)?.status).toBe('running')
     expect(workers.find((w) => w.id === w3.id)?.status).toBe('running')
@@ -1303,8 +1304,9 @@ describe('R13: /daemon slash command', () => {
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'list-workers', payload: { sortBy: 'name' } })
     expect(res.ok).toBe(true)
-    const workers = (res.data as Array<{ name: string }>)
-    expect(workers.map((w) => w.name)).toEqual(['alpha', 'bravo', 'charlie'])
+    const data = res.data as { workers: Array<{ name: string }>; total: number }
+    expect(data.workers.map((w) => w.name)).toEqual(['alpha', 'bravo', 'charlie'])
+    expect(data.total).toBe(3)
 
     await daemon.stop()
   })
@@ -1324,8 +1326,8 @@ describe('R13: /daemon slash command', () => {
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'list-workers', payload: { sortBy: 'status' } })
     expect(res.ok).toBe(true)
-    const workers = (res.data as Array<{ id: string; status: string }>)
-    expect(workers.map((w) => w.id)).toEqual([w1.id, w2.id, w3.id])
+    const data = res.data as { workers: Array<{ id: string; status: string }> }
+    expect(data.workers.map((w) => w.id)).toEqual([w1.id, w2.id, w3.id])
 
     await daemon.stop()
   })
@@ -1340,6 +1342,134 @@ describe('R13: /daemon slash command', () => {
     const res = await client.send({ action: 'list-workers', payload: { sortBy: 'banana' } })
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/invalid sortBy/)
+
+    await daemon.stop()
+  })
+
+  it('R38: list-workers sortDir=desc reverses', async () => {
+    const sockPath = join(tmpDir, 'sortdir-desc.sock')
+    const logPath = join(tmpDir, 'sortdir-desc.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    daemon.addWorker('alpha', 'echo', 'cli')
+    daemon.addWorker('bravo', 'echo', 'cli')
+    daemon.addWorker('charlie', 'echo', 'cli')
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortBy: 'name', sortDir: 'desc' } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { workers: Array<{ name: string }> }
+    expect(data.workers.map((w) => w.name)).toEqual(['charlie', 'bravo', 'alpha'])
+
+    await daemon.stop()
+  })
+
+  it('R38: list-workers sortDir=asc is the default', async () => {
+    const sockPath = join(tmpDir, 'sortdir-asc.sock')
+    const logPath = join(tmpDir, 'sortdir-asc.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    daemon.addWorker('alpha', 'echo', 'cli')
+    daemon.addWorker('bravo', 'echo', 'cli')
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortBy: 'name', sortDir: 'asc' } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { workers: Array<{ name: string }> }
+    expect(data.workers.map((w) => w.name)).toEqual(['alpha', 'bravo'])
+
+    await daemon.stop()
+  })
+
+  it('R38: list-workers invalid sortDir returns ok=false', async () => {
+    const sockPath = join(tmpDir, 'sortdir-bad.sock')
+    const logPath = join(tmpDir, 'sortdir-bad.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortDir: 'banana' } })
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/invalid sortDir/)
+
+    await daemon.stop()
+  })
+
+  it('R39: sortBy=status uses name as tie-breaker (deterministic)', async () => {
+    const sockPath = join(tmpDir, 'sort-status-tb.sock')
+    const logPath = join(tmpDir, 'sort-status-tb.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    // Add 3 workers, all with status 'starting' (default).
+    // Insert order: charlie, alpha, bravo.
+    // Without tie-breaker, output would be: charlie, alpha, bravo.
+    // With name tie-breaker: alpha, bravo, charlie.
+    const charlie = daemon.addWorker('charlie', 'echo', 'cli')
+    const alpha = daemon.addWorker('alpha', 'echo', 'cli')
+    const bravo = daemon.addWorker('bravo', 'echo', 'cli')
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortBy: 'status' } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { workers: Array<{ id: string; name: string }> }
+    expect(data.workers.map((w) => w.id)).toEqual([alpha.id, bravo.id, charlie.id])
+
+    await daemon.stop()
+  })
+
+  it('R40: list-workers limit + offset paginates results', async () => {
+    const sockPath = join(tmpDir, 'paging.sock')
+    const logPath = join(tmpDir, 'paging.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    for (let i = 0; i < 5; i++) daemon.addWorker(`w-${i}`, 'echo', 'cli')
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortBy: 'name', limit: 2, offset: 1 } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { workers: Array<{ name: string }>; total: number; limit: number; offset: number }
+    expect(data.total).toBe(5)
+    expect(data.limit).toBe(2)
+    expect(data.offset).toBe(1)
+    expect(data.workers.map((w) => w.name)).toEqual(['w-1', 'w-2'])
+
+    await daemon.stop()
+  })
+
+  it('R40: list-workers offset beyond total returns empty', async () => {
+    const sockPath = join(tmpDir, 'paging-overflow.sock')
+    const logPath = join(tmpDir, 'paging-overflow.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    for (let i = 0; i < 3; i++) daemon.addWorker(`w-${i}`, 'echo', 'cli')
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'list-workers', payload: { sortBy: 'name', offset: 99 } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { workers: unknown[]; total: number }
+    expect(data.total).toBe(3)
+    expect(data.workers).toEqual([])
+
+    await daemon.stop()
+  })
+
+  it('R41: tag-stats paginates tags[] array', async () => {
+    const sockPath = join(tmpDir, 'tagstats-paging.sock')
+    const logPath = join(tmpDir, 'tagstats-paging.log')
+    const daemon = new Daemon(sockPath, logPath)
+    await daemon.start()
+    for (let i = 0; i < 5; i++) daemon.addWorker(`w-${i}`, 'echo', `tag-${i}`)
+
+    const client = new DaemonClient(sockPath)
+    const res = await client.send({ action: 'tag-stats', payload: { limit: 2, offset: 1 } })
+    expect(res.ok).toBe(true)
+    const data = res.data as { tags: Array<{ tag: string }>; totalTags: number; limit: number; offset: number }
+    expect(data.totalTags).toBe(5)
+    expect(data.limit).toBe(2)
+    expect(data.offset).toBe(1)
+    expect(data.tags.length).toBe(2)
+    expect(data.tags[0]?.tag).toBe('tag-1')
+    expect(data.tags[1]?.tag).toBe('tag-2')
 
     await daemon.stop()
   })

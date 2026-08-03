@@ -1,4 +1,36 @@
-# ADR-010: Anthropic native adapter (zero-deps fetch)
+# ADR-010: Anthropic native adapter (R8: SDK-based)
+
+## Context
+
+ovolv999 routes Anthropic API calls through `@anthropic-ai/sdk` (added
+in R8, 2026-07-30). This supersedes the earlier zero-deps hand-rolled
+fetch/SSE approach. The original ADR-010 text described the zero-deps
+implementation, which was the design at the time of writing but
+diverged from the shipped code after the R8 "A继续升级" decision
+that brought 3 SDKs (`@anthropic-ai/sdk`, `chokidar`,
+`vscode-jsonrpc`) into the runtime dependency list.
+
+First-party features unlocked by the SDK:
+
+- thinking blocks (extended thinking)
+- prompt caching (`prompt-caching-2024-07-31`)
+- cross-provider fallback (`server-side-fallback-2026-06-01`)
+- token-budget beta (`task-budgets-2026-03-13`)
+
+## Status: SUPERSEDED
+
+The current implementation uses `@anthropic-ai/sdk` (see
+`src/core/model/anthropicAdapter.ts:11` and `src/core/model/anthropicSse.ts:21`).
+The "zero-deps" property is no longer accurate — runtime
+dependencies now total 8, not 5. See ADR-012 for the full
+SDK integration status and `docs/audit/2026-08-03-architecture-audit.md`
+for the dependency-count drift history.
+
+## Original (zero-deps) Design
+
+The text below this point reflects the design intent at the time
+of writing. It is preserved for historical context but does not
+match the shipped code.
 
 ## Context
 

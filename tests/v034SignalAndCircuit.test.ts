@@ -25,7 +25,7 @@ describe('v0.3.4 signal handling + circuit breaker (durable supervisor contract 
         iteration: 7, phase: 'interrupted',
         goalHash: hashContract('test'), acceptanceHash: hashContract(''),
         changedFiles: [], consecutiveNoProgress: 0,
-        consecutiveProviderFailures: 2, consecutiveCommandFailures: 1,
+        consecutiveProviderFailures: 2,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       })
 
@@ -82,7 +82,7 @@ describe('v0.3.4 signal handling + circuit breaker (durable supervisor contract 
           iteration: i, phase: 'running',
           goalHash: 'g', acceptanceHash: 'a',
           changedFiles: [], consecutiveNoProgress: 0,
-          consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+          consecutiveProviderFailures: 0,
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         })
         const loaded = cm.load()

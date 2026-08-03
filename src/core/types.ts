@@ -8,7 +8,7 @@ import type { BackgroundTaskManager } from './backgroundTaskManager.js'
 import type { ResourceClaim } from './executionRun.js'
 import type { ExecutionContext } from './executionContext.js'
 import type { FileHistory } from './fileHistory.js'
-import type { PermissionManager } from './permissionSystem.js'
+import type { PermissionManager, PermissionMode } from './permissionSystem.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 import type { TaskKind } from './runtime/taskIntent.js'
@@ -146,7 +146,7 @@ export interface ToolContext {
    * union is kept as a subtype alias for back-compat with any tools
    * that pattern-match against `'auto' | 'ask' | 'deny'` directly.
    */
-  permissionMode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
+  permissionMode: PermissionMode
   /** Unified permission manager used by the engine before tool execution. */
   permissionManager?: PermissionManager
   /** AbortSignal — tools should honour this to support Ctrl+C cancellation */
@@ -406,7 +406,7 @@ export interface EngineConfig {
   maxIterations: number
   cwd: string
   /** Round 5: extended permission mode (7 states). */
-  permissionMode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
+  permissionMode: PermissionMode
   /** Unified permission manager; if omitted the engine creates one from permissionMode. */
   permissionManager?: PermissionManager
   systemPrompt?: string

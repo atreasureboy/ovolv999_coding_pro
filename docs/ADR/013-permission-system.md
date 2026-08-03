@@ -41,8 +41,11 @@ narrowest:
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer 2: gateByPermissionMode                                │
 │   - coarse mode gate (default / acceptEdits / plan / etc.)  │
-│   - bypassPermissions + dontAsk → 'allow' (skip layer 3)     │
+│   - bypassPermissions + dontAsk + bubble → 'allow'           │
 │   - other modes → 'check' (proceed to layer 3)              │
+│ Note: even on 'allow' paths, Layer 3 still runs (R20 fix).  │
+│ Deny-wins: a glob rule denying the action short-circuits     │
+│ the entire flow. Mode cannot bypass a deny.                  │
 └─────────────────────────────────────────────────────────────┘
                               │ pass
                               ▼
@@ -98,13 +101,13 @@ is the point.
 
 | Mode | Coarse gate (L2) | Glob engine (L3) | permissionManager (L4) | UI prompt (L5) |
 |---|---|---|---|---|
-| `default` | `'check'` | glob rules | risk-classified ask | dialog |
-| `acceptEdits` | `'allow'` for edit tools, `'check'` otherwise | glob rules | risk-classified ask | dialog |
-| `plan` | `'check'` (plan-mode policy in L1) | glob rules | read-only allowlist | dialog |
-| `auto` | `'check'` | glob rules | dangerous → ask | dialog |
-| `bypassPermissions` | `'allow'` (skip L3) | skip | skip | dialog (audit) |
-| `dontAsk` | `'allow'` (skip L3) | skip | skip | **auto-approve** (R9.3) |
-| `bubble` | `'check'` | glob rules | sandbox wrap (Bash tool) | dialog |
+| `default` | `'check'` | glob rules (always) | risk-classified ask | dialog |
+| `acceptEdits` | `'allow'` for edit tools, `'check'` otherwise | glob rules (always) | risk-classified ask | dialog |
+| `plan` | `'check'` (plan-mode policy in L1) | glob rules (always) | read-only allowlist | dialog |
+| `auto` | `'check'` | glob rules (always) | dangerous → ask | dialog |
+| `bypassPermissions` | `'allow'` | glob rules (always) | skip | dialog (audit) |
+| `dontAsk` | `'allow'` | glob rules (always) | skip | **auto-approve** (R9.3) |
+| `bubble` | `'allow'` | glob rules (always) | skip | dialog |
 
 The `bubble` row shows the cross-layer feature: the bash tool (a
 specific tool, not the permission layer) checks `permissionMode === 'bubble'`

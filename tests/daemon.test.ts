@@ -88,9 +88,9 @@ describe('daemon', () => {
       const client = new DaemonClient(socketPath)
       const res = await client.send({ action: 'list-workers' })
       expect(res.ok).toBe(true)
-      const workers = res.data as WorkerEntry[]
-      expect(workers).toHaveLength(1)
-      expect(workers[0].name).toBe('w1')
+      const data = res.data as { workers: WorkerEntry[] }
+      expect(data.workers).toHaveLength(1)
+      expect(data.workers[0].name).toBe('w1')
     })
 
     it('returns error for unknown action', async () => {

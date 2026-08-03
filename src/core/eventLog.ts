@@ -43,13 +43,13 @@ export type EventType =
   | 'memory_write'
   | 'context_compact'
   | 'module_flag'
-  | 'user_input'
-  | 'user_interrupt'
   | 'agent_completion'
   | 'protocol'
   | 'workspace_change'
   | 'permission_decision'
   | 'worker_restart'
+  | 'llm_api'
+  | 'llm_api_usage_missing'
 
 /** Runtime whitelist — used by isValidEntry to reject unknown event types. */
 const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
@@ -61,13 +61,13 @@ const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   'memory_write',
   'context_compact',
   'module_flag',
-  'user_input',
-  'user_interrupt',
   'agent_completion',
   'protocol',
   'workspace_change',
   'permission_decision',
   'worker_restart',
+  'llm_api',
+  'llm_api_usage_missing',
 ])
 
 export interface EventLogEntry {
@@ -296,6 +296,8 @@ export class EventLog {
 
   /**
    * Rotate the on-disk log when its size exceeds `thresholdBytes`.
+   * Public so tests can verify rotation behavior; production code uses
+   * `append()` which calls this automatically.
    *
    * Behavior:
    *   - If the file is missing or smaller than the threshold, returns
@@ -307,10 +309,6 @@ export class EventLog {
    * Returns `true` iff a rotation was performed. Best-effort: any
    * rename failure returns `false` rather than throwing — the audit log
    * must never break the engine.
-   *
-   * Callers typically invoke this before `readAll()` on long-running
-   * sessions so the read returns a bounded working set and the rotated
-   * `.1` holds the historical tail.
    */
   rotateIfExceeded(thresholdBytes: number): boolean {
     if (!Number.isFinite(thresholdBytes) || thresholdBytes <= 0) return false

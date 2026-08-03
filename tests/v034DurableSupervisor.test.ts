@@ -49,7 +49,7 @@ describe('v0.3.4 LoopLeaseManager', () => {
   })
 
   it('§5: heartbeat updates heartbeatAt timestamp', () => {
-    const mgr = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 50_000, writeTimeoutMs: 5_000 })
+    const mgr = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 50_000, })
     mgr.acquire('task-1', '/project')
     // Wait a tiny bit so timestamp differs
     const ok = mgr.updateHeartbeat({
@@ -63,7 +63,7 @@ describe('v0.3.4 LoopLeaseManager', () => {
   })
 
   it('§5: stale lease can be taken over', () => {
-    const mgr1 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 0, writeTimeoutMs: 5_000 })
+    const mgr1 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 0, })
     mgr1.acquire('task-1', '/project')
     mgr1.release() // release first so we can write a modified stale lease
     // Write a stale lease manually (1 hour ago, different PID)
@@ -76,14 +76,14 @@ describe('v0.3.4 LoopLeaseManager', () => {
     }
     writeFileSync(join(tmp, 'loop.lock'), JSON.stringify(staleLease))
     // A new manager with short stale threshold should take over
-    const mgr2 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 1_000, writeTimeoutMs: 5_000 })
+    const mgr2 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 1_000, })
     const taken = mgr2.tryTakeover('task-1', '/project')
     expect(taken).not.toBeNull()
     expect(taken!.ownerToken).not.toBe('old-token')
   })
 
   it('§5: fresh lease prevents takeover', () => {
-    const mgr1 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 60_000, writeTimeoutMs: 5_000 })
+    const mgr1 = new LoopLeaseManager(tmp, { intervalMs: 10_000, staleAfterMs: 60_000, })
     mgr1.acquire('task-1', '/project')
     const mgr2 = new LoopLeaseManager(tmp)
     const taken = mgr2.tryTakeover('task-1', '/project')
@@ -111,7 +111,7 @@ describe('v0.3.4 CheckpointManager', () => {
       schemaVersion: 1, sequence: 1, taskId: 't1', branch: 'main', worktree: '/wt',
       iteration: 3, phase: 'executing', goalHash: 'abc123', acceptanceHash: 'def456',
       changedFiles: ['a.ts'], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
-      consecutiveCommandFailures: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     cm.save(cp)
     const loaded = cm.load()
@@ -126,7 +126,7 @@ describe('v0.3.4 CheckpointManager', () => {
       schemaVersion: 1, sequence: 1, taskId: 't1', branch: 'main', worktree: '/wt',
       iteration: 1, phase: 'start', goalHash: 'a', acceptanceHash: 'b',
       changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
-      consecutiveCommandFailures: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     cm.save(cp1)
     const cp2: LoopCheckpoint = { ...cp1, iteration: 2, sequence: 2 }
@@ -148,7 +148,7 @@ describe('v0.3.4 CheckpointManager', () => {
       schemaVersion: 1, sequence: 1, taskId: 't1', branch: 'main', worktree: '/wt',
       iteration: 1, phase: 'start', goalHash: 'a', acceptanceHash: 'b',
       changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
-      consecutiveCommandFailures: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     cm.save(cp1)
     const cp2: LoopCheckpoint = { ...cp1, iteration: 2, sequence: 2 }
@@ -178,7 +178,7 @@ describe('v0.3.4 CheckpointManager', () => {
       schemaVersion: 1, sequence: 1, taskId: 't', branch: 'b', worktree: '/w',
       iteration: 1, phase: 's', goalHash: 'a', acceptanceHash: 'b',
       changedFiles: [], consecutiveNoProgress: 0, consecutiveProviderFailures: 0,
-      consecutiveCommandFailures: 0, createdAt: '', updatedAt: '',
+      createdAt: '', updatedAt: '',
     })
     cm.clear()
     expect(cm.exists()).toBe(false)

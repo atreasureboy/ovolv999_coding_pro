@@ -56,12 +56,10 @@ export interface LoopCheckpoint {
   workspaceEvidenceHash?: string
   goalHash: string
   acceptanceHash: string
-  lastCommit?: string
   head?: string
   changedFiles: string[]
   consecutiveNoProgress: number
   consecutiveProviderFailures: number
-  consecutiveCommandFailures: number
   createdAt: string
   updatedAt: string
 }
@@ -80,13 +78,11 @@ export interface HeartbeatInfo {
 export interface HeartbeatConfig {
   intervalMs: number
   staleAfterMs: number
-  writeTimeoutMs: number
 }
 
 export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
   intervalMs: 30_000,
   staleAfterMs: 120_000,
-  writeTimeoutMs: 5_000,
 }
 
 export class LoopLeaseManager {

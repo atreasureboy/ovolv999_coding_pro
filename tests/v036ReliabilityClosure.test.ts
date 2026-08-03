@@ -148,7 +148,6 @@ describe('v0.3.6 reliability closure', () => {
         workspaceEvidenceHash: 'workspace',
         consecutiveNoProgress: 1,
         consecutiveProviderFailures: 4,
-        consecutiveCommandFailures: 0,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:01:00.000Z',
       }
