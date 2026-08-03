@@ -534,6 +534,15 @@ export interface CompactResult {
   messages: OpenAIMessage[]
   summaryTokens: number
   originalTokens: number
+  /** v0.5.2 (C8): transient error from the LLM call. When set,
+   *  callers like `maybeCompactWithRetry` know the failure was a
+   *  provider issue (network, 429, 5xx) and may retry. Pre-existing
+   *  callers ignore this field — they already treat
+   *  `compacted: false` as "fall through". */
+  error?: string
+  /** True iff the error was a retryable provider failure (vs a
+   *  local pre-condition like "too few messages"). */
+  retryable?: boolean
 }
 
 /**
@@ -694,16 +703,20 @@ export async function maybeCompact(
     // its own catch and into the user-facing `result.reason = 'error'`
     // path. Other failures (network blip, 429, malformed-response)
     // keep the legacy "return compacted:false" behaviour so the engine
-    // can continue with the original messages.
+    // can continue with the original messages. v0.5.2 (C8): we ALSO
+    // attach the error message + retryable hint so a wrapping retry
+    // layer can decide to try again with a fallback model.
     if (isAbort(err, signal)) {
       throw err
     }
-    return { compacted: false, messages, summaryTokens: 0, originalTokens }
+    const msg = (err as Error).message ?? String(err)
+    const retryable = /429|rate|timeout|ETIMEDOUT|ECONNRESET|503|502|500/i.test(msg)
+    return { compacted: false, messages, summaryTokens: 0, originalTokens, error: msg, retryable }
   }
 
   const summary = extractSummary(summaryText)
   if (!summary) {
-    return { compacted: false, messages, summaryTokens: 0, originalTokens }
+    return { compacted: false, messages, summaryTokens: 0, originalTokens, error: 'no summary extracted', retryable: false }
   }
 
   // Build compacted history: summary message + recent verbatim messages.
@@ -742,6 +755,83 @@ export async function maybeCompact(
 
 import type { WorkingState } from './workingState.js'
 import { assertCompactionInvariants } from './workingState.js'
+
+/**
+ * v0.5.2 (C8 — borrowed from codex `compact_model_fallback.rs` +
+ * `compact_remote_v2_attempt.rs`): wrap `maybeCompact` with a retry
+ * loop + optional fallback model. On retryable errors (5xx, 429,
+ * network blips), retry up to `maxAttempts` times. After
+ * `maxAttempts` failures, fall back to the cheapest model in
+ * `fallbackModels` (in order) and try once with each.
+ *
+ * The result mirrors `maybeCompact`; callers see no difference
+ * beyond an extra `attemptCount` field on success or failure.
+ *
+ * Pure: does not mutate `messages` on the failure path.
+ */
+export interface CompactWithRetryOptions {
+  maxAttempts?: number
+  fallbackModels?: string[]
+}
+
+export interface CompactWithRetryResult extends CompactResult {
+  /** Total attempts (including primary + fallbacks). */
+  attemptCount: number
+  /** Model that produced the summary (primary or fallback). */
+  effectiveModel: string
+}
+
+export async function maybeCompactWithRetry(
+  client: OpenAI,
+  primaryModel: string,
+  messages: OpenAIMessage[],
+  opts: CompactWithRetryOptions = {},
+  signal?: AbortSignal,
+): Promise<CompactWithRetryResult> {
+  const maxAttempts = opts.maxAttempts ?? 2
+  const fallbackModels = opts.fallbackModels ?? []
+  // Build the ordered model list: primary first, then fallbacks.
+  const ordered = [primaryModel, ...fallbackModels]
+  let lastResult: CompactResult | null = null
+  let attemptCount = 0
+  for (const model of ordered) {
+    for (let i = 0; i < maxAttempts; i++) {
+      attemptCount++
+      try {
+        const r = await maybeCompact(client, model, messages, signal)
+        if (r.compacted) {
+          return { ...r, attemptCount, effectiveModel: model }
+        }
+        lastResult = r
+        // Non-retryable failure (compacted:false without retryable hint).
+        // Break the inner loop and try the next model in the chain.
+        if (!r.retryable) break
+        // Last attempt of this model — fall through to the next model.
+        if (i === maxAttempts - 1) break
+      } catch (err) {
+        // Cancellation must always propagate. Retryable errors are
+        // silently retried; non-retryable errors fall through to the
+        // next model.
+        if (isAbort(err, signal)) throw err
+        const msg = (err as Error).message ?? ''
+        const isRetryable =
+          /429|rate|timeout|ETIMEDOUT|ECONNRESET|503|502|500/.test(msg)
+        if (!isRetryable) {
+          lastResult = { compacted: false, messages, summaryTokens: 0, originalTokens: estimateTokens(messages), error: msg, retryable: false }
+          break
+        }
+        lastResult = { compacted: false, messages, summaryTokens: 0, originalTokens: estimateTokens(messages), error: msg, retryable: true }
+        // Last attempt of this model — fall through to the next model.
+        if (i === maxAttempts - 1) break
+      }
+    }
+  }
+  return {
+    ...(lastResult ?? { compacted: false, messages, summaryTokens: 0, originalTokens: estimateTokens(messages) }),
+    attemptCount,
+    effectiveModel: ordered[ordered.length - 1],
+  }
+}
 
 /**
  * Wrap `maybeCompact` with the §七 compaction invariants:

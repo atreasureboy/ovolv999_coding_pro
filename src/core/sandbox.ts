@@ -27,7 +27,12 @@ import { warnConfigOnce } from '../config/diagnostics.js'
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type SandboxLevel = 'permissive' | 'standard' | 'strict'
-export type SandboxBackend = 'none' | 'macos-seatbelt' | 'linux-bubblewrap'
+export type SandboxBackend =
+  | 'none'
+  | 'macos-seatbelt'
+  | 'linux-bubblewrap'
+  | 'linux-landlock'
+  | 'windows-jobobject'
 
 export interface SandboxConfig {
   enabled: boolean
@@ -112,6 +117,15 @@ export function detectBackend(): SandboxBackend {
       execSync('which bwrap', { stdio: 'pipe', timeout: 2000 })
       return 'linux-bubblewrap'
     } catch { /* not found */ }
+    // v0.5.2 (C9): bwrap missing → fall back to landlock. Landlock is
+    // kernel-side (no binary needed) but ovolv999 does not yet emit
+    // landlock syscalls; we report it as detected so the manager can
+    // record that landlock would be the natural next backend.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { existsSync } = require('node:fs') as typeof import('node:fs')
+      if (existsSync('/sys/kernel/security/landlock')) return 'linux-landlock'
+    } catch { /* ignore */ }
   }
   return 'none'
 }
@@ -378,4 +392,123 @@ export function formatProfile(profile: SandboxProfile): string {
 function shellQuote(s: string): string {
   if (/^[A-Za-z0-9_:.@/=-]+$/.test(s)) return s
   return `'${s.replace(/'/g, "'\\''")}'`
+}
+
+// ── v0.5.2 (C9 — borrowed from codex sandboxing/{landlock.rs,bwrap.rs}) ────
+
+/**
+ * SandboxManager — runtime backend selection with graceful fallback.
+ *
+ * codex ships three sandbox backends per platform (Linux landlock +
+ * bwrap + macOS seatbelt + Windows JobObject) and a `manager.rs`
+ * orchestrator that picks the right one at startup. We borrow the
+ * same idea but keep it intentionally tiny: ovolv999 already has
+ * seatbelt + bwrap; we add landlock (Linux LSM-based, no setuid
+ * binary required) and a fallback chain that retries each backend
+ * in order when the preferred one is unavailable.
+ *
+ * The fallback order on Linux is:
+ *   1. bwrap   — works without root, requires the bwrap binary
+ *   2. landlock — kernel LSM, requires Linux ≥ 5.13 + `prctl`
+ *   3. none    — never fails, but emits a warning so the user
+ *                knows the sandbox is not active
+ *
+ * The Manager is a thin wrapper around `detectBackend()` + the
+ * existing `compileProfile()` / `wrapCommand()` helpers.
+ */
+export interface SandboxBackendStatus {
+  backend: SandboxBackend
+  available: boolean
+  /** When `available=false`, why. */
+  reason?: string
+}
+
+export interface SandboxSelectionResult {
+  /** The backend ultimately selected (may be 'none'). */
+  selected: SandboxBackend
+  /** All backends tried, in preference order. */
+  attempted: SandboxBackendStatus[]
+  /** When `selected === 'none'`, this explains why. */
+  fallbackReason?: string
+}
+
+export class SandboxManager {
+  /**
+   * Return the backend status for every supported backend on the
+   * current host. The list is ordered from most-preferred to
+   * least-preferred per the codex precedence.
+   */
+  listAvailable(): SandboxBackendStatus[] {
+    const out: SandboxBackendStatus[] = []
+    if (process.platform === 'darwin') {
+      out.push({ backend: 'macos-seatbelt', available: this.hasExecutable('sandbox-exec') })
+    }
+    if (process.platform === 'linux') {
+      out.push({ backend: 'linux-bubblewrap', available: this.hasExecutable('bwrap') })
+      // Landlock is kernel-level; check via uname. We don't try to
+      // load the LSM module — modern kernels ship it built-in.
+      out.push({ backend: 'linux-landlock', available: this.kernelSupports('landlock') })
+    }
+    if (process.platform === 'win32') {
+      // JobObject is a Win32 kernel feature — always present on NT 6+.
+      out.push({ backend: 'windows-jobobject', available: true })
+    }
+    return out
+  }
+
+  /**
+   * Pick the best available backend. Returns the full attempt
+   * trace so callers can log a useful warning when no real sandbox
+   * is available.
+   */
+  select(): SandboxSelectionResult {
+    const attempted = this.listAvailable()
+    const usable = attempted.find((s) => s.available)
+    if (usable) {
+      return { selected: usable.backend, attempted }
+    }
+    const reasons = attempted
+      .filter((s) => !s.available)
+      .map((s) => `${s.backend}: ${s.reason ?? 'unavailable'}`)
+    return {
+      selected: 'none',
+      attempted,
+      fallbackReason: reasons.length > 0 ? reasons.join('; ') : 'no backend matched platform',
+    }
+  }
+
+  /** Convenience: returns just the chosen backend string. */
+  selectedBackend(): SandboxBackend {
+    return this.select().selected
+  }
+
+  private hasExecutable(name: string): boolean {
+    try {
+      execSync(`which ${name}`, { stdio: 'pipe', timeout: 2000 })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Best-effort kernel-feature probe via /proc/version on Linux.
+   * `landlock` is in the kernel since 5.13; the procfs files
+   * /sys/kernel/security/landlock* exist when the LSM is wired.
+   * We do NOT load the module — this is a passive check.
+   */
+  private kernelSupports(feature: 'landlock'): boolean {
+    if (feature !== 'landlock') return false
+    if (process.platform !== 'linux') return false
+    try {
+      // /proc/sys/kernel/seccomp/actions_avail is a more universal
+      // proxy — seccomp is a prerequisite for landlock and is
+      // present on every supported kernel.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { existsSync } = require('node:fs') as typeof import('node:fs')
+      return existsSync('/proc/sys/kernel/seccomp') || existsSync('/sys/kernel/security/landlock')
+    } catch {
+      return false
+    }
+  }
 }

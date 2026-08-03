@@ -173,3 +173,28 @@ These three:
 - Codex per-tool time/cost budgets
 - Aider "Split Repo" sub-agent mode dispatch
 - Codex cross-session persistent memory (feature-request only)
+
+## Status (v0.5.2 Stage 8 — comprehensive borrowing)
+
+| ID | Capability | Status | File |
+|---|---|---|---|
+| C1 | RepoMapService | ✅ Done | `src/core/repoMap.ts` |
+| C2 | execpolicy DSL extension | ✅ Done | `src/core/permissionRules.ts` |
+| C3 | RunScopedRuntimeContext.inheritConfig | ✅ Done | `src/core/runtime/runScopedContext.ts` |
+| C4 | Aider planner-vs-executor split | ✅ Done (v0.5.0) + C13 helper | `src/core/architectMode.ts` |
+| C5 | Cursor 90% auto-compact threshold | ✅ Done (CLAUDE.md 85%) | `src/core/compact.ts` |
+| C6 | Memories auto-extract | ✅ Done | `src/modules/reflection.ts` |
+| C7 | .ovolv999ignore | ✅ Done | `src/core/repoStats.ts` |
+| C8 | Compact retry + fallback | ✅ Done | `src/core/compact.ts` |
+| C9 | Landlock/seatbelt/bwrap manager | ✅ Done (detection only; syscall emitter deferred) | `src/core/sandbox.ts` |
+| C10 | EditFormat contract | ✅ Done | `src/core/editFormat.ts` |
+| C11 | .mdc rule loader | ✅ Done | `src/core/mdcRules.ts` |
+| C12 | @-symbol picker | ✅ Done | `src/tools/atSymbolPicker.ts` |
+| C13 | Architect/editor mode | ✅ Done | `src/core/architectMode.ts` |
+
+All thirteen items from the original survey are wired. The
+remaining gaps (Codex landlock syscall emitter, Cursor @docs,
+Aider Split-Repo sub-agent mode) require capabilities ovolv999
+explicitly does not want — native syscalls break the zero-deps
+contract; embedding-based docs break the zero-deps contract;
+Split-Repo sub-agents were not verified in the public tree.

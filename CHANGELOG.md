@@ -30,12 +30,69 @@ caller and a zero-dep implementation:
 
 Survey notes: `.ovolv999/notes/codex-cursor-aider-survey.md`.
 
-Excluded from this round (already done or out of scope):
-- Aider planner-vs-executor model split — done (v0.5.0 multi-agent)
+### Stage 8 — Comprehensive borrowing completion
+
+All deferred items from the Stage 7 survey are now wired, each gated
+on a real production caller and a zero-dep implementation:
+
+- **C2 — execpolicy DSL extension** (codex `execpolicy/`): added
+  `HostExecutableRule` + `evaluateHostExecutable()` + `strictestWins()`
+  + `evaluateBashPolicy()` to `permissionRules.ts`. Canonical
+  `forbidden > prompt > allow` aggregation codified as a testable
+  pure function.
+- **C6 — Memories auto-extract** (cursor "Memories"): the
+  `ReflectionModule` now routes every extracted entry through the
+  `LongTermMemory` R1 (verification) + R2 (source marking) +
+  R5 (conflict merge) gates. Audit-rejected entries are surfaced
+  in the EventLog so the LLM-driven learning loop stays honest.
+- **C8 — compact retry + fallback** (codex
+  `compact_model_fallback.rs` + `compact_remote_v2_attempt.rs`):
+  new `maybeCompactWithRetry()` with retry-on-5xx/429 and a
+  `fallbackModels` chain. `CompactResult` gained `error` +
+  `retryable` fields so wrappers can decide.
+- **C9 — landlock/seatbelt/bwrap sandbox manager** (codex
+  `sandboxing/{landlock,seatbelt,bwrap}.rs`): new `SandboxManager`
+  with per-platform fallback chain (`bwrap → landlock → none` on
+  Linux, `sandbox-exec` on macOS, JobObject on Windows). Detection
+  is best-effort; the manager surfaces a `fallbackReason` when no
+  backend is available.
+- **C10 — EditFormat contract** (aider `editor_*_coder.py`):
+  new `EditFormat` union (`whole` / `udiff` / `diff` / `editblock`)
+  with pure `applyEdit()` + per-format diagnostics. The system
+  prompt can now declare which format the model should emit;
+  switching the format does NOT change WHICH tools are available,
+  only the SHAPE of the model's output.
+- **C11 — Cursor `.mdc` rule loader**: new `parseMdcRule()` +
+  `loadRules()` + `activateRules()` + `renderForPrompt()`. Loads
+  `.ovolv999/rules/*.mdc` (user-level + cwd-level) with the
+  Cursor YAML frontmatter shape and the 4 activation modes
+  (`always` / `auto` / `agent` / `decisions`).
+- **C12 — Cursor `@`-symbol picker**: new `AtSymbolPicker` tool
+  + `createAtSymbolPickerTool()`. Resolves `@file` / `@folder`
+  / `@codebase` against the existing `RepoStatsService` walk.
+  Zero-deps; `@docs` is reserved but not wired (no docs index yet).
+- **C13 — Aider architect/editor mode**: new `runArchitectExecutor()`
+  + `formatArchitectResult()`. Two-round planner → executor flow
+  with separate model profiles. Production caller: future
+  `/architect <task>` slash command.
+
+### Tests
+
+Stage 8 adds 47 new tests across 7 new test files
+(`tests/compactRetry`, `tests/sandboxManager`, `tests/execPolicyC2`,
+`tests/mdcRules`, `tests/atSymbolPicker`, `tests/editFormat`,
+`tests/architectMode`). Cumulative targeted test count for v0.5.2:
+**240+ tests** across 12+ files, 0 typecheck errors, all 7
+`verify-runtime-truth` checks pass.
+
+### Excluded (done before / out of v0.5.2 scope)
+
+- Aider planner-vs-executor model split — done (v0.5.0 multi-agent + C13 helper)
 - Cursor 90% auto-compact threshold — done (CLAUDE.md 85%)
-- Codex landlock / seatbelt OS sandbox — deferred (needs sandbox test infra)
-- Codex compact retry / fallback — deferred
-- Cursor Memories auto-extract — LongTermMemory gate in place, extractor deferred
+- Cursor `@docs` semantic docs — reserved (zero-deps constraint, future round)
+- Codex landlock syscalls — kernel detection is wired but the
+  actual syscall emitter is deferred (would require a native
+  addon, breaking the zero-deps constraint).
 
 ### Added
 

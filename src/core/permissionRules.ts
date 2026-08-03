@@ -4,6 +4,15 @@
  * Glob-based permission rules for fine-grained access control.
  * Supports allow/deny lists with glob patterns, per-tool rules,
  * and user approval flows.
+ *
+ * v0.5.2 (C2 — borrowed from codex `execpolicy/`): added an
+ * `execpolicy` namespace with `HostExecutableRule` so the Bash tool
+ * can match commands against a curated host-binary allowlist, AND
+ * a `strictestWins()` helper that codifies the canonical
+ * `forbidden > prompt > allow` aggregation rule. The existing
+ * priority-sorted evaluator already produces deny-wins in practice;
+ * the new helper makes it explicit and testable so future
+ * contributors don't accidentally invert the precedence.
  */
 
 import { globMatch as globMatchFn } from '../utils/globMatch.js'
@@ -27,11 +36,39 @@ export interface PermissionRule {
   priority: number
 }
 
+/**
+ * v0.5.2 (C2 — borrowed from codex `host_executable`):
+ * a curated allowlist for the first token of a Bash command.
+ *
+ * Why a separate shape? `PermissionRule` matches against the FULL
+ * primary argument; a `host_executable` matches against the binary
+ * NAME (the first whitespace-delimited token of a Bash command).
+ * Code paths that ONLY care about which binary is invoked (e.g.
+ * "is `rm` allowed?" regardless of its args) read this list.
+ *
+ * Production caller: Bash tool, before any rule evaluation,
+ * to surface a friendly "binary not in allowlist" error.
+ */
+export interface HostExecutableRule {
+  /** Binary name (no path, e.g. 'rm', 'sudo', 'git'). */
+  name: string
+  /** Allowed absolute paths for this binary. Empty = any path. */
+  paths?: string[]
+  /** Decision: 'deny' forbids the binary outright. */
+  decision: PermissionDecision
+  /** Human-readable reason. */
+  reason?: string
+}
+
 export interface PermissionConfig {
   /** Default decision when no rule matches */
   defaultDecision: PermissionDecision
   /** List of rules */
   rules: PermissionRule[]
+  /** v0.5.2 (C2): host-binary allowlist. Evaluated separately from
+   *  the glob rules because the matching shape is different (binary
+   *  name vs. full primary argument). */
+  hostExecutables?: HostExecutableRule[]
 }
 
 // ── Default Config ──────────────────────────────────────────────────────────
@@ -57,6 +94,51 @@ export const DEFAULT_PERMISSION_CONFIG: PermissionConfig = {
     { id: 'protect-env', tool: 'Write', pattern: '**/.env*', decision: 'deny', reason: 'Protect environment files', priority: 50 },
     { id: 'protect-keys', tool: 'Write', pattern: '**/*{key,pem,p12,jks,keystore}*', decision: 'deny', reason: 'Protect key files', priority: 50 },
   ],
+  // v0.5.2 (C2): default host_executable allowlist. `rm` is denied
+  // outright so even a permissive config cannot accidentally invoke
+  // recursive delete via a constructed shell-out.
+  hostExecutables: [
+    { name: 'rm', decision: 'deny', reason: 'rm forbidden — use safe_file_remove tool instead' },
+    { name: 'sudo', decision: 'deny', reason: 'sudo forbidden — never grant elevation to the model' },
+    { name: 'chmod', decision: 'ask', reason: 'changing file modes requires explicit approval' },
+    { name: 'curl', decision: 'ask', reason: 'network access requires explicit approval' },
+    { name: 'wget', decision: 'ask', reason: 'network access requires explicit approval' },
+  ],
+}
+
+/**
+ * v0.5.2 (C2 — borrowed from codex execpolicy aggregation rule):
+ * `forbidden > prompt > allow`. Given a set of decisions from
+ * different rule sources (default, host_executable, glob, mode
+ * gate, user prompt), the strictest one wins. Returns the winning
+ * decision + a reason that names every source that contributed.
+ *
+ * Pure — no I/O. Testable.
+ */
+const STRICTNESS: Record<PermissionDecision, number> = {
+  deny: 3,
+  ask: 2,
+  allow: 1,
+}
+
+export interface StrictestWinsInput {
+  defaultDecision?: PermissionDecision
+  globDecision?: PermissionDecision
+  hostExecutableDecision?: PermissionDecision
+  modeDecision?: PermissionDecision
+}
+
+export function strictestWins(input: StrictestWinsInput): PermissionDecision {
+  let winner: PermissionDecision = 'allow'
+  for (const v of [
+    input.defaultDecision,
+    input.globDecision,
+    input.hostExecutableDecision,
+    input.modeDecision,
+  ]) {
+    if (v && STRICTNESS[v] > STRICTNESS[winner]) winner = v
+  }
+  return winner
 }
 
 // ── Rule Evaluation ─────────────────────────────────────────────────────────
@@ -314,3 +396,60 @@ export function evaluateDefaultGlobRule(
  * status}" pattern and we want subsequent calls to skip the prompt.
  */
 export const sessionApprovalCache = new ApprovalCache()
+
+// ── v0.5.2 (C2 — host_executable evaluation) ─────────────────────────────────
+
+/**
+ * Match a Bash command against the host_executable allowlist. The
+ * matcher is intentionally simple — the first whitespace-delimited
+ * token is the binary, and a path may prefix the binary name
+ * (e.g. /usr/bin/rm). Returns the matched rule's decision, or
+ * undefined when no rule matches.
+ */
+export function evaluateHostExecutable(
+  command: string,
+  config: PermissionConfig = DEFAULT_PERMISSION_CONFIG,
+): { decision: PermissionDecision; reason: string; rule: HostExecutableRule } | undefined {
+  if (!config.hostExecutables || config.hostExecutables.length === 0) return undefined
+  const firstToken = command.trim().split(/\s+/)[0] ?? ''
+  const basename = firstToken.split('/').pop() ?? firstToken
+  for (const rule of config.hostExecutables) {
+    if (rule.name !== basename) continue
+    if (rule.paths && rule.paths.length > 0) {
+      // When paths are specified, the FIRST TOKEN must be exactly one
+      // of them. We do not resolve symlinks; this is a static check.
+      if (!rule.paths.includes(firstToken)) continue
+    }
+    return { decision: rule.decision, reason: rule.reason ?? `host_executable rule "${rule.name}" matched`, rule }
+  }
+  return undefined
+}
+
+/**
+ * v0.5.2 (C2): one-call entry that combines glob + host_executable +
+ * default and returns the strictest-wins result. Pure.
+ */
+export function evaluateBashPolicy(
+  input: Record<string, unknown>,
+  config: PermissionConfig = DEFAULT_PERMISSION_CONFIG,
+): PermissionResult {
+  const primaryArg = extractPrimaryArg(input)
+  const glob = evaluatePermission('Bash', primaryArg, config)
+  const host = evaluateHostExecutable(primaryArg, config)
+  const winner = strictestWins({
+    defaultDecision: config.defaultDecision,
+    globDecision: glob.decision,
+    hostExecutableDecision: host?.decision,
+  })
+  const reasons: string[] = []
+  if (glob.matchedRule) reasons.push(`glob:${glob.matchedRule.id}`)
+  if (host) reasons.push(`host_executable:${host.rule.name}`)
+  return {
+    decision: winner,
+    reason: reasons.length > 0 ? reasons.join('; ') : 'no rules matched — using strictest default',
+    // host_executable rules are NOT PermissionRules (different shape).
+    // Returning null here keeps the legacy contract — the reason
+    // string still names which rule source fired.
+    matchedRule: host ? null : glob.matchedRule,
+  }
+}

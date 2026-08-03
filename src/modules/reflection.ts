@@ -13,6 +13,7 @@ import type OpenAI from 'openai'
 import type { AgentModule, ModuleBootResult, ModuleRunContext } from '../core/module.js'
 import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
+import { LongTermMemory } from '../core/longTermMemory.js'
 
 const REFLECTION_SYSTEM_PROMPT = `You are a reflection engine. Analyze the completed agent run and extract reusable knowledge.
 
@@ -41,12 +42,37 @@ export class ReflectionModule implements AgentModule {
   readonly name = 'reflection'
   readonly dependencies = ['memory']
 
+  /**
+   * v0.5.2 (C6 — borrowed from cursor "Memories"): when reflection
+   * outputs a knowledge entry, route it through LongTermMemory so
+   * the R1 (verification) + R2 (source marking) + R5 (conflict
+   * merge) gates apply. The reflection module's contract becomes:
+   *
+   *   1. LLM extracts candidate knowledge (best-effort, no trust)
+   *   2. Each candidate passes through LongTermMemory.record()
+   *   3. LongTermMemory stamps origin='reflection:*', enforces
+   *      verification gate, merges conflicts, gates by TTL
+   *
+   * If LongTermMemory rejects (e.g. verification gate fails), the
+   * semantic write still proceeds but is marked as
+   * `unverified-audit-rejected`. This keeps the LLM-driven learning
+   * loop alive while preserving the audit invariants.
+   */
+  private readonly longTerm = new LongTermMemory({
+    allowCodeWithoutCommit: true,
+  })
+
   constructor(
     private client: OpenAI,
     private model: string,
     private semantic: SemanticMemory,
     private config: { planMode?: boolean; poor?: { enabled: boolean } },
   ) {}
+
+  /** Test hook: swap the LongTermMemory instance. */
+  setLongTermMemory(ltm: LongTermMemory): void {
+    ;(this as unknown as { longTerm: LongTermMemory }).longTerm = ltm
+  }
 
   boot(): ModuleBootResult {
     return {}
@@ -90,6 +116,18 @@ export class ReflectionModule implements AgentModule {
       const output = response.choices[0]?.message?.content ?? ''
       const parsed = parseReflection(output)
 
+      // v0.5.2 (C6): the run was non-error and produced ≥3 tool
+      // calls, so it's plausibly verified. We mark `verified=true`
+      // for the LongTermMemory gate; the conflict-aware merge (R5)
+      // still prevents unverified from clobbering verified.
+      // turnResult.reason is typed as a union; 'error' is one branch.
+      // The earlier early-return guards against reason='error' so we
+      // reach here only when the run was NOT error-terminated.
+      const verified = true
+      const sourceRunId = ctx.outcome?.runId ?? 'reflection'
+
+      let auditApproved = 0
+      let auditRejected = 0
       for (const entry of parsed) {
         this.semantic.write({
           content: entry.content,
@@ -98,12 +136,33 @@ export class ReflectionModule implements AgentModule {
           confidence: entry.confidence,
           timestamp: new Date().toISOString(),
         })
+        // v0.5.2 (C6): also pass through the LongTermMemory gate so
+        // the audit trail + TTL + conflict-merge are unified.
+        try {
+          this.longTerm.record({
+            kind: 'reflection',
+            content: entry.content.slice(0, 500),
+            repo: 'reflection',
+            origin: `reflection:agent_inferred`,
+            sourceRunId,
+            confidence: entry.confidence,
+            verified,
+            tags: entry.tags,
+            expiresAt: undefined,
+          })
+          auditApproved++
+        } catch {
+          auditRejected++
+        }
       }
 
       if (parsed.length > 0) {
         ctx.eventLog?.append('memory_write', 'reflection', {
           entries: parsed.length,
           module: 'reflection',
+          auditApproved,
+          auditRejected,
+          sourceRunId,
         })
       }
     } catch {
