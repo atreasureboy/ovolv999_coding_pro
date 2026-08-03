@@ -21,8 +21,8 @@
  * Pure: no side effects on import. Wire-in via the engine assembly.
  */
 
-import { existsSync, statSync } from 'node:fs'
-import { join, relative, resolve, basename, extname } from 'node:path'
+import { existsSync, statSync, readFileSync } from 'node:fs'
+import { join, relative, resolve, basename, extname, sep } from 'node:path'
 
 const DEFAULT_EXCLUDED_DIRS = new Set([
   'node_modules',
@@ -93,6 +93,15 @@ export interface RepoStatsOptions {
   binaryExtensions?: Set<string>
   /** Override the cap on per-file size for the walk. */
   maxFileBytes?: number
+  /**
+   * v0.5.2 (C7 — borrowed from cursor `.cursorignore`): additional
+   * gitignore-style patterns loaded from a file in the rootDir.
+   * Lines starting with `#` are comments; blank lines are ignored;
+   * anything else is matched against the relative path. The patterns
+   * are layered ON TOP of the default excludedDirs set (a pattern
+   * wins when either side excludes it).
+   */
+  ignoreFileName?: string
 }
 
 /** Walk a directory tree and aggregate file counts. */
@@ -107,8 +116,70 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
     ...(opts.binaryExtensions ?? new Set<string>()),
   ])
   const maxFileBytes = opts.maxFileBytes ?? 5 * 1024 * 1024 // 5 MiB cap per file
+  const ignoreFileName = opts.ignoreFileName ?? '.ovolv999ignore'
 
   const absRoot = resolve(rootDir)
+  // v0.5.2 (C7): load the .ovolv999ignore patterns once. Patterns
+  // are gitignore-style: `path/`, `*.ext`, `/leading`, `name`. We
+  // implement a subset sufficient for the common cases (exact name,
+  // extension glob, and trailing-slash directory marker).
+  const ignorePatterns: string[] = []
+  try {
+    const ignorePath = join(absRoot, ignoreFileName)
+    if (existsSync(ignorePath)) {
+      const raw = readFileSync(ignorePath, 'utf8')
+      for (const rawLine of raw.split('\n')) {
+        const line = rawLine.trim()
+        if (!line || line.startsWith('#')) continue
+        ignorePatterns.push(line)
+      }
+    }
+  } catch { /* ignore-file is best-effort */ }
+
+  const matchesIgnore = (relPath: string, isDir: boolean): boolean => {
+    if (ignorePatterns.length === 0) return false
+    const normalized = relPath.split(sep).join('/')
+    for (const pat of ignorePatterns) {
+      let p = pat
+      let dirOnly = false
+      if (p.endsWith('/')) { dirOnly = true; p = p.slice(0, -1) }
+      // Leading slash: anchored to root
+      const anchored = p.startsWith('/')
+      if (anchored) p = p.slice(1)
+      // For dirOnly patterns (e.g. "vendor/"), we skip the entry if
+      // it's a file under that directory. Files under `vendor/` match
+      // because normalized starts with `vendor/`. The dirOnly flag
+      // exists to prevent bare `vendor` (no slash) from accidentally
+      // matching a file named "vendor" — it only matches a directory
+      // named "vendor" OR anything inside that directory.
+      if (dirOnly && !isDir) {
+        // A file path matches a `dir/` pattern when the file is
+        // inside the directory. Exact-prefix check covers it.
+        if (normalized.startsWith(p + '/') || normalized === p) return true
+        continue
+      }
+      if (dirOnly && isDir && normalized === p) return true
+      // Exact match (file or directory without trailing slash)
+      if (normalized === p) return true
+      // Directory prefix match (pattern "build" matches "build/x.ts")
+      if (normalized.startsWith(p + '/')) return true
+      // Glob patterns with `*` and `**`. Anchored patterns (`/foo`) match
+// from the repo root; non-anchored patterns match any segment of the
+// path, so `*.gen.ts` matches `src/b.gen.ts`. This mirrors gitignore
+// behaviour: a leading `/` anchors, no leading `/` matches anywhere.
+      if (p.includes('*')) {
+        const regexBody = p
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*\*/g, '::DOUBLESTAR::')
+          .replace(/\*/g, '[^/]*')
+          .replace(/::DOUBLESTAR::/g, '.*')
+        const regex = new RegExp(anchored ? `^${regexBody}$` : `(^|/)${regexBody}$`)
+        if (regex.test(normalized)) return true
+      }
+    }
+    return false
+  }
+
   let totalFileCount = 0
   let sourceFileCount = 0
   let largestFileBytes = 0
@@ -133,13 +204,16 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
       if (excludedPrefixes.some((p) => name.startsWith(p))) continue
       if (excludedDirs.has(name)) continue
       const full = join(dir, name)
+      const rel = relative(absRoot, full).split(sep).join('/')
       let stat
       try {
         stat = statSync(full)
       } catch {
         continue
       }
-      if (stat.isDirectory()) {
+      const isDir = stat.isDirectory()
+      if (matchesIgnore(rel, isDir)) continue
+      if (isDir) {
         walk(full, depth + 1)
       } else if (stat.isFile()) {
         totalFileCount++

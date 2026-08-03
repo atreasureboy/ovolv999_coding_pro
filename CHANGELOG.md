@@ -7,6 +7,36 @@ All notable changes are documented here. This project follows Semantic Versionin
 Reality Closure — wiring production main chain to the data sources
 the routing + completion signals have always claimed to consume.
 
+### Stage 7 — Borrowing from codex / cursor / aider
+
+Three capabilities surveyed and wired, each gated on a real production
+caller and a zero-dep implementation:
+
+- **C1 — `RepoMapService`** (borrowed from `aider/repomap.py`):
+  token-budgeted, cacheable, refresh-aware (`auto` / `files` /
+  `always` / `manual`) file map. Pure TypeScript — no tree-sitter,
+  no embeddings, no networkx. Shares the existing `RepoStatsService`
+  walk so the cache key uses real file counts.
+- **C3 — `RunScopedRuntimeContext.inheritedConfig` + `inheritConfig()`
+  + `withConfigOverride()`** (borrowed from codex
+  `multi_agents_common.rs`): structural sub-agent config inheritance.
+  Children inherit provider / model / sandbox; **cwd and
+  permissionMode are locked to the parent** so a child cannot
+  silently escape the project root or switch the user's mode choice.
+- **C7 — `.ovolv999ignore` + `CodebaseIndex`** (borrowed from
+  cursor `.cursorignore`): gitignore-style exclusion file honored
+  by `RepoStatsService`. Glob patterns with `*` and `**`, anchored
+  (`/leading`) and unanchored forms.
+
+Survey notes: `.ovolv999/notes/codex-cursor-aider-survey.md`.
+
+Excluded from this round (already done or out of scope):
+- Aider planner-vs-executor model split — done (v0.5.0 multi-agent)
+- Cursor 90% auto-compact threshold — done (CLAUDE.md 85%)
+- Codex landlock / seatbelt OS sandbox — deferred (needs sandbox test infra)
+- Codex compact retry / fallback — deferred
+- Cursor Memories auto-extract — LongTermMemory gate in place, extractor deferred
+
 ### Added
 
 - **`ContextBudgetSnapshot`** (`src/core/context/contextManager.ts`): a

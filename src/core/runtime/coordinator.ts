@@ -171,6 +171,18 @@ export interface CoordinatorDeps {
    * the per-turn run records it as parentRunId for hierarchical queries.
    */
   parentRunId?: string
+  /**
+   * v0.5.2 (C3 — borrowed from codex multi_agents_common.rs):
+   * the parent's effective config slice. Coordinator uses this to
+   * populate `RunScopedRuntimeContext.inheritedConfig` so child runs
+   * cannot accidentally drift provider / model / sandbox / cwd.
+   * When omitted, no inheritance is recorded (legacy behaviour).
+   */
+  inheritedConfig?: {
+    provider?: string
+    model?: string
+    sandboxEnabled?: boolean
+  }
 }
 
 export class RuntimeCoordinator {
@@ -433,6 +445,21 @@ export class RuntimeCoordinator {
         runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
           parentRunId: effectiveParentRunId,
           taskKind: 'informational',
+          // v0.5.2 (C3 — borrowed from codex multi_agents_common.rs):
+          // capture the parent's effective config so child runs can
+          // inherit it structurally instead of through ad-hoc field
+          // reads. The Engine passes its resolved config via deps;
+          // we expose only the slice that materially affects
+          // sub-agent behaviour.
+          inheritedConfig: this.deps.inheritedConfig ? {
+            provider: this.deps.inheritedConfig.provider ?? this.deps.config.provider,
+            model: this.deps.inheritedConfig.model ?? this.deps.config.model,
+            cwd: this.deps.config.cwd,
+            permissionMode: this.deps.config.permissionMode ?? 'default',
+            sandboxEnabled: this.deps.inheritedConfig.sandboxEnabled ?? false,
+            inheritedFrom: effectiveParentRunId ?? 'engine',
+            inheritedAt: Date.now(),
+          } : undefined,
         })
         runContext.taskKind = taskIntent.kind
         // v0.3.5: do NOT write back to this.deps.taskGraph (shared mutable

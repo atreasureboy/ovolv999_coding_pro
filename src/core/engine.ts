@@ -63,6 +63,7 @@ import {
 import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
 import { RepoStatsService } from './repoStats.js'
+import { RepoMapService } from './repoMap.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
 import { ToolScheduler } from './toolRuntime/toolScheduler.js'
@@ -189,6 +190,13 @@ export class ExecutionEngine {
    */
   private readonly repoStats: RepoStatsService
   /**
+   * v0.5.2 (C1 — borrowed from aider/repomap.py): token-budgeted
+   * repo map. The system-prompt builder reads `renderForPrompt()` to
+   * inject a top-files-by-symbol-density block when code-context
+   * features are enabled.
+   */
+  private readonly repoMap: RepoMapService
+  /**
    * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
    * result here; the coordinator queries detectStall() each iteration.
    * Drives /progress and the soft/hard-stall interventions.
@@ -295,6 +303,9 @@ export class ExecutionEngine {
     // The walk runs lazily on first snapshot(); the WorkspaceWatcher
     // module calls `invalidate()` whenever the cwd mutates.
     this.repoStats = new RepoStatsService()
+    // v0.5.2 (C1): wire the repo map; share the same RepoStatsService
+    // so the cache key uses the file count distribution.
+    this.repoMap = new RepoMapService({ repoStats: this.repoStats })
     // v0.3.1 (runtime truth contract §三.1.2): resolve ProviderRuntimeBindings for
     // every profile so /models + /route can report the actual
     // transport, baseURL, and capabilities tied to the active engine.

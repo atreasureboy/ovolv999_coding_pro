@@ -29,6 +29,12 @@ import type { TaskKind } from './taskIntent.js'
  *   - routingSignals: collected just before the first LLM call
  *   - completionCandidate / completionVerdict: set at completion
  *   - startedAt: monotonic now-ms
+ *   - inheritedConfig: v0.5.2 (C3 — borrowed from codex multi-agent
+ *     `multi_agents_common.rs` config inheritance): per-run slice of
+ *     the parent's resolved config. The AgentTool + ClaudeCodeTool
+ *     children populate this from the parent's effective config so
+ *     sub-agent runs cannot accidentally drift provider / sandbox /
+ *     permission settings without an explicit override.
  */
 export interface RunScopedRuntimeContext {
   runId: string
@@ -43,6 +49,33 @@ export interface RunScopedRuntimeContext {
   completionCandidate?: CompletionCandidate
   completionVerdict?: CompletionVerdict
   startedAt: number
+  /**
+   * v0.5.2 (C3): config slice inherited from the parent at create-time.
+   * Children layer role-specific overrides on top via the immutable
+   * `withConfigOverride()` helper. Production callers: AgentTool,
+   * ClaudeCodeTool, WorkerTool. Without this, child runs had no
+   * structural record of "what config did I inherit" — a runtime
+   * invariant gap that surfaced as cross-child permission drift in
+   * tests.
+   */
+  inheritedConfig?: InheritedConfig
+}
+
+/**
+ * v0.5.2 (C3): minimal config slice needed by a child run. Only the
+ * fields that materially affect sub-agent behaviour are included; the
+ * rest stays on the parent Engine and is read through the resolver.
+ */
+export interface InheritedConfig {
+  provider?: string
+  model?: string
+  cwd: string
+  permissionMode: string
+  sandboxEnabled: boolean
+  /** Source run id for audit. */
+  inheritedFrom: string
+  /** Wall-clock of when the inheritance was captured. */
+  inheritedAt: number
 }
 
 /**
@@ -64,7 +97,13 @@ export interface CompletionCandidate {
 }
 
 export interface RunScopedRuntimeContextStore {
-  create(runId: string, options: { parentRunId?: string; taskKind: TaskKind }): RunScopedRuntimeContext
+  create(runId: string, options: {
+    parentRunId?: string
+    taskKind: TaskKind
+    /** v0.5.2 (C3): explicit config inheritance. Optional — pre-wiring
+     *  callers omit it and get the legacy behaviour (no inheritance). */
+    inheritedConfig?: InheritedConfig
+  }): RunScopedRuntimeContext
   get(runId: string): RunScopedRuntimeContext | undefined
   getLatest(): RunScopedRuntimeContext | undefined
   restore(runId: string, snapshot: SerializedRunContext): RunScopedRuntimeContext
@@ -98,7 +137,13 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
     this.sink = sink
   }
 
-  create(runId: string, options: { parentRunId?: string; taskKind: TaskKind }): RunScopedRuntimeContext {
+  create(runId: string, options: {
+    parentRunId?: string
+    taskKind: TaskKind
+    /** v0.5.2 (C3): explicit config inheritance. The parent passes
+     *  its effective config so the child does not silently drift. */
+    inheritedConfig?: InheritedConfig
+  }): RunScopedRuntimeContext {
     if (this.contexts.has(runId)) {
       throw new Error(`RunScopedRuntimeContextStore: runId "${runId}" already exists`)
     }
@@ -111,6 +156,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       controlMessages: new ControlMessageLog(),
       evidence: new EvidenceStore(),
       startedAt: Date.now(),
+      inheritedConfig: options.inheritedConfig,
     }
     // v0.3.2: the graph inside the Context is a fresh TaskGraph;
     // set its runId so event emission is tagged correctly, and
@@ -189,5 +235,60 @@ export class RunScopedContextResolver {
 
   resolveOrNull(runId: string): RunScopedRuntimeContext | undefined {
     return this.store.get(runId)
+  }
+}
+
+/**
+ * v0.5.2 (C3 — borrowed from codex multi_agents_common.rs): build a
+ * child InheritedConfig from a parent InheritedConfig + the child
+ * role-specific overrides. Strict rule: a child may override provider,
+ * model, and sandboxEnabled; permissionMode and cwd are inherited
+ * (cwd is locked to the parent's project root to prevent a child
+ * from silently escaping it; permissionMode is sticky to keep the
+ * user's mode choice consistent across the run tree).
+ *
+ * The result is the value to pass into `create({ inheritedConfig })`
+ * for the child run. Pure function — no side effects on the parent.
+ */
+export function inheritConfig(
+  parent: InheritedConfig,
+  overrides: {
+    provider?: string
+    model?: string
+    sandboxEnabled?: boolean
+  },
+): InheritedConfig {
+  return {
+    provider: overrides.provider ?? parent.provider,
+    model: overrides.model ?? parent.model,
+    cwd: parent.cwd, // locked
+    permissionMode: parent.permissionMode, // locked
+    sandboxEnabled: overrides.sandboxEnabled ?? parent.sandboxEnabled,
+    inheritedFrom: parent.inheritedFrom,
+    inheritedAt: Date.now(),
+  }
+}
+
+/**
+ * v0.5.2 (C3): immutable override on a RunScopedRuntimeContext.
+ * Returns a NEW context object (per run-scoped runtime contract §2.1:
+ * contexts are write-once, the snapshot is replaced wholesale). The
+ * caller should `restore()` the new snapshot via the store, or use
+ * this helper to compute the override before construction.
+ */
+export function withConfigOverride(
+  ctx: RunScopedRuntimeContext,
+  overrides: {
+    provider?: string
+    model?: string
+    sandboxEnabled?: boolean
+  },
+): RunScopedRuntimeContext {
+  if (!ctx.inheritedConfig) {
+    throw new Error(`RunScopedRuntimeContext: runId "${ctx.runId}" has no inheritedConfig — cannot override`)
+  }
+  return {
+    ...ctx,
+    inheritedConfig: inheritConfig(ctx.inheritedConfig, overrides),
   }
 }
