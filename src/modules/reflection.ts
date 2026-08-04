@@ -278,99 +278,144 @@ function parseReflection(output: string): Array<{
 // ── Session-level consolidation (AgentOS §8 Memory 整合) ──────────────────────
 
 /**
- * Consolidate a session's episodic events into semantic memory.
- * Called at REPL exit to close the learning loop.
+ * Consolidate a session's verified LongTermMemory records.
  *
- * Unlike per-turn reflection (which analyzes a single run), this summarizes
- * the entire session's activity and extracts durable knowledge.
+ * v0.5.3 Final (task 6): the previous implementation:
+ *   - read episodic events (full session including failures),
+ *   - called LLM to extract knowledge,
+ *   - wrote each entry with verified=false + repo='session' + a
+ *     fabricated sessionRunId.
  *
- * v0.5.3 P0-1: this entry point MUST funnel through LongTermMemory so
- * the same R1/R2/R3/R5 gates that protect `memory_write` apply here
- * too. The previous implementation called `semantic.write()` directly,
- * which was a parallel store bypassing the gate. Now we attempt a
- * `LongTermMemory.record()` per entry; on rejection we count + drop
- * (we still mirror to SemanticMemory only if the gate accepted, so
- * the boot-time relevance injector cannot accidentally surface
- * audit-rejected entries).
+ * Result: every consolidation entry was `gateRejected` because
+ * verified=false semantic entries fail R1, AND the artificial
+ * 'session' repo + 'session-${Date.now()}' runId violated the
+ * RevisionBinding contract.
+ *
+ * New implementation (Option A from spec):
+ *   1. Read already-VERIFIED LongTermMemory records that carry a
+ *      sourceRunId from the current session (episodes alone are not
+ *      trusted — they are unverified by definition).
+ *   2. Group records by content similarity (exact contentKey match).
+ *   3. For each group: synthesize a Candidate that cites every
+ *      constituent sourceRunId.
+ *   4. Run decidePromotion. Failure runs → drops. Success runs →
+ *      Candidate with origin='reflection:consolidation' and a
+ *      `sourceRunIds:<...>` tag listing every contributing run.
+ *   5. The promoter stamps verified=true only when the run that
+ *      CALLS consolidateSession is itself a completed run; the
+ *      pass-through requirement is that the caller passes its
+ *      own outcome + userMessage.
+ *
+ * If no verified LongTermMemory records are present in the
+ * current session, consolidation is a no-op (NOT an error) — the
+ * previous implementation always produced output regardless of
+ * input, which masked broken flows.
  */
-export async function consolidateSession(
-  client: OpenAI,
-  model: string,
-  episodic: EpisodicMemory,
-  semantic: SemanticMemory,
-  poor?: { enabled: boolean },
-  longTerm?: LongTermMemory,
-): Promise<{ episodes: number; knowledgeExtracted: number; gateRejected: number }> {
-  if (poor?.enabled) {
-    return { episodes: 0, knowledgeExtracted: 0, gateRejected: 0 }
+export async function consolidateSession(opts: {
+  client: OpenAI
+  model: string
+  longTerm: LongTermMemory
+  sessionRunIds: string[] // real Run IDs from this session
+  outcomeForCaller?: import('../core/runtime/turnOutcome.js').TurnOutcome
+  userMessage?: string
+  cwd: string
+  poor?: { enabled: boolean }
+}): Promise<{
+  sourceRecords: number
+  candidates: number
+  promoted: number
+  promotionFailed: number
+}> {
+  if (opts.poor?.enabled) {
+    return { sourceRecords: 0, candidates: 0, promoted: 0, promotionFailed: 0 }
   }
-  const episodes = episodic.recent(100)
-  if (episodes.length < 5) {
-    return { episodes: episodes.length, knowledgeExtracted: 0, gateRejected: 0 }
-  }
 
-  const sessionSummary = episodes.map((e, i) => {
-    const icon = e.outcome === 'success' ? '✓' : '✗'
-    return `${i + 1}. ${icon} ${e.toolName}: ${e.inputSummary.slice(0, 60)} → ${e.resultSummary.slice(0, 80)}`
-  }).join('\n')
+  const longTerm = opts.longTerm
+  // Filter LongTermMemory records by this session's real Run IDs.
+  // We only read verified=true semantic records — anything else
+  // would have a fabrication problem (R5 already demoted it).
+  const candidates: Array<{
+    content: string
+    tags: string[]
+    confidence: number
+    sourceRunIds: string[]
+  }> = []
 
-  try {
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `Summarize this entire coding session and extract durable knowledge:\n\n${sessionSummary}`,
-        },
-      ],
-      temperature: 0,
-      max_tokens: REFLECTION_MAX_TOKENS,
-    }, { timeout: 30_000 })
-
-      const output = response.choices[0]?.message?.content ?? ''
-      const parsed = parseReflection(output)
-
-      // v0.5.3 P0-1: callers MAY pass a LongTermMemory instance. If
-      // absent (legacy test paths), we instantiate a default one —
-      // but then the call has no commit-binding context, so any
-      // code-bearing entry will be rejected and counted as
-      // gateRejected. The fallback exists only for back-compat.
-      const gate = longTerm ?? new LongTermMemory({ allowCodeWithoutCommit: true })
-      let knowledgeExtracted = 0
-      let gateRejected = 0
-      const sessionRunId = `session-${Date.now()}`
-      for (const entry of parsed) {
-        try {
-          const rec = gate.record({
-            kind: 'semantic',
-            content: `[session] ${entry.content}`.slice(0, 500),
-            repo: 'session',
-            origin: 'reflection:consolidation',
-            sourceRunId: sessionRunId,
-            confidence: entry.confidence,
-            // Consolidation synthesizes knowledge from many runs;
-            // treat each summary as a tool_observed datum unless
-            // the entry is explicitly a user preference.
-            verified: false,
-            tags: [...entry.tags, 'session-consolidation'],
-            expiresAt: undefined,
-          })
-          knowledgeExtracted++
-          semantic.write({
-            content: rec.content,
-            tags: entry.tags,
-            source: 'consolidation',
-            confidence: entry.confidence,
-            timestamp: rec.createdAt,
-          })
-        } catch {
-          gateRejected++
-        }
+  const seen = new Map<string, number>() // contentKey → idx in candidates
+  let sourceRecords = 0
+  for (const runId of opts.sessionRunIds) {
+    const records = longTerm.query({ kind: 'semantic', verified: true, sourceRunId: runId, limit: 50 })
+    for (const r of records) {
+      sourceRecords++
+      // contentKey reuses the merge key shape from LongTermMemory —
+      // sha256(repo|kind|content.toLowerCase().trim()).
+      const key = `${r.repo || ''}|${r.kind}|${r.content.trim().toLowerCase()}`
+      const existingIdx = seen.get(key)
+      if (existingIdx !== undefined) {
+        candidates[existingIdx].confidence = Math.max(candidates[existingIdx].confidence, r.confidence)
+        candidates[existingIdx].sourceRunIds.push(runId)
+      } else {
+        seen.set(key, candidates.length)
+        candidates.push({
+          content: r.content,
+          tags: [...r.tags, 'session-consolidation'],
+          confidence: r.confidence,
+          sourceRunIds: [runId],
+        })
       }
-
-      return { episodes: episodes.length, knowledgeExtracted, gateRejected }
-  } catch {
-    return { episodes: episodes.length, knowledgeExtracted: 0, gateRejected: 0 }
+    }
   }
+
+  if (candidates.length === 0) {
+    return { sourceRecords: 0, candidates: 0, promoted: 0, promotionFailed: 0 }
+  }
+
+  // Promote via the gate that protects memory_write. Build
+  // MemoryCandidates from the synthesized entries, run the gate
+  // against a dummy completion context. The caller must pass a
+  // successful outcome; otherwise we only write failure entries.
+  const { decidePromotion } = await import('../core/memoryCandidate.js')
+  const memoryCandidates = candidates.map((c) => ({
+    id: `mc_consolidate_${Math.random().toString(36).slice(2)}`,
+    runId: opts.sessionRunIds[0] ?? 'unknown',
+    content: c.content,
+    claimedSource: 'tool_observed' as const,
+    tags: c.tags,
+    confidence: c.confidence,
+    createdAt: new Date().toISOString(),
+  }))
+
+  const dummyOutcome = opts.outcomeForCaller ?? {
+    runId: opts.sessionRunIds[0] ?? 'unknown',
+    stopReason: 'error' as const,
+    completion: { status: 'failed' as const, reasons: [], evidence: [], requiredNextActions: [] },
+    output: '',
+    changedFiles: [],
+    artifacts: [],
+    verification: { executed: false, passed: false, failed: [] },
+    modelAttempts: [],
+    durationMs: 0,
+    stopped: true,
+    reason: 'consolidation-default-failed',
+  }
+
+  const decision = decidePromotion({
+    candidates: memoryCandidates,
+    outcome: dummyOutcome,
+    userMessage: opts.userMessage ?? '',
+    revision: { repo: opts.cwd, dirty: false },
+  })
+
+  let promoted = 0
+  let promotionFailed = 0
+  for (const promo of [...decision.successPromotions, ...decision.failurePromotions]) {
+    try {
+      longTerm.record({ ...promo.memoryInput, sourceRunId: opts.sessionRunIds[0] ?? 'unknown' })
+      promoted++
+    } catch {
+      promotionFailed++
+    }
+  }
+
+  return { sourceRecords, candidates: candidates.length, promoted, promotionFailed }
 }

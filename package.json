@@ -51,12 +51,13 @@
     "test:watch": "vitest",
     "test:unit": "vitest run",
     "test:integration": "vitest run tests/gap tests/phase tests/eval",
+    "test:esm": "node tests/esm-runner/repoStats-real-esm.mjs && node tests/esm-runner/sandbox-bwrap-isolation.mjs",
     "eval:wiring": "vitest run evals/wiring-smoke",
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
     "eval:real": "vitest run evals/real",
     "typecheck": "tsc --noEmit",
     "verify:runtime-truth": "node scripts/verify-runtime-truth.mjs",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm eval:deterministic && pnpm verify:runtime-truth",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:esm && pnpm eval:deterministic && pnpm verify:runtime-truth",
     "prepack": "pnpm check && pnpm build && pnpm package:verify"
   },
   "dependencies": {

@@ -290,30 +290,26 @@ export class ContextManager {
 
   // ── Budget evaluation ──────────────────────────────────────────────────
 
-  async evaluateBudget(params: {
+  /**
+   * v0.5.3 Final (task 9): PURE measurement. No LLM, no message
+   * mutation. Publishes a fresh snapshot and returns the same
+   * snapshot so the Router (and the Coordinator) read the CURRENT
+   * state without us having to mutate anything. AbortError propagates
+   * out — only clearly-recoverable best-effort errors get swallowed.
+   */
+  measureBudget(params: {
     messages: OpenAIMessage[]
     toolDefs?: ToolDefinition[]
-    abortSignal?: AbortSignal
-  }): Promise<void> {
-    const { messages, toolDefs, abortSignal } = params
-
-    const suppressWarning = this.suppressCompactWarning
-    this.suppressCompactWarning = false
-
+  }): ContextBudgetSnapshot {
+    const { messages, toolDefs } = params
     const maxCtxTokens = this.contextWindow
     const messageTokens = estimateTokens(messages)
     const toolDefTokens = estimateToolDefinitionTokens(toolDefs)
     const totalTokens = messageTokens + this.systemPromptTokens + toolDefTokens
     const inputBudget = effectiveInputBudget(maxCtxTokens, this.deps.maxOutputTokens)
     const pct = totalTokens / inputBudget
-
-    // v0.5.2 (Stage 2.1): publish a fresh budget snapshot so the Router
-    // and Coordinator can read contextUsageRatio / budgetRemaining from
-    // a single source instead of fabricating undefined values. The same
-    // estimation functions back both this snapshot and the budget
-    // decision (compact at 85%) so the values cannot drift.
     const remainingTokens = Math.max(0, inputBudget - totalTokens)
-    this.lastBudgetSnapshot = {
+    const snapshot: ContextBudgetSnapshot = {
       runId: this.activeRunId,
       contextWindow: maxCtxTokens,
       estimatedInputTokens: totalTokens,
@@ -324,13 +320,32 @@ export class ContextManager {
       compactFailureCount: this.consecutiveCompactFailures,
       initialized: true,
     }
+    this.lastBudgetSnapshot = snapshot
+    return snapshot
+  }
 
+  /**
+   * v0.5.3 Final (task 9): apply the budget policy on top of an
+   * already-measured snapshot. This step MAY mutate messages (when
+   * compaction fires) and MAY call the LLM. After mutation the
+   * caller MUST re-measure so the Router sees post-compaction state.
+   */
+  async applyBudgetPolicy(params: {
+    messages: OpenAIMessage[]
+    toolDefs?: ToolDefinition[]
+    snapshot: ContextBudgetSnapshot
+    abortSignal?: AbortSignal
+  }): Promise<ContextBudgetSnapshot> {
+    const { messages, toolDefs, snapshot: prev, abortSignal } = params
+    const suppressWarning = this.suppressCompactWarning
+    this.suppressCompactWarning = false
+
+    const pct = prev.usageRatio
     const shouldMicroCompact = pct >= CONTEXT_MICROCOMPACT_PCT
     const shouldWarn = pct >= CONTEXT_WARN_PCT
     const shouldCompact = pct >= CONTEXT_COMPACT_PCT
     const strategy = getCompressionStrategy(pct)
 
-    // Time-based microCompact — free when cache is cold
     if (!shouldCompact) {
       const tbResult = maybeTimeBasedMicroCompact(messages, this.lastAssistantTs)
       if (tbResult.compacted) {
@@ -343,7 +358,6 @@ export class ContextManager {
       }
     }
 
-    // Pressure-based microCompact — clear old tool results at 50%
     if (shouldMicroCompact && !shouldCompact) {
       const mcResult = microCompact(messages)
       if (mcResult.compacted) {
@@ -357,33 +371,41 @@ export class ContextManager {
     }
 
     if (this.deps.sessionDir && shouldWarn && !suppressWarning) {
-      this.deps.renderer.contextWarning(totalTokens, maxCtxTokens, pct)
+      this.deps.renderer.contextWarning(prev.estimatedInputTokens, prev.contextWindow, pct)
     }
 
     if (shouldCompact && this.consecutiveCompactFailures < 3) {
-      this.deps.renderer.compactStart(totalTokens)
+      this.deps.renderer.compactStart(prev.estimatedInputTokens)
       this.deps.eventLog?.append('context_compact', 'engine', {
         strategy,
-        tokens_before: totalTokens,
+        tokens_before: prev.estimatedInputTokens,
         system_prompt_tokens: this.systemPromptTokens,
         pct,
       })
 
-      // P2-6: route through maybeCompactWithInvariants so the
-      // INV-1..INV-9 checks actually run on the production path. Today
-      // compaction only mutates `messages` (WorkingState lives in a
-      // separate field), so before===after and the invariants hold
-      // trivially — but this becomes load-bearing the moment any change
-      // derives WorkingState from the (compacted) message log, catching
-      // silent loss of objective/constraints/filesChanged/verification.
-      const compactResult = await maybeCompactWithInvariants(
-        this.deps.client,
-        this.deps.model,
-        messages,
-        this.workingState,
-        () => this.workingState,
-        abortSignal,
-      )
+      let compactResult
+      try {
+        compactResult = await maybeCompactWithInvariants(
+          this.deps.client,
+          this.deps.model,
+          messages,
+          this.workingState,
+          () => this.workingState,
+          abortSignal,
+        )
+      } catch (err) {
+        // AbortError propagates — caller decides whether to cancel.
+        if ((err as { name?: string }).name === 'AbortError') throw err
+        // Other transport errors increment the failure counter; the
+        // snapshot is RE-measured from the unchanged messages.
+        this.consecutiveCompactFailures++
+        if (this.consecutiveCompactFailures >= 3) {
+          this.deps.renderer.warn(
+            `Auto-compact failed ${this.consecutiveCompactFailures} consecutive times — skipping further attempts. Consider starting a new session.`,
+          )
+        }
+        return this.measureBudget({ messages, toolDefs })
+      }
 
       if (compactResult.compacted) {
         messages.length = 0
@@ -402,6 +424,10 @@ export class ContextManager {
           compactResult.originalTokens,
           compactResult.summaryTokens,
         )
+        // v0.5.3 Final (task 9): re-measure AFTER compaction so the
+        // Router reads the post-compaction usage, not the value that
+        // triggered compaction.
+        return this.measureBudget({ messages, toolDefs })
       } else {
         this.consecutiveCompactFailures++
         if (this.consecutiveCompactFailures >= 3) {
@@ -409,8 +435,31 @@ export class ContextManager {
             `Auto-compact failed ${this.consecutiveCompactFailures} consecutive times — skipping further attempts. Consider starting a new session.`,
           )
         }
+        return this.measureBudget({ messages, toolDefs })
       }
     }
+
+    return prev
+  }
+
+  /**
+   * v0.5.3 Final (task 9): BACKWARDS-COMPAT wrapper. Calls
+   * measureBudget + applyBudgetPolicy + re-measure. New callers
+   * should call measureBudget/applyBudgetPolicy directly so the
+   * 'measure → route → apply → re-measure' invariant is explicit.
+   */
+  async evaluateBudget(params: {
+    messages: OpenAIMessage[]
+    toolDefs?: ToolDefinition[]
+    abortSignal?: AbortSignal
+  }): Promise<void> {
+    const snapshot = this.measureBudget(params)
+    await this.applyBudgetPolicy({
+      messages: params.messages,
+      toolDefs: params.toolDefs,
+      snapshot,
+      abortSignal: params.abortSignal,
+    })
   }
 
   // ── Snip management ────────────────────────────────────────────────────

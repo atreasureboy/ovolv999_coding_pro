@@ -80,8 +80,8 @@ export interface RoutingInput {
   // v0.5.2 (Stage 2.4): extended failure/health signals. Optional
   // — pre-wiring callers omit them. The Router uses these to break
   // out of a failing chain before the chain is exhausted.
+  // v0.5.3 Final (task 7): totalRetryAttempts removed — see recordRetry() doc.
   totalFallbacksApplied?: number
-  totalRetryAttempts?: number
   circuitState?: 'closed' | 'open' | 'half-open'
   consecutiveProviderFailures?: number
   /** True when the user has manually overridden the model. The Router
@@ -187,7 +187,10 @@ export class ModelRouter {
    */
   private totalRoutingFailures = 0
   private totalFallbacksApplied = 0
-  private totalRetryAttempts = 0
+  // v0.5.3 Final (task 7): totalRetryAttempts removed — never had a
+  // production caller. See recordRetry() doc-comment.
+  // Probe lease set (v0.5.3 Final): one probe per profile at a time.
+  private readonly probeInFlight = new Set<string>()
   /** v0.5.3 (P1.8): per-profile circuit state. The Coordinator's
    *  global circuit penalizes ALL profiles for one failure; this
    *  per-profile circuit isolates the failing profile so healthy
@@ -288,15 +291,21 @@ export class ModelRouter {
   }
 
   /**
-   * v0.5.2 (Stage 2.4): record a retry attempt on the same model
-   * (within-circuit, NOT a fallback). Distinct from emitFallback:
-   * a retry keeps the same profile; a fallback moves to a new one.
-   * The Router treats retries as a separate counter so the signal
-   * collector can distinguish "model is flaky" from "this chain
-   * is exhausted".
+   * v0.5.2 (Stage 2.4): record a retry attempt on the same model.
+   * v0.5.3 Final (task 7): REMOVED. ModelGateway never retries the
+   * same model internally — it falls back at the stream boundary.
+   * Without a real production caller the counter was always 0
+   * (decoration). We removed:
+   *   - recordRetry() effect
+   *   - totalRetryAttempts counter
+   *   - the field in getRoutingFailureStats()
+   *   - the field in RouterHealthSnapshot
+   * The method is kept as a no-op for back-compat with any stale
+   * call site.
    */
+  /** @deprecated v0.5.3 Final — does nothing. */
   recordRetry(): void {
-    this.totalRetryAttempts++
+    // no-op
   }
 
   /**
@@ -308,12 +317,10 @@ export class ModelRouter {
   getRoutingFailureStats(): {
     totalFailures: number
     totalFallbacksApplied: number
-    totalRetryAttempts: number
   } {
     return {
       totalFailures: this.totalRoutingFailures,
       totalFallbacksApplied: this.totalFallbacksApplied,
-      totalRetryAttempts: this.totalRetryAttempts,
     }
   }
 
@@ -402,6 +409,44 @@ export class ModelRouter {
   }
 
   /**
+   * v0.5.3 Final (task 7): real probe lease. Returns true iff the
+   * caller has acquired the right to issue ONE probe call against
+   * a half-open profile. Concurrent callers receive false — the
+   * Router's "second probe must be rejected" invariant is enforced
+   * here, not by accident elsewhere. A call returns false if the
+   * circuit is not yet half-open (callers must check
+   * getProfileCircuitState first to drive the cooldown transition).
+   */
+  tryAcquireProbe(profileId: string): boolean {
+    const state = this.getProfileCircuitState(profileId)
+    if (state !== 'half-open') return false
+    if (this.probeInFlight.has(profileId)) return false
+    this.probeInFlight.add(profileId)
+    return true
+  }
+
+  /**
+   * v0.5.3 Final (task 7): complete a probe previously acquired via
+   * tryAcquireProbe. success → CLOSED (and reset failures);
+   * failure → re-OPEN with renewed cooldown.
+   */
+  finishProbe(profileId: string, success: boolean): void {
+    this.probeInFlight.delete(profileId)
+    if (success) {
+      this.circuitStates.set(profileId, 'closed')
+      this.consecutiveProfileFailures.set(profileId, 0)
+    } else {
+      this.circuitStates.set(profileId, 'open')
+      this.circuitOpenedAt.set(profileId, Date.now())
+    }
+  }
+
+  /** For tests: read the in-flight probe set. */
+  getProbeInFlight(): ReadonlySet<string> {
+    return this.probeInFlight
+  }
+
+  /**
    * The single decision function. Pure given input + current health —
    * no side effects except caching lastDecision. Callers apply the
    * selected model and emit a routing event.
@@ -419,12 +464,26 @@ export class ModelRouter {
     const available = this.profiles.filter(
       (p) => p.available && this.isProfileAvailable(p.id),
     )
-    if (available.length === 0) {
-      // All profiles are in open circuit — fall back to whatever
-      // the Coordinator picked (still routed, but Router can't
-      // choose). The caller should surface this in /why.
-    }
     const reasonCodes: string[] = []
+    if (available.length === 0) {
+      // v0.5.3 Final (task 7): all profiles are in open circuit.
+      // The previous implementation silently returned an "empty"
+      // decision (`selectedModel=''`, `selectedProfile='default'`),
+      // which made it indistinguishable from a successful no-op.
+      // We now return an explicit unavailable decision that the
+      // caller (Coordinator) MUST treat as a failure.
+      const unavailable: RoutingDecision = {
+        selectedModel: '',
+        selectedProfile: '',
+        reasonCodes: ['all-profiles-open', ...reasonCodes],
+        confidence: 0,
+        estimatedComplexity: 0,
+        fallbackChain: [],
+        budgetAllocation: {},
+      }
+      this.lastDecision = unavailable
+      return unavailable
+    }
 
     // 1) Manual override always wins (adaptive runtime contract §四.1).
     if (this.manualOverride) {

@@ -219,7 +219,6 @@ describe('Golden Path G — RoutingSignals pass through extended health', () => 
         providerHealth: [{ profileId: 'p1', failRate: 0.3, avgLatencyMs: 200 }],
         previousRoutingFailures: 4,
         totalFallbacksApplied: 2,
-        totalRetryAttempts: 3,
         circuitState: 'half-open',
         consecutiveProviderFailures: 2,
         manualOverrideActive: true,
@@ -227,7 +226,6 @@ describe('Golden Path G — RoutingSignals pass through extended health', () => 
     })
     expect(signals.previousRoutingFailures).toBe(4)
     expect(signals.totalFallbacksApplied).toBe(2)
-    expect(signals.totalRetryAttempts).toBe(3)
     expect(signals.circuitState).toBe('half-open')
     expect(signals.consecutiveProviderFailures).toBe(2)
     expect(signals.manualOverrideActive).toBe(true)

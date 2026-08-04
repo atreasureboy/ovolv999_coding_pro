@@ -50,6 +50,17 @@ export interface RunScopedRuntimeContext {
   completionVerdict?: CompletionVerdict
   startedAt: number
   /**
+   * v0.5.3 Final (task 2): per-run MemoryCandidates written by
+   * memory_write. They are NOT persisted at write-time; the
+   * MemoryPromoter reads them after CompletionContract and
+   * promotes / demotes / drops each one based on the run verdict.
+   * Storage is per-run so a re-run never inherits previous candidates.
+   */
+  memoryCandidates: import("../memoryCandidate.js").MemoryCandidate[]
+  /** v0.5.3 Final (task 2): per-run snapshot of the user message —
+   *  the MemoryPromoter uses this to verify sourceQuote claims. */
+  userMessage: string
+  /**
    * v0.5.2 (C3): config slice inherited from the parent at create-time.
    * Children layer role-specific overrides on top via the immutable
    * `withConfigOverride()` helper. Production callers: AgentTool,
@@ -103,6 +114,10 @@ export interface RunScopedRuntimeContextStore {
     /** v0.5.2 (C3): explicit config inheritance. Optional — pre-wiring
      *  callers omit it and get the legacy behaviour (no inheritance). */
     inheritedConfig?: InheritedConfig
+    /** v0.5.3 Final (task 2): the original user message — once we
+     *  have it, the MemoryPromoter can verify sourceQuote claims
+     *  against the user's actual words. */
+    userMessage?: string
   }): RunScopedRuntimeContext
   get(runId: string): RunScopedRuntimeContext | undefined
   getLatest(): RunScopedRuntimeContext | undefined
@@ -126,6 +141,9 @@ export interface SerializedRunContext {
   completionVerdict?: CompletionVerdict
   routingSignals?: RoutingSignals
   completionCandidate?: CompletionCandidate
+  /** v0.5.3 Final (task 2): restore-time user message so MemoryPromoter
+   *  can re-verify sourceQuote claims. */
+  userMessage?: string
 }
 
 export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeContextStore {
@@ -143,6 +161,10 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
     /** v0.5.2 (C3): explicit config inheritance. The parent passes
      *  its effective config so the child does not silently drift. */
     inheritedConfig?: InheritedConfig
+    /** v0.5.3 Final (task 2): the original user message, stored
+     *  once at create-time so the MemoryPromoter can verify
+     *  sourceQuote claims later. */
+    userMessage?: string
   }): RunScopedRuntimeContext {
     if (this.contexts.has(runId)) {
       throw new Error(`RunScopedRuntimeContextStore: runId "${runId}" already exists`)
@@ -157,6 +179,8 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       evidence: new EvidenceStore(),
       startedAt: Date.now(),
       inheritedConfig: options.inheritedConfig,
+      memoryCandidates: [],
+      userMessage: options.userMessage ?? '',
     }
     // v0.3.2: the graph inside the Context is a fresh TaskGraph;
     // set its runId so event emission is tagged correctly, and
@@ -194,6 +218,8 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       completionCandidate: snapshot.completionCandidate,
       completionVerdict: snapshot.completionVerdict,
       startedAt: snapshot.startedAt,
+      memoryCandidates: [],
+      userMessage: snapshot.userMessage ?? '',
     }
     ctx.taskGraph.setNodeTransitionSink((transition) => ctx.progressMonitor.recordTaskNodeTransition(transition))
     this.contexts.set(runId, ctx)

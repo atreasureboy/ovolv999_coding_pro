@@ -164,18 +164,35 @@ describe('consolidateSession — poor mode guard', () => {
 
   it('T4: returns early and does not call client when poor.enabled=true', async () => {
     const { client, calls } = makeMockClient()
-    const result = await consolidateSession(client, 'test-model', episodic, semantic, { enabled: true })
+    const { LongTermMemory } = await import('../src/core/longTermMemory.js')
+    const result = await consolidateSession({
+      client,
+      model: 'test-model',
+      longTerm: new LongTermMemory(),
+      sessionRunIds: [],
+      cwd: tmpDir,
+      poor: { enabled: true },
+    })
     expect(calls).toHaveLength(0)
-    expect(result.episodes).toBe(0)
-    expect(result.knowledgeExtracted).toBe(0)
+    expect(result.candidates).toBe(0)
+    expect(result.promoted).toBe(0)
     expect(semantic.readAll()).toHaveLength(0)
   })
 
-  it('consolidateSession still works normally when poor is unset', async () => {
+  it('consolidateSession no-ops when no verified runIds supplied (real session ids)', async () => {
     const { client, calls } = makeMockClient()
-    const result = await consolidateSession(client, 'test-model', episodic, semantic)
-    expect(calls.length).toBeGreaterThanOrEqual(1)
-    expect(result.episodes).toBeGreaterThanOrEqual(10)
+    const { LongTermMemory } = await import('../src/core/longTermMemory.js')
+    const result = await consolidateSession({
+      client,
+      model: 'test-model',
+      longTerm: new LongTermMemory(),
+      sessionRunIds: [],
+      cwd: tmpDir,
+    })
+    // No fake session ids → no synthetic entries → no LLM call.
+    expect(calls.length).toBe(0)
+    expect(result.candidates).toBe(0)
+    expect(result.promoted).toBe(0)
   })
 })
 

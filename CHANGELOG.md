@@ -80,6 +80,65 @@ real CLI against the openaiEchoServer fixture:
 - `CLAUDE.md`: removed absolute test-count and outdated runtime-dep
   claims; new vocabulary adopted across survey notes and CHANGELOG.
 
+### Final Reality Closure (v0.5.3 → unreleased)
+
+- **Memory Candidate → Promotion**: `memory_write` no longer
+  persists during tool execution. It pushes a `MemoryCandidate`
+  onto the per-run `RunScopedRuntimeContext`. After CompletionContract
+  + Reviewer + verification, `MemoryModule.onComplete` runs
+  `decidePromotion()` which promotes candidates only on a fully
+  successful run. Failure runs push `kind:'failure', verified:false`
+  entries that never enter the success-memory read pool.
+- **User source quote verification**: `claimedSource='user_stated'`
+  no longer grants verified access. The model MUST provide a
+  `source_quote` that the engine verifies via
+  `isNormalizedSubstring()` against the original user message.
+  Forged quotes → demoted to `agent_inferred` (success runs) or
+  dropped (failure runs). The `origin='memory_write:user_stated'`
+  shortcut in `LongTermMemory.record()` is removed entirely.
+- **RevisionBinding**: every memory write binds to a real revision
+  state — git branch+HEAD (clean), git baseCommit+diffHash
+  (dirty), or workspaceHash (non-git). No more `repo='memory'`,
+  `repo='session'`, or fabricated `sessionRunId`. New
+  `src/core/revisionBinding.ts`.
+- **LongTermMemory is the read source**: `memory_search` and boot
+  relevance retrieval query `LongTermMemory.query()` directly.
+  SemanticMemory is kept only for back-reads of legacy data.
+- **consolidateSession** rewritten: no longer accepts a fake
+  synthetic runId. Reads only verified=`true` records by real
+  sourceRunId, fuses them into candidates, routes through
+  `decidePromotion()` + `longTerm.record()`. No parallel
+  `semantic.write()`.
+- **TaskImpact single source of truth**:
+  `src/core/taskImpact.ts` exports `TASK_IMPACT_SCOPES` used by
+  tool schema, parser, TaskGraph, Router, and tests. Round-trip
+  test asserts every schema enum value parses and every
+  parser-accepted value is in the schema. `estimated_files`
+  schema `minimum` is now `0`.
+- **Router state**: `recordRetry` / `totalRetryAttempts` removed
+  (no production caller existed). Real `tryAcquireProbe(profileId)`
+  / `finishProbe(profileId, success)` lease API. `route()` returns
+  a structured unavailable decision when all profiles are open
+  (`selectedModel=''`, `reasonCodes=['all-profiles-open', ...]`).
+- **RepoStats truth**: Coordinator passes `repoStats.state` and
+  exact sourceFileCount. The router never fabricates
+  `repoFileCount=100` from `filesTouched*10` again.
+- **ContextSnapshot measure/apply split**:
+  `ContextManager.measureBudget()` is pure (no LLM, no message
+  mutation); `applyBudgetPolicy()` is the mutating step that may
+  compact; after compact, the Coordinator re-measures so the
+  Router reads post-compaction state. `AbortError` propagates;
+  only clearly-recoverable errors are best-effort ignored.
+- **Real Golden Path C**: programmatic two-profile test wires
+  `model-a` (fail) and `model-b` (succeed), forces Profile A's
+  circuit open, re-routes, asserts the Router picks `model-b`,
+  emits exactly one ROUTING_FALLBACK_APPLIED, and counters roll up
+  to `totalFailures=≥1, totalFallbacksApplied=1`.
+- **Runtime-truth verifier extended**: schema-↔-parser
+  round-trip checks, `totalRetryAttempts` absence, no
+  `semantic.write` outside the gate, esm-runner scripts wired
+  into `pnpm check`.
+
 ## 0.5.2 (superseded)
 
 Reality Closure — wiring production main chain to the data sources

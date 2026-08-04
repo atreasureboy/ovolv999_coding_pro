@@ -71,10 +71,15 @@ export class TaskPlanTool implements Tool {
           // only existed on the in-memory node, with no path in
           // for the model to set them. The Router reads the same
           // fields to escalate code that crosses boundaries.
+          //
+          // v0.5.3 Final (task 1): impact_scope enum is the SINGLE
+          // vocabulary — sourced from src/core/taskImpact.ts. Any
+          // drift between schema enum and parser enum is now caught
+          // by a runtime-truth round-trip check.
           impact_scope: {
             type: 'string',
-            enum: ['file', 'module', 'package', 'repo', 'external'],
-            description: 'How far does this change reach? file = single file edit; module = several files in one package; package = cross-module; repo = cross-package in one repo; external = touches external contract/SDK.',
+            enum: ['local', 'module', 'cross-module', 'repository'],
+            description: 'How far does this change reach? local = single file/module; module = several files in one module; cross-module = multiple modules; repository = whole repo.',
           },
           affects_public_interface: {
             type: 'boolean',
@@ -90,8 +95,8 @@ export class TaskPlanTool implements Tool {
           },
           estimated_files: {
             type: 'number',
-            minimum: 1,
-            description: 'Best-guess count of files this change will touch. Router uses this for budget + complexity heuristics. Must be ≥ 1.',
+            minimum: 0,
+            description: 'Best-guess count of files this change will touch. 0 = unknown; ≥ 1 = concrete estimate. Router uses this for budget + complexity heuristics.',
           },
         },
         required: ['action'],
@@ -292,7 +297,18 @@ function asStrArr(v: unknown): string[] {
  *  the parsed TaskImpact on success or `{error: string}` when any
  *  field is illegal. Legacy callers that omit impact entirely
  *  get `{impact: undefined}` — the Router then falls back to
- *  keyword heuristics. */
+ *  keyword heuristics.
+ *
+ *  v0.5.3 Final (task 1): the vocabulary is sourced from
+ *  src/core/taskImpact.ts. Drift between schema enum and parser
+ *  enum is now a compile-time / round-trip-time failure. */
+import {
+  TASK_IMPACT_SCOPES,
+  isTaskImpactScope,
+  type TaskImpactScope,
+  type TaskImpact as TaskImpactCanonical,
+} from '../core/taskImpact.js'
+
 function parseImpact(
   scope: unknown,
   flags: {
@@ -301,23 +317,21 @@ function parseImpact(
     requires_root_cause?: unknown
     estimated_files?: unknown
   },
-): { impact?: import('../core/runtime/taskGraph.js').TaskImpact; error?: string } {
+): { impact?: TaskImpactCanonical; error?: string } {
   // Legacy path: no impact supplied at all.
   if (scope === undefined && flags.affects_public_interface === undefined &&
       flags.changes_configuration === undefined && flags.requires_root_cause === undefined &&
       flags.estimated_files === undefined) {
     return { impact: undefined }
   }
-  const VALID_SCOPES = ['local', 'module', 'cross-module', 'repository'] as const
-  type Scope = typeof VALID_SCOPES[number]
-  let scopeVal: Scope
+  let scopeVal: TaskImpactScope
   if (typeof scope !== 'string') {
-    return { error: `impact_scope must be a string (one of ${VALID_SCOPES.join('|')})` }
+    return { error: `impact_scope must be a string (one of ${TASK_IMPACT_SCOPES.join('|')})` }
   }
-  if (!VALID_SCOPES.includes(scope as Scope)) {
-    return { error: `impact_scope "${scope}" is invalid; expected one of ${VALID_SCOPES.join('|')}` }
+  if (!isTaskImpactScope(scope)) {
+    return { error: `impact_scope "${scope}" is invalid; expected one of ${TASK_IMPACT_SCOPES.join('|')}` }
   }
-  scopeVal = scope as Scope
+  scopeVal = scope
   const apf = flags.affects_public_interface
   if (apf !== undefined && typeof apf !== 'boolean') return { error: 'affects_public_interface must be boolean' }
   const cc = flags.changes_configuration
@@ -325,7 +339,7 @@ function parseImpact(
   const rc = flags.requires_root_cause
   if (rc !== undefined && typeof rc !== 'boolean') return { error: 'requires_root_cause must be boolean' }
   const ef = flags.estimated_files
-  let efVal: number | undefined
+  let efVal: number = 0
   if (ef !== undefined) {
     if (typeof ef !== 'number' || ef < 0 || !Number.isInteger(ef)) {
       return { error: 'estimated_files must be a non-negative integer' }

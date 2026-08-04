@@ -451,25 +451,25 @@ export class RuntimeCoordinator {
             publishMemoryContext?: (c: typeof memoryCtx) => void
           }
           try { mm.publishMemoryContext?.(memoryCtx) } catch { /* best-effort */ }
+          // candidateSink publish happens AFTER runContext is created
+          // — see below.
         }
       }
     }
 
-    // v0.5.3 (P1.6): publish a fresh budget snapshot BEFORE signal
-    // collection so the Router sees the current turn's tokens, not
-    // the previous turn's residue. We use the same estimation
-    // functions evaluateBudget() uses so the numbers cannot drift.
+    // v0.5.3 Final (task 9): pure-measure BEFORE signal collection
+    // so the Router sees the current turn's tokens without us
+    // having touched messages. Apply the policy in the budget_check
+    // state below; re-measure after any compaction so the Router
+    // never reads a pre-compaction snapshot.
     this.deps.contextManager.setActiveRunId(runId ?? null)
     try {
-      await this.deps.contextManager.evaluateBudget({
-        messages,
-        toolDefs,
-        abortSignal: turnAbortController.signal,
-      })
-    } catch {
-      // evaluateBudget throws only on cancellation; on early-boot
-      // errors we proceed with whatever snapshot the ContextManager
-      // holds (still initialized=false means Router treats as unknown).
+      this.deps.contextManager.measureBudget({ messages, toolDefs })
+    } catch (err) {
+      // AbortError propagates — caller will catch. Other errors
+      // are best-effort ignored; an uninitialized snapshot is a
+      // valid signal (Router treats it as 'unknown').
+      if ((err as { name?: string }).name === 'AbortError') throw err
     }
 
     // ── State machine driver ──
@@ -501,6 +501,12 @@ export class RuntimeCoordinator {
         runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
           parentRunId: effectiveParentRunId,
           taskKind: 'informational',
+          // v0.5.3 Final (task 2): stash the original user message
+          // on the run context so the MemoryPromoter can verify
+          // sourceQuote claims later. Snapshot once at create-time —
+          // do NOT re-read from messages[] because tool-added user
+          // strings would let the model forge quotes.
+          userMessage,
           // v0.5.2 (C3 — borrowed from codex multi_agents_common.rs):
           // capture the parent's effective config so child runs can
           // inherit it structurally instead of through ad-hoc field
@@ -518,6 +524,23 @@ export class RuntimeCoordinator {
           } : undefined,
         })
         runContext.taskKind = taskIntent.kind
+        // v0.5.3 Final (task 2): publish the per-run candidate sink.
+        // memory_write routes candidates into runContext.memoryCandidates;
+        // the MemoryPromoter reads them after CompletionContract.
+        for (const m of this.deps.moduleManager.modules) {
+          if (m.name === 'memory') {
+            const mm = m as unknown as {
+              publishCandidateSink?: (runId: string, sink: (c: import('../memoryCandidate.js').MemoryCandidate) => void) => void
+            }
+            try {
+              if (mm.publishCandidateSink) {
+                mm.publishCandidateSink(runId, (cand) => {
+                  runContext!.memoryCandidates.push(cand)
+                })
+              }
+            } catch { /* best-effort */ }
+          }
+        }
         // v0.3.5: do NOT write back to this.deps.taskGraph (shared mutable
         // global). Use the runContext's graph via a local variable instead.
       } else {
@@ -584,19 +607,31 @@ export class RuntimeCoordinator {
           },
           contextManager: cmSignals,
           // v0.5.2 (Stage 2.2): real repository stats via the service.
-          // repoFileCount falls back to the legacy proxy only when this
-          // service is absent (pre-wiring tests).
-          repoStats: this.deps.repoStats
-            ? (() => {
-                const snap = this.deps.repoStats!.snapshot(config.cwd)
-                if (snap.state !== 'ready' || !snap.stats) return undefined
-                return {
-                  rootDir: snap.stats.rootDir,
-                  sourceFileCount: snap.stats.sourceFileCount,
-                  totalFileCount: snap.stats.totalFileCount,
-                }
-              })()
-            : undefined,
+          // v0.5.3 Final (task 8): the signal carries repoStatsState
+          // and may report partial/unknown precisely. We never
+          // synthesize `repoFileCount=100` from `filesTouched*10`.
+          repoStats: (() => {
+            const notWired = {
+              state: 'unknown' as const,
+              rootDir: config.cwd,
+              sourceFileCount: undefined,
+              totalFileCount: undefined,
+              lowerBound: false,
+              reason: 'repoStats not wired',
+            }
+            if (!this.deps.repoStats) return notWired
+            const snap = this.deps.repoStats.snapshot(config.cwd)
+            const state = (snap.state === 'pending' ? 'unknown' : snap.state) as
+              'ready' | 'empty' | 'partial' | 'unknown'
+            return {
+              state,
+              rootDir: snap.stats?.rootDir ?? config.cwd,
+              sourceFileCount: snap.stats?.sourceFileCount,
+              totalFileCount: snap.stats?.totalFileCount,
+              lowerBound: snap.stats ? (snap.stats.sourceFileCount > 0) : false,
+              reason: snap.reason,
+            }
+          })(),
           taskGraph: tg ? {
             nodeCount: tg.size(),
             preferredRoles: tg.list().map((n: { preferredRole?: string }) => n.preferredRole ?? '').filter(Boolean),
@@ -637,13 +672,8 @@ export class RuntimeCoordinator {
                 avgLatencyMs: h?.ewmaLatency ?? 0,
               }
             }),
-            // v0.5.3 P0-3: signal collector reads the canonical
-            // counters from the Router. Previously we exposed
-            // coordinator-local state; the global circuit was
-            // removed so these now reflect the router's view.
             previousRoutingFailures: router.getRoutingFailureStats().totalFailures,
             totalFallbacksApplied: router.getRoutingFailureStats().totalFallbacksApplied,
-            totalRetryAttempts: router.getRoutingFailureStats().totalRetryAttempts,
             // v0.5.3 P0-3: per-profile circuit visibility replaces
             // the old global flag. The Router's isProfileAvailable()
             // decides what's callable; the signal collector just
@@ -659,7 +689,19 @@ export class RuntimeCoordinator {
         })
         if (runContext) runContext.routingSignals = signals
         const routed = this.deps.routeModel(signalsToRoutingInput(signals))
-        if (routed) renderer.info(`Model routed to ${routed} (adaptive)`)
+        if (routed) {
+          // v0.5.3 Final (task 7): if Router returned an "all profiles
+          // open" decision (empty selectedModel), surface as an
+          // API-class error so the caller gets exit 2, not exit 1.
+          if (routed === '') {
+            renderer.error(`Router: all profiles in open circuit — no model available for this request.`)
+            // We do NOT short-circuit the turn here; the gateway
+            // would throw a typed error anyway. We surface a
+            // structured note on stderr.
+          } else {
+            renderer.info(`Model routed to ${routed} (adaptive)`)
+          }
+        }
       } catch { /* best-effort: routing must never break the turn */ }
     }
 
@@ -797,7 +839,12 @@ export class RuntimeCoordinator {
             if (config.hookRunner?.runPreCompact) {
               try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
             }
-            await this.deps.contextManager.evaluateBudget({ messages, toolDefs, abortSignal: turnAbortController.signal })
+            // v0.5.3 Final (task 9): measure → apply → re-measure.
+            const snap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+            await this.deps.contextManager.applyBudgetPolicy({
+              messages, toolDefs, snapshot: snap,
+              abortSignal: turnAbortController.signal,
+            })
             if (config.hookRunner?.runPostCompact) {
               try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
             }
@@ -1427,6 +1474,10 @@ export class RuntimeCoordinator {
       outcome,
       messages,
       eventLog,
+      // v0.5.3 Final (task 2): pass the per-run context so the
+      // MemoryModule's onComplete can promote this run's candidates.
+      runContext: runContext ?? undefined,
+      userMessage,
     })
 
     void config.hookRunner?.runOnComplete?.(result)

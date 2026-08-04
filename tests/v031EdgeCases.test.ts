@@ -24,7 +24,11 @@ describe('v0.3.1 edge cases (audit pass 2)', () => {
   it('ModelRouter with empty profiles: route returns single-profile fallback for any goal', () => {
     const r = new ModelRouter([])
     const d = r.route({ userGoal: 'anything' })
-    expect(d.reasonCodes).toContain('single-profile')
+    // v0.5.3 Final (task 7): an empty Router is now a structured
+    // unavailable decision — distinct from "all profiles open"
+    // (which only fires when there ARE profiles in the open state).
+    expect(d.selectedModel).toBe('')
+    expect(d.reasonCodes.length).toBeGreaterThan(0)
     expect(d.fallbackChain).toEqual([])
   })
 

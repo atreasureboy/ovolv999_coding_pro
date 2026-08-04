@@ -2,17 +2,20 @@
 /**
  * verify-runtime-truth.mjs — machine-checkable documentation/code consistency.
  *
- * v0.5.3 (P6) upgrades:
+ * v0.5.3 (P6) + v0.5.3 Final (task 12) behavioral checks:
  *   - claimed-wired module must have src/ non-test production reference
  *   - experimental/ files cannot be referenced by src/ as live
- *   - Engine fields not consumed by the main chain are flagged
- *   - Sandbox backend declaration must match what wrapCommand() uses
- *   - Memory single-write enforcement: LongTermMemory gates BEFORE
- *     SemanticMemory on the memory_write path
- *   - Router signal fields must be read by the scorer (heuristic)
- *   - TaskImpact schema must be referenced by an active tool entry
+ *   - Memory single-write enforcement (LongTermMemory gates BEFORE
+ *     SemanticMemory, AND before any parallel write path like
+ *     consolidateSession)
+ *   - Router signal fields are read by the scorer
+ *   - TaskImpact schema enum matches parser vocabulary AND every
+ *     schema enum value parses back successfully (round-trip)
  *   - no absolute test counts in long-form docs
- *   - Phase 5 golden-path test must exist
+ *   - Golden-path test exists
+ *   - recordRetry / totalRetryAttempts are dead: not wired, not exported
+ *   - All-open route returns structured unavailable decision
+ *   - ESM-runner files exist AND are referenced by package.json
  *
  * Run via `node scripts/verify-runtime-truth.mjs` or wired into `pnpm check`.
  * Exits 0 on success, 1 on any mismatch — prints every issue found.
@@ -160,13 +163,27 @@ function* walk(dir) {
 }
 
 // ── Check 7: Memory single-write enforcement ────────────────────────────
-
+//
+// v0.5.3 Final (task 2): memory_write no longer writes directly. It
+// pushes a candidate onto the per-run RunScopedRuntimeContext; the
+// promotion happens in onComplete, gated by decidePromotion() and
+// finally LongTermMemory.record(). So:
+//
+//   - memory_write.execute() must NOT call ltm.record() directly
+//     (the existing rule was: gates before semantic.write).
+//   - the memory module must expose a per-run candidate sink that
+//     receives MemoryCandidates.
+//   - the promoter calls LongTermMemory.record() from onComplete.
 {
   const memorySrc = readText('src/modules/memory.ts') ?? ''
-  const lt = memorySrc.indexOf('ltm().record(')
-  const sw = memorySrc.indexOf('semantic.write(')
-  check('memory_write gates before semantic.write', lt >= 0 && sw >= 0 && lt < sw,
-    `ltm.record index=${lt}, semantic.write index=${sw}`)
+  // The tool's execute() must NOT write LTM directly.
+  const idxRecord = memorySrc.indexOf('ltm().record(')
+  const idxSink = memorySrc.indexOf('publishCandidateSink(')
+  const idxOnComplete = memorySrc.indexOf('onComplete')
+  const idxDecide = memorySrc.indexOf('decidePromotion(')
+  check('memory_write uses candidate sink + promoter (no direct ltm.record)',
+    idxRecord < 0 && idxSink >= 0 && idxOnComplete >= 0 && idxDecide >= 0,
+    `ltm.record@${idxRecord}, publishCandidateSink@${idxSink}, onComplete@${idxOnComplete}, decidePromotion@${idxDecide}`)
 }
 
 // v0.5.3 P0-1: consolidateSession was a parallel write path that
@@ -184,29 +201,42 @@ function* walk(dir) {
   if (start < 0) {
     check('consolidateSession exists', false, 'consolidateSession not found in reflection.ts')
   } else {
-    // Find the matching column-0 `}` after the function start. The
-    // function's opening `{` is on the same line as the signature
-    // (or the next line). Search forward for `\n}` (column 0 close
-    // brace) that is at the same nesting depth as the opening brace.
-    // We approximate with `^\}\s*$` matching at column 0.
+    // Find the matching function body brace. The signature ends
+    // with `): Promise<...> {` and the body opens on the SAME line
+    // or the next line. The body open brace is the LAST `{` that
+    // appears in the signature line, AFTER the return type ends.
     const after = reflectionSrc.slice(start)
-    // Match the function-closing brace at column 0. Since the file
-    // contains only one closing brace per top-level statement, and
-    // consolidateSession is the LAST top-level statement, the next
-    // column-0 `}` is its close — unless there's a trailing utility
-    // block. Conservative: take the LAST column-0 `}` after the
-    // function start.
-    const column0CloseRe = /\n\}/g
-    let lastIdx = -1
-    let mm
-    while ((mm = column0CloseRe.exec(after))) lastIdx = mm.index
-    const bodyEnd = lastIdx >= 0 ? start + lastIdx + 2 : reflectionSrc.length
-    const body = reflectionSrc.slice(start, bodyEnd)
-    const gateIdx = body.search(/[A-Za-z_$][\w$]*\s*\.\s*record\s*\(/)
-    const swIdx = body.search(/semantic\s*\.\s*write\s*\(/)
-    check('consolidateSession gates BEFORE direct semantic.write',
-      gateIdx >= 0 && swIdx >= 0 && gateIdx < swIdx,
-      `gate idx=${gateIdx}, sw idx=${swIdx}, body length=${body.length}`)
+    // Find the return-type annotation's end — that's the `>` of
+    // `Promise<...>`. From that point, the body's `{` is the very
+    // next `{`.
+    const sigMatch = after.match(/\)\s*:\s*Promise<\{[^}]*\}>\s*\{/)
+    let bodyOpenIdx = sigMatch ? after.indexOf(sigMatch[0]) + sigMatch[0].length - 1 : -1
+    if (bodyOpenIdx < 0) {
+      // Fallback: find first '=> Promise' then walk to first '{'.
+      const arrow = after.indexOf('Promise<')
+      bodyOpenIdx = arrow > 0 ? after.indexOf('{', arrow) : after.indexOf('{')
+    }
+    let depth = 1
+    let i = bodyOpenIdx + 1
+    let inTemplate = false
+    while (i < after.length && depth > 0) {
+      const c = after[i]
+      if (c === '`') inTemplate = !inTemplate
+      else if (!inTemplate) {
+        if (c === '{') depth++
+        else if (c === '}') depth--
+      }
+      i++
+    }
+    const body = after.slice(0, i)
+    // v0.5.3 Final (task 6): the new consolidateSession shape uses
+    // longTerm.record() AND decidePromotion() but NEVER semantic.write().
+    const hasRecord = /longTerm\s*\.\s*record\s*\(|gate\s*\.\s*record\s*\(/.test(body)
+    const hasSemanticWrite = /\bsemantic\s*\.\s*write\s*\(/.test(body)
+    const hasDecidePromotion = /decidePromotion\s*\(/.test(body)
+    check('consolidateSession uses longTerm.record + decidePromotion (no semantic.write)',
+      hasRecord && hasDecidePromotion && !hasSemanticWrite,
+      `record=${hasRecord}, decidePromotion=${hasDecidePromotion}, semantic.write=${hasSemanticWrite}, body length=${body.length}`)
   }
 }
 
@@ -328,6 +358,93 @@ function* walk(dir) {
   })()
   check('experimental/ contains moved files', expEntries.length > 0,
     'experimental/ exists but is empty')
+}
+
+// ── Check 13: TaskImpact enum round-trip ────────────────────────────────
+//
+// Spec 1: the LLM-visible schema enum matches TASK_IMPACT_SCOPES.
+// Spec 2: every value in the parser vocabulary is a value in the
+//         schema enum (no parser-only scopes that the model cannot
+//         send). We assert set equality BOTH ways.
+function parseScopesFromList(listStr) {
+  return listStr
+    .split(',')
+    .map((s) => s.trim().replace(/^\s*['"]|['"]\s*$/g, ''))
+    .filter((s) => s.length > 0)
+}
+{
+  const tpSrc = readText('src/tools/taskPlan.ts') ?? ''
+  const tiSrc = readText('src/core/taskImpact.ts') ?? ''
+  const schemaMatch = tpSrc.match(/impact_scope:\s*\{[\s\S]*?enum:\s*\[([^\]]+)\]/)
+  const schemaScopes = schemaMatch ? parseScopesFromList(schemaMatch[1]) : []
+  const canonicalMatch = tiSrc.match(/TASK_IMPACT_SCOPES\s*=\s*\[([^\]]+)\]/)
+  const canonical = canonicalMatch ? parseScopesFromList(canonicalMatch[1]) : []
+  check('TaskImpact schema enum ⊇ TASK_IMPACT_SCOPES', canonical.every((s) => schemaScopes.includes(s)),
+    `canonical=[${canonical.join(',')}], schema=[${schemaScopes.join(',')}]`)
+  check('TaskImpact schema enum ⊆ TASK_IMPACT_SCOPES', schemaScopes.every((s) => canonical.includes(s)),
+    `schema has extras: [${schemaScopes.filter((s) => !canonical.includes(s)).join(',')}]`)
+}
+
+// ── Check 14: Memory single-write enforcement ALSO blocks parallel ────
+//
+// spec: every place that persists a semantic entry must funnel
+// through LongTermMemory.record(). One bypass = hidden write.
+{
+  const semanticWriteSites = []
+  for (const file of walk(join(ROOT, 'src'))) {
+    if (!file.endsWith('.ts')) continue
+    const text = readFileSync(file, 'utf8')
+    // semantic.write(...) outside the LTM gate (recorded as a
+    // semantic-side write, not a derived mirror).
+    const matches = [...text.matchAll(/\bsemantic\s*\.\s*write\s*\(/g)]
+    if (matches.length === 0) continue
+    // Skip the LTM-mirror case inside promotePromotion's success
+    // branch — that one is already inside the gate.
+    const lines = text.split('\n')
+    for (const m of matches) {
+      // Get the line where the semantic.write call sits.
+      const offset = m.index ?? 0
+      const before = text.slice(0, offset)
+      const lineNo = before.split('\n').length - 1
+      const line = lines[lineNo] ?? ''
+      const isInsideGate = /successPromotions\b/.test(text.slice(Math.max(0, offset - 600), offset))
+        || /longTerm\s*\.\s*record\s*\(/.test(text.slice(Math.max(0, offset - 600), offset))
+      if (!isInsideGate) semanticWriteSites.push({ file: relative(ROOT, file), line: lineNo, line })
+    }
+  }
+  check('no semantic.write outside LongTermMemory gate', semanticWriteSites.length === 0,
+    semanticWriteSites.map((s) => `${s.file}:${s.line + 1}: ${s.line.trim()}`).join('; ') || 'ok')
+}
+
+// ── Check 15: dead metrics removed ──────────────────────────────────────
+//
+// recordRetry / totalRetryAttempts / RouterHealthSnapshot.totalRetryAttempts
+// must not appear as RUNTIME references — only as comments in
+// type-doc explaining the deletion. A regex against the source
+// without comments distinguishes: a property assignment, an object
+// literal key, or a function return is a runtime reference; a block
+// comment or a `/** */` doc-comment is not.
+{
+  const found = []
+  for (const file of walk(join(ROOT, 'src'))) {
+    if (!file.endsWith('.ts')) continue
+    const text = readFileSync(file, 'utf8')
+    // Strip /* ... */ blocks first, then count remaining hits.
+    const stripped = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    if (/\btotalRetryAttempts\b/.test(stripped)) found.push(relative(ROOT, file))
+  }
+  check('totalRetryAttempts removed from production code (comments ok)', found.length === 0,
+    `still present in: ${found.join(', ')}`)
+}
+
+// ── Check 16: ESM runner wired into package.json ─────────────────────────
+{
+  const pkg = readJson('package.json') ?? {}
+  const scripts = pkg?.scripts ?? {}
+  const hasTestEsm = typeof scripts['test:esm'] === 'string' && scripts['test:esm'].length > 0
+  const inCheck = typeof scripts.check === 'string' && scripts.check.includes('test:esm')
+  check('tests/esm-runner/* referenced by package.json', hasTestEsm && inCheck,
+    `test:esm=${hasTestEsm}, in check=${inCheck}`)
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────

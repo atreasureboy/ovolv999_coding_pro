@@ -272,8 +272,12 @@ export class ModuleManager {
     outcome?: TurnOutcome
     messages: OpenAIMessage[]
     eventLog?: EventLog
+    /** v0.5.3 Final (task 2): pass the per-run context for
+     *  MemoryModule.onComplete's promoter step. */
+    runContext?: import('../runtime/runScopedContext.js').RunScopedRuntimeContext
+    userMessage?: string
   }): Promise<void> {
-    const { cwd, sessionDir, turnResult, outcome, messages, eventLog } = params
+    const { cwd, sessionDir, turnResult, outcome, messages, eventLog, runContext, userMessage } = params
 
     for (const module of this.activeModules) {
       try {
@@ -284,6 +288,8 @@ export class ModuleManager {
           outcome,
           messages,
           eventLog,
+          runContext,
+          userMessage,
         })
       } catch {
         // module onComplete failures must never break the engine

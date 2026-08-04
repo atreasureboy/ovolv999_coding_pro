@@ -802,7 +802,13 @@ async function runRepl(
   cwd: string,
   skills: Map<string, Skill>,
   hookRunner: { runUserPromptSubmit: (p: string) => void },
-  consolidate?: { config: EngineConfig; semanticMemory: SemanticMemory; episodicMemory: EpisodicMemory },
+  consolidate?: {
+    config: EngineConfig
+    semanticMemory: SemanticMemory
+    episodicMemory: EpisodicMemory
+    longTerm: import('../src/core/longTermMemory.js').LongTermMemory
+    sessionRunIds: string[]
+  },
   sessionDir?: string,
   resumedHistory?: OpenAIMessage[],
   loopMaxIters = 12,
@@ -1334,13 +1340,17 @@ async function runRepl(
       renderer.info('Consolidating memory...')
       const OpenAI = (await import('openai')).default
       const client = new OpenAI({ apiKey: consolidate.config.apiKey, baseURL: consolidate.config.baseURL })
-      const result = await consolidateSession(
-        client, consolidate.config.model,
-        consolidate.episodicMemory, consolidate.semanticMemory,
-        consolidate.config.poor,
-      )
-      if (result.knowledgeExtracted > 0) {
-        renderer.info(`Memory consolidated: ${result.knowledgeExtracted} entries from ${result.episodes} episodes`)
+      const { LongTermMemory } = await import('../src/core/longTermMemory.js')
+      const result = await consolidateSession({
+        client,
+        model: consolidate.config.model,
+        longTerm: consolidate.longTerm ?? new LongTermMemory(),
+        sessionRunIds: consolidate.sessionRunIds ?? [],
+        cwd: consolidate.config.cwd,
+        poor: consolidate.config.poor,
+      })
+      if (result.promoted > 0) {
+        renderer.info(`Memory consolidated: ${result.promoted} promoted (from ${result.sourceRecords} verified records, ${result.candidates} candidates)`)
       }
     } catch { /* best-effort */ }
   }
@@ -2238,7 +2248,11 @@ async function main(): Promise<void> {
   }
 
   await runRepl(engine, planConfig, renderer, cwd, skills, hookRunner, {
-    config, semanticMemory, episodicMemory,
+    config,
+    semanticMemory,
+    episodicMemory,
+    longTerm: new (await import('../src/core/longTermMemory.js')).LongTermMemory(),
+    sessionRunIds: [], // populated by the run loop; the cli/repl loop does not yet track per-run Ids.
   }, sessionDir, resumedHistory, loopMaxIters)
 }
 

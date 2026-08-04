@@ -52,7 +52,7 @@ export interface RoutingSignals {
   // — pre-wiring callers omit them and the Router treats them as
   // 'unknown' (neutral).
   totalFallbacksApplied?: number
-  totalRetryAttempts?: number
+  // v0.5.3 Final (task 7): removed. Same-model retries never happen.
   circuitState?: 'closed' | 'open' | 'half-open'
   consecutiveProviderFailures?: number
   manualOverrideActive?: boolean
@@ -109,7 +109,6 @@ export interface RouterHealthSnapshot {
   // v0.5.2 (Stage 2.4): optional extended health signals. When omitted,
   // the collector treats them as 'unknown' (neutral).
   totalFallbacksApplied?: number
-  totalRetryAttempts?: number
   /** v0.5.3 P0-3: removed (coordinator-local global circuit is
    *  gone). Replaced by per-profile circuit visibility below. */
   circuitState?: 'closed' | 'open' | 'half-open'
@@ -134,8 +133,15 @@ export interface RouterHealthSnapshot {
  */
 export interface RepoStatsSnapshot {
   rootDir: string
+  /** v0.5.3 Final (task 8): the actual state — 'ready', 'empty',
+   *  'partial', or 'unknown'. The Router uses this to distinguish a
+   *  known-zero repo from a fully-unread one. */
+  state?: 'ready' | 'empty' | 'partial' | 'unknown'
   sourceFileCount?: number
   totalFileCount?: number
+  /** For partial states, true means the count is a lower bound. */
+  lowerBound?: boolean
+  reason?: string
 }
 
 /** Optional inputs the collector consumes; all may be omitted. */
@@ -241,7 +247,6 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
     // through unchanged so the Router can break out of failing
     // chains. Omitted fields stay undefined (neutral).
     totalFallbacksApplied: rh?.totalFallbacksApplied,
-    totalRetryAttempts: rh?.totalRetryAttempts,
     circuitState: rh?.circuitState,
     consecutiveProviderFailures: rh?.consecutiveProviderFailures,
     manualOverrideActive: rh?.manualOverrideActive,
@@ -270,7 +275,6 @@ export function signalsToRoutingInput(s: RoutingSignals): RoutingInput {
     previousRoutingFailures: s.previousRoutingFailures,
     // v0.5.2 (Stage 2.4): propagate extended health signals.
     totalFallbacksApplied: s.totalFallbacksApplied,
-    totalRetryAttempts: s.totalRetryAttempts,
     circuitState: s.circuitState,
     consecutiveProviderFailures: s.consecutiveProviderFailures,
     manualOverrideActive: s.manualOverrideActive,

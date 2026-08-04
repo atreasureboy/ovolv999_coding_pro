@@ -9,18 +9,26 @@
  */
 
 import type { Tool, ToolDefinition, ToolContext, ToolResult } from '../core/types.js'
-import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../core/module.js'
+import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleRunContext } from '../core/module.js'
 import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
 import { getMemoryDir, buildMemorySystemSection } from '../memory/index.js'
 import { str } from '../core/strings.js'
 import { LongTermMemory, defaultMemoryPath } from '../core/longTermMemory.js'
+import {
+  decidePromotion,
+  makeCandidateId,
+  type MemoryCandidate,
+  type RevisionBinding,
+} from '../core/memoryCandidate.js'
+import { buildRevisionBinding } from '../core/revisionBinding.js'
+import type { RunScopedRuntimeContextStore } from '../core/runtime/runScopedContext.js'
 
 // (Source priority lives in semanticMemory.ts — single source of truth)
 
 // ── memory_write — store knowledge with source attribution ──────────────────
 
-function createMemoryWriteTool(semantic: SemanticMemory, ltm: () => LongTermMemory, ctxProvider: () => MemoryToolContext): Tool {
+function createMemoryWriteTool(semantic: SemanticMemory, ctxProvider: () => MemoryToolContext, candidateSink: (c: MemoryCandidate) => boolean): Tool {
   return {
     name: 'memory_write',
     metadata: { mutatesState: true, concurrencySafe: false },
@@ -28,18 +36,22 @@ function createMemoryWriteTool(semantic: SemanticMemory, ltm: () => LongTermMemo
       type: 'function',
       function: {
         name: 'memory_write',
-        description: `Store a knowledge entry in long-term memory with source attribution.
+        description: `Store a knowledge entry via the Candidate → Promotion lifecycle.
 
-Use this when you learn something reusable:
-- **user_stated**: The user explicitly told you a preference/rule/constraint
-- **agent_inferred**: You deduced something from observations
-- **tool_observed**: A tool returned factual data worth remembering
+v0.5.3 Final (task 2): this tool DOES NOT persist anything yet.
+It creates a MemoryCandidate on the current run's RunScopedRuntimeContext.
+After the run finishes, the MemoryPromoter promotes the candidate
+based on the CompletionContract verdict and the user-source
+verification (for source='user_stated'). If the run failed, the
+candidate is recorded under kind='failure' — those entries do NOT
+enter the success-memory read pool.
 
-Higher-priority sources override lower ones on conflict.
-
-The engine auto-supplies \`repo\`, \`branch\`, \`commit\`, and \`sourceRunId\`
-from the ToolContext; you do not need to pass them. Override only when
-the model knows a more specific commit hash than what the engine sees.`,
+- **user_stated**: You MUST provide \`source_quote\` — a contiguous
+  substring of the user's original message. The engine verifies the
+  quote is real; without a verified quote the entry is demoted to
+  agent_inferred, or dropped entirely on failure runs.
+- **agent_inferred**: You deduced something from observations.
+- **tool_observed**: A tool returned factual data worth remembering.`,
         parameters: {
           type: 'object',
           properties: {
@@ -60,6 +72,10 @@ the model knows a more specific commit hash than what the engine sees.`,
               type: 'string',
               enum: ['user_stated', 'agent_inferred', 'tool_observed'],
               description: 'Knowledge source (default: agent_inferred)',
+            },
+            source_quote: {
+              type: 'string',
+              description: 'REQUIRED when source="user_stated": a contiguous substring of the user\'s original message that proves the user said this. The engine verifies before promoting.',
             },
           },
           required: ['content'],
@@ -82,68 +98,51 @@ the model knows a more specific commit hash than what the engine sees.`,
       const confidence = typeof input.confidence === 'number'
         ? Math.min(Math.max(input.confidence, 0), 1)
         : 0.7
-      const source = str(input.source, 'agent_inferred') as 'user_stated' | 'agent_inferred' | 'tool_observed'
+      const claimedSource = str(input.source, 'agent_inferred') as 'user_stated' | 'agent_inferred' | 'tool_observed'
+      const sourceQuote = str(input.source_quote) || undefined
 
-      // v0.5.3 P0-1: read repo / branch / commit / sourceRunId from
-      // ToolContext (engine-published) instead of stashing hidden
-      // input fields. The closure `ctxProvider()` reads from
-      // MemoryModule.currentMemoryContext which the Coordinator
-      // seeds each turn (post-runId-mint).
+      // v0.5.3 P0-1 (kept): read runId from ToolContext so the
+      // candidate is bound to the just-minted runId.
       const ctx = (context as unknown as { memoryToolContext?: MemoryToolContext })
         .memoryToolContext ?? ctxProvider()
-      const repo = str(ctx.repo) || str(input.repo) || 'memory'
-      const branch = str(ctx.branch) || (typeof input.branch === 'string' ? input.branch : undefined)
-      const commit = str(ctx.commit) || (typeof input.commit === 'string' ? input.commit : undefined)
-      const sourceRunId = str(ctx.sourceRunId) || str(input.sourceRunId) || 'unknown'
+      const runId = str(ctx.sourceRunId) || str(input.sourceRunId) || 'unknown'
 
-      // v0.5.3 P0-1: user_stated preferences bypass the R1
-      // verification gate by contract (a human's stated rule IS the
-      // ground truth; commit-binding is irrelevant). Everything
-      // else is verified=false at this layer — the engine's
-      // pre-publishing verified=true via the ToolContext is the
-      // only path that produces a verified=true entry here.
-      const verified = source === 'user_stated'
-        ? true
-        : (typeof ctx.verified === 'boolean' ? ctx.verified : false)
-
-      const memoryInput = {
-        kind: 'semantic' as const,
-        content: content.slice(0, 500),
-        repo,
-        branch,
-        commit,
-        origin: `memory_write:${source}`,
-        sourceRunId,
-        confidence,
-        verified,
-        tags,
-        expiresAt: undefined,
-      }
-      let gateResult
-      try {
-        gateResult = ltm().record(memoryInput)
-      } catch (gateErr) {
-        const reason = (gateErr as Error).message
+      // user_stated ALWAYS requires a source_quote — even before
+      // promotion. The quote-verifier runs at promotion time, but
+      // the tool itself refuses to enqueue a user_stated candidate
+      // without one, so the model sees the missing-input error
+      // immediately (rather than a silent demotion later).
+      if (claimedSource === 'user_stated' && !sourceQuote) {
         return Promise.resolve({
-          content: `Memory gate rejected: ${reason}`,
+          content: 'Error: source="user_stated" requires a non-empty `source_quote` proving the user actually said this.',
           isError: true,
         })
       }
 
-      // Gate passed — the LongTermMemory record is the source of
-      // truth; we mirror it into the SemanticMemory READ adapter
-      // so existing boot-time injection (relevance-scored top-K)
-      // keeps working without a parallel write.
-      const entry = semantic.write({
-        content: gateResult.content,
+      const candidate: MemoryCandidate = {
+        id: makeCandidateId(),
+        runId,
+        content: content.slice(0, 500),
+        claimedSource,
+        sourceQuote,
         tags,
-        source,
         confidence,
-        timestamp: gateResult.createdAt,
-      })
+        createdAt: new Date().toISOString(),
+      }
+
+      const accepted = candidateSink(candidate)
+      // candidateSink returns false only when no per-run context is
+      // available (a test path that bypassed Engine). In production
+      // it always returns true.
+      if (!accepted) {
+        return Promise.resolve({
+          content: `Memory candidate could not be enqueued (no per-run context). This path is unsupported.`,
+          isError: true,
+        })
+      }
 
       return Promise.resolve({
-        content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence}, audit_id: ${gateResult.id})`,
+        content: `MemoryCandidate enqueued (id: ${candidate.id}, source: ${claimedSource}, runId: ${runId}). Promotion to long-term memory happens after the run completes — based on CompletionContract, not on this call.`,
         isError: false,
       })
     },
@@ -363,28 +362,26 @@ export class MemoryModule implements AgentModule {
   }
 
   /**
-   * v0.5.2 (Stage 3): wired LongTermMemory as the single write gate
-   * for `memory_write`. R1 (verification) and R5 (conflict-aware
-   * merge) are now enforced on the production path. R2 (source
-   * marking) is satisfied because the `origin` is the module name +
-   * source attribution. R3 (commit binding for code memories) is
-   * downgraded — the legacy `memory_write` tool does not carry
-   * commit metadata, so we pass `allowCodeWithoutCommit: true` to
-   * avoid breaking existing flows. A future round can tighten R3
-   * for the reflection-driven writes.
-   *
-   * The actual durable storage is still `semantic.write()` (the
-   * legacy store) — LongTermMemory is the gate, not a parallel
-   * backend. Its JSONL backend (longterm.jsonl) is also written for
-   * audit but reads go through SemanticMemory to preserve backwards
-   * compatibility.
+   * v0.5.3 Final (task 2): per-runId Candidate sink. The
+   * Coordinator publishes a sink closure for the current runId;
+   * memory_write pushes candidates into it. Drop on close.
    */
+  private readonly candidateSinks = new Map<string, (c: MemoryCandidate) => void>()
+
+  publishCandidateSink(runId: string, sink: (c: MemoryCandidate) => void): void {
+    this.candidateSinks.set(runId, sink)
+  }
+
+  closeCandidateSink(runId: string): void {
+    this.candidateSinks.delete(runId)
+  }
+
   private longTerm = new LongTermMemory({
-    // v0.5.3 (P0.3): production path MUST enforce R3 (commit
-    // binding for code memories). user_stated preferences that
-    // mention code keywords bypass via the gate's `referencesCode`
-    // check, not via this knob.
-    allowCodeWithoutCommit: false,
+    // v0.5.3 Final: no allowCodeWithoutCommit or allowUnverified
+    // shortcuts. Promotion to kind='semantic' requires the
+    // RevisionBinding produced by the engine (binding.repo +
+    // binding.baseCommit when present), which satisfies R3 by
+    // contract.
   })
 
   /** Override the per-process LongTermMemory instance (tests). */
@@ -397,30 +394,34 @@ export class MemoryModule implements AgentModule {
   }
 
   boot(ctx: ModuleBootContext): ModuleBootResult {
-    // Relevance-based memory retrieval (AgentOS pattern)
-    // Score entries by keyword overlap with user message, inject top-K
-    const allEntries = this.semantic.readAll()
+    // v0.5.3 Final (task 5): memory retrieval reads LongTermMemory
+    // directly. SemanticMemory is kept for back-compat reads only
+    // (until migration; see migrateSemanticToLongTerm below).
     let section = ''
-
-    if (allEntries.length > 0 && ctx.userMessage) {
-      const keywords = extractKeywords(ctx.userMessage)
-      const scored = allEntries
-        .map(e => ({ entry: e, score: scoreRelevance(e, keywords) }))
-        .filter(x => x.score > 0) // Only inject relevant entries
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10) // Top-K to save context budget
-
-      if (scored.length > 0) {
-        const lines = scored.map(({ entry: e, score }) => {
-          const s = score.toFixed(2)
-          const tags = e.tags.length > 0 ? ` [${e.tags.join(', ')}]` : ''
-          return `- (${s}) ${e.content}${tags}`
-        })
-        section = `## Memory — Relevant Knowledge (relevance-scored)\n\nKeywords: ${keywords.slice(0, 10).join(', ')}\n\n${lines.join('\n')}`
+    try {
+      const ltmRecords = this.longTerm.query({ kind: 'semantic', verified: true, limit: 10 })
+      if (ltmRecords.length > 0 && ctx.userMessage) {
+        const keywords = extractKeywords(ctx.userMessage)
+        const scored = ltmRecords
+          .map((r: { content: string; tags: string[]; confidence: number }) => ({
+            entry: { content: r.content, tags: r.tags, confidence: r.confidence },
+            score: scoreRelevance({ content: r.content, tags: r.tags, confidence: r.confidence }, keywords),
+          }))
+          .filter((x: { score: number }) => x.score > 0)
+          .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
+          .slice(0, 10)
+        if (scored.length > 0) {
+          const lines = scored.map(({ entry: e, score }: { entry: { content: string; tags: string[]; confidence: number }; score: number }) => {
+            const s = score.toFixed(2)
+            const tags = e.tags.length > 0 ? ` [${e.tags.join(', ')}]` : ''
+            return `- (${s}) ${e.content}${tags}`
+          })
+          section = `## Memory — Relevant Knowledge (LongTermMemory top-K)\n\nKeywords: ${keywords.slice(0, 10).join(', ')}\n\n${lines.join('\n')}`
+        }
       }
-    }
+    } catch { /* if LongTermMemory read fails, fall back silently — never block boot */ }
 
-    // Fallback: if no user message or no relevant entries, use confidence-based injection
+    // Fallback: build the legacy semantic section only if LongTermMemory yielded nothing
     if (!section) {
       const memoryDir = getMemoryDir(ctx.cwd)
       section = buildMemorySystemSection(memoryDir)
@@ -432,23 +433,70 @@ export class MemoryModule implements AgentModule {
         semanticMemory: this.semantic,
         episodicMemory: this.episodic,
       },
-      // Module-provided tools — agent actively manages its own memory
-      //
-      // v0.5.3 P0-1: ctxProvider reads from this.currentMemoryContext
-      // at execute-time. The Coordinator sets that field each
-      // turn; on the very first call before the Coordinator has
-      // published anything, we still pass an empty object so the
-      // gate's "no provenance" rejection is the user-visible
-      // outcome (rather than a typed NPE).
       tools: [
+        // v0.5.3 Final (task 2): tool pushes Candidate into the
+        // per-run sink, NOT to LongTermMemory.
         createMemoryWriteTool(
           this.semantic,
-          () => this.longTerm,
           () => this.currentMemoryContext,
+          (cand: MemoryCandidate) => {
+            const sink = this.candidateSinks.get(cand.runId)
+            if (!sink) return false
+            sink(cand)
+            return true
+          },
         ),
-        createMemorySearchTool(this.semantic),
+        // v0.5.3 Final (task 5): memory_search queries LongTermMemory
+        // directly — semantic mirror removed from production reads.
+        createMemorySearchToolLTM(this.longTerm),
         createMemoryRecallTool(this.episodic),
       ],
+    }
+  }
+
+  /**
+   * v0.5.3 Final (task 2): promote this run's MemoryCandidates.
+   * Called from the Coordinator right after evaluateCompletion().
+   * Reads candidates from the per-run RunScopedRuntimeContext and
+   * promotes each one based on the completion verdict.
+   *
+   * Also closes the per-run candidate sink so a re-run does not
+   * inherit closures from the previous run.
+   */
+  async onComplete(ctx: ModuleRunContext): Promise<void> {
+    // Close the sink even if we do not have a runContext.
+    if (ctx.outcome?.runId) {
+      // Close at the end — no further candidates will land.
+      this.closeCandidateSink(ctx.outcome.runId)
+    }
+    if (!ctx.outcome || !ctx.cwd) return
+
+    const runContext = (ctx as unknown as { runContext?: { memoryCandidates?: MemoryCandidate[]; userMessage?: string } }).runContext
+    const candidates = runContext?.memoryCandidates ?? []
+    const userMessage = runContext?.userMessage ?? ''
+
+    if (candidates.length === 0) return
+
+    // v0.5.3 Final (task 3): build a real RevisionBinding from the
+    // workspace. Non-git fallback returns workspaceHash, never a
+    // fabricated commit.
+    const binding: RevisionBinding = await buildRevisionBinding({ cwd: ctx.cwd })
+
+    const decision = decidePromotion({
+      candidates,
+      outcome: ctx.outcome,
+      userMessage,
+      revision: binding,
+    })
+
+    for (const promo of [...decision.successPromotions, ...decision.failurePromotions]) {
+      try {
+        this.longTerm.record(promo.memoryInput)
+      } catch {
+        // If a single record is rejected (e.g. commit-binding still
+        // missing for an unexpected content shape), drop and
+        // continue — we do not let one bad candidate break the run.
+      }
     }
   }
 
@@ -472,3 +520,57 @@ export class MemoryModule implements AgentModule {
     })
   }
 }
+
+// ── LongTermMemory-backed search (replaces the semantic mirror) ──────────
+function createMemorySearchToolLTM(ltm: LongTermMemory): Tool {
+  return {
+    name: 'memory_search',
+    metadata: { readOnly: true, concurrencySafe: true },
+    definition: {
+      type: 'function',
+      function: {
+        name: 'memory_search',
+        description: 'Search long-term memory by keywords/tags. Returns verified entries sorted by confidence and recency.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Keywords to search for in memory content' },
+            tags: { type: 'array', items: { type: 'string' }, description: 'Tags to filter by' },
+            limit: { type: 'number', description: 'Max results (default: 10)' },
+          },
+        },
+      },
+    } satisfies ToolDefinition,
+    execute(input: Record<string, unknown>): Promise<ToolResult> {
+      const query = str(input.query)
+      const tags = Array.isArray(input.tags)
+        ? (input.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+        : []
+      const limit = typeof input.limit === 'number' ? Math.min(input.limit, 30) : 10
+      const records = ltm.query({
+        kind: 'semantic',
+        verified: true,
+        fullText: query || undefined,
+        tag: tags[0],
+        limit,
+      })
+      if (records.length === 0) {
+        return Promise.resolve({ content: 'No matching memories found.', isError: false })
+      }
+      const lines = records.map((r, i) => {
+        const tagStr = r.tags.length > 0 ? ` [${r.tags.join(', ')}]` : ''
+        return `${i + 1}. (${r.kind}) ${r.content}${tagStr} (conf: ${r.confidence})`
+      })
+      return Promise.resolve({
+        content: `Found ${records.length} memor${records.length === 1 ? 'y' : 'ies'}:\n\n${lines.join('\n')}`,
+        isError: false,
+      })
+    },
+  }
+}
+
+// (RevisionBinding comes from src/core/revisionBinding.ts — the
+// stub above was deleted; the real implementation lives in that
+// module. Keeping this comment as a breadcrumb so future readers
+// understand why neither `workspaceHash` nor `buildRevisionBinding`
+// are defined here.)

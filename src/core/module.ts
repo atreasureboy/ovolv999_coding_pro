@@ -98,6 +98,14 @@ export interface ModuleRunContext {
   outcome?: TurnOutcome
   messages: OpenAIMessage[]
   eventLog?: EventLog
+  /** v0.5.3 Final (task 2): the per-run RunScopedRuntimeContext, so
+   *  MemoryModule.onComplete can read this run's MemoryCandidates
+   *  + userMessage snapshot for promotion. */
+  runContext?: import('./runtime/runScopedContext.js').RunScopedRuntimeContext
+  /** v0.5.3 Final (task 2): the original user message — duplicated
+   *  here for engines whose ModuleManager doesn't keep the
+   *  context object alive all the way to onComplete. */
+  userMessage?: string
 }
 
 /**

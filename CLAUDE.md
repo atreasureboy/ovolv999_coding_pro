@@ -10,6 +10,27 @@ TypeScript 5.7 strict ESM,Node ≥ 20,~67k 行 src,测试套件全绿。运行�
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
 
+v0.5.3 Final 关键不变量:
+
+- **Memory Candidate → Promotion**: `memory_write` 推 MemoryCandidate 到
+  `RunScopedRuntimeContext`;`onComplete` + CompletionContract + Reviewer
+  + Verification 之后才晋升。失败 run 只能晋升 kind=`failure`。
+- **用户来源不可伪造**:`claimedSource=user_stated` 必须带 `source_quote`。
+  engine 用 `isNormalizedSubstring()` 在原始 user message 上验证,伪造 quote
+  → 降级为 `agent_inferred`(成功 run)或丢弃(失败 run)。
+- **RevisionBinding**: 每条 memory 绑定真实 git branch+commit / dirty
+  diffHash / 绝对 cwd+workspaceHash。不接受 `repo='memory'` /
+  `sourceRunId='unknown'`。
+- **LongTermMemory 是真实的读源**:`memory_search` + Boot relevance 直接
+  query LongTermMemory;SemanticMemory 保留只读向后兼容。
+- **Router 状态收敛**:没有生产 caller 的 `recordRetry` /
+  `totalRetryAttempts` 删除;`tryAcquireProbe` / `finishProbe` 是真正的
+  probe 租约;`all profiles open` 返回结构化 unavailable decision。
+- **Context 测量时间**: `measureBudget()` 是纯测量;`applyBudgetPolicy()`
+  是变更步;compact 后重新 measure,Router 永远读最新快照。
+- **TaskImpact 单源真相**:`TASK_IMPACT_SCOPES` 在 schema / parser /
+  TaskGraph / Router / 测试同一份。 `estimated_files` 的 `minimum=0`。
+
 ## 常用命令
 
 ```bash

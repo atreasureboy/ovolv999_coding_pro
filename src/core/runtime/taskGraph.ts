@@ -38,8 +38,10 @@ export interface TaskImpact {
   affectsPublicInterface: boolean
   changesConfiguration: boolean
   requiresRootCause: boolean
-  /** Optional estimate of files this node will touch. 0 = unknown. */
-  estimatedFiles?: number
+  /** v0.5.3 Final: required (was optional). 0 = model didn't estimate,
+   *  ≥ 1 = concrete count. The Tool schema mirrors this with
+   *  `minimum: 0` so the LLM is allowed to say "I don't know yet". */
+  estimatedFiles: number
 }
 
 export interface TaskNode {
