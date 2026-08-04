@@ -283,6 +283,15 @@ function parseReflection(output: string): Array<{
  *
  * Unlike per-turn reflection (which analyzes a single run), this summarizes
  * the entire session's activity and extracts durable knowledge.
+ *
+ * v0.5.3 P0-1: this entry point MUST funnel through LongTermMemory so
+ * the same R1/R2/R3/R5 gates that protect `memory_write` apply here
+ * too. The previous implementation called `semantic.write()` directly,
+ * which was a parallel store bypassing the gate. Now we attempt a
+ * `LongTermMemory.record()` per entry; on rejection we count + drop
+ * (we still mirror to SemanticMemory only if the gate accepted, so
+ * the boot-time relevance injector cannot accidentally surface
+ * audit-rejected entries).
  */
 export async function consolidateSession(
   client: OpenAI,
@@ -290,13 +299,14 @@ export async function consolidateSession(
   episodic: EpisodicMemory,
   semantic: SemanticMemory,
   poor?: { enabled: boolean },
-): Promise<{ episodes: number; knowledgeExtracted: number }> {
+  longTerm?: LongTermMemory,
+): Promise<{ episodes: number; knowledgeExtracted: number; gateRejected: number }> {
   if (poor?.enabled) {
-    return { episodes: 0, knowledgeExtracted: 0 }
+    return { episodes: 0, knowledgeExtracted: 0, gateRejected: 0 }
   }
   const episodes = episodic.recent(100)
   if (episodes.length < 5) {
-    return { episodes: episodes.length, knowledgeExtracted: 0 }
+    return { episodes: episodes.length, knowledgeExtracted: 0, gateRejected: 0 }
   }
 
   const sessionSummary = episodes.map((e, i) => {
@@ -321,18 +331,46 @@ export async function consolidateSession(
       const output = response.choices[0]?.message?.content ?? ''
       const parsed = parseReflection(output)
 
+      // v0.5.3 P0-1: callers MAY pass a LongTermMemory instance. If
+      // absent (legacy test paths), we instantiate a default one —
+      // but then the call has no commit-binding context, so any
+      // code-bearing entry will be rejected and counted as
+      // gateRejected. The fallback exists only for back-compat.
+      const gate = longTerm ?? new LongTermMemory({ allowCodeWithoutCommit: true })
+      let knowledgeExtracted = 0
+      let gateRejected = 0
+      const sessionRunId = `session-${Date.now()}`
       for (const entry of parsed) {
-      semantic.write({
-        content: `[session] ${entry.content}`,
-        tags: entry.tags,
-        source: 'consolidation',
-        confidence: entry.confidence,
-        timestamp: new Date().toISOString(),
-      })
-    }
+        try {
+          const rec = gate.record({
+            kind: 'semantic',
+            content: `[session] ${entry.content}`.slice(0, 500),
+            repo: 'session',
+            origin: 'reflection:consolidation',
+            sourceRunId: sessionRunId,
+            confidence: entry.confidence,
+            // Consolidation synthesizes knowledge from many runs;
+            // treat each summary as a tool_observed datum unless
+            // the entry is explicitly a user preference.
+            verified: false,
+            tags: [...entry.tags, 'session-consolidation'],
+            expiresAt: undefined,
+          })
+          knowledgeExtracted++
+          semantic.write({
+            content: rec.content,
+            tags: entry.tags,
+            source: 'consolidation',
+            confidence: entry.confidence,
+            timestamp: rec.createdAt,
+          })
+        } catch {
+          gateRejected++
+        }
+      }
 
-    return { episodes: episodes.length, knowledgeExtracted: parsed.length }
+      return { episodes: episodes.length, knowledgeExtracted, gateRejected }
   } catch {
-    return { episodes: episodes.length, knowledgeExtracted: 0 }
+    return { episodes: episodes.length, knowledgeExtracted: 0, gateRejected: 0 }
   }
 }

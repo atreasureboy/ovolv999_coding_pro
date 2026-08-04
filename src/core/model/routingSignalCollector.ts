@@ -110,8 +110,18 @@ export interface RouterHealthSnapshot {
   // the collector treats them as 'unknown' (neutral).
   totalFallbacksApplied?: number
   totalRetryAttempts?: number
+  /** v0.5.3 P0-3: removed (coordinator-local global circuit is
+   *  gone). Replaced by per-profile circuit visibility below. */
   circuitState?: 'closed' | 'open' | 'half-open'
+  /** @deprecated v0.5.3 P0-3 — per-profile circuit visibility
+   *  supersedes this global counter. */
   consecutiveProviderFailures?: number
+  /**
+   * v0.5.3 P0-3: per-profile circuit visibility. Each entry shows
+   * whether the Router would let the profile serve a call right
+   * now. When all profiles are open the Router signals unavailable.
+   */
+  profileCircuits?: Array<{ profileId: string; state: 'closed' | 'open' | 'half-open' }>
   manualOverrideActive?: boolean
 }
 

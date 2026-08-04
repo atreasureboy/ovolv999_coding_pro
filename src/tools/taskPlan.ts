@@ -65,6 +65,34 @@ export class TaskPlanTool implements Tool {
           evidence_command: { type: 'string', description: 'The command that was run (record_evidence only)' },
           evidence_exit_code: { type: 'number', description: 'Exit code of the command (record_evidence only)' },
           evidence_criterion_id: { type: 'string', description: 'Which acceptance criterion this evidence supports (record_evidence only)' },
+          // v0.5.3 P0-4: TaskImpact fields are now exposed to the
+          // LLM in the tool schema. Without these the model could
+          // not declare scope/affects_public_interface/etc. — they
+          // only existed on the in-memory node, with no path in
+          // for the model to set them. The Router reads the same
+          // fields to escalate code that crosses boundaries.
+          impact_scope: {
+            type: 'string',
+            enum: ['file', 'module', 'package', 'repo', 'external'],
+            description: 'How far does this change reach? file = single file edit; module = several files in one package; package = cross-module; repo = cross-package in one repo; external = touches external contract/SDK.',
+          },
+          affects_public_interface: {
+            type: 'boolean',
+            description: 'True iff this change modifies an exported function signature, public type, or HTTP/RPC contract. Router uses this to prefer long-context models.',
+          },
+          changes_configuration: {
+            type: 'boolean',
+            description: 'True iff this change writes to a config file (.json/.yaml/.toml/.env schema, package.json, etc). Router treats config edits as risk-bearing.',
+          },
+          requires_root_cause: {
+            type: 'boolean',
+            description: 'True iff this change fixes a bug rather than adding a feature. Router insists on root-cause reasoning for these.',
+          },
+          estimated_files: {
+            type: 'number',
+            minimum: 1,
+            description: 'Best-guess count of files this change will touch. Router uses this for budget + complexity heuristics. Must be ≥ 1.',
+          },
         },
         required: ['action'],
       },

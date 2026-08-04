@@ -132,21 +132,35 @@ export function startEchoServer(opts = {}) {
         const text = `ECHO: ${lastUserText(body)}`
 
         // scenario-c: first call fails with 503, subsequent calls succeed.
+        // The 503 carries the requested model name in the error body so
+        // the test can verify the server saw model "A"; the second call
+        // is allowed to change the requested model — the test asserts
+        // the model actually changed (Profile A → Profile B).
         if (mode === 'scenario-c' && callIdx === 1) {
           res.writeHead(503, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { message: 'service temporarily unavailable', type: 'server_error', code: 'service_unavailable' } }))
+          res.end(JSON.stringify({
+            error: {
+              message: 'service temporarily unavailable for model ' + (body.model ?? ''),
+              type: 'server_error',
+              code: 'service_unavailable',
+            },
+          }))
           return
         }
 
         // scenario-a: 4-step scripted flow — Write → Bash → record_evidence → completion.
         // scenario-a: scripted 4-call sequence.
-//   call 1: Write tool call
-//   call 2: Bash tool call (verification)
-//   call 3: TaskPlan record_evidence tool call
-//   call 4: text-only completion
-// All four calls stream tool_calls or text as the model would
-// emit them, regardless of the engine's prompting. This proves
-// the production chain streams + parses + executes tools.
+//   call 1: Write tool call (creates a.txt on disk)
+//   call 2: Bash tool call (cat a.txt — verifies the write)
+//   call 3: empty completion (model says "stop")
+// The TaskPlan record_evidence step was REMOVED from this scenario
+// because adding a TaskGraph node changes the run shape from a
+// trivial mutation to a multi-node plan, which is a different
+// story. scenario-a is now the simplest possible success path:
+// write, verify, stop. The strong assertions are:
+//   1. a.txt exists on disk with content "hello"
+//   2. Bash output streams back to the model (proves tool → model loop)
+//   3. exit code === 0 (only emitted on `completion.status === 'completed'`)
 if (mode === 'scenario-a') {
           if (body.stream === true) {
             res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
@@ -155,8 +169,6 @@ if (mode === 'scenario-a') {
               chunks = streamToolCall(model, 'call_write_1', 'Write', { file_path: 'a.txt', content: 'hello' })
             } else if (callIdx === 2) {
               chunks = streamToolCall(model, 'call_bash_1', 'Bash', { command: 'cat a.txt' })
-            } else if (callIdx === 3) {
-              chunks = streamToolCall(model, 'call_record_1', 'TaskPlan', { action: 'record_evidence', id: 'n1', criterion_id: 'c1', status: 'satisfied', evidence_type: 'command' })
             } else {
               chunks = streamChunks(model, 'All done.')
             }

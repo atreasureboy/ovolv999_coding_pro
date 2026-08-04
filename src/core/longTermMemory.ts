@@ -281,8 +281,33 @@ export class LongTermMemory {
     // verification impossible. The conflict-aware merge (R5) still
     // prevents a failure entry from clobbering a verified success
     // entry.
-    if (!input.verified && !this.allowUnverified && input.kind !== 'failure') {
+    //
+    // v0.5.3 P0-1: a `user_stated`-originated semantic memory entry
+    // ALSO bypasses R1, because the user is the ultimate authority
+    // on preferences. The gate trusts the upstream `origin` field,
+    // which the memory_write tool stamps as `memory_write:user_stated`.
+    // This keeps the contract narrow (only the documented origin
+    // pattern bypasses), not a free pass for arbitrary code paths.
+    const isUserStatedPreference =
+      input.kind !== 'failure' &&
+      !input.verified &&
+      (input.origin === 'memory_write:user_stated'
+        || input.origin === 'memory_write:USER_STATED'
+        || input.origin?.startsWith?.('memory_write:user_stated:') === true)
+    if (
+      !input.verified &&
+      !this.allowUnverified &&
+      input.kind !== 'failure' &&
+      !isUserStatedPreference
+    ) {
       throw new MemoryVerificationError(input)
+    }
+    // When bypassing R1 for a user_stated preference we still want
+    // it stamped as the user verified it upstream — R5 conflict
+    // merge then prefers this entry against any newer
+    // agent_inferred version with the same content key.
+    if (isUserStatedPreference) {
+      input = { ...input, verified: true }
     }
 
     // R3 — Commit binding for code references. `failure` entries

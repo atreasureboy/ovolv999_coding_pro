@@ -160,12 +160,32 @@ describe('ModelRouter v0.3.1 API split', () => {
     expect(r.getManualOverride()).toBeNull()
   })
 
-  it('nextFallback emits ROUTING_FALLBACK_APPLIED via the listener', () => {
+  it('nextFallback() does NOT emit ROUTING_FALLBACK_APPLIED (caller does)', () => {
+    // v0.5.3 P0-3: double-counting fix. The Router no longer emits
+    // the event from nextFallback() — the caller (Coordinator) is
+    // the single emit site. nextFallback() is pure: returns the
+    // next model, mutates no observable state.
     const r = new ModelRouter([STRONG, CHEAP, LONG])
     const cap = makeCaptured(r)
     const d = r.route({ userGoal: 'fix bug' })
     const next = r.nextFallback(d.selectedModel)
     expect(next).not.toBeNull()
+    expect(cap.events.filter((e) => e.type === 'ROUTING_FALLBACK_APPLIED').length).toBe(0)
+  })
+
+  it('nextFallback() + emitFallback() emit exactly one ROUTING_FALLBACK_APPLIED', () => {
+    // The new contract: caller calls nextFallback() to discover the
+    // next profile, then emitFallback() to record the transition.
+    // This is the exact same call shape the Coordinator uses.
+    const r = new ModelRouter([STRONG, CHEAP, LONG])
+    const cap = makeCaptured(r)
+    const d = r.route({ userGoal: 'fix bug' })
+    const next = r.nextFallback(d.selectedModel)
+    expect(next).not.toBeNull()
+    r.emitFallback(d.selectedModel, next!, 'provider-failure')
+    expect(cap.events.filter((e) => e.type === 'ROUTING_FALLBACK_APPLIED').length).toBe(1)
+    // Successive calls do NOT double-count without a fresh advance.
+    r.nextFallback(next!)
     expect(cap.events.filter((e) => e.type === 'ROUTING_FALLBACK_APPLIED').length).toBe(1)
   })
 

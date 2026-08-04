@@ -387,6 +387,13 @@ export class ModelRouter {
     return state
   }
 
+  /** v0.5.3 (P0-3): expose the consecutive-failure counter for a
+   *  profile so the Coordinator can size its backoff without
+   *  duplicating bookkeeping. */
+  getProfileConsecutiveFailures(profileId: string): number {
+    return this.consecutiveProfileFailures.get(profileId) ?? 0
+  }
+
   /** v0.5.3 (P1.8): true iff a profile is callable right now.
    *  When circuit is half-open we allow the probe; when open we
    *  reject so the Router selects the next healthy profile. */
@@ -473,14 +480,16 @@ export class ModelRouter {
    * failure on the CURRENT call. Returns null if the chain is exhausted.
    * Caller MUST only call this at the LLM-call boundary (before tools
    * execute) so no side-effectful tool is ever replayed.
+   *
+   * v0.5.3 P0-3: does NOT call emitFallback() internally — callers
+   * (Coordinator) must explicitly invoke emitFallback() once when they
+   * accept the returned profile. Previous behavior double-counted
+   * fallbacks (router + caller) and inflated routingFailureStats().
    */
   nextFallback(failedModel: string): string | null {
     const chain = this.lastDecision?.fallbackChain ?? []
     const idx = chain.indexOf(failedModel)
     const next = idx >= 0 ? chain[idx + 1] : chain[0]
-    if (next) {
-      this.emitFallback(failedModel, next, 'provider-failure')
-    }
     return next ?? null
   }
 

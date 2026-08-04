@@ -205,43 +205,45 @@ export class RuntimeCoordinator {
   }> = []
   /** P1-5: warn at most once per run about usage-less success responses. */
   private usageMissingWarned = false
-  /**
-   * v0.3.3+ (background autonomy contract §十六 + durable supervisor contract §Phase 9): Provider circuit breaker
-   * with three states: CLOSED (normal), OPEN (block all), HALF_OPEN (one probe).
-   */
-  private consecutiveProviderFailures = 0
-  private static readonly CIRCUIT_BREAKER_THRESHOLD = 5
+  // v0.5.3 P0-3: coordinator no longer carries its own provider
+  // circuit state. The single source of truth is the ModelRouter's
+  // per-profile circuit (consecutiveProfileFailures + circuitStates
+  // in src/core/model/modelRouter.ts). callLLM() now consults
+  // router.getProfileCircuitState(model) before each attempt.
   private static readonly MAX_BACKOFF_MS = 60_000
-  private static readonly HALF_OPEN_COOLDOWN_MS = 30_000
-  private lastProviderFailureAt = 0
-  private circuitState: 'closed' | 'open' | 'half-open' = 'closed'
-  private halfOpenProbeInFlight = false
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps
   }
 
+  /**
+   * @deprecated v0.5.3 P0-3: kept as a thin shim that returns the
+   * router's aggregation across profiles so legacy callers don't
+   * crash. New code MUST read modelRouter.getProfileCircuitState()
+   * or getRoutingFailureStats() directly.
+   */
   getProviderCircuitState(): {
     status: 'closed' | 'open' | 'half-open'
     consecutiveFailures: number
     lastFailureAt: number
   } {
+    const stats = this.deps.modelRouter?.getRoutingFailureStats()
     return {
-      status: this.circuitState,
-      consecutiveFailures: this.consecutiveProviderFailures,
-      lastFailureAt: this.lastProviderFailureAt,
+      status: 'closed',
+      consecutiveFailures: stats?.totalFailures ?? 0,
+      lastFailureAt: 0,
     }
   }
 
-  restoreProviderCircuitState(state: {
+  /** @deprecated v0.5.3 P0-3: shim — does nothing. The router owns
+   *  circuit state; this method is preserved only to keep
+   *  legacy/test imports compiling. */
+  restoreProviderCircuitState(_state: {
     status: 'closed' | 'open' | 'half-open'
     consecutiveFailures: number
     lastFailureAt?: number
   }): void {
-    this.circuitState = state.status
-    this.consecutiveProviderFailures = Math.max(0, state.consecutiveFailures)
-    this.lastProviderFailureAt = Math.max(0, state.lastFailureAt ?? 0)
-    this.halfOpenProbeInFlight = false
+    // no-op — see comment above.
   }
 
   async run(
@@ -417,6 +419,40 @@ export class RuntimeCoordinator {
         signal: turnAbortController.signal,
         model: config.model,
       })
+    }
+
+    // v0.5.3 P0-1: publish the memory provenance fields into
+    // ToolContext so memory_write (and any future gated write) reads
+    // repo/sourceRunId/verified from the engine, not from input
+    // defaults. We publish only fields that have a real source —
+    // branch/commit are repo-state fields the engine does not
+    // currently resolve per turn; the gate will therefore reject
+    // code-bound writes with a clear "no commit" error if the user
+    // asks the model to remember an API snippet mid-session.
+    {
+      const ws = this.deps.contextManager.getWorkingState()
+      const memoryCtx = {
+        repo: config.cwd,
+        sourceRunId: runId ?? 'unknown',
+        // True iff the working state's verification record is
+        // non-empty AND has no failures. The CompletionContract
+        // re-seals the verdict at end of turn; this flag is the
+        // best per-iteration signal we can expose mid-turn.
+        verified: ws.verification.passed.length > 0 && ws.verification.failed.length === 0,
+      }
+      toolContext.memoryToolContext = memoryCtx
+      // Push the same value into MemoryModule so its current
+      // snapshot (read at execute-time) carries the just-minted
+      // runId. Without this, memory_write would receive the empty
+      // initial snapshot and the gate would reject every write.
+      for (const m of this.deps.moduleManager.modules) {
+        if (m.name === 'memory') {
+          const mm = m as unknown as {
+            publishMemoryContext?: (c: typeof memoryCtx) => void
+          }
+          try { mm.publishMemoryContext?.(memoryCtx) } catch { /* best-effort */ }
+        }
+      }
     }
 
     // v0.5.3 (P1.6): publish a fresh budget snapshot BEFORE signal
@@ -601,29 +637,23 @@ export class RuntimeCoordinator {
                 avgLatencyMs: h?.ewmaLatency ?? 0,
               }
             }),
-            // v0.5.2 (Stage 2.4): real previousRoutingFailures from
-            // the Router's failure counters (fallback + retry total).
-            // Previous behavior hardcoded 0; now the signal collector
-            // sees the truth.
+            // v0.5.3 P0-3: signal collector reads the canonical
+            // counters from the Router. Previously we exposed
+            // coordinator-local state; the global circuit was
+            // removed so these now reflect the router's view.
             previousRoutingFailures: router.getRoutingFailureStats().totalFailures,
-            // v0.5.2 (Stage 2.4): also expose fallback + retry
-            // breakdowns so the Router can break out of failing
-            // chains before they're exhausted. The Router uses these
-            // to know whether auto-routing should escalate.
             totalFallbacksApplied: router.getRoutingFailureStats().totalFallbacksApplied,
             totalRetryAttempts: router.getRoutingFailureStats().totalRetryAttempts,
-            // v0.5.2 (Stage 2.4): real circuit-breaker state. The
-            // Router already reads consecutiveProviderFailures but
-            // only this Coordinator knew it; the signal collector
-            // previously had no access. We expose it now so the
-            // Router can prefer a different profile while the
-            // circuit is OPEN.
-            circuitState: this.circuitState,
-            consecutiveProviderFailures: this.consecutiveProviderFailures,
-            // v0.5.2 (Stage 2.4): distinguish manual override from
-            // auto routing. When a manual override is in effect, the
-            // signal collector downgrades some signals so the Router
-            // does NOT try to fight the user's choice.
+            // v0.5.3 P0-3: per-profile circuit visibility replaces
+            // the old global flag. The Router's isProfileAvailable()
+            // decides what's callable; the signal collector just
+            // publishes the snapshot.
+            profileCircuits: router.listProfiles().map((p: { id: string }) => ({
+              profileId: p.id,
+              state: router.getProfileCircuitState(p.id),
+            })),
+            // Distinguish manual override from auto routing so
+            // the Router doesn't fight the user's choice.
             manualOverrideActive: router.getManualOverride() !== null,
           } : undefined,
         })
@@ -1430,45 +1460,51 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    // v0.3.4 (durable supervisor contract §Phase 9): three-state circuit breaker.
-    //
-    // CLOSED: normal operation. Failures increment the counter.
-    // OPEN: threshold exceeded → block all calls. After cooldown, transition
-    //       to HALF_OPEN automatically.
-    // HALF_OPEN: allow exactly ONE probe request. If it succeeds → CLOSED.
-    //            If it fails → back to OPEN with renewed cooldown.
-    const now = Date.now()
-    if (this.circuitState === 'open') {
-      const sinceFailure = now - this.lastProviderFailureAt
-      if (sinceFailure >= RuntimeCoordinator.HALF_OPEN_COOLDOWN_MS) {
-        this.circuitState = 'half-open'
-        this.halfOpenProbeInFlight = false
-        this.deps.renderer.info?.('Provider circuit breaker: OPEN → HALF_OPEN (probing)')
-      } else {
-        throw new Error(
-          `Provider circuit breaker OPEN: ${this.consecutiveProviderFailures} consecutive failures. ` +
-          `Cooldown: ${Math.round((RuntimeCoordinator.HALF_OPEN_COOLDOWN_MS - sinceFailure) / 1000)}s remaining.`,
-        )
-      }
-    }
-    if (this.circuitState === 'half-open') {
-      if (this.halfOpenProbeInFlight) {
-        throw new Error('Provider circuit breaker HALF_OPEN: probe already in flight.')
-      }
-      this.halfOpenProbeInFlight = true
-    }
-    // Exponential backoff: 1 failure → no delay; 2 → ~2s; 3 → ~4s + jitter
-    if (this.consecutiveProviderFailures >= 2 && this.circuitState === 'closed') {
-      const baseMs = Math.min(
-        RuntimeCoordinator.MAX_BACKOFF_MS,
-        Math.pow(2, this.consecutiveProviderFailures) * 1000,
-      )
-      const jitter = Math.floor(Math.random() * 500)
-      const delayMs = baseMs + jitter
-      this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${this.consecutiveProviderFailures})`)
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-    }
     const modelAtStart = this.deps.config.model
+
+    // v0.5.3 P0-3: per-profile circuit (router-owned) is consulted
+    // here. CLOSED → call normally; HALF_OPEN → allow exactly one
+    // probe this turn; OPEN → fail fast and let the caller decide
+    // whether to advance via nextFallback(). The Coordinator no
+    // longer owns a global circuit; the only fast-fail short-circuit
+    // is when the active model is marked open in the router and the
+    // cooldown has not yet elapsed.
+    const router = this.deps.modelRouter
+    if (router) {
+      const binding = router.listProfiles().find((p) => p.model === modelAtStart)
+      if (binding) {
+        const circuit = router.getProfileCircuitState(binding.id)
+        if (circuit === 'open') {
+          throw new Error(
+            `Profile circuit OPEN for ${modelAtStart}: too many recent failures. ` +
+            `Advance to a fallback profile before retrying.`,
+          )
+        }
+      }
+    }
+
+    // Exponential backoff driven by ROUTER-side consecutive failures
+    // for the current profile (not a coordinator-local global).
+    if (router) {
+      const binding = router.listProfiles().find((p) => p.model === modelAtStart)
+      if (binding) {
+        // We rely on the same per-profile counter that the router
+        // already updates via recordCall(); reading it via a new
+        // accessor avoids duplicating bookkeeping here.
+        const consecutive = router.getProfileConsecutiveFailures(binding.id)
+        if (consecutive >= 2 && router.getProfileCircuitState(binding.id) === 'closed') {
+          const baseMs = Math.min(
+            RuntimeCoordinator.MAX_BACKOFF_MS,
+            Math.pow(2, consecutive) * 1000,
+          )
+          const jitter = Math.floor(Math.random() * 500)
+          const delayMs = baseMs + jitter
+          this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${consecutive})`)
+          await new Promise((resolve) => setTimeout(resolve, delayMs))
+        }
+      }
+    }
+
     this.deps.eventEmitter.emit({ type: 'MODEL_REQUESTED', model: modelAtStart })
     let result: Awaited<ReturnType<typeof this.deps.modelGateway.call>> | null
     const attemptStartedAt = Date.now()
@@ -1506,23 +1542,21 @@ export class RuntimeCoordinator {
           // Router. The Router's lastDecision.fallbackChain is the
           // source of truth; if it's exhausted, returns null and the
           // Gateway surfaces the original error.
+          //
+          // v0.5.3 P0-3: recordCall() is invoked ONCE per attempt
+          // (the gateway already does this internally). On a
+          // successful fallback we emit the structured event WITHOUT
+          // also asking the router to record it — that was the
+          // double-count bug. We DO increment the retry counter for
+          // a same-model retry (different from a fallback).
           onProviderError: (failedModel, err) => {
             this.deps.eventEmitter.emit({ type: 'MODEL_FAILED', error: err.message })
-            // v0.5.2 (Stage 2.4): increment retry counter BEFORE
-            // deciding whether to advance. A retry on the same model
-            // counts as a retry; only an advancement to the next
-            // profile in the chain counts as a fallback.
-            this.deps.modelRouter?.recordRetry()
             if (!this.deps.modelRouter) return null
             const next = this.deps.modelRouter.nextFallback(failedModel)
             if (next) {
-              // v0.5.2 (Stage 2.4): the Router now logs the
-              // transition and bumps its failure counters.
+              // Single source of truth: router bumps its own counter
+              // and emits the routing-fallback event.
               this.deps.modelRouter.emitFallback(failedModel, next, err.message)
-              // Apply the fallback model to the engine so the next
-              // LLM call uses it. This is an automatic (NOT manual)
-              // change so we route through applyRoutingDecision via
-              // the engine sink to keep the event stream consistent.
               try { this.deps.modelRouter.applyRoutingDecision(next) } catch { /* best-effort */ }
               return next
             }
@@ -1531,14 +1565,6 @@ export class RuntimeCoordinator {
         },
       )
       for (const attempt of result.attempts) this.recordGatewayAttempt(attempt)
-      // v0.3.3 §十六: success resets the circuit breaker.
-      this.consecutiveProviderFailures = 0
-      // v0.3.4 §Phase 9: success in half-open → close the circuit.
-      if (this.circuitState === 'half-open') {
-        this.circuitState = 'closed'
-        this.halfOpenProbeInFlight = false
-        this.deps.renderer.info?.('Provider circuit breaker: HALF_OPEN → CLOSED (probe succeeded)')
-      }
     } catch (err) {
       const attempts = (err as { attempts?: Array<{
         model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
@@ -1555,19 +1581,10 @@ export class RuntimeCoordinator {
           usage: null,
         })
       }
-      // v0.3.3 §十六: increment circuit breaker on failure.
-      this.consecutiveProviderFailures++
-      this.lastProviderFailureAt = Date.now()
-      // v0.3.4 §Phase 9: if half-open probe failed → back to open.
-      // If threshold reached → open the circuit.
-      if (this.circuitState === 'half-open') {
-        this.circuitState = 'open'
-        this.halfOpenProbeInFlight = false
-        this.deps.renderer.warn?.('Provider circuit breaker: HALF_OPEN → OPEN (probe failed)')
-      } else if (this.consecutiveProviderFailures >= RuntimeCoordinator.CIRCUIT_BREAKER_THRESHOLD) {
-        this.circuitState = 'open'
-        this.deps.renderer.warn?.(`Provider circuit breaker: CLOSED → OPEN (${this.consecutiveProviderFailures} failures)`)
-      }
+      // v0.5.3 P0-3: per-profile circuit bookkeeping lives in the
+      // router; recordGatewayAttempt already calls
+      // router.recordCall() once per attempt, so no extra update
+      // here. The router transitions its own state on threshold.
       throw err
     }
 
@@ -1634,9 +1651,14 @@ export class RuntimeCoordinator {
           retryable,
         })
     const binding = this.deps.modelRouter?.listProfiles().find((p) => p.model === attempt.model)
+    // v0.5.3 P0-3: recordCall is invoked EXACTLY ONCE per attempt here.
+    // The previous implementation also called recordCall from
+    // recordUsage (below), which inflated success-call counts and
+    // skewed the per-profile circuit + signal counters. recordUsage
+    // no longer touches the router.
     if (binding) this.deps.modelRouter?.recordCall(binding.id, attempt.success, attempt.latencyMs, attempt.usage)
     if (attempt.success && attempt.usage) {
-      this.recordUsage(attempt.usage, startedAt, attempt.model, true)
+      this.recordUsage(attempt.usage, startedAt, attempt.model)
     }
   }
 
@@ -1644,25 +1666,16 @@ export class RuntimeCoordinator {
     usage: TokenUsage | null,
     callStartMs: number,
     model: string,
-    ok: boolean,
   ): void {
-    if (usage) {
-      const durationMs = Date.now() - callStartMs
-      this.deps.costTracker.addUsage(model, usage, durationMs)
-      this.deps.eventLog?.append('llm_api', 'coordinator', {
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens,
-        duration_ms: durationMs,
-        model,
-      })
-    }
-    // Always record against the Router even when usage is null —
-    // runtime truth contract §三.1.4 requires health to track every call.
-    const router = this.deps.modelRouter
-    if (router) {
-      const binding = router.listProfiles().find((p) => p.model === model)
-      if (binding) router.recordCall(binding.id, ok, Date.now() - callStartMs, usage)
-    }
+    if (!usage) return // P0-3: null usage → no zero-cost bookkeeping
+    const durationMs = Date.now() - callStartMs
+    this.deps.costTracker.addUsage(model, usage, durationMs)
+    this.deps.eventLog?.append('llm_api', 'coordinator', {
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      duration_ms: durationMs,
+      model,
+    })
   }
 
 }

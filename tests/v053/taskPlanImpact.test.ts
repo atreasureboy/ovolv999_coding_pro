@@ -113,4 +113,28 @@ describe('TaskPlan impact entry (P1.7)', () => {
     expect(g.get('n1')!.impact!.scope).toBe('cross-module')
     expect(g.get('n1')!.impact!.affectsPublicInterface).toBe(true)
   })
+
+  // v0.5.3 (P0-4): the model sees the TaskImpact fields in the LLM-
+  // visible tool schema. Previously the fields only existed on the
+  // in-memory node + the parser; the model had no path to set them.
+  // This test asserts the schema actually exposes every field, with
+  // the correct types. If anyone removes these from
+  // TaskPlanTool.definition, this test fails immediately.
+  it('LLM-visible schema exposes all TaskImpact fields', () => {
+    const inst = new TaskPlanTool()
+    const props = (inst.definition.function.parameters.properties as Record<string, { type?: string; enum?: unknown[] }>)
+    expect(props.impact_scope).toBeDefined()
+    expect(props.impact_scope.type).toBe('string')
+    expect(props.impact_scope.enum).toEqual(
+      expect.arrayContaining(['file', 'module', 'package', 'repo', 'external']),
+    )
+    expect(props.affects_public_interface).toBeDefined()
+    expect(props.affects_public_interface.type).toBe('boolean')
+    expect(props.changes_configuration).toBeDefined()
+    expect(props.changes_configuration.type).toBe('boolean')
+    expect(props.requires_root_cause).toBeDefined()
+    expect(props.requires_root_cause.type).toBe('boolean')
+    expect(props.estimated_files).toBeDefined()
+    expect(props.estimated_files.type).toBe('number')
+  })
 })

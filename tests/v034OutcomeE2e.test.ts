@@ -221,18 +221,28 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     expect(store.list().length).toBeGreaterThanOrEqual(20)
   })
 
-  it('restores the real coordinator provider circuit state', () => {
+  // v0.5.3 P0-3: the Coordinator's global provider circuit is gone.
+  // Per-profile state lives in the ModelRouter. The
+  // restoreProviderCircuitState() and getProviderCircuitState() methods
+  // are preserved as shims for back-compat with any external caller,
+  // but they no longer maintain the legacy global state. This test
+  // documents the new contract.
+  it('restoreProviderCircuitState() is a no-op shim (circuit lives in router)', () => {
     const c = new FakeOpenAI()
     const e = new ExecutionEngine(baseConfig(), fakeRenderer(), c as unknown as never)
+    // Calling restoreProviderCircuitState() must not throw.
     e.restoreProviderCircuitState({
       status: 'open',
       consecutiveFailures: 5,
       lastFailureAt: 1234,
     })
+    // getProviderCircuitState() returns the router's aggregated
+    // totals — for an engine without a router wired into this
+    // fixture, the shim returns the zero defaults.
     expect(e.getProviderCircuitState()).toEqual({
-      status: 'open',
-      consecutiveFailures: 5,
-      lastFailureAt: 1234,
+      status: 'closed',
+      consecutiveFailures: 0,
+      lastFailureAt: 0,
     })
   })
 })

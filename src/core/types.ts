@@ -264,6 +264,28 @@ export interface ToolContext {
    * Wired by boot.ts to the engine's ToolRegistry.markDiscovered.
    */
   markToolDiscovered?: (name: string) => void
+  /**
+   * v0.5.3 P0-1: per-turn publication of the memory provenance
+   * fields. The Engine populates these from
+   * `WorkingState.repo/branch/commit/sourceRunId` and
+   * `outcome.verification.passed`. memory_write (and any other tool
+   * that wants to write through the LongTermMemory gate) reads from
+   * here so it never has to depend on hidden input defaults.
+   *
+   *   - `verified` is set TRUE only after the CompletionContract
+   *     declared the run complete; otherwise FALSE. memory_write
+   *     sets verified=true on its own ONLY for `source=user_stated`.
+   *   - `commit` is empty if the run has not produced any file
+   *     changes yet; the memory gate will reject code-bound entries
+   *     without a commit (R3).
+   */
+  memoryToolContext?: {
+    repo?: string
+    branch?: string
+    commit?: string
+    sourceRunId?: string
+    verified?: boolean
+  }
 }
 
 // ── AskUserQuestion types (shared between tool, context, and REPL) ──────────

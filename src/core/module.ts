@@ -44,6 +44,23 @@ export interface ModuleBootContext {
   sharedServices?: {
     repoStats?: RepoStatsService
   }
+  /**
+   * v0.5.3 (P0-1): per-turn memory provenance. The Engine stamps
+   * this with the JUST-MINTED runId, the working state's
+   * verification verdict, and the project cwd before invoking
+   * module.boot(). Module memory_write hooks read from this on
+   * every invocation; if absent (legacy test paths), the gate
+   * receives `unknown` and rejects code-bound entries with a
+   * clear message — that is the correct behaviour for a write
+   * without provenance.
+   */
+  memoryToolContext?: {
+    repo?: string
+    branch?: string
+    commit?: string
+    sourceRunId?: string
+    verified?: boolean
+  }
 }
 
 /** Return value of module.boot() — what the module injects into the run */

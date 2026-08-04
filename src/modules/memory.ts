@@ -8,7 +8,7 @@
  *   - Passive tracking: episodic write on every tool call
  */
 
-import type { Tool, ToolDefinition, ToolResult } from '../core/types.js'
+import type { Tool, ToolDefinition, ToolContext, ToolResult } from '../core/types.js'
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../core/module.js'
 import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
@@ -20,7 +20,7 @@ import { LongTermMemory, defaultMemoryPath } from '../core/longTermMemory.js'
 
 // ── memory_write — store knowledge with source attribution ──────────────────
 
-function createMemoryWriteTool(semantic: SemanticMemory, ltm: () => LongTermMemory): Tool {
+function createMemoryWriteTool(semantic: SemanticMemory, ltm: () => LongTermMemory, ctxProvider: () => MemoryToolContext): Tool {
   return {
     name: 'memory_write',
     metadata: { mutatesState: true, concurrencySafe: false },
@@ -35,7 +35,11 @@ Use this when you learn something reusable:
 - **agent_inferred**: You deduced something from observations
 - **tool_observed**: A tool returned factual data worth remembering
 
-Higher-priority sources override lower ones on conflict.`,
+Higher-priority sources override lower ones on conflict.
+
+The engine auto-supplies \`repo\`, \`branch\`, \`commit\`, and \`sourceRunId\`
+from the ToolContext; you do not need to pass them. Override only when
+the model knows a more specific commit hash than what the engine sees.`,
         parameters: {
           type: 'object',
           properties: {
@@ -63,7 +67,7 @@ Higher-priority sources override lower ones on conflict.`,
       },
     } satisfies ToolDefinition,
 
-    execute(input: Record<string, unknown>): Promise<ToolResult> {
+    execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
       const content = str(input.content)
       if (!content || content.length < 5) {
         return Promise.resolve({
@@ -80,23 +84,38 @@ Higher-priority sources override lower ones on conflict.`,
         : 0.7
       const source = str(input.source, 'agent_inferred') as 'user_stated' | 'agent_inferred' | 'tool_observed'
 
-      // v0.5.3 (P0.3): the gate is the single primary write path.
-      // We construct a MemoryRecordInput, then call LongTermMemory.record()
-      // BEFORE touching the SemanticMemory adapter. If the gate throws,
-      // we return isError:true and DO NOT write to any adapter.
+      // v0.5.3 P0-1: read repo / branch / commit / sourceRunId from
+      // ToolContext (engine-published) instead of stashing hidden
+      // input fields. The closure `ctxProvider()` reads from
+      // MemoryModule.currentMemoryContext which the Coordinator
+      // seeds each turn (post-runId-mint).
+      const ctx = (context as unknown as { memoryToolContext?: MemoryToolContext })
+        .memoryToolContext ?? ctxProvider()
+      const repo = str(ctx.repo) || str(input.repo) || 'memory'
+      const branch = str(ctx.branch) || (typeof input.branch === 'string' ? input.branch : undefined)
+      const commit = str(ctx.commit) || (typeof input.commit === 'string' ? input.commit : undefined)
+      const sourceRunId = str(ctx.sourceRunId) || str(input.sourceRunId) || 'unknown'
+
+      // v0.5.3 P0-1: user_stated preferences bypass the R1
+      // verification gate by contract (a human's stated rule IS the
+      // ground truth; commit-binding is irrelevant). Everything
+      // else is verified=false at this layer — the engine's
+      // pre-publishing verified=true via the ToolContext is the
+      // only path that produces a verified=true entry here.
+      const verified = source === 'user_stated'
+        ? true
+        : (typeof ctx.verified === 'boolean' ? ctx.verified : false)
+
       const memoryInput = {
         kind: 'semantic' as const,
         content: content.slice(0, 500),
-        repo: (input.__repo as string) ?? 'memory',
+        repo,
+        branch,
+        commit,
         origin: `memory_write:${source}`,
-        sourceRunId: (input.__sourceRunId as string) ?? 'unknown',
+        sourceRunId,
         confidence,
-        // R1: user_stated preferences skip R1 verification (humans
-        // override commit-binding for prefs); everything else
-        // requires the engine to have set verified=true via a
-        // pre-validated channel. The memory_write tool does NOT
-        // auto-verify.
-        verified: false,
+        verified,
         tags,
         expiresAt: undefined,
       }
@@ -105,16 +124,16 @@ Higher-priority sources override lower ones on conflict.`,
         gateResult = ltm().record(memoryInput)
       } catch (gateErr) {
         const reason = (gateErr as Error).message
-        // Gate failure → no adapter write, no isError:false lie.
         return Promise.resolve({
           content: `Memory gate rejected: ${reason}`,
           isError: true,
         })
       }
 
-      // Gate passed — SemanticMemory is now a DERIVED READ ADAPTER,
-      // not a parallel store. The LongTermMemory record is the
-      // source of truth.
+      // Gate passed — the LongTermMemory record is the source of
+      // truth; we mirror it into the SemanticMemory READ adapter
+      // so existing boot-time injection (relevance-scored top-K)
+      // keeps working without a parallel write.
       const entry = semantic.write({
         content: gateResult.content,
         tags,
@@ -129,6 +148,19 @@ Higher-priority sources override lower ones on conflict.`,
       })
     },
   }
+}
+
+/** Subset of ToolContext fields the memory module reads. Documented
+ *  in src/core/types.ts ToolContextShape. The engine populates these
+ *  each turn so memory_write never sees the `unknown` defaults. */
+export interface MemoryToolContext {
+  repo?: string
+  branch?: string
+  commit?: string
+  sourceRunId?: string
+  /** Engine-published: whether the current run's verification passed.
+   *  When true, code-bound R1 verification is satisfied. */
+  verified?: boolean
 }
 
 // ── memory_search — search semantic memory by keywords/tags ─────────────────
@@ -312,6 +344,25 @@ export class MemoryModule implements AgentModule {
   ) {}
 
   /**
+   * v0.5.3 P0-1: live publication of the per-turn memory
+   * provenance fields. The Coordinator writes to this on every
+   * turn with (repo, sourceRunId, verified) just after the runId
+   * is minted. The memory_write tool's ctxProvider reads from
+   * this field on every invocation so writes always carry the
+   * engine-resolved provenance — never hidden input defaults.
+   */
+  private currentMemoryContext: MemoryToolContext = {}
+
+  /** Coordinator hook: update the per-turn memory provenance. */
+  publishMemoryContext(ctx: MemoryToolContext): void {
+    this.currentMemoryContext = ctx
+  }
+
+  getMemoryContext(): MemoryToolContext {
+    return this.currentMemoryContext
+  }
+
+  /**
    * v0.5.2 (Stage 3): wired LongTermMemory as the single write gate
    * for `memory_write`. R1 (verification) and R5 (conflict-aware
    * merge) are now enforced on the production path. R2 (source
@@ -382,8 +433,19 @@ export class MemoryModule implements AgentModule {
         episodicMemory: this.episodic,
       },
       // Module-provided tools — agent actively manages its own memory
+      //
+      // v0.5.3 P0-1: ctxProvider reads from this.currentMemoryContext
+      // at execute-time. The Coordinator sets that field each
+      // turn; on the very first call before the Coordinator has
+      // published anything, we still pass an empty object so the
+      // gate's "no provenance" rejection is the user-visible
+      // outcome (rather than a typed NPE).
       tools: [
-        createMemoryWriteTool(this.semantic, () => this.longTerm),
+        createMemoryWriteTool(
+          this.semantic,
+          () => this.longTerm,
+          () => this.currentMemoryContext,
+        ),
         createMemorySearchTool(this.semantic),
         createMemoryRecallTool(this.episodic),
       ],

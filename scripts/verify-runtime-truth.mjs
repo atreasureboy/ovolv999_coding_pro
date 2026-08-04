@@ -169,6 +169,67 @@ function* walk(dir) {
     `ltm.record index=${lt}, semantic.write index=${sw}`)
 }
 
+// v0.5.3 P0-1: consolidateSession was a parallel write path that
+// bypassed LongTermMemory. The Gate must intercept it too. We assert
+// that the function-body contains a `.record(` invocation BEFORE
+// any top-level `semantic.write(`. To extract the function body
+// without nesting glitches we rely on indentation: the body lines
+// that we care about (the `for (const entry of parsed)` block in
+// consolidateSession) are at 6-space indent; the function's
+// enclosing `}` is at column 0. So we slice from the function
+// start to the next column-0 `}`.
+{
+  const reflectionSrc = readText('src/modules/reflection.ts') ?? ''
+  const start = reflectionSrc.indexOf('export async function consolidateSession')
+  if (start < 0) {
+    check('consolidateSession exists', false, 'consolidateSession not found in reflection.ts')
+  } else {
+    // Find the matching column-0 `}` after the function start. The
+    // function's opening `{` is on the same line as the signature
+    // (or the next line). Search forward for `\n}` (column 0 close
+    // brace) that is at the same nesting depth as the opening brace.
+    // We approximate with `^\}\s*$` matching at column 0.
+    const after = reflectionSrc.slice(start)
+    // Match the function-closing brace at column 0. Since the file
+    // contains only one closing brace per top-level statement, and
+    // consolidateSession is the LAST top-level statement, the next
+    // column-0 `}` is its close — unless there's a trailing utility
+    // block. Conservative: take the LAST column-0 `}` after the
+    // function start.
+    const column0CloseRe = /\n\}/g
+    let lastIdx = -1
+    let mm
+    while ((mm = column0CloseRe.exec(after))) lastIdx = mm.index
+    const bodyEnd = lastIdx >= 0 ? start + lastIdx + 2 : reflectionSrc.length
+    const body = reflectionSrc.slice(start, bodyEnd)
+    const gateIdx = body.search(/[A-Za-z_$][\w$]*\s*\.\s*record\s*\(/)
+    const swIdx = body.search(/semantic\s*\.\s*write\s*\(/)
+    check('consolidateSession gates BEFORE direct semantic.write',
+      gateIdx >= 0 && swIdx >= 0 && gateIdx < swIdx,
+      `gate idx=${gateIdx}, sw idx=${swIdx}, body length=${body.length}`)
+  }
+}
+
+// v0.5.3 P0-1: Coordinator must publish a memoryToolContext (repo /
+// sourceRunId / verified) that memory_write reads at execute time.
+// We grep the coordinator for the publication site AND verify the
+// MemoryModule has the receiver; both must exist or the wiring is
+// only one-directional.
+{
+  const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
+  const memSrc = readText('src/modules/memory.ts') ?? ''
+  // Accept any call: direct `publishMemoryContext(` or optional-
+  // chaining `publishMemoryContext?.(`. The opt-chain path is the
+  // production wiring shape; a back-compat direct call is the same
+  // shape from the verifier's perspective.
+  const publishesCtx = /publishMemoryContext[?]?[.]?\s*\(/.test(coordSrc)
+  const definesModuleCtx = /publishMemoryContext[?]?[.]?\s*\(/.test(memSrc)
+  const readsInWrite = /currentMemoryContext/.test(memSrc)
+  check('Coordinator publishes + MemoryModule receives + memory_write reads memoryToolContext',
+    publishesCtx && definesModuleCtx && readsInWrite,
+    `publishes=${publishesCtx}, defines=${definesModuleCtx}, reads=${readsInWrite}`)
+}
+
 // ── Check 8: Router signal fields are read by the scorer ────────────────
 
 {
@@ -180,13 +241,59 @@ function* walk(dir) {
 }
 
 // ── Check 9: TaskImpact schema must be referenced by an active tool ─────
+//
+// v0.5.3 P0-4: the schema MUST carry `type: '...'` AFTER each
+// TaskImpact property name. A string-level grep on field names is
+// insufficient — a parser-only mention passes that, but the LLM
+// never sees it. We assert the JSON-schema type is present.
 
 {
   const tpSrc = readText('src/tools/taskPlan.ts') ?? ''
-  check('TaskPlan tool schema references impact_scope', tpSrc.includes('impact_scope'),
-    'tools/taskPlan.ts missing impact_scope field — TaskImpact has no real entry point')
-  check('TaskPlan tool schema references affects_public_interface', tpSrc.includes('affects_public_interface'),
-    'missing affects_public_interface')
+  // Match `name: { ..., type: 'typevalue' ... }` blocks so the
+  // assertion cannot be satisfied by a typo-only mention of the
+  // field name.
+  const hasBoolType = (name) =>
+    new RegExp(`\\b${name}:\\s*\\{\\s*[\\s\\S]*?type:\\s*['"]boolean['"]`).test(tpSrc)
+  const hasNumberType = (name) =>
+    new RegExp(`\\b${name}:\\s*\\{\\s*[\\s\\S]*?type:\\s*['"]number['"]`).test(tpSrc)
+  check('TaskPlan schema: impact_scope present (string)',
+    /\bimpact_scope:\s*\{[^}]*type:\s*['"]string['"]/.test(tpSrc),
+    'impact_scope missing or wrong type — TaskImpact has no real schema entry')
+  check('TaskPlan schema: affects_public_interface boolean', hasBoolType('affects_public_interface'),
+    'affects_public_interface missing boolean type in schema')
+  check('TaskPlan schema: changes_configuration boolean', hasBoolType('changes_configuration'),
+    'changes_configuration missing boolean type in schema')
+  check('TaskPlan schema: requires_root_cause boolean', hasBoolType('requires_root_cause'),
+    'requires_root_cause missing boolean type in schema')
+  check('TaskPlan schema: estimated_files number', hasNumberType('estimated_files'),
+    'estimated_files missing number type in schema')
+}
+
+// v0.5.3 P0-3: the global circuit breaker on the Coordinator must be
+// gone. We assert the absence of the canonical global fields. Their
+// return only via the shim is fine — that's a back-compat wrapper
+// for legacy test imports.
+{
+  const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
+  // Strip comments before scanning to avoid catching doc-only mentions.
+  const code = coordSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasCircuitState = /\bcircuitState\b/.test(code)
+  const hasConsecutiveProviderFailures = /\bconsecutiveProviderFailures\b/.test(code)
+  const hasHalfOpenProbe = /\bhalfOpenProbeInFlight\b/.test(code)
+  check('Coordinator global circuit removed (P0-3)',
+    !hasCircuitState && !hasConsecutiveProviderFailures && !hasHalfOpenProbe,
+    `circuitState=${hasCircuitState}, consecutiveProviderFailures=${hasConsecutiveProviderFailures}, halfOpenProbeInFlight=${hasHalfOpenProbe}`)
+}
+
+// v0.5.3 P0-3: Router.nextFallback must NOT call emitFallback
+// internally anymore (the previous double-call inflated
+// totalFallbacksApplied). The Coordinator is the single emit site.
+{
+  const routerSrc = readText('src/core/model/modelRouter.ts') ?? ''
+  const nfMatch = routerSrc.match(/nextFallback\([^)]*\)\s*:\s*string\s*\|\s*null\s*\{[\s\S]*?\n\s*\}/)
+  check('Router.nextFallback() does not double-emit emitFallback',
+    nfMatch ? !/emitFallback\s*\(/.test(nfMatch[0]) : false,
+    nfMatch ? 'nextFallback still calls emitFallback()' : 'nextFallback definition not found')
 }
 
 // ── Check 10: no absolute test counts in long-form docs ──────────────────
@@ -226,7 +333,7 @@ function* walk(dir) {
 // ── Summary ───────────────────────────────────────────────────────────────
 
 if (failures.length === 0) {
-  console.log('✓ verify-runtime-truth: all 12 checks passed')
+  console.log('✓ verify-runtime-truth: all checks passed')
   process.exit(0)
 }
 
