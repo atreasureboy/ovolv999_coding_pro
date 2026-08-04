@@ -459,11 +459,21 @@ export class RuntimeCoordinator {
 
     // v0.5.3 Final (task 9): pure-measure BEFORE signal collection
     // so the Router sees the current turn's tokens without us
-    // having touched messages. Apply the policy in the budget_check
-    // state below; re-measure after any compaction so the Router
-    // never reads a pre-compaction snapshot.
+    // v0.5.3 Final (P0 issue): the Router must read the
+    // POST-compaction snapshot. We do measure → apply → re-measure
+    // here BEFORE signal collection so the very first routing
+    // decision is based on compacted-state (or, when no compaction
+    // is needed, on the as-is snapshot — same value re-measured
+    // is harmless). The previous order (measure → route →
+    // budget_check → apply) let the Router see 90% before the
+    // compaction kicked in.
     this.deps.contextManager.setActiveRunId(runId ?? null)
     try {
+      const initialSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+      await this.deps.contextManager.applyBudgetPolicy({
+        messages, toolDefs, snapshot: initialSnap,
+        abortSignal: turnAbortController.signal,
+      })
       this.deps.contextManager.measureBudget({ messages, toolDefs })
     } catch (err) {
       // AbortError propagates — caller will catch. Other errors
@@ -834,17 +844,19 @@ export class RuntimeCoordinator {
           }
 
           case 'budget_check': {
-            // R7: PreCompact fires before context compaction (auto/manual).
+            // v0.5.3 Final (P0 issue): measure → apply → re-measure
+            // already happened BEFORE signal collection. The state
+            // machine still visits budget_check (to keep the hook
+            // pre/post-compact timing and the transition graph
+            // intact), so we just fire hooks and transition.
             const compactTrigger: 'auto' | 'manual' = 'auto'
             if (config.hookRunner?.runPreCompact) {
               try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
             }
-            // v0.5.3 Final (task 9): measure → apply → re-measure.
-            const snap = this.deps.contextManager.measureBudget({ messages, toolDefs })
-            await this.deps.contextManager.applyBudgetPolicy({
-              messages, toolDefs, snapshot: snap,
-              abortSignal: turnAbortController.signal,
-            })
+            // Re-measure is idempotent now (post-compact state is
+            // already published). We do one more pass to honor
+            // any mutations that happened during the iterations.
+            this.deps.contextManager.measureBudget({ messages, toolDefs })
             if (config.hookRunner?.runPostCompact) {
               try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
             }
@@ -1513,14 +1525,16 @@ export class RuntimeCoordinator {
   }> {
     const modelAtStart = this.deps.config.model
 
-    // v0.5.3 P0-3: per-profile circuit (router-owned) is consulted
-    // here. CLOSED → call normally; HALF_OPEN → allow exactly one
-    // probe this turn; OPEN → fail fast and let the caller decide
-    // whether to advance via nextFallback(). The Coordinator no
-    // longer owns a global circuit; the only fast-fail short-circuit
-    // is when the active model is marked open in the router and the
-    // cooldown has not yet elapsed.
+    // v0.5.3 P0-3 + P1-3: per-profile circuit (router-owned) is
+    // consulted here. CLOSED → call normally. HALF_OPEN → the
+    // Router's probe lease (`tryAcquireProbe`) decides whether THIS
+    // call is the probe; concurrent callers fail fast so the half-
+    // open window carries exactly one in-flight call at a time.
+    // OPEN → fail fast and let the caller advance via
+    // nextFallback() to a different profile.
     const router = this.deps.modelRouter
+    let probeAcquired = false
+    let probeBindingId: string | undefined
     if (router) {
       const binding = router.listProfiles().find((p) => p.model === modelAtStart)
       if (binding) {
@@ -1530,6 +1544,18 @@ export class RuntimeCoordinator {
             `Profile circuit OPEN for ${modelAtStart}: too many recent failures. ` +
             `Advance to a fallback profile before retrying.`,
           )
+        }
+        if (circuit === 'half-open') {
+          probeAcquired = router.tryAcquireProbe(binding.id)
+          probeBindingId = binding.id
+          if (!probeAcquired) {
+            // Another caller is already probing — fail fast so we
+            // can advance to a fallback profile for this turn.
+            throw new Error(
+              `Profile ${binding.id} is half-open with a probe in flight. ` +
+              `Advance to a fallback profile before retrying.`,
+            )
+          }
         }
       }
     }
@@ -1616,6 +1642,10 @@ export class RuntimeCoordinator {
         },
       )
       for (const attempt of result.attempts) this.recordGatewayAttempt(attempt)
+      // v0.5.3 Final (P1-3): success → close the half-open probe.
+      if (probeAcquired && probeBindingId && router) {
+        router.finishProbe(probeBindingId, true)
+      }
     } catch (err) {
       const attempts = (err as { attempts?: Array<{
         model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
@@ -1631,6 +1661,10 @@ export class RuntimeCoordinator {
           latencyMs: Date.now() - attemptStartedAt,
           usage: null,
         })
+      }
+      // v0.5.3 Final (P1-3): failure → re-open the half-open probe.
+      if (probeAcquired && probeBindingId && router) {
+        router.finishProbe(probeBindingId, false)
       }
       // v0.5.3 P0-3: per-profile circuit bookkeeping lives in the
       // router; recordGatewayAttempt already calls

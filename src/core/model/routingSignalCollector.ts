@@ -37,7 +37,24 @@ import type { RoutingInput } from './modelRouter.js'
 
 export interface RoutingSignals {
   userGoal: string
-  repoFileCount: number
+  /**
+   * v0.5.3 Final (P0 issue): repoFileCount is `number` ONLY when
+   * the value is real. undefined means "RepoStats did not produce
+   * a number" — Router MUST treat as neutral, never fabricate
+   * any default.
+   */
+  repoFileCount?: number
+  /**
+   * v0.5.3 Final (P0 issue): repoFileCount provenance. Router
+   * uses this to choose how to weight a partial count.
+   *  - 'ready'   → use the count exactly
+   *  - 'empty'   → repoFileCount is exactly 0
+   *  - 'partial' → count is a lower bound; treat weakly
+   *  - 'unknown' → repoFileCount is undefined
+   */
+  repoStatsState?: 'ready' | 'empty' | 'partial' | 'unknown'
+  /** True when the count is a partial lower bound. */
+  repoStatsLowerBound?: boolean
   filesTouched: number
   recentFailureCount: number
   /** undefined when no reliable context measurement is available. */
@@ -187,14 +204,24 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
   const filesTouched = ws
     ? ws.filesRead.length + ws.filesChanged.length
     : 0
-  // v0.5.2 (Stage 2.2): prefer real repo stats when supplied. The proxy
-  // path is preserved as a *weak fallback* — keyword-derivable signals
-  // still want a non-zero complexity number on cold start. If neither
-  // path produces a number, the Router treats repoFileCount as unknown.
+  // v0.5.3 Final (P0 issue): repoFileCount is the EXACT sourceFileCount
+  // when state='ready' (or empty with count=0). For 'partial' the
+  // router treats it as a weak lower bound. For 'unknown' (or no
+  // snapshot at all) the router gets `undefined` — it MUST NOT
+  // fabricate 100 or any other number. The previous implementation
+  // here used `Math.max(filesTouched * 10, 100)` as a fallback,
+  // which was a real lie: a zero-file-edit turn was reported as a
+  // 100-file repo, triggering spurious model escalations.
   const realCount = opts.repoStats?.sourceFileCount
-  const repoFileCount = typeof realCount === 'number' && realCount >= 0
-    ? realCount
-    : Math.max(filesTouched * 10, 100)
+  const repoStatsState = opts.repoStats?.state
+  const repoFileCount =
+    repoStatsState === 'ready' && typeof realCount === 'number' && realCount >= 0
+      ? realCount
+      : repoStatsState === 'empty'
+        ? 0
+        : (repoStatsState === 'partial' && typeof realCount === 'number' && realCount >= 0)
+          ? realCount
+          : undefined
 
   // Static analysis — combine keyword evidence with task-graph
   // evidence so a single keyword match isn't a license to charge
@@ -235,6 +262,8 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
   return {
     userGoal: goal,
     repoFileCount,
+    repoStatsState,
+    repoStatsLowerBound: opts.repoStats?.lowerBound,
     filesTouched,
     recentFailureCount: cm?.recentFailureCount ?? 0,
     contextUsageRatio: cm?.contextUsageRatio,

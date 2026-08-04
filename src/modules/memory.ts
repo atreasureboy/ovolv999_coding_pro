@@ -376,13 +376,36 @@ export class MemoryModule implements AgentModule {
     this.candidateSinks.delete(runId)
   }
 
-  private longTerm = new LongTermMemory({
+  /**
+   * v0.5.3 Final (P0 issue): per-project LongTermMemory. The
+   * previous instance shared `~/.ovogo/projects/default/memory/
+   * longterm.jsonl` across all repos — A's memory bled into B's
+   * prompt. We now re-bind the instance to a path derived from
+   * the cwd at boot-time and every query carries the cwd-derived
+   * repo string.
+   */
+  private longTerm: LongTermMemory = new LongTermMemory({
     // v0.5.3 Final: no allowCodeWithoutCommit or allowUnverified
     // shortcuts. Promotion to kind='semantic' requires the
     // RevisionBinding produced by the engine (binding.repo +
     // binding.baseCommit when present), which satisfies R3 by
     // contract.
   })
+  private projectRepo: string = ''
+
+  /**
+   * v0.5.3 Final (P0 issue): wire the per-project LongTermMemory
+   * instance. Engine calls this once it has the resolved cwd; boot
+   * re-derives any query filter from the same cwd.
+   */
+  bindToProject(cwd: string): void {
+    this.projectRepo = cwd
+  }
+
+  /** Repo filter — used by every read query below. */
+  private repoFilter(): string {
+    return this.projectRepo
+  }
 
   /** Override the per-process LongTermMemory instance (tests). */
   setLongTermMemory(ltm: LongTermMemory): void {
@@ -398,8 +421,18 @@ export class MemoryModule implements AgentModule {
     // directly. SemanticMemory is kept for back-compat reads only
     // (until migration; see migrateSemanticToLongTerm below).
     let section = ''
+    // v0.5.3 Final (P0 issue): bind to the boot's cwd so every read
+    // and write below scopes to this project.
+    this.bindToProject(ctx.cwd)
     try {
-      const ltmRecords = this.longTerm.query({ kind: 'semantic', verified: true, limit: 10 })
+      const ltmRecords = this.longTerm.query({
+        kind: 'semantic',
+        verified: true,
+        // v0.5.3 Final (P0 issue): repo filter is MANDATORY. Without
+        // it, A's memory bleeds into B's prompt.
+        repo: this.repoFilter(),
+        limit: 10,
+      })
       if (ltmRecords.length > 0 && ctx.userMessage) {
         const keywords = extractKeywords(ctx.userMessage)
         const scored = ltmRecords
@@ -448,7 +481,7 @@ export class MemoryModule implements AgentModule {
         ),
         // v0.5.3 Final (task 5): memory_search queries LongTermMemory
         // directly — semantic mirror removed from production reads.
-        createMemorySearchToolLTM(this.longTerm),
+        createMemorySearchToolLTM(this.longTerm, () => this.repoFilter()),
         createMemoryRecallTool(this.episodic),
       ],
     }
@@ -522,7 +555,7 @@ export class MemoryModule implements AgentModule {
 }
 
 // ── LongTermMemory-backed search (replaces the semantic mirror) ──────────
-function createMemorySearchToolLTM(ltm: LongTermMemory): Tool {
+function createMemorySearchToolLTM(ltm: LongTermMemory, getRepo: () => string): Tool {
   return {
     name: 'memory_search',
     metadata: { readOnly: true, concurrencySafe: true },
@@ -550,6 +583,9 @@ function createMemorySearchToolLTM(ltm: LongTermMemory): Tool {
       const records = ltm.query({
         kind: 'semantic',
         verified: true,
+        // v0.5.3 Final (P0 issue): per-project isolation. A's memory
+        // does NOT leak into B's prompt / search results.
+        repo: getRepo(),
         fullText: query || undefined,
         tag: tags[0],
         limit,

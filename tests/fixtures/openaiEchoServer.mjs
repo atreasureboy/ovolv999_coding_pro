@@ -131,12 +131,10 @@ export function startEchoServer(opts = {}) {
         const callIdx = requests.length
         const text = `ECHO: ${lastUserText(body)}`
 
-        // scenario-c: first call fails with 503, subsequent calls succeed.
-        // The 503 carries the requested model name in the error body so
-        // the test can verify the server saw model "A"; the second call
-        // is allowed to change the requested model — the test asserts
-        // the model actually changed (Profile A → Profile B).
-        if (mode === 'scenario-c' && callIdx === 1) {
+        // scenario-c: 503 ONLY when model === 'model-a'. Subsequent
+        // model-b calls walk Write → Bash → completion exactly like
+        // scenario-a does for the first three calls.
+        if (mode === 'scenario-c' && body.model === 'model-a') {
           res.writeHead(503, { 'content-type': 'application/json' })
           res.end(JSON.stringify({
             error: {
@@ -145,6 +143,31 @@ export function startEchoServer(opts = {}) {
               code: 'service_unavailable',
             },
           }))
+          return
+        }
+        if (mode === 'scenario-c' && body.stream === true) {
+          // count model-b calls specifically (the global `requests.length`
+          // already includes the model-a 503 attempts that returned
+          // before `requests.push` — wait, those push inside the 503
+          // branch too. To keep things deterministic we instead look
+          // at the messages[]: the FIRST model-b request from a fresh
+          // turn sees only the system prompt + user prompt. After
+          // Write is dispatched, the next model-b request sees a
+          // `tool` role response. So:
+          //   - has tool response with file_path=... → Bash verify
+          //   - has tool response already → done
+          //   - otherwise → Write
+          const lastToolMsg = [...(body.messages ?? [])].reverse().find((m) => m && m.role === 'tool')
+          const anyPriorTool = (body.messages ?? []).some((m) => m && m.role === 'tool')
+          let chunks
+          if (anyPriorTool) {
+            chunks = streamChunks(model, 'All done.')
+          } else {
+            chunks = streamToolCall(model, 'call_write_b', 'Write', { file_path: 'b.txt', content: 'fallback-ok' })
+          }
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+          for (const line of chunks) res.write(line)
+          res.end()
           return
         }
 

@@ -46,8 +46,18 @@ export interface MemoryRecord {
   /** Branch name. Optional. */
   branch?: string
   /** Commit hash. REQUIRED for kind in {semantic,procedural} when the
-   * memory references code (R3 — code memories bind to commit). */
+   * memory references code AND the repo is a clean git repo (R3 —
+   * code memories bind to commit on clean git). */
   commit?: string
+  /** v0.5.3 Final (P0 issue): working-tree dirty flag. Code-bound
+   *  entries from a dirty repo MUST carry diffHash, NOT commit. */
+  dirty?: boolean
+  /** v0.5.3 Final (P0 issue): sha256-prefix of git diff output. Required
+   *  for code-bound entries from a dirty repo. */
+  diffHash?: string
+  /** v0.5.3 Final (P0 issue): for non-Git paths, sha256(cwd + mtime).
+   *  Required for code-bound entries in non-git repos. */
+  workspaceHash?: string
 
   /** Run that produced this memory. Required. */
   sourceRunId: string
@@ -76,6 +86,28 @@ export interface MemoryRecord {
 
 /** Input shape for `record()` — id/createdAt are assigned by the store. */
 export type MemoryRecordInput = Omit<MemoryRecord, 'id' | 'createdAt'>
+
+/** v0.5.3 Final (P1): in-memory backend for tests. Keeps records
+ *  in a Map so test runs do NOT pollute the host filesystem and
+ *  do NOT read previously-seeded production records. */
+export class InMemoryMemoryBackend implements MemoryBackend {
+  private records: MemoryRecord[] = []
+
+  upsert(record: MemoryRecord): void {
+    this.records.push(record)
+  }
+
+  load(_now: string): MemoryRecord[] {
+    // We deliberately do NOT handle TTL here — the test store
+    // accepts whatever the test writes.
+    void _now
+    return [...this.records]
+  }
+
+  delete(id: string): void {
+    this.records = this.records.filter((r) => r.id !== id)
+  }
+}
 
 // ── Errors ──────────────────────────────────────────────────────────────
 
@@ -295,12 +327,20 @@ export class LongTermMemory {
     // never require a commit — the run itself failed, so we can't
     // bind to a known-good state. The audit trail records the
     // failure without committing it as a project fact.
+    //
+    // v0.5.3 Final (P0 issue): R3 now accepts commit OR (diffHash
+    // when dirty) OR (workspaceHash when non-git). The previous
+    // check rejected entries that had a workspaceHash but no
+    // commit — silently dropping code experiences from non-git
+    // repos. Now we accept the right binding per repo state.
     if (
       !this.allowCodeWithoutCommit &&
-      !input.commit &&
       input.kind !== 'failure' &&
       (input.kind === 'semantic' || input.kind === 'procedural') &&
-      referencesCode(input.content)
+      referencesCode(input.content) &&
+      !input.commit &&
+      !(input.dirty && input.diffHash) &&
+      !input.workspaceHash
     ) {
       throw new MemoryCommitBindingError(input)
     }

@@ -201,9 +201,19 @@ describe('Golden Path F — RepoStatsService', () => {
       userMessage: 'tiny repo',
       workingState: { filesRead: [], filesChanged: [], verification: { passed: [], failed: [] }, unresolved: [] },
       contextManager: { recentFailureCount: 0 },
-      repoStats: { rootDir: tmp, sourceFileCount: svc.repoFileCount(tmp) ?? 0, totalFileCount: svc.getCache().stats?.totalFileCount ?? 0 },
+      repoStats: {
+        // v0.5.3 Final (P0): state must be 'ready' for the exact
+        // count to be emitted. Old default was Math.max(filesTouched
+        // * 10, 100); v0.5.3 stops fabricating and trusts the
+        // caller to stamp state.
+        state: 'ready',
+        rootDir: tmp,
+        sourceFileCount: svc.repoFileCount(tmp) ?? 0,
+        totalFileCount: svc.getCache().stats?.totalFileCount ?? 0,
+      },
     })
     expect(withStats.repoFileCount).toBe(3)
+    expect(withStats.repoStatsState).toBe('ready')
   })
 })
 

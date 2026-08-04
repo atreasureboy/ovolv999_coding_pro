@@ -28,8 +28,10 @@ v0.5.3 Final 关键不变量:
   probe 租约;`all profiles open` 返回结构化 unavailable decision。
 - **Context 测量时间**: `measureBudget()` 是纯测量;`applyBudgetPolicy()`
   是变更步;compact 后重新 measure,Router 永远读最新快照。
-- **TaskImpact 单源真相**:`TASK_IMPACT_SCOPES` 在 schema / parser /
-  TaskGraph / Router / 测试同一份。 `estimated_files` 的 `minimum=0`。
+- **TaskImpact 单源真相**:`TASK_IMPACT_SCOPES` 是 canonical vocabulary,parser /
+  TaskGraph / Router / 测试都 import 它。Tool schema 的 `enum` 字段仍
+  是字面量数组 —— runtime-truth 脚本强制双向 set equality 作为漂移检测;
+  并非 derivation。 `estimated_files` 的 `minimum=0`。
 
 ## 常用命令
 

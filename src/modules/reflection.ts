@@ -43,38 +43,27 @@ export class ReflectionModule implements AgentModule {
   readonly dependencies = ['memory']
 
   /**
-   * v0.5.2 (C6 — borrowed from cursor "Memories"): when reflection
-   * outputs a knowledge entry, route it through LongTermMemory so
-   * the R1 (verification) + R2 (source marking) + R5 (conflict
-   * merge) gates apply. The reflection module's contract becomes:
+   * v0.5.3 Final (P0 issue): the previous ReflectionModule was an
+   * active memory writer with its own bypass path. It is now a no-op
+   * epistemic log: it observes the run outcome but does NOT write to
+   * LongTermMemory. All persistence goes through MemoryModule's
+   * Candidate→Promotion lifecycle.
    *
-   *   1. LLM extracts candidate knowledge (best-effort, no trust)
-   *   2. Each candidate passes through LongTermMemory.record()
-   *   3. LongTermMemory stamps origin='reflection:*', enforces
-   *      verification gate, merges conflicts, gates by TTL
-   *
-   * If LongTermMemory rejects (e.g. verification gate fails), the
-   * semantic write still proceeds but is marked as
-   * `unverified-audit-rejected`. This keeps the LLM-driven learning
-   * loop alive while preserving the audit invariants.
+   * The module's constructor still accepts the legacy parameters so
+   * existing Engine wiring does not break; we simply ignore them.
    */
-  private readonly longTerm = new LongTermMemory({
-    // v0.5.3 (P0.3): production default. Reflection's caller (P0.4)
-    // pre-validates with the CompletionContract BEFORE calling
-    // record(), so the gate's R3 check is the final authority.
-    allowCodeWithoutCommit: false,
-  })
+  private readonly longTerm = new LongTermMemory()
 
   constructor(
-    private client: OpenAI,
-    private model: string,
-    private semantic: SemanticMemory,
+    _client: OpenAI,
+    _model: string,
+    _semantic: SemanticMemory,
     private config: { planMode?: boolean; poor?: { enabled: boolean } },
   ) {}
 
-  /** Test hook: swap the LongTermMemory instance. */
-  setLongTermMemory(ltm: LongTermMemory): void {
-    ;(this as unknown as { longTerm: LongTermMemory }).longTerm = ltm
+  /** Test hook — kept for back-compat. No effect. */
+  setLongTermMemory(_ltm: LongTermMemory): void {
+    // no-op
   }
 
   boot(): ModuleBootResult {
@@ -82,151 +71,29 @@ export class ReflectionModule implements AgentModule {
   }
 
   /**
-   * P0-1 (transactional model switch): keep the captured model in
-   * sync with the runtime so the post-run knowledge extraction LLM
-   * call targets the user's currently-selected model rather than
-   * the model that was active when this module was constructed.
+   * v0.5.3 Final (P0 issue): previously this re-targeted the LLM
+   * used to extract knowledge. Reflection no longer writes, so the
+   * captured model is irrelevant. Kept as a no-op for back-compat.
    */
-  onModelChanged(model: string): void {
-    this.model = model
+  onModelChanged(_model: string): void {
+    // no-op
   }
 
   async onComplete(ctx: ModuleRunContext): Promise<void> {
+    // v0.5.3 Final (P0 issue): the previous ReflectionModule
+    // bypassed the MemoryCandidate lifecycle. It called LTM.record
+    // directly with repo='reflection' AND its own heuristic to
+    // decide whether the run "succeeded" — a fabrication that
+    // could mark entries verified=true when the engine's
+    // CompletionContract did not. That is anti-fake-success
+    // regression.
+    //
+    // The right fix is to drop the LLM-driven write entirely. The
+    // MemoryModule is the single entry point; Reflection becomes a
+    // no-op whose presence is preserved only for the Engine's
+    // profile-resolution plumbing.
     if (this.config.poor?.enabled) return
-    const outcome = ctx.outcome
-    if (!outcome) return
-
-    // v0.5.3 (P0.4): the run must satisfy ALL of the following for
-    // any entry to be marked verified=true:
-    //   - CompletionStatus === 'completed'
-    //   - verification.failed is empty
-    //   - completion.blockers / unresolved / remaining are empty
-    //   - turnResult.reason !== 'error'
-    // Any other outcome routes the entry through a SEPARATE failure
-    // branch with `kind: 'failure'` and `verified=false`. The LLM is
-    // never trusted to declare its own success.
-    const verification = outcome.verification
-    const isCompleted =
-      outcome.completion.status === 'completed' &&
-      (outcome.completion.reasons?.length ?? 0) === 0 &&
-      verification.executed &&
-      verification.passed &&
-      verification.failed.length === 0 &&
-      (outcome.workerReferences?.filter((w) => (w as { status?: string }).status === 'failed').length ?? 0) === 0
-
-    // Too-short runs never yield useful insights.
-    const toolCallCount = ctx.messages.filter((m) => m.role === 'tool').length
-    if (toolCallCount < 3) return
-
-    // Cancelled/interrupted/failed/max_iter runs get a different
-    // treatment — see below.
-    const runOutcomeKind: 'success' | 'partial' | 'blocked' | 'cancelled' | 'failed' | 'exhausted' = isCompleted
-      ? 'success'
-      : outcome.completion.status === 'partial'
-        ? 'partial'
-        : outcome.completion.status === 'blocked'
-          ? 'blocked'
-          : ctx.turnResult.reason === 'interrupted'
-            ? 'cancelled'
-            : ctx.turnResult.reason === 'max_iterations'
-              ? 'exhausted'
-              : 'failed'
-
-    try {
-      const conversationSummary = this.serializeForReflection(ctx.messages)
-      const response = await this.client.chat.completions.create({
-        model: this.model,
-        messages: [
-          { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: `Analyze this agent run (outcome: ${runOutcomeKind}):\n\n${conversationSummary}`,
-          },
-        ],
-        temperature: 0,
-        max_tokens: REFLECTION_MAX_TOKENS,
-      }, { timeout: 30_000 })
-
-      const output = response.choices[0]?.message?.content ?? ''
-      const parsed = parseReflection(output)
-      const sourceRunId = outcome.runId ?? 'unknown'
-
-      let auditApproved = 0
-      let auditRejected = 0
-      for (const entry of parsed) {
-        // v0.5.3 (P0.4): success branch is GATED on runOutcomeKind.
-        // Failure / partial / blocked / cancelled / exhausted runs
-        // CANNOT save success experiences — they can only save
-        // `kind: 'failure'` entries that the audit gate stamps
-        // verified=false. This prevents the model from reinforcing
-        // its own false-success narratives.
-        const kind: 'semantic' | 'reflection' | 'failure' =
-          runOutcomeKind === 'success' ? 'semantic' : 'failure'
-        const verified = runOutcomeKind === 'success'
-        // Use the unified Memory Gate. Bypass the SemanticMemory
-        // adapter for failure entries — they belong in the audit
-        // trail, not in the read adapter that feeds the prompt.
-        if (runOutcomeKind === 'success') {
-          try {
-            const gateResult = this.longTerm.record({
-              kind,
-              content: entry.content.slice(0, 500),
-              repo: 'reflection',
-              origin: `reflection:${runOutcomeKind}`,
-              sourceRunId,
-              confidence: entry.confidence,
-              verified,
-              tags: [...entry.tags, `outcome:${runOutcomeKind}`],
-              expiresAt: undefined,
-            })
-            this.semantic.write({
-              content: gateResult.content,
-              tags: entry.tags,
-              source: 'agent_inferred',
-              confidence: entry.confidence,
-              timestamp: gateResult.createdAt,
-            })
-            auditApproved++
-          } catch {
-            auditRejected++
-          }
-        } else {
-          // Failure branch: only the audit gate, never the
-          // SemanticMemory adapter. This is the v0.5.3 invariant —
-          // a failed run must not feed its (possibly false) lessons
-          // back into the prompt.
-          try {
-            this.longTerm.record({
-              kind: 'failure',
-              content: entry.content.slice(0, 500),
-              repo: 'reflection',
-              origin: `reflection:${runOutcomeKind}`,
-              sourceRunId,
-              confidence: entry.confidence,
-              verified: false,
-              tags: [...entry.tags, `outcome:${runOutcomeKind}`],
-              expiresAt: undefined,
-            })
-            auditApproved++
-          } catch {
-            auditRejected++
-          }
-        }
-      }
-
-      if (parsed.length > 0) {
-        ctx.eventLog?.append('memory_write', 'reflection', {
-          entries: parsed.length,
-          module: 'reflection',
-          auditApproved,
-          auditRejected,
-          sourceRunId,
-          runOutcomeKind,
-        })
-      }
-    } catch {
-      // reflection failures must never break anything
-    }
+    void ctx
   }
 
   private serializeForReflection(messages: { role: string; content: string | unknown[] | null; tool_calls?: unknown[] }[]): string {

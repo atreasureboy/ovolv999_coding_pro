@@ -447,6 +447,190 @@ function parseScopesFromList(listStr) {
     `test:esm=${hasTestEsm}, in check=${inCheck}`)
 }
 
+// ── Check 17: RepoStats Math.max(fallback) abolished ────────────────
+//
+// v0.5.3 Final (P0 issue): the old code was
+//   const repoFileCount = realCount ?? Math.max(filesTouched * 10, 100)
+// which fabricated 100 for unknown states. The collector must NOT
+// synthesize a number; either realCount or undefined.
+{
+  const rcSrcRaw = readText('src/core/model/routingSignalCollector.ts') ?? ''
+  const rcSrc = rcSrcRaw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasFallback = /Math\.max\(\s*filesTouched\s*\*\s*10\s*,\s*100\s*\)/.test(rcSrc)
+  check('RoutingSignalCollector no longer fabricates Math.max(filesTouched*10,100) (comments stripped)',
+    !hasFallback,
+    hasFallback ? 'the fabrication formula is still present in code' : 'ok')
+}
+
+// ── Check 18: Router measure BEFORE route ──────────────────────────────
+//
+// v0.5.3 Final (P0 issue): the Coordinator used to measure → collect
+// signals → route THEN compact. The new order is measure → apply
+// policy (compact) → re-measure → collect signals → route. The Router
+// must always read the POST-compaction snapshot.
+{
+  const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
+  // Find run() and inspect relative order of measureBudget and
+  // collectRoutingSignals.
+  const runIdx = coordSrc.indexOf('async run(')
+  if (runIdx < 0) {
+    check('Coordinator.run() measure → route order present', false, 'run() not found')
+  } else {
+    const runBody = coordSrc.slice(runIdx, coordSrc.indexOf('\n  }\n', runIdx + 1) === -1 ? coordSrc.length : coordSrc.indexOf('\n  }\n', runIdx + 1))
+    const measureIdx = runBody.indexOf('measureBudget')
+    const applyIdx = runBody.indexOf('applyBudgetPolicy')
+    const remeasureIdx = runBody.indexOf('measureBudget', (measureIdx >= 0 ? measureIdx : 0) + 1)
+    const signalsIdx = runBody.indexOf('collectRoutingSignals')
+    check('Coordinator orders measure → apply → re-measure → signals → route',
+      measureIdx >= 0 && applyIdx >= 0 && remeasureIdx >= 0 && signalsIdx >= 0
+        && measureIdx < applyIdx && applyIdx < remeasureIdx && remeasureIdx < signalsIdx,
+      `measure@${measureIdx}, apply@${applyIdx}, remeasure@${remeasureIdx}, signals@${signalsIdx}`)
+  }
+}
+
+// ── Check 19: RevisionBinding fields persist on MemoryRecord ─────────
+//
+// v0.5.3 Final (P0 issue): the gate's R3 now accepts diffHash for
+// dirty git repos and workspaceHash for non-git. The promoter must
+// pass these from RevisionBinding → MemoryRecord.
+{
+  const mcSrc = readText('src/core/memoryCandidate.ts') ?? ''
+  const checks = {
+    dirty: /\bdirty:\s*input\.revision\.dirty/.test(mcSrc),
+    diffHash: /\bdiffHash:\s*input\.revision\.diffHash/.test(mcSrc),
+    workspaceHash: /\bworkspaceHash:\s*input\.revision\.workspaceHash/.test(mcSrc),
+  }
+  const all = Object.values(checks).every(Boolean)
+  check('Promoter propagates RevisionBinding → MemoryRecord (dirty/diffHash/workspaceHash)',
+    all, `passed=${JSON.stringify(checks)}`)
+}
+
+// ── Check 20: ReflectionModule no longer calls LTM.record ────────────
+//
+// v0.5.3 Final (P0 issue): ReflectionModule previously called
+// LongTermMemory.record() directly with repo='reflection', a parallel
+// write path that bypassed MemoryCandidate → Promotion. The bypass
+// must be gone; onComplete should not call record().
+{
+  const reflSrc = readText('src/modules/reflection.ts') ?? ''
+  // Slice just the onComplete body for accuracy.
+  const idx = reflSrc.indexOf('async onComplete')
+  const close = reflSrc.indexOf('\n  private ', idx)
+  const body = close > idx ? reflSrc.slice(idx, close) : ''
+  const hasRecord = /\blongTerm\s*\.\s*record\s*\(/.test(body) ||
+                    /\bgate\s*\.\s*record\s*\(/.test(body) ||
+                    /\bsemantic\s*\.\s*write\s*\(/.test(body)
+  check('ReflectionModule.onComplete does NOT call LTM.record or semantic.write',
+    !hasRecord, hasRecord ? `body still calls a write path: ${body.slice(0, 200)}` : 'ok')
+}
+
+// ── Check 21: MemoryModule reads are repo-filtered ─────────────────────
+//
+// v0.5.3 Final (P0 issue): the previous memory_search and boot
+// retrieval queried LongTermMemory.query() without a repo filter,
+// so A's memory bled into B's prompt. The query MUST carry `repo`.
+{
+  const memSrc = readText('src/modules/memory.ts') ?? ''
+  // Boot: between `ltmRecords = this.longTerm.query({` and the
+  // matching `})` for that block. The repo property must appear.
+  const bootHasRepo = (() => {
+    const idx = memSrc.indexOf('ltmRecords = this.longTerm.query({')
+    if (idx < 0) return false
+    const close = memSrc.indexOf('})', idx)
+    const body = memSrc.slice(idx, close)
+    return /\brepo:/.test(body)
+  })()
+  const searchToolHasRepo = (() => {
+    const idx = memSrc.indexOf('function createMemorySearchToolLTM')
+    if (idx < 0) return false
+    const slice = memSrc.slice(idx, idx + 4000)
+    // Strip comments + whitespace, then look for the ltm.query call.
+    const stripped = slice.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const queryStart = stripped.indexOf('ltm.query(')
+    if (queryStart < 0) return false
+    const queryBody = stripped.slice(queryStart, queryStart + 500)
+    return /\brepo:\s*getRepo\(\)/.test(queryBody)
+  })()
+  check('MemoryModule reads carry repo filter (boot + search)',
+    bootHasRepo && searchToolHasRepo,
+    `boot=${bootHasRepo}, search=${searchToolHasRepo}`)
+}
+
+// ── Check 22: real end-to-end Profile A→B test exists ────────────────
+//
+// v0.5.3 Final (P0 issue): the previous fake Golden Path C only
+// invoked the Router directly. The new test must exercise Engine +
+// Coordinator + ModelGateway through runTurn().
+{
+  check('tests/v053RealGoldenPath.profileFallback.test.ts exists',
+    existsSync(join(ROOT, 'tests/v053RealGoldenPath.profileFallback.test.ts')),
+    'real end-to-end profile-fallback test missing')
+}
+
+// ── Check 23: probe lease wired into Coordinator ─────────────────────
+//
+// v0.5.3 Final (P1-3): the previous round added
+// tryAcquireProbe / finishProbe to the Router but did not call
+// them from anywhere in the production path. The Coordinator's
+// callLLM must consult the lease in the half-open window.
+{
+  const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
+  const stripped = coordSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasAcquire = /router\s*\?\.\s*tryAcquireProbe\s*\(/.test(stripped)
+      || /tryAcquireProbe\s*\(\s*binding\.id\s*\)/.test(stripped)
+  const hasFinish = /router\s*\?\.\s*finishProbe\s*\(/.test(stripped)
+      || /finishProbe\s*\(\s*probeBindingId\s*,/.test(stripped)
+  check('Coordinator consults tryAcquireProbe/finishProbe on the half-open path',
+    hasAcquire && hasFinish,
+    `acquire=${hasAcquire}, finish=${hasFinish}`)
+}
+
+// ── Check 24: sourceQuote min-length + coverage enforced ───────────
+//
+// v0.5.3 Final (P1-1): laundering user_stated with a 1-char
+// quote must be impossible. The promoter must enforce both a
+// minimum normalized quote length AND a content-token-coverage
+// floor.
+{
+  const mcSrc = readText('src/core/memoryCandidate.ts') ?? ''
+  const stripped = mcSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasMinLen = /MIN_USER_STATED_QUOTE_NORM_LENGTH\s*=/.test(stripped)
+  const hasCoverage = /MIN_CONTENT_TOKEN_COVERAGE\s*=/.test(stripped)
+  const usesVerifier = /verifySourceQuote\s*\(/.test(stripped)
+  check('MemoryCandidate enforces sourceQuote min-length + content coverage',
+    hasMinLen && hasCoverage && usesVerifier,
+    `minLen=${hasMinLen}, coverage=${hasCoverage}, verifier=${usesVerifier}`)
+}
+
+// ── Check 25: CLI publishes real sessionRunIds ───────────────────────
+//
+// v0.5.3 Final (P1-2): the CLI used to declare `sessionRunIds: []`
+// in runRepl, making consolidation a no-op forever. The runId
+// must be pushed INTO a shared array on every runTurn() result
+// and handed to consolidateSession() at exit.
+{
+  const cliSrc = readText('bin/ovogogogo.ts') ?? ''
+  const stripped = cliSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasArray = /const sessionRunIds\s*:\s*string\[\]/.test(stripped)
+  const hasPush = /sessionRunIds\s*\.\s*push\s*\(/.test(stripped)
+  const passToConsolidate = /sessionRunIds:\s*sessionRunIds/.test(stripped)
+  check('CLI tracks sessionRunIds and hands them to consolidateSession',
+    hasArray && hasPush && passToConsolidate,
+    `array=${hasArray}, push=${hasPush}, pass=${passToConsolidate}`)
+}
+
+// ── Check 26: consolidateSession test exercises real round-trip ──────
+//
+// v0.5.3 Final (P1-2): the previous consolidation test only
+// asserted that no records were promoted; the real round-trip test
+// must seed two verified records across two runIds and observe
+// one promoted entry.
+{
+  check('tests/v053/consolidateSessionReal.test.ts exists',
+    existsSync(join(ROOT, 'tests/v053/consolidateSessionReal.test.ts')),
+    'real round-trip consolidation test missing')
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────
 
 if (failures.length === 0) {

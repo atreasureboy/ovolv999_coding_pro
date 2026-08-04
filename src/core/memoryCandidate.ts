@@ -118,6 +118,105 @@ export function isNormalizedSubstring(quote: string, userMessage: string): boole
   return normalize(userMessage).includes(normalize(quote))
 }
 
+/**
+ * v0.5.3 Final (P1): minimum normalized quote length. A 1–2 char
+ * quote (e.g. `"用"`, `"the"`, `",,"`) would otherwise pass the
+ * `isNormalizedSubstring` check and let the model attribute any
+ * claim to the user. We refuse those outright.
+ */
+export const MIN_USER_STATED_QUOTE_NORM_LENGTH = 12
+
+/**
+ * v0.5.3 Final (P1): minimum fraction of content tokens that must
+ * already appear (as substrings) in the normalized quote. Without
+ * this check a model can write a free-form `content` and append a
+ * 1-char quote to launder it as a user preference. We require the
+ * content to be DERIVABLE from the quote's vocabulary.
+ */
+export const MIN_CONTENT_TOKEN_COVERAGE = 0.6
+
+/**
+ * v0.5.3 Final (P1): result of verifying a source quote against
+ * the original user message. Replaces the previous single-bit
+ * `isNormalizedSubstring` with a multi-factor verification:
+ *
+ *   - 'verified'                  → claim accepted, origin = user_prompt
+ *   - 'demote-agent_inferred'     → drop the user_stated claim; treat as inferred
+ *   - 'drop'                      → drop both the user_stated claim and the candidate itself
+ */
+export type SourceVerification =
+  | { result: 'verified' }
+  | { result: 'demote-agent_inferred'; reason: string }
+  | { result: 'drop'; reason: string }
+
+/**
+ * Multi-factor verification of a user_stated memory candidate's
+ * source_quote. Returns the decision the promoter should apply.
+ * The function is pure — it does not write anywhere.
+ */
+export function verifySourceQuote(opts: {
+  sourceQuote: string | undefined
+  userMessage: string
+  content: string
+}): SourceVerification {
+  const quote = (opts.sourceQuote ?? '').trim()
+  if (!quote) {
+    return { result: 'drop', reason: 'user_stated missing sourceQuote' }
+  }
+  const normalized = normalize(quote)
+  if (normalized.length < MIN_USER_STATED_QUOTE_NORM_LENGTH) {
+    return {
+      result: 'drop',
+      reason: `sourceQuote too short (${normalized.length} < ${MIN_USER_STATED_QUOTE_NORM_LENGTH})`,
+    }
+  }
+  if (!isNormalizedSubstring(quote, opts.userMessage)) {
+    return {
+      result: 'demote-agent_inferred',
+      reason: 'sourceQuote not a substring of userMessage',
+    }
+  }
+  // Coverage: how much of `content` derives from `quote`?
+  const coverage = computeContentTokenCoverage(opts.content, quote)
+  if (coverage < MIN_CONTENT_TOKEN_COVERAGE) {
+    return {
+      result: 'demote-agent_inferred',
+      reason: `content coverage of quote ${coverage.toFixed(2)} < ${MIN_CONTENT_TOKEN_COVERAGE}`,
+    }
+  }
+  return { result: 'verified' }
+}
+
+/**
+ * Fraction of content tokens (size ≥ 3, alnum) that already appear
+ * inside the normalized quote. CJK + Latin are handled with a
+ * mixed tokenization (length-3+ alnum; length-2 bigrams for CJK).
+ */
+export function computeContentTokenCoverage(content: string, quote: string): number {
+  const tokens = extractClaimTokens(content)
+  if (tokens.length === 0) return 1 // no tokens → trivially covered
+  const normalizedQuote = normalize(quote)
+  let hits = 0
+  for (const tok of tokens) {
+    if (normalizedQuote.includes(tok)) hits++
+  }
+  return hits / tokens.length
+}
+
+function extractClaimTokens(content: string): string[] {
+  const out: string[] = []
+  // Latin alphanumeric tokens of length ≥ 3.
+  const latin = content.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []
+  for (const t of latin) out.push(t)
+  // CJK 2-char bigrams.
+  const cjkRuns = content.match(/[一-鿿぀-ゟ゠-ヿ가-힯]+/g) ?? []
+  for (const run of cjkRuns) {
+    if (run.length === 1) out.push(run)
+    else for (let i = 0; i < run.length - 1; i++) out.push(run.slice(i, i + 2))
+  }
+  return out
+}
+
 // ── Promotion decision ─────────────────────────────────────────────────
 
 export interface PromotionInput {
@@ -169,26 +268,32 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
     unresolvedCount === 0
 
   for (const c of input.candidates) {
-    // Verify user_stated source. Model-passed `claimedSource` is
-    // not trusted — only the sourceQuote proves it.
+    // v0.5.3 Final (P1): user_stated verification is multi-factor.
+    // The model passes `claimedSource='user_stated'` and
+    // `sourceQuote`, but the Engine must verify the quote is real
+    // (substring of userMessage), long enough (a 1-char quote is
+    // forbidden), and that the content is DERIVABLE from the quote
+    // (≥60% content-token coverage). Anything weaker is demoted or
+    // dropped — no laundered content reaches long-term memory.
     let effectiveSource: ClaimedMemorySource = c.claimedSource
     if (c.claimedSource === 'user_stated') {
-      if (!c.sourceQuote || c.sourceQuote.length === 0) {
-        // No proof — treat as agent_inferred but DROP for failure
-        // runs (we don't trust the inferred content either).
-        dropped.push({ candidateId: c.id, reason: 'user_stated missing sourceQuote' })
+      const verdict = verifySourceQuote({
+        sourceQuote: c.sourceQuote,
+        userMessage: input.userMessage,
+        content: c.content,
+      })
+      if (verdict.result === 'drop') {
+        dropped.push({ candidateId: c.id, reason: verdict.reason })
         if (!isFullSuccess) continue
+        // On success runs, drop also demotes to agent_inferred for the
+        // promotion decision below.
         effectiveSource = 'agent_inferred'
-      } else if (!isNormalizedSubstring(c.sourceQuote, input.userMessage)) {
-        // Quote doesn't match. Trust NO part of the claim. Demote +
-        // drop on failure runs (we're not going to record an inferred
-        // fact based on a forged user quote — that's still an
-        // attempt to launder fake content).
-        dropped.push({ candidateId: c.id, reason: 'user_stated sourceQuote not in userMessage' })
+      } else if (verdict.result === 'demote-agent_inferred') {
+        dropped.push({ candidateId: c.id, reason: verdict.reason })
         if (!isFullSuccess) continue
         effectiveSource = 'agent_inferred'
       }
-      // else: sourceQuote verified → proceed
+      // else 'verified' → proceed with user_stated.
     }
 
     if (isFullSuccess) {
@@ -199,6 +304,13 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         repo: input.revision.repo,
         branch: input.revision.branch,
         commit: input.revision.baseCommit,
+        // v0.5.3 Final (P0 issue): propagate the FULL RevisionBinding
+        // so the gate's R3 check accepts the right binding per repo
+        // state. Dirty repos carry diffHash, non-git carries
+        // workspaceHash, clean git carries commit.
+        dirty: input.revision.dirty,
+        diffHash: input.revision.diffHash,
+        workspaceHash: input.revision.workspaceHash,
         sourceRunId: c.runId,
         origin: effectiveSource === 'user_stated' ? 'user_prompt' : `memory_promotion:${c.runId}`,
         confidence: c.confidence,
@@ -223,6 +335,9 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         repo: input.revision.repo,
         branch: input.revision.branch,
         commit: input.revision.baseCommit,
+        dirty: input.revision.dirty,
+        diffHash: input.revision.diffHash,
+        workspaceHash: input.revision.workspaceHash,
         sourceRunId: c.runId,
         origin: `memory_promotion:${c.runId}:failure:${status}`,
         confidence: c.confidence,

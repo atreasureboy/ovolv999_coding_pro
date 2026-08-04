@@ -58,8 +58,16 @@ export interface ModelProfile {
 
 export interface RoutingInput {
   userGoal: string
-  /** Approximate repo file count (complexity signal). */
+  /** Approximate repo file count (complexity signal). undefined
+   *  is ALWAYS neutral — the Router MUST NOT fabricate a value. */
   repoFileCount?: number
+  /** v0.5.3 Final (P0 issue): provenance of repoFileCount.
+   *  - ready/empty → count is exact.
+   *  - partial → count is a lower bound; Router weights weakly.
+   *  - unknown → Router treats as neutral (no fabrication). */
+  repoStatsState?: 'ready' | 'empty' | 'partial' | 'unknown'
+  /** True when the count is a partial lower bound. */
+  repoStatsLowerBound?: boolean
   /** Files referenced in the turn so far (complexity signal). */
   filesTouched?: number
   /** Consecutive model failures before this turn (health/fallback signal). */
@@ -563,7 +571,20 @@ export class ModelRouter {
     if (/debug|fix|investigate|trace|why does|broken|crash|error/.test(goal)) {
       c += 0.15; reasonCodes.push('debug-signal')
     }
-    if ((input.repoFileCount ?? 0) > 500) { c += 0.15; reasonCodes.push('large-repo') }
+    // v0.5.3 Final (P0 issue): the old code used
+    //   (input.repoFileCount ?? 0) > 500
+    // which fabricated a 0 for the unknown case — anything > 500
+    // triggered a "large-repo" bump even when RepoStats was
+    // completely unknown. The Collector now passes `undefined` for
+    // that path; we honor it here.
+    if (input.repoStatsState === 'ready' && typeof input.repoFileCount === 'number' && input.repoFileCount > 500) {
+      c += 0.15; reasonCodes.push('large-repo')
+    } else if (input.repoStatsState === 'partial' && typeof input.repoFileCount === 'number' && input.repoFileCount > 500) {
+      // weak weighting — partial bound could over/under-count.
+      c += 0.05; reasonCodes.push('large-repo-partial')
+    }
+    // empty → repoFileCount === 0: handled implicitly (not a positive signal).
+    // unknown → no fabrication, no signal.
     if ((input.filesTouched ?? 0) > 5) { c += 0.1; reasonCodes.push('many-files') }
     if ((input.estimatedImpactFiles ?? 0) > 5) { c += 0.1; reasonCodes.push('large-impact') }
     if ((input.consecutiveFailures ?? 0) > 0) {

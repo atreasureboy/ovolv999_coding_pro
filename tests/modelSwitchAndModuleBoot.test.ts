@@ -179,14 +179,14 @@ describe('P0-1.B: modules observe onModelChanged', () => {
     } as never
     const sem = new SemanticMemory(tmpRoot)
     const reflection = new ReflectionModule(client, 'original-model', sem, {})
-    expect(reflection['model']).toBe('original-model')
+    // v0.5.3 Final (P0 issue): Reflection no longer carries a
+    // captured model — onModelChanged is a no-op. Verify the module
+    // still accepts the constructor and the no-op shape.
+    expect(typeof reflection.onModelChanged).toBe('function')
     reflection.onModelChanged('switched-model')
-    expect(reflection['model']).toBe('switched-model')
     await reflection.onComplete?.({
       cwd: tmpRoot,
       turnResult: { stopped: true, reason: 'stop_sequence', output: 'done' },
-      // Reflection skips runs with <3 tool messages; provide 3 so the
-      // knowledge-extraction LLM call actually fires.
       messages: [
         { role: 'user', content: 'q' },
         { role: 'assistant', content: 'a', tool_calls: [{ id: '1', type: 'function', function: { name: 'T', arguments: '{}' } }] },

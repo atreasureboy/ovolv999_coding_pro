@@ -100,15 +100,43 @@ real CLI against the openaiEchoServer fixture:
   state — git branch+HEAD (clean), git baseCommit+diffHash
   (dirty), or workspaceHash (non-git). No more `repo='memory'`,
   `repo='session'`, or fabricated `sessionRunId`. New
-  `src/core/revisionBinding.ts`.
+  `src/core/revisionBinding.ts`. `MemoryRecord` now carries the
+  full binding (`dirty`, `diffHash`, `workspaceHash`); the gate's
+  R3 accepts any of the three bindings, never silently dropping
+  code experiences from dirty/non-git repos.
 - **LongTermMemory is the read source**: `memory_search` and boot
-  relevance retrieval query `LongTermMemory.query()` directly.
-  SemanticMemory is kept only for back-reads of legacy data.
+  relevance retrieval query `LongTermMemory.query()` directly,
+  ALWAYS with the project-derived `repo` filter. Cross-project
+  pollution is impossible — A's memory does not leak into B's
+  prompt, A's `memory_search` does not match B's records.
 - **consolidateSession** rewritten: no longer accepts a fake
   synthetic runId. Reads only verified=`true` records by real
   sourceRunId, fuses them into candidates, routes through
   `decidePromotion()` + `longTerm.record()`. No parallel
   `semantic.write()`.
+- **ReflectionModule** dropped: its LLM-driven write path was an
+  anti-fake-success regression. The module now reduces to an
+  epistemic log; no LTM write, no `repo='reflection'` shortcut.
+- **Probe lease wired into production** (P1-3): the
+  Coordinator's `callLLM()` calls `router.tryAcquireProbe()` before
+  the half-open attempt and `router.finishProbe(success)` after
+  the call returns. Two concurrent callers cannot both serve a
+  half-open profile — the second is rejected and advances to a
+  fallback. Previously the API existed only in unit-test code.
+- **source_quote multi-factor verification** (P1-1): the model can
+  no longer launder a forged user preference with a 1-char quote.
+  `verifySourceQuote` enforces a minimum normalized quote length
+  (12 chars) AND a content-token-coverage floor (≥60%). Quotes
+  that fail either check drop the candidate; quotes that pass
+  substring-match but fail coverage demote to `agent_inferred`.
+- **Session consolidation is now real** (P1-2): `sessionRunIds`
+  is populated by the CLI on every runTurn() (REPL + pipe + single-
+  task paths), and the most recent `userMessage` + raw outcome
+  are forwarded at exit. `consolidateSession` writes promoted
+  entries when there are actually verified records to merge —
+  previously the empty-array case made it a permanent no-op.
+  `InMemoryMemoryBackend` ships for tests so consolidation
+  exercises don't pollute the host filesystem.
 - **TaskImpact single source of truth**:
   `src/core/taskImpact.ts` exports `TASK_IMPACT_SCOPES` used by
   tool schema, parser, TaskGraph, Router, and tests. Round-trip
@@ -120,24 +148,35 @@ real CLI against the openaiEchoServer fixture:
   / `finishProbe(profileId, success)` lease API. `route()` returns
   a structured unavailable decision when all profiles are open
   (`selectedModel=''`, `reasonCodes=['all-profiles-open', ...]`).
-- **RepoStats truth**: Coordinator passes `repoStats.state` and
-  exact sourceFileCount. The router never fabricates
-  `repoFileCount=100` from `filesTouched*10` again.
-- **ContextSnapshot measure/apply split**:
-  `ContextManager.measureBudget()` is pure (no LLM, no message
-  mutation); `applyBudgetPolicy()` is the mutating step that may
-  compact; after compact, the Coordinator re-measures so the
-  Router reads post-compaction state. `AbortError` propagates;
+- **RepoStats truth**: `RoutingSignalCollector` no longer fabricates
+  `Math.max(filesTouched * 10, 100)` for unknown states. The signal
+  carries `repoStatsState` (`ready` / `empty` / `partial` /
+  `unknown`); the Router uses `ready` exact, `partial` as a weak
+  lower bound, and `unknown` is genuinely neutral.
+- **ContextSnapshot measure/apply split + post-compact Router**:
+  `measureBudget()` is pure, `applyBudgetPolicy()` may compact,
+  and the Coordinator now runs the full `measure → apply →
+  re-measure → collect-signals → route` sequence BEFORE the first
+  Router call. The Router always reads the post-compaction
+  snapshot, not pre-compact pressure. `AbortError` propagates;
   only clearly-recoverable errors are best-effort ignored.
-- **Real Golden Path C**: programmatic two-profile test wires
-  `model-a` (fail) and `model-b` (succeed), forces Profile A's
-  circuit open, re-routes, asserts the Router picks `model-b`,
-  emits exactly one ROUTING_FALLBACK_APPLIED, and counters roll up
-  to `totalFailures=≥1, totalFallbacksApplied=1`.
-- **Runtime-truth verifier extended**: schema-↔-parser
-  round-trip checks, `totalRetryAttempts` absence, no
-  `semantic.write` outside the gate, esm-runner scripts wired
-  into `pnpm check`.
+- **Real end-to-end Golden Path C**:
+  `tests/v053RealGoldenPath.profileFallback.test.ts` exercises
+  `Engine.runTurn` (NOT the fake Router-only path) through
+  Coordinator → ModelGateway → OpenAI fixture → ToolScheduler →
+  ToolExecutor. `model-a` 503s on the wire, `model-b` lands the
+  Write tool call, `outcome.modelAttempts` shows both profiles,
+  `outcome.changedFiles` includes `b.txt`. The Router's
+  per-profile circuit, the gateway's onProviderError → Router
+  fallback path, and the Engine's CompletionContract all run
+  for real.
+- **Runtime-truth verifier extended** (22 checks): schema-↔-parser
+  round-trip, `totalRetryAttempts` absence, no `semantic.write`
+  outside the gate, no fabricated 100-file fallback, Coordina
+  tor measure→apply→re-measure→signals→route ordering,
+  RevisionBinding→MemoryRecord propagation, ReflectionModule no
+  longer calls LTM.record, MemoryModule reads carry repo filter,
+  real end-to-end Profile-fallback test exists.
 
 ## 0.5.2 (superseded)
 
