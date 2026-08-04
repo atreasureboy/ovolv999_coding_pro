@@ -104,6 +104,16 @@ export class TaskPlanTool implements Tool {
           const id = str(input.id)
           if (!id) return err('id is required for add')
           if (g.has(id)) return err(`node "${id}" already exists`)
+          // v0.5.3 (P1.7): validate structured impact fields. Illegal
+          // values are rejected (NOT silently coerced). Legacy callers
+          // that omit impact still work — impact is optional.
+          const impactResult = parseImpact(input.impact_scope, {
+            affects_public_interface: input.affects_public_interface,
+            changes_configuration: input.changes_configuration,
+            requires_root_cause: input.requires_root_cause,
+            estimated_files: input.estimated_files,
+          })
+          if (impactResult.error) return err(`invalid impact: ${impactResult.error}`)
           g.addNode({
             id,
             title: str(input.title, id),
@@ -113,6 +123,7 @@ export class TaskPlanTool implements Tool {
             resourceClaims: asStrArr(input.resourceClaims),
             preferredRole: str(input.preferredRole) || undefined,
             retryPolicy: { maxAttempts: 2 },
+            impact: impactResult.impact,
           })
           return ok(`Added node "${id}". ${renderGraph(g)}`)
         }
@@ -128,6 +139,18 @@ export class TaskPlanTool implements Tool {
           if (n.status !== 'pending') return err(`cannot update node "${id}" in status ${n.status}`)
           if (input.title !== undefined) n.title = str(input.title, n.title)
           if (input.description !== undefined) n.description = str(input.description, n.description)
+          // v0.5.3 (P1.7): impact can be updated too — same
+          // validation as add.
+          if (input.impact_scope !== undefined) {
+            const impactResult = parseImpact(input.impact_scope, {
+              affects_public_interface: input.affects_public_interface,
+              changes_configuration: input.changes_configuration,
+              requires_root_cause: input.requires_root_cause,
+              estimated_files: input.estimated_files,
+            })
+            if (impactResult.error) return err(`invalid impact: ${impactResult.error}`)
+            n.impact = impactResult.impact
+          }
           return ok(`Updated "${id}".`)
         }
         case 'begin_verification': {
@@ -225,13 +248,71 @@ function renderGraph(g: TaskGraph): string {
     const deps = n.dependencies.length ? ` ←[${n.dependencies.join(',')}]` : ''
     const flag = n.status === 'blocked' ? ` ⚠${n.blockReason ? ' ' + n.blockReason : ''}`
       : n.status === 'failed' ? ` ✗${n.failReason ? ' ' + n.failReason : ''}` : ''
-    return `  [${n.status}] ${n.title}${deps}${flag}`
+    const impact = n.impact
+      ? ` impact=${n.impact.scope}${n.impact.affectsPublicInterface ? '/public' : ''}${n.impact.changesConfiguration ? '/config' : ''}${n.impact.requiresRootCause ? '/rootcause' : ''}`
+      : ''
+    return `  [${n.status}] ${n.title}${deps}${flag}${impact}`
   })
   return [head, ...lines].join('\n')
 }
 
 function asStrArr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** v0.5.3 (P1.7): validate the structured impact payload. Returns
+ *  the parsed TaskImpact on success or `{error: string}` when any
+ *  field is illegal. Legacy callers that omit impact entirely
+ *  get `{impact: undefined}` — the Router then falls back to
+ *  keyword heuristics. */
+function parseImpact(
+  scope: unknown,
+  flags: {
+    affects_public_interface?: unknown
+    changes_configuration?: unknown
+    requires_root_cause?: unknown
+    estimated_files?: unknown
+  },
+): { impact?: import('../core/runtime/taskGraph.js').TaskImpact; error?: string } {
+  // Legacy path: no impact supplied at all.
+  if (scope === undefined && flags.affects_public_interface === undefined &&
+      flags.changes_configuration === undefined && flags.requires_root_cause === undefined &&
+      flags.estimated_files === undefined) {
+    return { impact: undefined }
+  }
+  const VALID_SCOPES = ['local', 'module', 'cross-module', 'repository'] as const
+  type Scope = typeof VALID_SCOPES[number]
+  let scopeVal: Scope
+  if (typeof scope !== 'string') {
+    return { error: `impact_scope must be a string (one of ${VALID_SCOPES.join('|')})` }
+  }
+  if (!VALID_SCOPES.includes(scope as Scope)) {
+    return { error: `impact_scope "${scope}" is invalid; expected one of ${VALID_SCOPES.join('|')}` }
+  }
+  scopeVal = scope as Scope
+  const apf = flags.affects_public_interface
+  if (apf !== undefined && typeof apf !== 'boolean') return { error: 'affects_public_interface must be boolean' }
+  const cc = flags.changes_configuration
+  if (cc !== undefined && typeof cc !== 'boolean') return { error: 'changes_configuration must be boolean' }
+  const rc = flags.requires_root_cause
+  if (rc !== undefined && typeof rc !== 'boolean') return { error: 'requires_root_cause must be boolean' }
+  const ef = flags.estimated_files
+  let efVal: number | undefined
+  if (ef !== undefined) {
+    if (typeof ef !== 'number' || ef < 0 || !Number.isInteger(ef)) {
+      return { error: 'estimated_files must be a non-negative integer' }
+    }
+    efVal = ef
+  }
+  return {
+    impact: {
+      scope: scopeVal,
+      affectsPublicInterface: apf === true,
+      changesConfiguration: cc === true,
+      requiresRootCause: rc === true,
+      estimatedFiles: efVal,
+    },
+  }
 }
 function ok(content: string): ToolResult {
   return { content, isError: false }

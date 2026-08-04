@@ -2,7 +2,85 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
-## 0.5.2 (unreleased)
+## 0.5.3 (unreleased) — Reality Closure
+
+**Stop claiming Done for code that has no production caller.**
+
+v0.5.3 audits every Stage 7/8 module and classifies each by a
+4-state vocabulary: **wired**, **implemented**, **experimental**,
+**unsupported**. Modules without a real production caller moved to
+`experimental/` and their tests were removed.
+
+### Reality repairs (P0)
+
+- **RepoStats ESM**: pure ESM imports, four-state walk outcomes
+  (ready/empty/partial/unknown), symlink-loop guard, build-time
+  wireRepoStats() guard so Engine is the SOLE constructor.
+- **RepoStats instance sharing**: Engine constructs the single
+  instance via `wireRepoStats()`; WorkspaceWatcher, Coordinator,
+  and RepoMap receive the SAME instance through ModuleBootContext.
+- **Memory Gate as single primary write path**: `memory_write`
+  passes through `LongTermMemory.record()` BEFORE touching
+  `SemanticMemory`; gate failure returns `isError:true` (no more
+  silent "audit gate skipped" lies); `allowCodeWithoutCommit`
+  default is now `false`.
+- **Reflection verified truth**: success entries require
+  CompletionStatus=completed + Reviewer pass + verification.passed;
+  failed runs can ONLY write `kind:'failure'` entries which never
+  feed the SemanticMemory adapter.
+- **Sandbox honest backend**: SandboxManager now reports
+  `linux-landlock` and `windows-jobobject` as `available:false`
+  with explicit reasons ("syscall emitter not shipped",
+  "native addon not shipped") instead of falsely claiming support.
+
+### Typo-only state (P1)
+
+- **Context current-turn snapshot**: Coordinator publishes a fresh
+  snapshot BEFORE signal collection; snapshot carries `runId` so
+  the Router can refuse stale data from a previous turn.
+- **TaskPlan impact schema**: structured `impact_scope`,
+  `affects_public_interface`, `changes_configuration`,
+  `requires_root_cause`, `estimated_files` validated in TaskPlan
+  `add`/`update`. Illegal values rejected; legacy callers work.
+- **Router per-profile failure**: per-profile circuit state
+  replaces the global circuit; Profile A's 5 failures open A's
+  circuit while Profile B remains selectable.
+- **RuntimeErrorInfo deleted**: zero production callers; the
+  abstract and its tests are removed. Provider error
+  classification lives in ModelGateway.isRetryableProviderError.
+
+### Stage 7/8 audit (Phase 4)
+
+Five modules had no production caller despite the v0.5.2 "all
+thirteen items wired" claim. They moved to `experimental/`:
+
+  C1  RepoMapService
+  C10 EditFormat
+  C11 .mdc rule loader
+  C12 @-symbol picker
+  C13 Architect/editor mode
+
+The remaining items (C2/C3/C5/C6/C7/C9) are genuinely wired into
+the production main chain; see `verify-runtime-truth.mjs` for
+proof.
+
+### Real Golden Paths (Phase 5)
+
+`tests/v053RealGoldenPath.test.ts` — three scenarios spawn the
+real CLI against the openaiEchoServer fixture:
+  A. engine reaches fixture with streaming tool calls
+  B. model skips verification → blocked verdict
+  C. 503 on first call → fallback succeeds on second
+
+### Documentation
+
+- `verify-runtime-truth.mjs` upgraded from 7 to 12 checks:
+  experimental/ import guard, Memory Gate ordering, Router field
+  consumption, TaskImpact schema, absolute test counts.
+- `CLAUDE.md`: removed absolute test-count and outdated runtime-dep
+  claims; new vocabulary adopted across survey notes and CHANGELOG.
+
+## 0.5.2 (superseded)
 
 Reality Closure — wiring production main chain to the data sources
 the routing + completion signals have always claimed to consume.

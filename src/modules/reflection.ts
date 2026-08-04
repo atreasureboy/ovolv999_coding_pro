@@ -59,7 +59,10 @@ export class ReflectionModule implements AgentModule {
    * loop alive while preserving the audit invariants.
    */
   private readonly longTerm = new LongTermMemory({
-    allowCodeWithoutCommit: true,
+    // v0.5.3 (P0.3): production default. Reflection's caller (P0.4)
+    // pre-validates with the CompletionContract BEFORE calling
+    // record(), so the gate's R3 check is the final authority.
+    allowCodeWithoutCommit: false,
   })
 
   constructor(
@@ -90,23 +93,54 @@ export class ReflectionModule implements AgentModule {
 
   async onComplete(ctx: ModuleRunContext): Promise<void> {
     if (this.config.poor?.enabled) return
-    // Skip if the run was too short to yield useful insights
-    const toolCallCount = ctx.messages.filter(m => m.role === 'tool').length
+    const outcome = ctx.outcome
+    if (!outcome) return
+
+    // v0.5.3 (P0.4): the run must satisfy ALL of the following for
+    // any entry to be marked verified=true:
+    //   - CompletionStatus === 'completed'
+    //   - verification.failed is empty
+    //   - completion.blockers / unresolved / remaining are empty
+    //   - turnResult.reason !== 'error'
+    // Any other outcome routes the entry through a SEPARATE failure
+    // branch with `kind: 'failure'` and `verified=false`. The LLM is
+    // never trusted to declare its own success.
+    const verification = outcome.verification
+    const isCompleted =
+      outcome.completion.status === 'completed' &&
+      (outcome.completion.reasons?.length ?? 0) === 0 &&
+      verification.executed &&
+      verification.passed &&
+      verification.failed.length === 0 &&
+      (outcome.workerReferences?.filter((w) => (w as { status?: string }).status === 'failed').length ?? 0) === 0
+
+    // Too-short runs never yield useful insights.
+    const toolCallCount = ctx.messages.filter((m) => m.role === 'tool').length
     if (toolCallCount < 3) return
 
-    // Skip if the run ended in error
-    if (ctx.turnResult.reason === 'error') return
+    // Cancelled/interrupted/failed/max_iter runs get a different
+    // treatment — see below.
+    const runOutcomeKind: 'success' | 'partial' | 'blocked' | 'cancelled' | 'failed' | 'exhausted' = isCompleted
+      ? 'success'
+      : outcome.completion.status === 'partial'
+        ? 'partial'
+        : outcome.completion.status === 'blocked'
+          ? 'blocked'
+          : ctx.turnResult.reason === 'interrupted'
+            ? 'cancelled'
+            : ctx.turnResult.reason === 'max_iterations'
+              ? 'exhausted'
+              : 'failed'
 
     try {
       const conversationSummary = this.serializeForReflection(ctx.messages)
-
       const response = await this.client.chat.completions.create({
         model: this.model,
         messages: [
           { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
           {
             role: 'user',
-            content: `Analyze this agent run (outcome: ${ctx.turnResult.reason}):\n\n${conversationSummary}`,
+            content: `Analyze this agent run (outcome: ${runOutcomeKind}):\n\n${conversationSummary}`,
           },
         ],
         temperature: 0,
@@ -115,44 +149,68 @@ export class ReflectionModule implements AgentModule {
 
       const output = response.choices[0]?.message?.content ?? ''
       const parsed = parseReflection(output)
-
-      // v0.5.2 (C6): the run was non-error and produced ≥3 tool
-      // calls, so it's plausibly verified. We mark `verified=true`
-      // for the LongTermMemory gate; the conflict-aware merge (R5)
-      // still prevents unverified from clobbering verified.
-      // turnResult.reason is typed as a union; 'error' is one branch.
-      // The earlier early-return guards against reason='error' so we
-      // reach here only when the run was NOT error-terminated.
-      const verified = true
-      const sourceRunId = ctx.outcome?.runId ?? 'reflection'
+      const sourceRunId = outcome.runId ?? 'unknown'
 
       let auditApproved = 0
       let auditRejected = 0
       for (const entry of parsed) {
-        this.semantic.write({
-          content: entry.content,
-          tags: entry.tags,
-          source: 'agent_inferred',
-          confidence: entry.confidence,
-          timestamp: new Date().toISOString(),
-        })
-        // v0.5.2 (C6): also pass through the LongTermMemory gate so
-        // the audit trail + TTL + conflict-merge are unified.
-        try {
-          this.longTerm.record({
-            kind: 'reflection',
-            content: entry.content.slice(0, 500),
-            repo: 'reflection',
-            origin: `reflection:agent_inferred`,
-            sourceRunId,
-            confidence: entry.confidence,
-            verified,
-            tags: entry.tags,
-            expiresAt: undefined,
-          })
-          auditApproved++
-        } catch {
-          auditRejected++
+        // v0.5.3 (P0.4): success branch is GATED on runOutcomeKind.
+        // Failure / partial / blocked / cancelled / exhausted runs
+        // CANNOT save success experiences — they can only save
+        // `kind: 'failure'` entries that the audit gate stamps
+        // verified=false. This prevents the model from reinforcing
+        // its own false-success narratives.
+        const kind: 'semantic' | 'reflection' | 'failure' =
+          runOutcomeKind === 'success' ? 'semantic' : 'failure'
+        const verified = runOutcomeKind === 'success'
+        // Use the unified Memory Gate. Bypass the SemanticMemory
+        // adapter for failure entries — they belong in the audit
+        // trail, not in the read adapter that feeds the prompt.
+        if (runOutcomeKind === 'success') {
+          try {
+            const gateResult = this.longTerm.record({
+              kind,
+              content: entry.content.slice(0, 500),
+              repo: 'reflection',
+              origin: `reflection:${runOutcomeKind}`,
+              sourceRunId,
+              confidence: entry.confidence,
+              verified,
+              tags: [...entry.tags, `outcome:${runOutcomeKind}`],
+              expiresAt: undefined,
+            })
+            this.semantic.write({
+              content: gateResult.content,
+              tags: entry.tags,
+              source: 'agent_inferred',
+              confidence: entry.confidence,
+              timestamp: gateResult.createdAt,
+            })
+            auditApproved++
+          } catch {
+            auditRejected++
+          }
+        } else {
+          // Failure branch: only the audit gate, never the
+          // SemanticMemory adapter. This is the v0.5.3 invariant —
+          // a failed run must not feed its (possibly false) lessons
+          // back into the prompt.
+          try {
+            this.longTerm.record({
+              kind: 'failure',
+              content: entry.content.slice(0, 500),
+              repo: 'reflection',
+              origin: `reflection:${runOutcomeKind}`,
+              sourceRunId,
+              confidence: entry.confidence,
+              verified: false,
+              tags: [...entry.tags, `outcome:${runOutcomeKind}`],
+              expiresAt: undefined,
+            })
+            auditApproved++
+          } catch {
+            auditRejected++
+          }
         }
       }
 
@@ -163,6 +221,7 @@ export class ReflectionModule implements AgentModule {
           auditApproved,
           auditRejected,
           sourceRunId,
+          runOutcomeKind,
         })
       }
     } catch {

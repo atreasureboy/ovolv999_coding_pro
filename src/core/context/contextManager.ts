@@ -43,6 +43,11 @@ import {
  * effectiveInputBudget) so the values cannot diverge.
  */
 export interface ContextBudgetSnapshot {
+  /** v0.5.3 (P1.6): runId this snapshot belongs to. The Router MUST
+   *  refuse to consume a snapshot whose runId differs from the
+   *  active runId — otherwise a stale previous-turn snapshot
+   *  leaks into a fresh turn's routing decision. */
+  runId: string | null
   contextWindow: number
   estimatedInputTokens: number
   inputBudget: number
@@ -91,6 +96,7 @@ export class ContextManager {
    * routing signal collector when ContextManager is wired in.
    */
   private lastBudgetSnapshot: ContextBudgetSnapshot = {
+    runId: null,
     contextWindow: 0,
     estimatedInputTokens: 0,
     inputBudget: 0,
@@ -100,6 +106,10 @@ export class ContextManager {
     compactFailureCount: 0,
     initialized: false,
   }
+  /** v0.5.3 (P1.6): the active runId, set by the Coordinator before
+   *  evaluateBudget() runs. The snapshot is stamped with this so
+   *  the Router can refuse stale data. */
+  private activeRunId: string | null = null
   /**
    * P1-6 (runtime invariants §十): structured task state. Updated deterministically
    * from tool events via applyToolEvent() and re-rendered into every
@@ -267,6 +277,17 @@ export class ContextManager {
     return this.lastBudgetSnapshot
   }
 
+  /** v0.5.3 (P1.6): set the runId before evaluateBudget() so the
+   *  snapshot carries it. The Router cross-checks the snapshot's
+   *  runId against this.activeRunId. */
+  setActiveRunId(runId: string | null): void {
+    this.activeRunId = runId
+  }
+
+  getActiveRunId(): string | null {
+    return this.activeRunId
+  }
+
   // ── Budget evaluation ──────────────────────────────────────────────────
 
   async evaluateBudget(params: {
@@ -293,6 +314,7 @@ export class ContextManager {
     // decision (compact at 85%) so the values cannot drift.
     const remainingTokens = Math.max(0, inputBudget - totalTokens)
     this.lastBudgetSnapshot = {
+      runId: this.activeRunId,
       contextWindow: maxCtxTokens,
       estimatedInputTokens: totalTokens,
       inputBudget,

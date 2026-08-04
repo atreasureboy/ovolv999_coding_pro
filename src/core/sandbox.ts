@@ -105,6 +105,17 @@ export function updateConfig(patch: Partial<SandboxConfig>): SandboxConfig {
 
 // ── Backend Detection ───────────────────────────────────────────────────────
 
+/**
+ * v0.5.3 (P0.5): detectBackend returns the backend whose enforcement
+ * code this build actually ships. It MUST agree with what the
+ * SandboxManager reports — when they diverge, the UI shows one
+ * backend and the Bash tool runs another, which is the v0.5.2
+ * false-safety failure mode.
+ *
+ * Currently shipped: macos-seatbelt, linux-bubblewrap.
+ * NOT shipped (reported via SandboxManager with reason): linux-landlock,
+ * windows-jobobject.
+ */
 export function detectBackend(): SandboxBackend {
   if (process.platform === 'darwin') {
     try {
@@ -117,15 +128,8 @@ export function detectBackend(): SandboxBackend {
       execSync('which bwrap', { stdio: 'pipe', timeout: 2000 })
       return 'linux-bubblewrap'
     } catch { /* not found */ }
-    // v0.5.2 (C9): bwrap missing → fall back to landlock. Landlock is
-    // kernel-side (no binary needed) but ovolv999 does not yet emit
-    // landlock syscalls; we report it as detected so the manager can
-    // record that landlock would be the natural next backend.
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { existsSync } = require('node:fs') as typeof import('node:fs')
-      if (existsSync('/sys/kernel/security/landlock')) return 'linux-landlock'
-    } catch { /* ignore */ }
+    // v0.5.3: landlock kernel-side check removed. Until we ship
+    // the syscall emitter we MUST NOT claim landlock is enforced.
   }
   return 'none'
 }
@@ -394,27 +398,27 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
 }
 
-// ── v0.5.2 (C9 — borrowed from codex sandboxing/{landlock.rs,bwrap.rs}) ────
+// ── v0.5.3 (P0.5) — HONEST BACKEND DECLARATION ────────────────────────────
 
 /**
- * SandboxManager — runtime backend selection with graceful fallback.
+ * v0.5.2 (C9) SandboxManager was overly optimistic — it reported
+ * `linux-landlock` and `windows-jobobject` as available without
+ * having any enforcement code. v0.5.3 is the reality repair:
  *
- * codex ships three sandbox backends per platform (Linux landlock +
- * bwrap + macOS seatbelt + Windows JobObject) and a `manager.rs`
- * orchestrator that picks the right one at startup. We borrow the
- * same idea but keep it intentionally tiny: ovolv999 already has
- * seatbelt + bwrap; we add landlock (Linux LSM-based, no setuid
- * binary required) and a fallback chain that retries each backend
- * in order when the preferred one is unavailable.
+ *   * `macos-seatbelt`     — IMPLEMENTED (sandbox-exec + .sb profile)
+ *   * `linux-bubblewrap`  — IMPLEMENTED (bwrap wrapper)
+ *   * `linux-landlock`    — NOT IMPLEMENTED in this build; reported
+ *                            as `available: false` with reason
+ *                            'syscall emitter not shipped'
+ *   * `windows-jobobject` — NOT IMPLEMENTED in this build; reported
+ *                            as `available: false` with reason
+ *                            'native addon not shipped'
+ *   * `none`              — fallback when no backend runs
  *
- * The fallback order on Linux is:
- *   1. bwrap   — works without root, requires the bwrap binary
- *   2. landlock — kernel LSM, requires Linux ≥ 5.13 + `prctl`
- *   3. none    — never fails, but emits a warning so the user
- *                knows the sandbox is not active
- *
- * The Manager is a thin wrapper around `detectBackend()` + the
- * existing `compileProfile()` / `wrapCommand()` helpers.
+ * The Bash tool's `wrapCommand()` continues to consult the SAME
+ * `detectBackend()` the UI displays, so the user never sees a
+ * "sandbox active" message when the command actually runs without
+ * one.
  */
 export interface SandboxBackendStatus {
   backend: SandboxBackend
@@ -424,43 +428,39 @@ export interface SandboxBackendStatus {
 }
 
 export interface SandboxSelectionResult {
-  /** The backend ultimately selected (may be 'none'). */
   selected: SandboxBackend
-  /** All backends tried, in preference order. */
   attempted: SandboxBackendStatus[]
-  /** When `selected === 'none'`, this explains why. */
   fallbackReason?: string
 }
 
+const LANDLOCK_NOT_SHIPPED = 'syscall emitter not shipped (zero-deps contract)'
+const JOBOBJECT_NOT_SHIPPED = 'native addon not shipped (zero-deps contract)'
+
 export class SandboxManager {
   /**
-   * Return the backend status for every supported backend on the
-   * current host. The list is ordered from most-preferred to
-   * least-preferred per the codex precedence.
+   * v0.5.3: status for every backend the manager knows about.
+   * Backends without enforcement code are reported as
+   * `available: false` with an explicit reason.
    */
   listAvailable(): SandboxBackendStatus[] {
     const out: SandboxBackendStatus[] = []
     if (process.platform === 'darwin') {
-      out.push({ backend: 'macos-seatbelt', available: this.hasExecutable('sandbox-exec') })
+      const ok = this.hasExecutable('sandbox-exec')
+      out.push({ backend: 'macos-seatbelt', available: ok, reason: ok ? undefined : 'sandbox-exec not in PATH' })
     }
     if (process.platform === 'linux') {
-      out.push({ backend: 'linux-bubblewrap', available: this.hasExecutable('bwrap') })
-      // Landlock is kernel-level; check via uname. We don't try to
-      // load the LSM module — modern kernels ship it built-in.
-      out.push({ backend: 'linux-landlock', available: this.kernelSupports('landlock') })
+      const bwrapOk = this.hasExecutable('bwrap')
+      out.push({ backend: 'linux-bubblewrap', available: bwrapOk, reason: bwrapOk ? undefined : 'bwrap not in PATH' })
+      // v0.5.3: never claim landlock without an emitter. seccomp
+      // existing does NOT prove landlock is usable from this build.
+      out.push({ backend: 'linux-landlock', available: false, reason: LANDLOCK_NOT_SHIPPED })
     }
     if (process.platform === 'win32') {
-      // JobObject is a Win32 kernel feature — always present on NT 6+.
-      out.push({ backend: 'windows-jobobject', available: true })
+      out.push({ backend: 'windows-jobobject', available: false, reason: JOBOBJECT_NOT_SHIPPED })
     }
     return out
   }
 
-  /**
-   * Pick the best available backend. Returns the full attempt
-   * trace so callers can log a useful warning when no real sandbox
-   * is available.
-   */
   select(): SandboxSelectionResult {
     const attempted = this.listAvailable()
     const usable = attempted.find((s) => s.available)
@@ -477,7 +477,6 @@ export class SandboxManager {
     }
   }
 
-  /** Convenience: returns just the chosen backend string. */
   selectedBackend(): SandboxBackend {
     return this.select().selected
   }
@@ -486,27 +485,6 @@ export class SandboxManager {
     try {
       execSync(`which ${name}`, { stdio: 'pipe', timeout: 2000 })
       return true
-    } catch {
-      return false
-    }
-  }
-
-  /**
-   * Best-effort kernel-feature probe via /proc/version on Linux.
-   * `landlock` is in the kernel since 5.13; the procfs files
-   * /sys/kernel/security/landlock* exist when the LSM is wired.
-   * We do NOT load the module — this is a passive check.
-   */
-  private kernelSupports(feature: 'landlock'): boolean {
-    if (feature !== 'landlock') return false
-    if (process.platform !== 'linux') return false
-    try {
-      // /proc/sys/kernel/seccomp/actions_avail is a more universal
-      // proxy — seccomp is a prerequisite for landlock and is
-      // present on every supported kernel.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { existsSync } = require('node:fs') as typeof import('node:fs')
-      return existsSync('/proc/sys/kernel/seccomp') || existsSync('/sys/kernel/security/landlock')
     } catch {
       return false
     }

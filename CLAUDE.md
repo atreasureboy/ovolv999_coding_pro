@@ -6,7 +6,7 @@
 ## 项目定位
 
 ovolv999 —— **可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**。
-TypeScript 5.7 strict ESM,Node ≥ 20,~67k 行 src,~4270 tests。运行时依赖仅 5 个:
+TypeScript 5.7 strict ESM,Node ≥ 20,~67k 行 src,测试套件全绿。运行时依赖 8 个:
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
 

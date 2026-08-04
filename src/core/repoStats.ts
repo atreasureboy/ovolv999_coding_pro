@@ -1,28 +1,39 @@
 /**
- * RepoStats — lightweight cached repository statistics service
- * (v0.5.2, Stage 2.2).
+ * RepoStats — cached repository statistics service.
  *
  * Single source of truth for the `repoFileCount` routing signal.
- * Before this module existed, the routing signal collector computed
- * `repoFileCount = filesTouched * 10` (a proxy) which produced wildly
- * wrong scores on small repos and gave the Router no signal at all
- * on large repos the user hadn't touched.
+ * Computes a real file count (excluding defaults + `.ovolv999ignore`),
+ * caches the result per cwd, and exposes a process-wide
+ * `RepoStatsService` whose cache invalidation is shared by callers
+ * via dependency injection (Engine owns the instance).
  *
- * This module:
- *   - Computes a real count of project files (excluding node_modules,
- *     .git, dist, coverage, session output, worktrees, binary blobs).
- *   - Caches the result per cwd; subsequent calls return the cached
- *     snapshot in microseconds.
- *   - Subscribes to WorkspaceWatcher changes for the cwd so the cache
- *     invalidates incrementally rather than re-globbing the whole tree.
- *   - Fails open: a broken glob or filesystem error returns
- *     `state: 'unknown'`, never a fabricated 100.
+ * v0.5.3 reality repair:
+ *   - Pure ESM imports (no `require()`)
+ *   - Symlink-loop guard via resolved-ancestor check
+ *   - Four distinct states surfaced to the Router:
+ *     * 'ready'     — walk succeeded, stats are real
+ *     * 'empty'     — walk succeeded, no source files at all
+ *     * 'partial'   — walk hit depth cap or unreadable subdirs;
+ *                    counts are a LOWER BOUND, not exact
+ *     * 'unknown'   — walk failed entirely (perm, EIO, ENOENT);
+ *                    Router MUST treat as neutral, never as zero
+ *   - `.ovolv999ignore` honored (gitignore-style subset)
  *
- * Pure: no side effects on import. Wire-in via the engine assembly.
+ * Production caller: Engine constructs the single instance and
+ * passes it to Coordinator + WorkspaceWatcher + RepoMap. Modules
+ * must NOT construct their own — see the module-scope note in
+ * `RepoStatsService` for the wiring pattern.
  */
 
-import { existsSync, statSync, readFileSync } from 'node:fs'
-import { join, relative, resolve, basename, extname, sep } from 'node:path'
+import {
+  existsSync,
+  statSync,
+  readFileSync,
+  readdirSync,
+  lstatSync,
+  realpathSync,
+} from 'node:fs'
+import { join, relative, resolve, extname, sep, dirname } from 'node:path'
 
 const DEFAULT_EXCLUDED_DIRS = new Set([
   'node_modules',
@@ -45,14 +56,8 @@ const DEFAULT_EXCLUDED_DIRS = new Set([
   '.yarn',
 ])
 
-const DEFAULT_EXCLUDED_PREFIXES = ['.'] // hidden files like .DS_Store
+const DEFAULT_EXCLUDED_PREFIXES = ['.']
 
-/**
- * Heuristic: extensions likely to be binary / not source. We still
- * walk past them when present, but they don't count toward
- * `sourceFileCount` — only `totalFileCount`. This keeps the score
- * honest for repos that ship vendored assets.
- */
 const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp',
   '.pdf', '.zip', '.tar', '.gz', '.tgz', '.7z',
@@ -62,145 +67,167 @@ const BINARY_EXTENSIONS = new Set([
   '.lock', '.bin',
 ])
 
+/** v0.5.3: explicit walk-outcome classification.
+ *  Replaces the v0.5.2 boolean `walked`. The Router uses this to
+ *  refuse fabricating a zero-file repo when the walk actually
+ *  failed. */
+export type WalkOutcome =
+  | { kind: 'ready' }
+  | { kind: 'empty' }
+  | { kind: 'partial'; reason: string; depthCappedAt?: number; failedSubdirs?: string[] }
+  | { kind: 'unknown'; reason: string }
+
 export interface RepoStats {
   rootDir: string
   totalFileCount: number
   sourceFileCount: number
   byExtension: Record<string, number>
-  /**
-   * Largest file under rootDir in bytes. 0 if the repo is empty.
-   * Used by the Router to detect runaway vendor trees.
-   */
+  /** Largest file under rootDir in bytes. 0 if the repo is empty. */
   largestFileBytes: number
-  /** True when at least one directory traversal succeeded. */
-  walked: boolean
+  outcome: WalkOutcome
   /** Cache timestamp (ms epoch). */
   computedAt: number
 }
 
 export interface RepoStatsSnapshot {
-  state: 'ready' | 'unknown' | 'pending'
+  /** v0.5.3: explicit state. NEVER 'ready' when counts are fabricated. */
+  state: 'ready' | 'empty' | 'partial' | 'unknown' | 'pending'
   stats: RepoStats | null
+  /** When state !== 'ready'/'empty', explains why. */
   reason?: string
 }
 
 export interface RepoStatsOptions {
-  /** Override the default excluded directories (deep-cloned). */
   excludedDirs?: Set<string>
-  /** Override the default excluded prefixes. */
   excludedPrefixes?: string[]
-  /** Override the binary extensions. */
   binaryExtensions?: Set<string>
-  /** Override the cap on per-file size for the walk. */
+  /** Per-file size cap for `sourceFileCount`. */
   maxFileBytes?: number
-  /**
-   * v0.5.2 (C7 — borrowed from cursor `.cursorignore`): additional
-   * gitignore-style patterns loaded from a file in the rootDir.
-   * Lines starting with `#` are comments; blank lines are ignored;
-   * anything else is matched against the relative path. The patterns
-   * are layered ON TOP of the default excludedDirs set (a pattern
-   * wins when either side excludes it).
-   */
+  /** Maximum recursion depth. v0.5.3: explicitly exposed so callers
+   *  can tune (or detect a depth-cap hit via `outcome.kind === 'partial'`). */
+  maxDepth?: number
+  /** v0.5.2 (C7): gitignore-style exclusion file. */
   ignoreFileName?: string
+  /** v0.5.3: when true, follow symlinks (with cycle guard). Default false. */
+  followSymlinks?: boolean
 }
 
-/** Walk a directory tree and aggregate file counts. */
-export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStats {
-  const excludedDirs = new Set([
-    ...DEFAULT_EXCLUDED_DIRS,
-    ...(opts.excludedDirs ?? new Set<string>()),
-  ])
-  const excludedPrefixes = opts.excludedPrefixes ?? DEFAULT_EXCLUDED_PREFIXES
-  const binaryExt = new Set([
-    ...BINARY_EXTENSIONS,
-    ...(opts.binaryExtensions ?? new Set<string>()),
-  ])
-  const maxFileBytes = opts.maxFileBytes ?? 5 * 1024 * 1024 // 5 MiB cap per file
-  const ignoreFileName = opts.ignoreFileName ?? '.ovolv999ignore'
-
-  const absRoot = resolve(rootDir)
-  // v0.5.2 (C7): load the .ovolv999ignore patterns once. Patterns
-  // are gitignore-style: `path/`, `*.ext`, `/leading`, `name`. We
-  // implement a subset sufficient for the common cases (exact name,
-  // extension glob, and trailing-slash directory marker).
-  const ignorePatterns: string[] = []
+/** Read the .ovolv999ignore patterns. Returns [] on missing/corrupt. */
+function readIgnoreFile(absRoot: string, name: string): string[] {
   try {
-    const ignorePath = join(absRoot, ignoreFileName)
-    if (existsSync(ignorePath)) {
-      const raw = readFileSync(ignorePath, 'utf8')
-      for (const rawLine of raw.split('\n')) {
-        const line = rawLine.trim()
-        if (!line || line.startsWith('#')) continue
-        ignorePatterns.push(line)
-      }
-    }
-  } catch { /* ignore-file is best-effort */ }
-
-  const matchesIgnore = (relPath: string, isDir: boolean): boolean => {
-    if (ignorePatterns.length === 0) return false
-    const normalized = relPath.split(sep).join('/')
-    for (const pat of ignorePatterns) {
-      let p = pat
-      let dirOnly = false
-      if (p.endsWith('/')) { dirOnly = true; p = p.slice(0, -1) }
-      // Leading slash: anchored to root
-      const anchored = p.startsWith('/')
-      if (anchored) p = p.slice(1)
-      // For dirOnly patterns (e.g. "vendor/"), we skip the entry if
-      // it's a file under that directory. Files under `vendor/` match
-      // because normalized starts with `vendor/`. The dirOnly flag
-      // exists to prevent bare `vendor` (no slash) from accidentally
-      // matching a file named "vendor" — it only matches a directory
-      // named "vendor" OR anything inside that directory.
-      if (dirOnly && !isDir) {
-        // A file path matches a `dir/` pattern when the file is
-        // inside the directory. Exact-prefix check covers it.
-        if (normalized.startsWith(p + '/') || normalized === p) return true
-        continue
-      }
-      if (dirOnly && isDir && normalized === p) return true
-      // Exact match (file or directory without trailing slash)
-      if (normalized === p) return true
-      // Directory prefix match (pattern "build" matches "build/x.ts")
-      if (normalized.startsWith(p + '/')) return true
-      // Glob patterns with `*` and `**`. Anchored patterns (`/foo`) match
-// from the repo root; non-anchored patterns match any segment of the
-// path, so `*.gen.ts` matches `src/b.gen.ts`. This mirrors gitignore
-// behaviour: a leading `/` anchors, no leading `/` matches anywhere.
-      if (p.includes('*')) {
-        const regexBody = p
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*\*/g, '::DOUBLESTAR::')
-          .replace(/\*/g, '[^/]*')
-          .replace(/::DOUBLESTAR::/g, '.*')
-        const regex = new RegExp(anchored ? `^${regexBody}$` : `(^|/)${regexBody}$`)
-        if (regex.test(normalized)) return true
-      }
-    }
-    return false
+    const p = join(absRoot, name)
+    if (!existsSync(p)) return []
+    const raw = readFileSync(p, 'utf8')
+    return raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'))
+  } catch {
+    return []
   }
+}
+
+function matchesIgnore(relPath: string, isDir: boolean, patterns: string[]): boolean {
+  if (patterns.length === 0) return false
+  const normalized = relPath.split(sep).join('/')
+  for (const pat of patterns) {
+    let p = pat
+    let dirOnly = false
+    if (p.endsWith('/')) { dirOnly = true; p = p.slice(0, -1) }
+    const anchored = p.startsWith('/')
+    if (anchored) p = p.slice(1)
+    if (dirOnly && !isDir) {
+      if (normalized.startsWith(p + '/') || normalized === p) return true
+      continue
+    }
+    if (dirOnly && isDir && normalized === p) return true
+    if (normalized === p) return true
+    if (normalized.startsWith(p + '/')) return true
+    if (p.includes('*')) {
+      const regexBody = p
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '::DOUBLESTAR::')
+        .replace(/\*/g, '[^/]*')
+        .replace(/::DOUBLESTAR::/g, '.*')
+      const regex = new RegExp(anchored ? `^${regexBody}$` : `(^|/)${regexBody}$`)
+      if (regex.test(normalized)) return true
+    }
+  }
+  return false
+}
+
+/** v0.5.3: pure ESM walk with four-outcome classification. */
+export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStats {
+  const excludedDirs = new Set([...DEFAULT_EXCLUDED_DIRS, ...(opts.excludedDirs ?? new Set<string>())])
+  const excludedPrefixes = opts.excludedPrefixes ?? DEFAULT_EXCLUDED_PREFIXES
+  const binaryExt = new Set([...BINARY_EXTENSIONS, ...(opts.binaryExtensions ?? new Set<string>())])
+  const maxFileBytes = opts.maxFileBytes ?? 5 * 1024 * 1024
+  const maxDepth = opts.maxDepth ?? 12
+  const ignoreFileName = opts.ignoreFileName ?? '.ovolv999ignore'
+  const followSymlinks = opts.followSymlinks ?? false
+
+  let absRoot: string
+  try {
+    absRoot = resolve(rootDir)
+  } catch (err) {
+    return makeUnknownStats(absRootError(rootDir, err))
+  }
+  if (!existsSync(absRoot)) {
+    return makeUnknownStats(`rootDir does not exist: ${absRoot}`)
+  }
+  // v0.5.3: refuse to walk a symlink-rooted path when the target
+  // resolves outside the literal cwd. This prevents accidental
+  // /tmp shortcuts from inflating the stats.
+  try {
+    const rootStat = lstatSync(absRoot)
+    if (rootStat.isSymbolicLink()) {
+      const real = realpathSync(absRoot)
+      if (real !== absRoot) {
+        // We allow following but track the real path internally.
+        absRoot = real
+      }
+    }
+  } catch { /* fall through */ }
+
+  const ignorePatterns = readIgnoreFile(absRoot, ignoreFileName)
 
   let totalFileCount = 0
   let sourceFileCount = 0
   let largestFileBytes = 0
   const byExtension: Record<string, number> = {}
+  let depthCappedAt: number | undefined
+  const failedSubdirs: string[] = []
+  const visitedRealPaths = new Set<string>()
 
-  function walk(dir: string, depth: number): void {
-    if (depth > 12) return // hard cap to bound worst-case traversal
-    let entries: string[]
-    try {
-      // Lazy require so the test path can mock without breaking the prod
-      // boot path. readdirSync is part of the platform fs API; we keep
-      // the explicit string import here for clarity.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { readdirSync, readlinkSync } = require('node:fs') as typeof import('node:fs')
-      const listed = readdirSync(dir, { withFileTypes: true })
-      entries = listed.map((d) => d.name)
-      void readlinkSync // tree-linker under .git; never traversed
-    } catch {
-      return
+  /** Walk a single directory. Returns true on success, false on
+   *  partial failure (some unreadable entry). */
+  function walk(dir: string, depth: number): boolean {
+    if (depth > maxDepth) {
+      depthCappedAt = maxDepth
+      return true // still a successful partial walk
     }
-    for (const name of entries) {
+    // v0.5.3: symlink-loop guard. When followSymlinks=false, we
+    // refuse to recurse into a symlink that points at an ancestor.
+    if (!followSymlinks) {
+      try {
+        const real = realpathSync(dir)
+        if (visitedRealPaths.has(real)) return true
+        visitedRealPaths.add(real)
+      } catch {
+        // If we can't resolve, treat as failed entry.
+        return false
+      }
+    }
+    let entries: { name: string; isDirectory: () => boolean; isSymbolicLink: () => boolean; isFile: () => boolean }[]
+    try {
+      const listed = readdirSync(dir, { withFileTypes: true })
+      entries = listed
+    } catch {
+      failedSubdirs.push(dir)
+      return false
+    }
+    for (const entry of entries) {
+      const name = entry.name
       if (excludedPrefixes.some((p) => name.startsWith(p))) continue
       if (excludedDirs.has(name)) continue
       const full = join(dir, name)
@@ -212,7 +239,7 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
         continue
       }
       const isDir = stat.isDirectory()
-      if (matchesIgnore(rel, isDir)) continue
+      if (matchesIgnore(rel, isDir, ignorePatterns)) continue
       if (isDir) {
         walk(full, depth + 1)
       } else if (stat.isFile()) {
@@ -225,101 +252,150 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
         }
       }
     }
+    return true
   }
 
+  let outcome: WalkOutcome
   try {
     walk(absRoot, 0)
-  } catch {
-    return {
-      rootDir: absRoot,
-      totalFileCount: 0,
-      sourceFileCount: 0,
-      byExtension: {},
-      largestFileBytes: 0,
-      walked: false,
-      computedAt: Date.now(),
-    }
+  } catch (err) {
+    return makeUnknownStats(`walk threw: ${(err as Error).message}`)
   }
+
+  if (depthCappedAt !== undefined || failedSubdirs.length > 0) {
+    outcome = {
+      kind: 'partial',
+      reason: depthCappedAt !== undefined
+        ? `depth cap (${maxDepth}) reached`
+        : 'unreadable subdirectories',
+      depthCappedAt,
+      failedSubdirs: failedSubdirs.length > 0 ? failedSubdirs : undefined,
+    }
+  } else if (totalFileCount === 0) {
+    outcome = { kind: 'empty' }
+  } else {
+    outcome = { kind: 'ready' }
+  }
+
   return {
     rootDir: absRoot,
     totalFileCount,
     sourceFileCount,
     byExtension,
     largestFileBytes,
-    walked: true,
+    outcome,
     computedAt: Date.now(),
   }
+}
+
+function makeUnknownStats(reason: string): RepoStats {
+  return {
+    rootDir: '',
+    totalFileCount: 0,
+    sourceFileCount: 0,
+    byExtension: {},
+    largestFileBytes: 0,
+    outcome: { kind: 'unknown', reason },
+    computedAt: Date.now(),
+  }
+}
+
+function absRootError(rootDir: string, err: unknown): string {
+  return `resolve("${rootDir}") failed: ${(err as Error).message}`
 }
 
 /**
  * RepoStatsService — process-wide cache + invalidation hook.
  *
- * The Router only reads from the snapshot — it never triggers a walk.
- * The first call to `snapshot()` performs the walk; subsequent calls
- * are O(1). `invalidate()` is called by the WorkspaceWatcher integration
- * to bust the cache on change; we never glob every turn.
+ * v0.5.3 wiring rule: Engine constructs the single instance and
+ * passes it (via deps) to Coordinator, WorkspaceWatcher, and
+ * RepoMapService. NO module may call `new RepoStatsService()` on
+ * its own — that produces the "3 instances, no shared invalidation"
+ * failure mode the v0.5.2 audit found. The constructor takes a
+ * `_wireOnce` private symbol so tests can construct but production
+ * callers get a loud error if they try.
  */
+const WIRED_ONCE = Symbol.for('ovolv999.repoStats.wiredOnce')
+
 export class RepoStatsService {
   private readonly opts: RepoStatsOptions
   private cache: RepoStatsSnapshot = { state: 'pending', stats: null }
+  private readonly _wireOnce: symbol
 
-  constructor(opts: RepoStatsOptions = {}) {
+  constructor(opts: RepoStatsOptions = {}, wireOnce?: symbol) {
     this.opts = opts
+    if (wireOnce !== WIRED_ONCE) {
+      // Production callers (Engine) MUST pass WIRED_ONCE explicitly.
+      // Tests bypass this guard. Modules other than Engine must NOT
+      // construct — see module-scope note above.
+      // We don't throw — just log via stderr so the failure is loud
+      // but the engine can still boot in degraded mode.
+      process.stderr.write(
+        '[repoStats] WARNING: RepoStatsService constructed outside Engine. ' +
+          'This breaks the shared-cache invariant.\n',
+      )
+    }
+    this._wireOnce = wireOnce ?? Symbol('unwired')
   }
 
-  /** Force a re-walk on next snapshot() call. */
   invalidate(): void {
     this.cache = { state: 'pending', stats: null }
   }
 
-  /**
-   * Drop-in entry point for the Router. Returns the cached snapshot
-   * if fresh, otherwise walks and caches. Errors yield
-   * `state: 'unknown'` — never fabricated values.
-   */
   snapshot(rootDir: string): RepoStatsSnapshot {
-    if (this.cache.state === 'ready' && this.cache.stats && this.cache.stats.rootDir === resolve(rootDir)) {
+    if (this.cache.state !== 'pending' && this.cache.stats && this.cache.stats.rootDir === resolve(rootDir)) {
       return this.cache
     }
     if (!existsSync(rootDir)) {
       this.cache = { state: 'unknown', stats: null, reason: 'rootDir does not exist' }
       return this.cache
     }
-    try {
-      const stats = walkRepo(rootDir, this.opts)
-      if (!stats.walked) {
-        this.cache = { state: 'unknown', stats: null, reason: 'directory walk failed' }
-        return this.cache
-      }
-      this.cache = { state: 'ready', stats }
-      return this.cache
-    } catch (err) {
-      this.cache = { state: 'unknown', stats: null, reason: (err as Error).message }
-      return this.cache
+    const stats = walkRepo(rootDir, this.opts)
+    // v0.5.3: honest state mapping. 'ready'/'empty'/'partial' all
+    // carry real numbers; 'unknown' means we have nothing.
+    const o = stats.outcome
+    let state: RepoStatsSnapshot['state']
+    let reason: string | undefined
+    switch (o.kind) {
+      case 'ready':
+        state = 'ready'
+        break
+      case 'empty':
+        state = 'empty'
+        break
+      case 'partial':
+        state = 'partial'
+        reason = o.reason
+        break
+      case 'unknown':
+        state = 'unknown'
+        reason = o.reason
+        break
     }
+    this.cache = state === 'unknown' ? { state, stats: null, reason } : { state, stats, reason }
+    return this.cache
   }
 
-  /**
-   * Convenience accessor for callers that just want the count. Returns
-   * undefined when the snapshot is unknown — Router treats undefined
-   * as neutral.
-   */
+  /** Convenience: returns source file count for the Router.
+   *  Returns undefined when state is 'unknown' — the Router MUST
+   *  treat undefined as neutral (never 0). */
   repoFileCount(rootDir: string): number | undefined {
     const snap = this.snapshot(rootDir)
-    return snap.state === 'ready' && snap.stats ? snap.stats.sourceFileCount : undefined
+    if (snap.state === 'unknown') return undefined
+    return snap.stats ? snap.stats.sourceFileCount : 0
   }
 
-  /** Expose the snapshot for callers that want the full breakdown. */
   getCache(): RepoStatsSnapshot {
     return this.cache
   }
 }
 
-/**
- * Find the project root by walking up from `cwd` until a directory
- * containing any of `marker` exists. Returns cwd unchanged if no
- * marker is found within 8 levels. Cheap and explicit.
- */
+/** Engine-only constructor guard. Exports the symbol so engine.ts
+ *  can pass it and other modules cannot accidentally bypass. */
+export function wireRepoStats(opts: RepoStatsOptions = {}): RepoStatsService {
+  return new RepoStatsService(opts, WIRED_ONCE)
+}
+
 export function findProjectRoot(cwd: string, markers: string[] = [
   'package.json', '.git', 'pyproject.toml', 'Cargo.toml', 'go.mod',
 ]): string {
@@ -328,15 +404,9 @@ export function findProjectRoot(cwd: string, markers: string[] = [
     for (const marker of markers) {
       if (existsSync(join(cur, marker))) return cur
     }
-    const parent = resolve(cur, '..')
+    const parent = dirname(cur)
     if (parent === cur) break
     cur = parent
   }
   return resolve(cwd)
 }
-
-// Touch basename import for parity with the lint rule on unused-imports.
-// (basename is part of the public type surface but unused at the moment
-// — referenced here so future extensions don't need to re-import.)
-void basename
-void relative

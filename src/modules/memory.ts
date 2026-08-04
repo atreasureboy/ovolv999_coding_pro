@@ -80,42 +80,51 @@ Higher-priority sources override lower ones on conflict.`,
         : 0.7
       const source = str(input.source, 'agent_inferred') as 'user_stated' | 'agent_inferred' | 'tool_observed'
 
-      const entry = semantic.write({
+      // v0.5.3 (P0.3): the gate is the single primary write path.
+      // We construct a MemoryRecordInput, then call LongTermMemory.record()
+      // BEFORE touching the SemanticMemory adapter. If the gate throws,
+      // we return isError:true and DO NOT write to any adapter.
+      const memoryInput = {
+        kind: 'semantic' as const,
         content: content.slice(0, 500),
-        tags,
-        source,
+        repo: (input.__repo as string) ?? 'memory',
+        origin: `memory_write:${source}`,
+        sourceRunId: (input.__sourceRunId as string) ?? 'unknown',
         confidence,
-        timestamp: new Date().toISOString(),
-      })
-
-      // v0.5.2 (Stage 3): pass the write through LongTermMemory's R1
-      // verification + R5 conflict gates. Best-effort: if the gate
-      // throws (e.g. R1 verification required and we lack a verified
-      // flag), the SemanticMemory write stays in place; we surface a
-      // warning to the model so it knows the audit gate did not pass.
+        // R1: user_stated preferences skip R1 verification (humans
+        // override commit-binding for prefs); everything else
+        // requires the engine to have set verified=true via a
+        // pre-validated channel. The memory_write tool does NOT
+        // auto-verify.
+        verified: false,
+        tags,
+        expiresAt: undefined,
+      }
+      let gateResult
       try {
-        ltm().record({
-          kind: 'semantic',
-          content: content.slice(0, 500),
-          repo: 'memory',
-          origin: `memory_write:${source}`,
-          sourceRunId: 'memory-module',
-          confidence,
-          verified: source === 'user_stated',
-          tags,
-          expiresAt: undefined,
-        })
+        gateResult = ltm().record(memoryInput)
       } catch (gateErr) {
         const reason = (gateErr as Error).message
+        // Gate failure → no adapter write, no isError:false lie.
         return Promise.resolve({
-          content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence}). ` +
-            `Note: long-term audit gate skipped — ${reason}`,
-          isError: false,
+          content: `Memory gate rejected: ${reason}`,
+          isError: true,
         })
       }
 
+      // Gate passed — SemanticMemory is now a DERIVED READ ADAPTER,
+      // not a parallel store. The LongTermMemory record is the
+      // source of truth.
+      const entry = semantic.write({
+        content: gateResult.content,
+        tags,
+        source,
+        confidence,
+        timestamp: gateResult.createdAt,
+      })
+
       return Promise.resolve({
-        content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence})`,
+        content: `Stored in memory (id: ${entry.id}, source: ${source}, confidence: ${confidence}, audit_id: ${gateResult.id})`,
         isError: false,
       })
     },
@@ -320,7 +329,11 @@ export class MemoryModule implements AgentModule {
    * compatibility.
    */
   private longTerm = new LongTermMemory({
-    allowCodeWithoutCommit: true,
+    // v0.5.3 (P0.3): production path MUST enforce R3 (commit
+    // binding for code memories). user_stated preferences that
+    // mention code keywords bypass via the gate's `referencesCode`
+    // check, not via this knob.
+    allowCodeWithoutCommit: false,
   })
 
   /** Override the per-process LongTermMemory instance (tests). */

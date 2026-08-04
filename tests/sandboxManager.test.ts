@@ -21,13 +21,30 @@ describe('SandboxManager (C9)', () => {
   it('select() returns a usable backend or "none" with a reason', () => {
     const mgr = new SandboxManager()
     const result = mgr.select()
-    expect(['none', 'macos-seatbelt', 'linux-bubblewrap', 'linux-landlock', 'windows-jobobject'])
+    expect(['none', 'macos-seatbelt', 'linux-bubblewrap'])
       .toContain(result.selected)
     expect(Array.isArray(result.attempted)).toBe(true)
     if (result.selected === 'none') {
       // When no backend is available, the manager MUST surface a
       // fallbackReason — otherwise the caller can't warn the user.
       expect(typeof result.fallbackReason).toBe('string')
+    }
+  })
+
+  it('v0.5.3 (P0.5): landlock + jobobject are reported unavailable with a reason', () => {
+    const mgr = new SandboxManager()
+    const status = mgr.listAvailable()
+    const landlock = status.find((s) => s.backend === 'linux-landlock')
+    const jobobj = status.find((s) => s.backend === 'windows-jobobject')
+    // On non-Linux hosts the landlock entry is absent entirely;
+    // on Linux it must report unavailable with a reason.
+    if (landlock) {
+      expect(landlock.available).toBe(false)
+      expect(landlock.reason).toMatch(/not shipped/)
+    }
+    if (jobobj) {
+      expect(jobobj.available).toBe(false)
+      expect(jobobj.reason).toMatch(/not shipped/)
     }
   })
 

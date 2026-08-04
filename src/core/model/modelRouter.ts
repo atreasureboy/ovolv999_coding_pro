@@ -161,6 +161,8 @@ export type RouterEventListener = (event: {
 
 const DEFAULT_LONG_CONTEXT_THRESHOLD = 0.8
 const DEFAULT_FAILURE_ESCALATION = 2
+const CIRCUIT_OPEN_THRESHOLD = 5
+const CIRCUIT_HALF_OPEN_COOLDOWN_MS = 30_000
 
 export class ModelRouter {
   private profiles: ModelProfile[]
@@ -186,6 +188,13 @@ export class ModelRouter {
   private totalRoutingFailures = 0
   private totalFallbacksApplied = 0
   private totalRetryAttempts = 0
+  /** v0.5.3 (P1.8): per-profile circuit state. The Coordinator's
+   *  global circuit penalizes ALL profiles for one failure; this
+   *  per-profile circuit isolates the failing profile so healthy
+   *  ones remain selectable. */
+  private readonly circuitStates = new Map<string, 'closed' | 'open' | 'half-open'>()
+  private readonly circuitOpenedAt = new Map<string, number>()
+  private readonly consecutiveProfileFailures = new Map<string, number>()
 
   constructor(profiles: ModelProfile[], routing: RoutingConfig = { enabled: true }) {
     this.profiles = profiles.length > 0 ? profiles : []
@@ -346,6 +355,43 @@ export class ModelRouter {
     if (!ok) h.failures++
     h.ewmaLatency = h.ewmaLatency === 0 ? latencyMs : 0.7 * h.ewmaLatency + 0.3 * latencyMs
     this.health.set(profileId, h)
+    // v0.5.3 (P1.8): per-profile circuit tracking. A successful call
+    // closes the per-profile circuit; a failed call increments the
+    // consecutive-failure counter and opens the circuit at the
+    // threshold. Healthy profiles are unaffected by another
+    // profile's failures — that's the whole point of moving from a
+    // global circuit to per-profile.
+    if (ok) {
+      this.consecutiveProfileFailures.set(profileId, 0)
+      this.circuitStates.set(profileId, 'closed')
+      return
+    }
+    const next = (this.consecutiveProfileFailures.get(profileId) ?? 0) + 1
+    this.consecutiveProfileFailures.set(profileId, next)
+    if (next >= CIRCUIT_OPEN_THRESHOLD) {
+      this.circuitStates.set(profileId, 'open')
+      this.circuitOpenedAt.set(profileId, Date.now())
+    }
+  }
+
+  /** v0.5.3 (P1.8): per-profile circuit state accessor. */
+  getProfileCircuitState(profileId: string): 'closed' | 'open' | 'half-open' {
+    const state = this.circuitStates.get(profileId) ?? 'closed'
+    if (state === 'open') {
+      const openedAt = this.circuitOpenedAt.get(profileId) ?? 0
+      if (Date.now() - openedAt >= CIRCUIT_HALF_OPEN_COOLDOWN_MS) {
+        this.circuitStates.set(profileId, 'half-open')
+        return 'half-open'
+      }
+    }
+    return state
+  }
+
+  /** v0.5.3 (P1.8): true iff a profile is callable right now.
+   *  When circuit is half-open we allow the probe; when open we
+   *  reject so the Router selects the next healthy profile. */
+  isProfileAvailable(profileId: string): boolean {
+    return this.getProfileCircuitState(profileId) !== 'open'
   }
 
   /**
@@ -359,7 +405,18 @@ export class ModelRouter {
    * the side-effect of switching the model is skipped.
    */
   route(input: RoutingInput): RoutingDecision {
-    const available = this.profiles.filter((p) => p.available)
+    // v0.5.3 (P1.8): per-profile circuit filter. Profiles whose
+    // circuit is OPEN are excluded from selection. The half-open
+    // state allows exactly one probe call so the Router can detect
+    // recovery.
+    const available = this.profiles.filter(
+      (p) => p.available && this.isProfileAvailable(p.id),
+    )
+    if (available.length === 0) {
+      // All profiles are in open circuit — fall back to whatever
+      // the Coordinator picked (still routed, but Router can't
+      // choose). The caller should surface this in /why.
+    }
     const reasonCodes: string[] = []
 
     // 1) Manual override always wins (adaptive runtime contract §四.1).

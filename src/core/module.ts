@@ -16,6 +16,7 @@ import type OpenAI from 'openai'
 import type { Tool, ToolContext, ToolResult, OpenAIMessage, TurnResult, EngineConfig } from './types.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { EventLog } from './eventLog.js'
+import type { RepoStatsService } from './repoStats.js'
 
 /** Context passed to module factories — provides shared dependencies */
 export interface ModuleContext {
@@ -34,6 +35,15 @@ export interface ModuleBootContext {
   config: EngineConfig
   /** The user's message for this run — used for relevance-based memory retrieval */
   userMessage?: string
+  /**
+   * v0.5.3 (P0.2): shared services supplied by the Engine. Modules
+   * MUST read these from the boot context, NOT construct their
+   * own. The Engine owns one instance per service and the WorkspaceWatcher
+   * uses it to invalidate the cache that the Router reads from.
+   */
+  sharedServices?: {
+    repoStats?: RepoStatsService
+  }
 }
 
 /** Return value of module.boot() — what the module injects into the run */

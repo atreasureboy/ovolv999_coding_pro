@@ -30,6 +30,7 @@ export type MemoryKind =
   | 'episodic'    // event ("on 2026-01-01, npm test failed")
   | 'procedural'  // recipe ("to run tests: vitest run")
   | 'reflection'  // derived from self-reflection (must mark source)
+  | 'failure'     // v0.5.3 (P0.4): a failed run's lesson — verified=false
   | 'artifact'    // metadata about a generated artifact
 
 export interface MemoryRecord {
@@ -274,15 +275,24 @@ export class LongTermMemory {
       )
     }
 
-    // R1 — Verification gate.
-    if (!input.verified && !this.allowUnverified) {
+    // R1 — Verification gate. `failure` entries are audit records of
+    // a failed run — they MUST be writable even without a verified
+    // flag because the run's own failure is exactly what makes
+    // verification impossible. The conflict-aware merge (R5) still
+    // prevents a failure entry from clobbering a verified success
+    // entry.
+    if (!input.verified && !this.allowUnverified && input.kind !== 'failure') {
       throw new MemoryVerificationError(input)
     }
 
-    // R3 — Commit binding for code references.
+    // R3 — Commit binding for code references. `failure` entries
+    // never require a commit — the run itself failed, so we can't
+    // bind to a known-good state. The audit trail records the
+    // failure without committing it as a project fact.
     if (
       !this.allowCodeWithoutCommit &&
       !input.commit &&
+      input.kind !== 'failure' &&
       (input.kind === 'semantic' || input.kind === 'procedural') &&
       referencesCode(input.content)
     ) {

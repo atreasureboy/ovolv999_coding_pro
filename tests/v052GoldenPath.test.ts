@@ -1,12 +1,9 @@
 /**
  * v0.5.2 Reality Closure — Golden Path tests.
  *
- * These tests verify USER-VISIBLE behavior, not just call counts.
- * Each scenario asserts both the outcome and the state changes a real
- * user would observe. We exercise the most important v0.5.2 wiring
- * changes without spinning up the full Coordinator (which requires
- * the OpenAICompatibleAdapter): the RepoStats walk, TaskGraph impact,
- * ContextManager budget snapshot, and RuntimeErrorInfo classification.
+ * v0.5.3 (P1.9): RuntimeErrorInfo scenario removed — the abstract
+ * was deleted because no production caller consumed it. Provider
+ * error classification lives in ModelGateway.isRetryableProviderError.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync } from 'fs'
@@ -16,11 +13,6 @@ import { join } from 'path'
 import { RepoStatsService } from '../src/core/repoStats.js'
 import { TaskGraph } from '../src/core/runtime/taskGraph.js'
 import { ContextManager } from '../src/core/context/contextManager.js'
-import {
-  categorizeProviderError,
-  isProviderRetryable,
-  makeRuntimeError,
-} from '../src/core/runtimeError.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../src/core/model/routingSignalCollector.js'
 import { silentRenderer } from './helpers/renderer.js'
 
@@ -69,28 +61,6 @@ describe('Golden Path B — code modification writes the file', () => {
     }
     await writeTool.execute({ file_path: target, content: 'hello' })
     expect(readFileSync(target, 'utf8')).toBe('hello')
-  })
-})
-
-// ── Scenario C: provider fallback — counters increment on retryable errors ─
-
-describe('Golden Path C — provider failure classification', () => {
-  it('rate-limit errors are retryable, 401 errors are not', () => {
-    expect(isProviderRetryable({ status: 429, message: 'Too Many Requests' })).toBe(true)
-    expect(isProviderRetryable({ status: 401, message: 'Invalid API key' })).toBe(false)
-    expect(isProviderRetryable({ code: 'ETIMEDOUT', message: 'timeout' })).toBe(true)
-  })
-
-  it('runtime error info carries a stable code + subsystem', () => {
-    const info = makeRuntimeError('provider.rate_limited', 'provider', '429 Too Many Requests', {
-      retryable: true,
-      phase: 'llm_call',
-      cause: 'upstream',
-    })
-    expect(info.code).toBe('provider.rate_limited')
-    expect(info.subsystem).toBe('provider')
-    expect(info.retryable).toBe(true)
-    expect(info.phase).toBe('llm_call')
   })
 })
 
@@ -268,18 +238,6 @@ describe('Golden Path G — RoutingSignals pass through extended health', () => 
   })
 })
 
-// ── Scenario H: RuntimeErrorInfo classification ───────────────────────────
-
-describe('Golden Path H — RuntimeErrorInfo classifies all known codes', () => {
-  it('classifies provider errors without string-prefix sniffing', () => {
-    expect(categorizeProviderError({ status: 401, message: 'Invalid API key' })).toBe('provider.unauthorized')
-    expect(categorizeProviderError({ status: 403, message: 'Forbidden' })).toBe('provider.forbidden')
-    expect(categorizeProviderError({ status: 404, message: 'model not found' })).toBe('provider.model_not_found')
-    expect(categorizeProviderError({ status: 429, message: 'Too Many Requests' })).toBe('provider.rate_limited')
-    expect(categorizeProviderError({ status: 503, message: 'service down' })).toBe('provider.server_error')
-    expect(categorizeProviderError({ code: 'ETIMEDOUT', message: 'request timed out' })).toBe('provider.timeout')
-    expect(categorizeProviderError({ code: 'ECONNRESET', message: 'reset' })).toBe('provider.connection_reset')
-    expect(categorizeProviderError({ code: 'ENOTFOUND', message: 'dns' })).toBe('provider.dns_failure')
-    expect(categorizeProviderError({})).toBe('unknown')
-  })
-})
+// ── Scenario H: REMOVED in v0.5.3 (P1.9). RuntimeErrorInfo was
+//    deleted because no production caller consumed it. Provider
+//    error classification lives in ModelGateway.isRetryableProviderError.

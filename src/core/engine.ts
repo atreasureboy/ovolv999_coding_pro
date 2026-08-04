@@ -62,8 +62,7 @@ import {
 } from './runtime/runScopedContext.js'
 import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
-import { RepoStatsService } from './repoStats.js'
-import { RepoMapService } from './repoMap.js'
+import { RepoStatsService, wireRepoStats } from './repoStats.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
 import { ToolScheduler } from './toolRuntime/toolScheduler.js'
@@ -190,13 +189,6 @@ export class ExecutionEngine {
    */
   private readonly repoStats: RepoStatsService
   /**
-   * v0.5.2 (C1 — borrowed from aider/repomap.py): token-budgeted
-   * repo map. The system-prompt builder reads `renderForPrompt()` to
-   * inject a top-files-by-symbol-density block when code-context
-   * features are enabled.
-   */
-  private readonly repoMap: RepoMapService
-  /**
    * Phase 4: progress + stall monitor. ToolExecutor feeds every tool
    * result here; the coordinator queries detectStall() each iteration.
    * Drives /progress and the soft/hard-stall interventions.
@@ -299,13 +291,14 @@ export class ExecutionEngine {
     // Phase 3/4: progress monitor + task graph must exist BEFORE
     // createTools (the TaskPlan tool receives the graph handle).
     this.modelRouter = buildRouter(this.config)
-    // v0.5.2 (Stage 2.2): cache repository statistics for the Router.
-    // The walk runs lazily on first snapshot(); the WorkspaceWatcher
-    // module calls `invalidate()` whenever the cwd mutates.
-    this.repoStats = new RepoStatsService()
-    // v0.5.2 (C1): wire the repo map; share the same RepoStatsService
-    // so the cache key uses the file count distribution.
-    this.repoMap = new RepoMapService({ repoStats: this.repoStats })
+    // v0.5.3 (P0.2): Engine is the SOLE constructor of RepoStatsService.
+    // WorkspaceWatcher, Coordinator, RepoMap all receive the same
+    // instance via deps so `invalidate()` from the watcher is visible
+    // to the Router immediately. Use the wireRepoStats() guard so
+    // any accidental duplicate construction is logged loudly.
+    this.repoStats = wireRepoStats()
+    // v0.5.3: RepoMapService moved to experimental/ — Engine no
+    // longer constructs it because nothing reads from `this.repoMap`.
     // v0.3.1 (runtime truth contract §三.1.2): resolve ProviderRuntimeBindings for
     // every profile so /models + /route can report the actual
     // transport, baseURL, and capabilities tied to the active engine.

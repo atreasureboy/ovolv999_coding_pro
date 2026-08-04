@@ -384,6 +384,9 @@ export class RuntimeCoordinator {
           excludedTools: profileSpec.excludedTools,
           taskKind: taskIntent.kind,
         },
+        // v0.5.3 (P0.2): propagate the shared RepoStatsService so
+        // WorkspaceWatcher can invalidate the Router's cache.
+        repoStats: this.deps.repoStats,
       })
     } catch (bootErr) {
       const msg = (bootErr as Error).message || String(bootErr)
@@ -414,6 +417,23 @@ export class RuntimeCoordinator {
         signal: turnAbortController.signal,
         model: config.model,
       })
+    }
+
+    // v0.5.3 (P1.6): publish a fresh budget snapshot BEFORE signal
+    // collection so the Router sees the current turn's tokens, not
+    // the previous turn's residue. We use the same estimation
+    // functions evaluateBudget() uses so the numbers cannot drift.
+    this.deps.contextManager.setActiveRunId(runId ?? null)
+    try {
+      await this.deps.contextManager.evaluateBudget({
+        messages,
+        toolDefs,
+        abortSignal: turnAbortController.signal,
+      })
+    } catch {
+      // evaluateBudget throws only on cancellation; on early-boot
+      // errors we proceed with whatever snapshot the ContextManager
+      // holds (still initialized=false means Router treats as unknown).
     }
 
     // ── State machine driver ──

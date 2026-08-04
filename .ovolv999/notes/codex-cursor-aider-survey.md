@@ -174,27 +174,41 @@ These three:
 - Aider "Split Repo" sub-agent mode dispatch
 - Codex cross-session persistent memory (feature-request only)
 
-## Status (v0.5.2 Stage 8 — comprehensive borrowing)
+## Status (v0.5.3 — Reality Closure)
 
 | ID | Capability | Status | File |
 |---|---|---|---|
-| C1 | RepoMapService | ✅ Done | `src/core/repoMap.ts` |
-| C2 | execpolicy DSL extension | ✅ Done | `src/core/permissionRules.ts` |
-| C3 | RunScopedRuntimeContext.inheritConfig | ✅ Done | `src/core/runtime/runScopedContext.ts` |
-| C4 | Aider planner-vs-executor split | ✅ Done (v0.5.0) + C13 helper | `src/core/architectMode.ts` |
-| C5 | Cursor 90% auto-compact threshold | ✅ Done (CLAUDE.md 85%) | `src/core/compact.ts` |
-| C6 | Memories auto-extract | ✅ Done | `src/modules/reflection.ts` |
-| C7 | .ovolv999ignore | ✅ Done | `src/core/repoStats.ts` |
-| C8 | Compact retry + fallback | ✅ Done | `src/core/compact.ts` |
-| C9 | Landlock/seatbelt/bwrap manager | ✅ Done (detection only; syscall emitter deferred) | `src/core/sandbox.ts` |
-| C10 | EditFormat contract | ✅ Done | `src/core/editFormat.ts` |
-| C11 | .mdc rule loader | ✅ Done | `src/core/mdcRules.ts` |
-| C12 | @-symbol picker | ✅ Done | `src/tools/atSymbolPicker.ts` |
-| C13 | Architect/editor mode | ✅ Done | `src/core/architectMode.ts` |
+| C1 | RepoMapService | experimental | `experimental/repoMap.ts` |
+| C2 | execpolicy DSL extension | implemented (no Bash hook) | `src/core/permissionRules.ts` |
+| C3 | RunScopedRuntimeContext.inheritConfig | wired | `src/core/runtime/runScopedContext.ts` |
+| C4 | Aider planner-vs-executor split | wired (v0.5.0 multi-agent) | `src/core/types.ts` |
+| C5 | Cursor 90% auto-compact threshold | wired (CLAUDE.md 85%) | `src/core/compact.ts` |
+| C6 | Memories auto-extract | wired | `src/modules/reflection.ts` |
+| C7 | .ovolv999ignore | wired | `src/core/repoStats.ts` |
+| C8 | Compact retry + fallback | implemented (no ContextManager caller) | `src/core/compact.ts` |
+| C9 | Landlock/seatbelt/bwrap manager | wired (bwrap + seatbelt only) | `src/core/sandbox.ts` |
+| C10 | EditFormat contract | experimental | `experimental/editFormat.ts` |
+| C11 | .mdc rule loader | experimental | `experimental/mdcRules.ts` |
+| C12 | @-symbol picker | experimental | `experimental/atSymbolPicker.ts` |
+| C13 | Architect/editor mode | experimental | `experimental/architectMode.ts` |
 
-All thirteen items from the original survey are wired. The
-remaining gaps (Codex landlock syscall emitter, Cursor @docs,
-Aider Split-Repo sub-agent mode) require capabilities ovolv999
-explicitly does not want — native syscalls break the zero-deps
-contract; embedding-based docs break the zero-deps contract;
-Split-Repo sub-agents were not verified in the public tree.
+### Status vocabulary (v0.5.3)
+
+* **wired** — in the production main chain (Engine → Boot → Coordinator → state)
+* **implemented** — code exists with tests, but no production caller
+* **experimental** — moved to `experimental/`, no production caller,
+  excluded from `pnpm check`
+* **unsupported** — capability does not exist; declared as a known gap
+
+### What was actually wired (post v0.5.3)
+
+C2 + C3 + C5 + C6 + C7 + C9 — these hit real production callers. C4
+was already wired in v0.5.0.
+
+### What is experimental / not wired
+
+C1 + C8 + C10 + C11 + C12 + C13 — code is in `experimental/`, has
+unit tests, but no production caller consumes it. These are NOT
+"wired" and the v0.5.2 "all thirteen items wired" claim is
+**incorrect**. Until each module is hooked into the Engine /
+Coordinator / ToolRegistry, they remain experimental.

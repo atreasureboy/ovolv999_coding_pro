@@ -48,11 +48,38 @@ export class WorkspaceWatcherModule implements AgentModule {
   private lastChanges: WorkspaceChange[] = []
   private lastChangeAt = 0
   private injectedForRun = false
-  /** v0.5.2 (Stage 2.2): shared service instance so the cache
-   *  invalidation is observable by the Engine's coordinator. */
-  private readonly repoStats = new RepoStatsService()
+  /** v0.5.3 (P0.2): shared RepoStatsService instance. Engine is
+   *  REQUIRED to pass this in via the constructor; if omitted the
+   *  module logs a warning AND uses a degraded local instance so
+   *  the cache invalidation contract is visible to callers. */
+  private readonly repoStats: RepoStatsService
+
+  constructor(repoStats?: RepoStatsService) {
+    if (repoStats) {
+      this.repoStats = repoStats
+    } else {
+      // Degraded mode — Engine forgot to inject. Module still works
+      // but the Router never sees invalidation events.
+      process.stderr.write(
+        '[workspaceWatcher] WARNING: no RepoStatsService injected; ' +
+          'cache invalidation will not reach the Router.\n',
+      )
+      this.repoStats = new RepoStatsService()
+    }
+  }
 
   async boot(ctx: ModuleBootContext): Promise<ModuleBootResult> {
+    // v0.5.3 (P0.2): pull the shared RepoStatsService from the boot
+    // context. Engine is the SOLE constructor; if the field is missing
+    // the constructor's warning has already been emitted.
+    const shared = ctx.sharedServices?.repoStats
+    if (shared && shared !== this.repoStats) {
+      // The constructor's `this.repoStats` may have been a degraded
+      // private instance; replace it with the shared one now that
+      // the Engine has had a chance to inject it.
+      ;(this as unknown as { repoStats: RepoStatsService }).repoStats = shared
+    }
+
     const roots = collectWatchRoots(ctx.cwd)
     this.watcher = new WorkspaceWatcher({
       rootDir: roots[0],
@@ -141,5 +168,14 @@ export class WorkspaceWatcherModule implements AgentModule {
       w.stop()
     }
     this.attachedWatchers = []
+  }
+
+  /** v0.5.3 (P0.2): test seams. */
+  getRepoStats(): RepoStatsService {
+    return this.repoStats
+  }
+
+  simulateChangeForTest(change: WorkspaceChange): void {
+    this.recordChange(change)
   }
 }

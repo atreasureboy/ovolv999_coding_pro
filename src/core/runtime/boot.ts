@@ -25,6 +25,7 @@ import type {
 import type { ModuleBootContext } from '../module.js'
 import type { ModuleManager } from '../moduleRuntime/moduleManager.js'
 import type { ContextManager } from '../context/contextManager.js'
+import type { RepoStatsService } from '../repoStats.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolRegistry } from '../toolRuntime/toolRegistry.js'
 import type { SharedRuntimeState } from './sharedState.js'
@@ -54,6 +55,9 @@ export interface BootParams {
   fileHistory: FileHistory | null
   eventLog?: EventLog
   eventEmitter?: RunEventEmitter
+  /** v0.5.3 (P0.2): shared services from Engine. Modules MUST
+   *  receive these via ModuleBootContext.sharedServices. */
+  repoStats?: RepoStatsService
   /**
    * v0.4.1 WS4 (ExecutionProfile): the resolved per-turn profile.
    * `modules` gates ModuleManager.boot({only}); `excludedTools` hides
@@ -93,6 +97,12 @@ export async function boot(params: BootParams): Promise<BootResult> {
     sessionDir: config.sessionDir,
     config,
     userMessage,
+    // v0.5.3 (P0.2): inject shared services so modules that need
+    // them (WorkspaceWatcher in particular) read the SAME instance
+    // the Router uses.
+    sharedServices: {
+      repoStats: (params as unknown as { repoStats?: RepoStatsService }).repoStats,
+    },
   }
   const bootOutput = await moduleManager.boot(bootCtx, executionProfile ? { only: executionProfile.modules } : {})
   const { systemPromptSections: moduleSections, toolContextPatch, tools: moduleTools } = bootOutput
