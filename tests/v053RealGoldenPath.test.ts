@@ -155,60 +155,12 @@ describe('v0.5.3 Real Golden Paths — strong assertions', () => {
   }, TIMEOUT)
 
   // ── Scenario C: provider fallback ────────────────────────────────────
-  it('C: 503 on call 1 → fallback to a DIFFERENT model on call 2', async () => {
-    // Configure TWO profiles: one for the failing model, one for the
-    // fallback. Without two profiles the engine can't fall back —
-    // it can only retry the same model. This is exactly the
-    // Profile A → Profile B distinction we need to verify.
-    const run = await runCli(['--pipe', '--format', 'json'], {
-      stdin: 'echo "hello fallback"',
-      cwd: tmpProj,
-      env: isolatedEnv(tmpHome, {
-        OPENAI_API_KEY: 'test-key',
-        OPENAI_BASE_URL: scenarioC.baseURL,
-        OVOGO_PROVIDER: 'openai-compatible',
-        // The fixture serves the same single model id for every
-        // call. We therefore can't see a model change at the wire
-        // unless the engine ALSO has a fallback profile pointing
-        // at a different model name. We use OVOGO_MODEL_OVERRIDES
-        // (if the CLI supports it) — fall back to plain
-        // `--model` on call 1 and let the engine's fallback
-        // machinery pick the second profile.
-      }),
-      timeoutMs: TIMEOUT,
-    })
-
-    expect(run.timedOut).toBe(false)
-
-    // (1) Fixture received at least 2 calls (the 503 + at least one
-    //     successful retry).
-    expect(scenarioC.requests.length).toBeGreaterThanOrEqual(2)
-
-    // (2) The 503 was served on the FIRST call, and the FIRST call
-    //     requested a model. The error body in the fixture includes
-    //     that model name. We can't easily read it here (we only
-    //     see request metadata) — so we assert at the fixture level:
-    //     the FIRST captured request must equal the model that was
-    //     requested initially.
-    const firstReq = scenarioC.requests[0]
-    expect(firstReq.model).toBeTruthy()
-
-    // (3) At least one subsequent call used the same OR a different
-    //     model. With a single configured model this is necessarily
-    //     the same. The router's behavior is meaningful only when
-    //     the engine has multiple profiles to choose from. So we
-    //     constrain the assertion to: success implies at least
-    //     one MORE call followed the 503, period.
-    expect(scenarioC.requests.length).toBeGreaterThanOrEqual(2)
-
-    // (4) Either the fallback succeeded (exit 0) OR the engine
-    //     failed the turn after exhausting retries (exit 1 or 2).
-    //     We don't pin this in CI — the fixture's second call
-    //     succeeds, but if the engine's retry policy consumes
-    //     too many attempts before reaching fallback, the gate is
-    //     still load-bearing. For now assert it's NOT a timeout.
-    expect([0, 1, 2]).toContain(run.code ?? -1)
-  }, TIMEOUT)
+  // v0.5.3 Closure (P3): the previous weak Scenario C was a CLI-only
+  // smoke that proved `requests.length >= 2` without verifying the
+  // model change, the side-effect tools, or the completion status.
+  // The real Profile A → B test now lives in
+  // tests/v053RealGoldenPath.profileFallback.test.ts. The CLI-only
+  // variant is removed per spec.
 })
 
 // ── Scenario C (real two-profile fallback) ────────────────────────────────

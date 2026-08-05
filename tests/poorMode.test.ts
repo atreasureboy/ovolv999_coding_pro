@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { CriticModule } from '../src/modules/critic.js'
-import { ReflectionModule, consolidateSession } from '../src/modules/reflection.js'
+// ReflectionModule moved to experimental/ — v0.5.3 Closure P9.
 import { SemanticMemory } from '../src/core/semanticMemory.js'
 import { EpisodicMemory } from '../src/core/episodicMemory.js'
 import { loadSettings, saveProjectSettings } from '../src/config/settings.js'
@@ -89,110 +89,6 @@ describe('CriticModule — poor mode guard', () => {
       abortSignal: new AbortController().signal,
     })
     expect(calls).toHaveLength(0)
-  })
-})
-
-// ── T3: ReflectionModule with poor.enabled=true skips LLM call ──────────────
-
-describe('ReflectionModule — poor mode guard', () => {
-  let tmpDir: string
-  let semantic: SemanticMemory
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'ovogo-poor-'))
-    mkdirSync(join(tmpDir, 'memory'), { recursive: true })
-    semantic = new SemanticMemory(tmpDir)
-  })
-
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true })
-  })
-
-  it('T3: onComplete does not call client.create when poor.enabled=true', async () => {
-    const { client, calls } = makeMockClient()
-    const mod = new ReflectionModule(client, 'test-model', semantic, { poor: { enabled: true } })
-    const messages = makeMessages(20)
-    await mod.onComplete({
-      cwd: tmpDir,
-      turnResult: { stopped: true, reason: 'stop_sequence', output: 'done' },
-      messages,
-    })
-    expect(calls).toHaveLength(0)
-    expect(semantic.readAll()).toHaveLength(0)
-  })
-
-  it('onComplete still calls client when poor disabled (regression)', async () => {
-    const { client, calls } = makeMockClient()
-    const mod = new ReflectionModule(client, 'test-model', semantic, { poor: { enabled: false } })
-    const messages = makeMessages(20)
-    await mod.onComplete({
-      cwd: tmpDir,
-      turnResult: { stopped: true, reason: 'stop_sequence', output: 'done' },
-      messages: messages,
-    })
-    expect(calls.length).toBeGreaterThanOrEqual(1)
-  })
-})
-
-// ── T4: consolidateSession with poor.enabled=true skips LLM call ────────────
-
-describe('consolidateSession — poor mode guard', () => {
-  let tmpDir: string
-  let semantic: SemanticMemory
-  let episodic: EpisodicMemory
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'ovogo-consol-'))
-    mkdirSync(join(tmpDir, 'memory'), { recursive: true })
-    semantic = new SemanticMemory(tmpDir)
-    episodic = new EpisodicMemory(tmpDir)
-    for (let i = 0; i < 10; i++) {
-      episodic.write({
-        turn: i,
-        toolName: 'Bash',
-        inputSummary: 'cmd ' + i,
-        resultSummary: 'ok',
-        outcome: 'success',
-        timestamp: '',
-      })
-    }
-  })
-
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true })
-  })
-
-  it('T4: returns early and does not call client when poor.enabled=true', async () => {
-    const { client, calls } = makeMockClient()
-    const { LongTermMemory } = await import('../src/core/longTermMemory.js')
-    const result = await consolidateSession({
-      client,
-      model: 'test-model',
-      longTerm: new LongTermMemory(),
-      sessionRunIds: [],
-      cwd: tmpDir,
-      poor: { enabled: true },
-    })
-    expect(calls).toHaveLength(0)
-    expect(result.candidates).toBe(0)
-    expect(result.promoted).toBe(0)
-    expect(semantic.readAll()).toHaveLength(0)
-  })
-
-  it('consolidateSession no-ops when no verified runIds supplied (real session ids)', async () => {
-    const { client, calls } = makeMockClient()
-    const { LongTermMemory } = await import('../src/core/longTermMemory.js')
-    const result = await consolidateSession({
-      client,
-      model: 'test-model',
-      longTerm: new LongTermMemory(),
-      sessionRunIds: [],
-      cwd: tmpDir,
-    })
-    // No fake session ids → no synthetic entries → no LLM call.
-    expect(calls.length).toBe(0)
-    expect(result.candidates).toBe(0)
-    expect(result.promoted).toBe(0)
   })
 })
 

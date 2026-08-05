@@ -73,7 +73,7 @@ import { loadSkills, expandSkillPrompt } from '../src/skills/loader.js'
 import type { Skill } from '../src/skills/loader.js'
 import type { SemanticMemory } from '../src/core/semanticMemory.js'
 import type { EpisodicMemory } from '../src/core/episodicMemory.js'
-import { consolidateSession } from '../src/modules/reflection.js'
+// consolidateSession removed in v0.5.3 Closure (P5).
 import { dispatchSlashCommand, listCommands, type SlashCommandContext } from '../src/commands/index.js'
 import '../src/commands/builtin.js' // register all built-in commands
 import {
@@ -133,18 +133,6 @@ let saveOnExit: (() => void) | null = null
  * one would lie.
  */
 let lastOutcomeSummary: OutcomeSummary | undefined
-/** v0.5.3 Final (P1): session-scoped run id tracker. The REPL pushes
- *  every observed TurnOutcome.runId here; consolidateSession() reads
- *  the populated list at REPL exit. */
-const sessionRunIds: string[] = []
-/** v0.5.3 Final (P1): most recent user prompt — passed to
- *  consolidateSession so its reviewer-style gate can verify
- *  sourceQuote claims against the original prompt text. */
-let lastUserPrompt: string | undefined
-/** v0.5.3 Final (P1): the raw outcome of the LAST turn — handed to
- *  consolidateSession as `outcomeForCaller` so its promoter knows
- *  whether the current session ended on a `completed` verdict. */
-let lastTurnOutcome: import('../src/core/runtime/turnOutcome.js').TurnOutcome | undefined
 
 /**
  * Hard deadline for a single engine turn. If a turn exceeds this,
@@ -784,9 +772,7 @@ async function runPlanMode(
 
     const startMs = Date.now()
     try {
-      lastUserPrompt = task
       const { result, newHistory, outcome } = await engine.runTurn(task, history)
-      if (outcome?.runId) sessionRunIds.push(outcome.runId)
       history.length = 0
       history.push(...trimHistoryForNextTurn(newHistory))
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
@@ -816,13 +802,6 @@ async function runRepl(
   cwd: string,
   skills: Map<string, Skill>,
   hookRunner: { runUserPromptSubmit: (p: string) => void },
-  consolidate?: {
-    config: EngineConfig
-    semanticMemory: SemanticMemory
-    episodicMemory: EpisodicMemory
-    longTerm: import('../src/core/longTermMemory.js').LongTermMemory
-    sessionRunIds: string[]
-  },
   sessionDir?: string,
   resumedHistory?: OpenAIMessage[],
   loopMaxIters = 12,
@@ -1003,10 +982,7 @@ async function runRepl(
         }
         let deadlineExceeded = false
         const dl = runWithDeadline(
-          () => {
-            lastUserPrompt = currentPrompt
-            return engine.runTurn(currentPrompt, currentHistory)
-          },
+          () => engine.runTurn(currentPrompt, currentHistory),
           {
             deadlineMs: HARD_TURN_DEADLINE_MS,
             onDeadline: () => {
@@ -1017,7 +993,6 @@ async function runRepl(
         )
         try {
           result = await dl.promise
-          if (result.outcome?.runId) sessionRunIds.push(result.outcome.runId)
         } catch (err: unknown) {
           const error = err as Error
           if (error.name === 'AbortError' || deadlineExceeded) {
@@ -1083,9 +1058,6 @@ async function runRepl(
         // v0.4.1 WS7: remember this turn's verdict for exit-path saves.
         if (result.outcome) {
           lastOutcomeSummary = summarizeOutcome(result.outcome)
-          // v0.5.3 Final (P1): also keep the raw outcome so
-          // consolidateSession can drive success-vs-failure promotion.
-          lastTurnOutcome = result.outcome
         }
 
         // Persist session after each turn — with the turn's verdict so the
@@ -1355,36 +1327,11 @@ async function runRepl(
     updateProgressLog(cwd, 'idle', 'waiting for next task')
   }
 
-  // Session consolidation (AgentOS §8 — close the learning loop)
-  if (consolidate) {
-    try {
-      renderer.info('Consolidating memory...')
-      const OpenAI = (await import('openai')).default
-      const client = new OpenAI({ apiKey: consolidate.config.apiKey, baseURL: consolidate.config.baseURL })
-      const { LongTermMemory } = await import('../src/core/longTermMemory.js')
-      const result = await consolidateSession({
-        client,
-        model: consolidate.config.model,
-        longTerm: consolidate.longTerm ?? new LongTermMemory(),
-        // v0.5.3 Final (P1): the REPL tracks real session runIds.
-        // Previously this was always [] which made consolidation a
-        // no-op. Now we hand the populated list to the merger.
-        sessionRunIds: sessionRunIds.length > 0 ? sessionRunIds : (consolidate.sessionRunIds ?? []),
-        // v0.5.3 Final (P1): outcome of the LAST turn in this session
-        // determines whether consolidation runs in success-promotion
-        // or failure-only mode. Without this the merger always ran
-        // failure-promotion (the previous default), turning itself
-        // into a denied ledger.
-        outcomeForCaller: lastTurnOutcome,
-        userMessage: lastUserPrompt,
-        cwd: consolidate.config.cwd,
-        poor: consolidate.config.poor,
-      })
-      if (result.promoted > 0) {
-        renderer.info(`Memory consolidated: ${result.promoted} promoted (from ${result.sourceRecords} verified records, ${result.candidates} candidates)`)
-      }
-    } catch { /* best-effort */ }
-  }
+  // v0.5.3 Closure (P5): consolidateSession was removed per spec
+  // Option A — it duplicated LongTermMemory R5 with no independent
+  // value. sessionRunIds / lastUserPrompt / lastTurnOutcome no
+  // longer need to be tracked; LTM R5 already merges by
+  // contentKey + RevisionBinding. See CLOSURE_NOTES.
 
   // Final save before exit — covers /exit, EOF (after we save above too
   // for safety), and the normal REPL-loop-end case. saveOnExit wired in
@@ -1981,10 +1928,7 @@ async function main(): Promise<void> {
     let exitCode: number
     try {
       const fullPrompt = buildPrompt(task, stdinContent, { cwd, includeContext: !noContext })
-      lastUserPrompt = fullPrompt
       const { outcome } = await assembled.engine.runTurn(fullPrompt, [])
-      if (outcome?.runId) sessionRunIds.push(outcome.runId)
-      lastTurnOutcome = outcome
       const costTracker = assembled.engine.getCostTracker()
       const response = pipeRenderer.responseText || outcome.output
       if (pipeFormat === 'json') {
@@ -2281,13 +2225,7 @@ async function main(): Promise<void> {
     return
   }
 
-  await runRepl(engine, planConfig, renderer, cwd, skills, hookRunner, {
-    config,
-    semanticMemory,
-    episodicMemory,
-    longTerm: new (await import('../src/core/longTermMemory.js')).LongTermMemory(),
-    sessionRunIds: [], // populated by the run loop; the cli/repl loop does not yet track per-run Ids.
-  }, sessionDir, resumedHistory, loopMaxIters)
+  await runRepl(engine, planConfig, renderer, cwd, skills, hookRunner, sessionDir, resumedHistory, loopMaxIters)
 }
 
 /**

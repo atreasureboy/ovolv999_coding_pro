@@ -22,7 +22,7 @@ import { ModuleManager, groupByDependencyDepth } from '../src/core/moduleRuntime
 import { ModelGateway } from '../src/core/model/modelGateway.js'
 import { createProviderAdapter } from '../src/core/model/providerAdapter.js'
 import { CriticModule } from '../src/modules/critic.js'
-import { ReflectionModule } from '../src/modules/reflection.js'
+// ReflectionModule removed from active profile — v0.5.3 Closure P9.
 import { SemanticMemory } from '../src/core/semanticMemory.js'
 import { resolveContextWindow } from '../src/core/compact.js'
 import type { AgentModule } from '../src/core/module.js'
@@ -159,43 +159,6 @@ describe('P0-1.B: modules observe onModelChanged', () => {
       iteration: 100,
       messages,
       abortSignal: new AbortController().signal,
-    })
-    expect(calls.length).toBeGreaterThan(0)
-    expect(calls.every(c => c.model === 'switched-model')).toBe(true)
-  })
-
-  it('ReflectionModule serves the new model on the next onComplete call', async () => {
-    const calls: { model: string }[] = []
-    const client = {
-      chat: {
-        completions: {
-          create: async (p: { model: string }) => {
-            calls.push({ model: p.model })
-            await Promise.resolve()
-            return { choices: [{ message: { content: 'LESSON: x' } }] }
-          },
-        },
-      },
-    } as never
-    const sem = new SemanticMemory(tmpRoot)
-    const reflection = new ReflectionModule(client, 'original-model', sem, {})
-    // v0.5.3 Final (P0 issue): Reflection no longer carries a
-    // captured model — onModelChanged is a no-op. Verify the module
-    // still accepts the constructor and the no-op shape.
-    expect(typeof reflection.onModelChanged).toBe('function')
-    reflection.onModelChanged('switched-model')
-    await reflection.onComplete?.({
-      cwd: tmpRoot,
-      turnResult: { stopped: true, reason: 'stop_sequence', output: 'done' },
-      messages: [
-        { role: 'user', content: 'q' },
-        { role: 'assistant', content: 'a', tool_calls: [{ id: '1', type: 'function', function: { name: 'T', arguments: '{}' } }] },
-        { role: 'tool', content: 'r1', tool_call_id: '1' },
-        { role: 'assistant', content: 'b', tool_calls: [{ id: '2', type: 'function', function: { name: 'T', arguments: '{}' } }] },
-        { role: 'tool', content: 'r2', tool_call_id: '2' },
-        { role: 'assistant', content: 'c', tool_calls: [{ id: '3', type: 'function', function: { name: 'T', arguments: '{}' } }] },
-        { role: 'tool', content: 'r3', tool_call_id: '3' },
-      ],
     })
     expect(calls.length).toBeGreaterThan(0)
     expect(calls.every(c => c.model === 'switched-model')).toBe(true)

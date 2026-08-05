@@ -186,58 +186,21 @@ function* walk(dir) {
     `ltm.record@${idxRecord}, publishCandidateSink@${idxSink}, onComplete@${idxOnComplete}, decidePromotion@${idxDecide}`)
 }
 
-// v0.5.3 P0-1: consolidateSession was a parallel write path that
-// bypassed LongTermMemory. The Gate must intercept it too. We assert
-// that the function-body contains a `.record(` invocation BEFORE
-// any top-level `semantic.write(`. To extract the function body
-// without nesting glitches we rely on indentation: the body lines
-// that we care about (the `for (const entry of parsed)` block in
-// consolidateSession) are at 6-space indent; the function's
-// enclosing `}` is at column 0. So we slice from the function
-// start to the next column-0 `}`.
+// v0.5.3 Closure (P5): consolidateSession was removed per spec
+// Option A. This is now inverted — the production code paths MUST
+// NOT reference consolidateSession. Any reference implies a stale
+// call site that needs deletion.
 {
+  const cliSrc = readText('bin/ovogogogo.ts') ?? ''
   const reflectionSrc = readText('src/modules/reflection.ts') ?? ''
-  const start = reflectionSrc.indexOf('export async function consolidateSession')
-  if (start < 0) {
-    check('consolidateSession exists', false, 'consolidateSession not found in reflection.ts')
-  } else {
-    // Find the matching function body brace. The signature ends
-    // with `): Promise<...> {` and the body opens on the SAME line
-    // or the next line. The body open brace is the LAST `{` that
-    // appears in the signature line, AFTER the return type ends.
-    const after = reflectionSrc.slice(start)
-    // Find the return-type annotation's end — that's the `>` of
-    // `Promise<...>`. From that point, the body's `{` is the very
-    // next `{`.
-    const sigMatch = after.match(/\)\s*:\s*Promise<\{[^}]*\}>\s*\{/)
-    let bodyOpenIdx = sigMatch ? after.indexOf(sigMatch[0]) + sigMatch[0].length - 1 : -1
-    if (bodyOpenIdx < 0) {
-      // Fallback: find first '=> Promise' then walk to first '{'.
-      const arrow = after.indexOf('Promise<')
-      bodyOpenIdx = arrow > 0 ? after.indexOf('{', arrow) : after.indexOf('{')
-    }
-    let depth = 1
-    let i = bodyOpenIdx + 1
-    let inTemplate = false
-    while (i < after.length && depth > 0) {
-      const c = after[i]
-      if (c === '`') inTemplate = !inTemplate
-      else if (!inTemplate) {
-        if (c === '{') depth++
-        else if (c === '}') depth--
-      }
-      i++
-    }
-    const body = after.slice(0, i)
-    // v0.5.3 Final (task 6): the new consolidateSession shape uses
-    // longTerm.record() AND decidePromotion() but NEVER semantic.write().
-    const hasRecord = /longTerm\s*\.\s*record\s*\(|gate\s*\.\s*record\s*\(/.test(body)
-    const hasSemanticWrite = /\bsemantic\s*\.\s*write\s*\(/.test(body)
-    const hasDecidePromotion = /decidePromotion\s*\(/.test(body)
-    check('consolidateSession uses longTerm.record + decidePromotion (no semantic.write)',
-      hasRecord && hasDecidePromotion && !hasSemanticWrite,
-      `record=${hasRecord}, decidePromotion=${hasDecidePromotion}, semantic.write=${hasSemanticWrite}, body length=${body.length}`)
-  }
+  // We allow the dead reference inside the experimental/ stub.
+  const cliRefs = /consolidateSession\s*\(/.test(cliSrc)
+  const reflectionRefs = /consolidateSession\s*\(/.test(reflectionSrc)
+  const experimental = readText('experimental/reflection.ts') ?? ''
+  const expRefs = /consolidateSession\s*\(/.test(experimental)
+  check('consolidateSession NOT called from production paths',
+    !cliRefs && !reflectionRefs,
+    `cli=${cliRefs}, reflection.ts=${reflectionRefs}, experimental(not checked)=${expRefs}`)
 }
 
 // v0.5.3 P0-1: Coordinator must publish a memoryToolContext (repo /
@@ -602,33 +565,69 @@ function parseScopesFromList(listStr) {
     `minLen=${hasMinLen}, coverage=${hasCoverage}, verifier=${usesVerifier}`)
 }
 
-// ── Check 25: CLI publishes real sessionRunIds ───────────────────────
+// ── Check 25: CLI does NOT track sessionRunIds anymore (P5) ─────────
 //
-// v0.5.3 Final (P1-2): the CLI used to declare `sessionRunIds: []`
-// in runRepl, making consolidation a no-op forever. The runId
-// must be pushed INTO a shared array on every runTurn() result
-// and handed to consolidateSession() at exit.
+// v0.5.3 Closure (P5): the CLI no longer needs to track per-run
+// runIds for consolidation (consolidation was removed). This is a
+// regression check: the variables are gone from the bin/ CLI.
 {
   const cliSrc = readText('bin/ovogogogo.ts') ?? ''
   const stripped = cliSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-  const hasArray = /const sessionRunIds\s*:\s*string\[\]/.test(stripped)
-  const hasPush = /sessionRunIds\s*\.\s*push\s*\(/.test(stripped)
-  const passToConsolidate = /sessionRunIds:\s*sessionRunIds/.test(stripped)
-  check('CLI tracks sessionRunIds and hands them to consolidateSession',
-    hasArray && hasPush && passToConsolidate,
-    `array=${hasArray}, push=${hasPush}, pass=${passToConsolidate}`)
+  const hasArray = /const\s+sessionRunIds\s*:\s*string\[\]/.test(stripped)
+  const hasLastUserPrompt = /let\s+lastUserPrompt\s*:/.test(stripped)
+  const hasLastTurnOutcome = /let\s+lastTurnOutcome\s*:/.test(stripped)
+  check('CLI has NO consolidation-tracking globals (P5 removed them)',
+    !hasArray && !hasLastUserPrompt && !hasLastTurnOutcome,
+    `sessionRunIds=${hasArray}, lastUserPrompt=${hasLastUserPrompt}, lastTurnOutcome=${hasLastTurnOutcome}`)
 }
 
 // ── Check 26: consolidateSession test exercises real round-trip ──────
 //
-// v0.5.3 Final (P1-2): the previous consolidation test only
-// asserted that no records were promoted; the real round-trip test
-// must seed two verified records across two runIds and observe
-// one promoted entry.
+// v0.5.3 Closure (P5): consolidateSession itself was removed per
+// the spec's Option A. This check flips: the test must NOT exist,
+// and consolidateSession must NOT be imported or referenced from
+// any src/ or bin/ production path.
 {
-  check('tests/v053/consolidateSessionReal.test.ts exists',
-    existsSync(join(ROOT, 'tests/v053/consolidateSessionReal.test.ts')),
-    'real round-trip consolidation test missing')
+  const consolidationFile = join(ROOT, 'tests/v053/consolidateSessionReal.test.ts')
+  check('consolidateSession test removed (P5 Option A)',
+    !existsSync(consolidationFile),
+    'consolidateSession test file should be removed')
+}
+
+// ── Check 27: ReflectionModule removed from active profile (P9) ────────
+//
+// v0.5.3 Closure (P9): ReflectionModule is no-op dead code. The
+// active module profile must NOT register it; the class itself
+// may live in experimental/ for future honest re-implementations.
+{
+  const engineAsm = readText('src/cli/engineAssembly.ts') ?? ''
+  const active = /globalModuleRegistry\.register\(\s*['"]reflection['"]/m.test(engineAsm)
+  check('ReflectionModule NOT in active profile registry', !active,
+    active ? 'reflection module is still registered' : 'ok')
+  // experimental/ is allowed (future home for an honest producer).
+  const experimental = existsSync(join(ROOT, 'experimental/reflection.ts'))
+  check('experimental/reflection.ts may exist (future home)', !active && experimental
+    ? true
+    : !experimental, 'reflection state inconsistent')
+}
+
+// ── Check 28: probe-finishProbe wiring in Coordinator ────────────────
+//
+// v0.5.3 Closure (P2): the Coordinator must consult
+// router.tryAcquireProbe() and router.finishProbe() in the half-
+// open path. Verified statically (regex) and dynamically by the
+// behavioral test in tests/v053/probePerAttemptTruth.test.ts.
+{
+  const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
+  const stripped = coordSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const hasAcquire = /router[?.]?\.?tryAcquireProbe\s*\(/.test(stripped)
+  const hasFinish = /router[?.]?\.?finishProbe\s*\(/.test(stripped)
+  // v0.5.3 Closure (P2): the finishProbe call must be in `finally`
+  // so the lease is released on abort / throw / normal-return.
+  const finishProbeInFinally = /try\s*\{[\s\S]*?finally\s*\{[\s\S]*?finishProbe/m.test(stripped)
+  check('Coordinator wires probe lease + finishProbe in finally',
+    hasAcquire && hasFinish && finishProbeInFinally,
+    `acquire=${hasAcquire}, finish=${hasFinish}, inFinally=${finishProbeInFinally}`)
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────

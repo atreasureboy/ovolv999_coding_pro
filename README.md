@@ -1,4 +1,4 @@
-# ovolv999 (v0.5.2) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.5.3) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -64,7 +64,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 - **借鉴为主,创新为辅**:借鉴 ~80%,创新 ~20%(指纹规避)
 - **架构/UX/模块设计 直接抄**:协议、UX 模式可借鉴
 
-测试增量:**4744 / 4744 pass**(从 4501 起 +243 个),5 依赖约束保持。
+测试增量:**4695 / 4697 pass**(基线 +243 个,Reflection 删除后 -49 个),8 依赖约束保持。
 
 ### v0.5 Role-aware Multi-Agent
 
@@ -308,7 +308,9 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ║  │  └──────────────────────────────────────────────────────────────┘   │   ║
 ║  │                                                                     │   ║
 ║  │  ┌─ Post-Run ────────────────────────────────────────────────────┐  │   ║
-║  │  │ moduleManager.runComplete() ← ReflectionModule LLM 知识提取    │  │   ║
+║  │  │ MemoryModule.onComplete → decidePromotion()                   │  │   ║
+║  │  │   (candidate → verified=true for completed runs;                │  │   ║
+║  │  │    kind='failure' for partial/blocked/cancelled runs)         │  │   ║
 ║  │  │ RunEventEmitter.emit(RUN_TERMINATED { status })               │  │   ║
 ║  │  └────────────────────────────────────────────────────────────────┘  │   ║
 ║  │                                                                     │   ║
@@ -845,13 +847,14 @@ ovolv999/
 | 统一 Harness（无 agent_type） | `ExecutionEngine` + `AgentConfig` + 4 preset |
 | 模块组合驱动 | `ModuleRegistry` + memory/critic/workspace/reflection |
 | Boot Sequence | 7 步：identity → modules → boot → prompt → tools → context → trajectory |
-| 来源归因 + 冲突解决 | `user_stated(3) > agent_inferred(2) > tool_observed(1)` |
+| 来源归因 + 冲突解决 | `user_stated` 必须带 `source_quote` 证明(长度 ≥ 12 + content-token 覆盖 ≥ 60%) |
 | Memory 三原语 | `memory_write` / `memory_search` / `memory_recall` |
-| 三层记忆 | 引擎层 Semantic + Episodic；KnowledgeBase / TeamMemory / LongTermMemory 为命令或契约层（未接入引擎循环） |
-| Boot 时相关性检索 | `extractKeywords` + `scoreRelevance` → top-10 |
-| Memory 整合 | `consolidateSession` — REPL 退出时 LLM 总结 |
+| 长时记忆唯一入口 | Candidate → Promotion (CompletionContract + Reviewer + Verification) |
+| Memory 冲突 resolution | contentKey = sha256(repo + branch + baseCommit + dirty + diffHash + workspaceHash + kind + content) |
+| Boot 时相关性检索 | `extractKeywords` + `scoreRelevance` → top-10, repo-filtered |
 | Skill 系统 | frontmatter 解析 + 懒加载 + 语义搜索 + auto-suggest |
 | 验证闸门 (No Tuple No Merge) | `verify:true` → 自动 package scripts / 语言检查 |
+| Probe lease | per-profile `tryAcquireProbe` / `finishProbe` 接 Coordinator (finally 释放) |
 | 调用链追踪 + 循环检测 | `_callDepth` max 5 + EventLog |
 | 生命周期 Hooks | 6 种 Hook 类型 |
 | Context 压缩 + 策略 | microCompact + snipCompact + autoCompact（含系统提示词 token） |

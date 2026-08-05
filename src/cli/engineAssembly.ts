@@ -51,7 +51,7 @@ import { MemoryModule } from '../modules/memory.js'
 import { CriticModule } from '../modules/critic.js'
 import { WorkspaceModule } from '../modules/workspace.js'
 import { WorkspaceWatcherModule } from '../modules/workspaceWatcher.js'
-import { ReflectionModule } from '../modules/reflection.js'
+// ReflectionModule removed from active profile — v0.5.3 Closure P9.
 import { McpModule } from '../modules/mcp.js'
 import { detectProjectContext, formatProjectContext } from '../config/projectContext.js'
 import { createLoadSkillTool } from '../tools/loadSkill.js'
@@ -260,8 +260,13 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     new CriticModule(ctx.client, ctx.model, ctx.config))
   globalModuleRegistry.register('workspace', (ctx) =>
     new WorkspaceModule(ctx.config.sessionDir))
-  globalModuleRegistry.register('reflection', (ctx) =>
-    new ReflectionModule(ctx.client, ctx.model, ctx.config.semanticMemory!, ctx.config))
+  // v0.5.3 Closure (P9): ReflectionModule removed from the active
+  // profile. It was a no-op epistemic-log left over from earlier
+  // rounds. LongTermMemory R5 owns content-key merging; the
+  // MemoryModule owns verified memory persistence. There is no
+  // independent value a reflection step adds today. The class is
+  // preserved under experimental/ for any future honest
+  // producer-of-candidates implementation.
   globalModuleRegistry.register('mcp', () => new McpModule())
   // P2.2: workspace_watcher turns the R8 chokidar-based WorkspaceWatcher
   // into a real runtime capability. It watches the cwd and user skills

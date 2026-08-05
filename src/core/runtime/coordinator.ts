@@ -1523,7 +1523,8 @@ export class RuntimeCoordinator {
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
   }> {
-    const modelAtStart = this.deps.config.model
+    let modelAtStart = this.deps.config.model
+    let caughtErr: unknown = null
 
     // v0.5.3 P0-3 + P1-3: per-profile circuit (router-owned) is
     // consulted here. CLOSED → call normally. HALF_OPEN → the
@@ -1549,12 +1550,44 @@ export class RuntimeCoordinator {
           probeAcquired = router.tryAcquireProbe(binding.id)
           probeBindingId = binding.id
           if (!probeAcquired) {
-            // Another caller is already probing — fail fast so we
-            // can advance to a fallback profile for this turn.
-            throw new Error(
-              `Profile ${binding.id} is half-open with a probe in flight. ` +
-              `Advance to a fallback profile before retrying.`,
-            )
+            // v0.5.3 Closure (P2): a busy probe is NOT a terminal
+            // error. The Router has another caller mid-probe for
+            // THIS profile; we advance to the next available
+            // profile and serve that instead. If no fallback
+            // exists the existing structured unavailable decision
+            // fires from route() — but we are NOT in route() here
+            // (we already picked this profile). So when no
+            // fallback chain reaches the Router, surface the
+            // precise condition explicitly.
+            const next = router.nextFallback(modelAtStart)
+            if (!next) {
+              // Lease MUST still be released (we never acquired it).
+              router.finishProbe(binding.id, false)
+              probeAcquired = false
+              probeBindingId = undefined
+              throw new Error(
+                `Profile ${binding.id} is half-open with a probe in flight and no fallback available.`,
+              )
+            }
+            // Advance config.model to the fallback so this turn
+            // proceeds with a healthy profile.
+            router.applyRoutingDecision(next)
+            modelAtStart = next
+            // The probe lease we did NOT acquire must not be touched
+            // by the post-call cleanup path.
+            probeAcquired = false
+            probeBindingId = undefined
+            // Re-evaluate the now-active profile's circuit. The
+            // fallback may itself be open (rare but possible). We
+            // don't recurse; the next iteration of the state
+            // machine handles it.
+            const newBinding = router.listProfiles().find((p) => p.model === modelAtStart)
+            if (newBinding && router.getProfileCircuitState(newBinding.id) === 'open') {
+              throw new Error(
+                `After advancing to fallback ${next}, that profile is also OPEN. ` +
+                `Skip this iteration; the next state-machine pass will re-route.`,
+              )
+            }
           }
         }
       }
@@ -1641,15 +1674,16 @@ export class RuntimeCoordinator {
           },
         },
       )
-      for (const attempt of result.attempts) this.recordGatewayAttempt(attempt)
-      // v0.5.3 Final (P1-3): success → close the half-open probe.
-      if (probeAcquired && probeBindingId && router) {
-        router.finishProbe(probeBindingId, true)
-      }
+      for (const attempt of result.attempts) this.recordGatewayAttempt(attempt) // result is non-null after await
     } catch (err) {
       const attempts = (err as { attempts?: Array<{
         model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
       }> }).attempts
+      // v0.5.3 Closure (P2): capture the error so the trailing
+      // finally-block can release the probe lease AND we can
+      // re-throw on the way out (the catch block is NOT a sink —
+      // the error must propagate to run()).
+      caughtErr = err
       if (attempts?.length) {
         for (const attempt of attempts) this.recordGatewayAttempt(attempt)
       } else {
@@ -1662,18 +1696,53 @@ export class RuntimeCoordinator {
           usage: null,
         })
       }
-      // v0.5.3 Final (P1-3): failure → re-open the half-open probe.
+    } finally {
+      // v0.5.3 Closure (P2): finishProbe MUST be invoked exactly
+      // once per acquired lease — in finally so abort, throw,
+      // and normal-return all release the probe and resolve the
+      // half-open window. Verdict comes from the SPECIFIC attempt
+      // for the probed profile, not the overall gateway result.
       if (probeAcquired && probeBindingId && router) {
-        router.finishProbe(probeBindingId, false)
+        // Probe model may have advanced to a fallback during the
+        // half-open-busy path above; that branch sets
+        // probeAcquired=false so we never touch the lease here
+        // for the un-acquired state.
+        const allAttempts = (() => {
+          // We can't see result/attempts here; the caller already
+          // called recordGatewayAttempt which captured them via
+          // this.modelCallsThisRun. The last attempt for the
+          // probed model IS the answer.
+          const calls = this.modelCallsThisRun
+          return calls.length > 0
+            ? calls.map((c) => ({
+                model: c.model,
+                provider: c.provider,
+                success: c.success,
+                latencyMs: c.endedAt - c.startedAt,
+                usage: c.usage
+                  ? { inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, totalTokens: c.usage.inputTokens + c.usage.outputTokens }
+                  : null,
+                error: c.error,
+              }))
+            : []
+        })()
+        const probedBinding = router.listProfiles().find((p) => p.id === probeBindingId)
+        const probeAttempt = probedBinding
+          ? allAttempts.find((a) => a.model === probedBinding.model)
+          : undefined
+        router.finishProbe(probeBindingId, probeAttempt?.success === true)
+        probeAcquired = false
       }
-      // v0.5.3 P0-3: per-profile circuit bookkeeping lives in the
-      // router; recordGatewayAttempt already calls
-      // router.recordCall() once per attempt, so no extra update
-      // here. The router transitions its own state on threshold.
-      throw err
     }
 
-    return result
+    // v0.5.3 Closure (P2): if the catch block above ran on a
+    // gateway error, the original throw must propagate to the
+    // outer run() so RUN_FAILED is emitted. The finally block
+    // only owns the probe-lease lifecycle; the error must still
+    // bubble up.
+    if (caughtErr) throw caughtErr
+
+    return result!
   }
 
   private recordGatewayAttempt(attempt: {

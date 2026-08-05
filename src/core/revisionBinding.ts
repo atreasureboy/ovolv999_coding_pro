@@ -1,28 +1,35 @@
 /**
  * RevisionBinding — bind every persisted memory record to a real
- * revision state. v0.5.3 Final (task 3).
+ * revision state. v0.5.3 Closure (P6).
  *
- * Rules:
- *   - Git repo, clean       → branch + HEAD
- *   - Git repo, dirty       → baseCommit (last clean commit) + diffHash
- *   - Non-Git directory     → absolute cwd + workspaceHash (sha256 of path + mtime bucket)
+ * Spec:
+ *   - Git repo root / subdir / worktree: detected via
+ *     `git -C <cwd> rev-parse --show-toplevel` + `--is-inside-work-tree`.
+ *     The `repo` field is the canonical toplevel, NOT arbitrary cwd.
+ *   - Git clean     → branch + HEAD (+ diffHash="<clean>").
+ *   - Git dirty     → baseCommit + diffHash(staged+unstaged+untracked).
+ *   - Non-Git       → absolute cwd + workspaceHash(manifest excluding
+ *                     node_modules / .git / dist / coverage / session).
  *
- * NO fabrication. If git is not available we return a non-git
- * binding honestly; the gate still accepts code-bearing entries
- * only when there is some way to trace them back to a project.
+ * Errors are explicit (ok / not-ok), not collapsed to "".
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { RevisionBinding } from './memoryCandidate.js'
 
 export interface RevisionBindingOptions {
-  /** Override the path — mainly for tests. */
   cwd?: string
   /** Disable git detection (always produce a non-git binding). */
   disableGit?: boolean
+  /** Test seam: pin the result of `rev-parse --show-toplevel`. */
+  forceRepoRoot?: string | null
 }
+
+export type ExecResult =
+  | { ok: true; stdout: string }
+  | { ok: false; reason: string }
 
 export async function buildRevisionBinding(opts: RevisionBindingOptions = {}): Promise<RevisionBinding> {
   const cwd = opts.cwd ?? process.cwd()
@@ -30,84 +37,225 @@ export async function buildRevisionBinding(opts: RevisionBindingOptions = {}): P
 
   if (opts.disableGit) {
     binding.workspaceHash = workspaceHash(cwd)
-    return binding
-  }
-
-  if (!isGitRepo(cwd)) {
-    binding.workspaceHash = workspaceHash(cwd)
-    return binding
-  }
-
-  // Git repo path — try to read branch + HEAD + dirty state without
-  // blocking on errors. We use execFileSync so the call is
-  // synchronous and bounded.
-  try {
-    const branch = safeExec(cwd, 'rev-parse', '--abbrev-ref', 'HEAD').trim()
-    if (branch && !branch.includes(' ')) binding.branch = branch
-    const head = safeExec(cwd, 'rev-parse', 'HEAD').trim()
-    if (head && /^[0-9a-f]{7,40}$/.test(head)) binding.baseCommit = head
-
-    const statusOutput = safeExec(cwd, 'status', '--porcelain')
-    if (statusOutput.trim().length > 0) {
-      binding.dirty = true
-      // Use a stable hash of the diff. `git diff HEAD` is too
-      // expensive to materialize for big repos; we hash the
-      // porcelain output instead. Stable as long as the file set +
-      // hunk signatures are stable; file content-level dedup is
-      // delegated to R5.
-      const diff = safeExec(cwd, 'diff', '--no-color', 'HEAD')
-      binding.diffHash = createHash('sha256').update(diff).digest('hex').slice(0, 16)
-    }
-  } catch {
-    // Any git error → fall back to a non-git binding rather than
-    // fabricate branch/commit strings.
-    binding.workspaceHash = workspaceHash(cwd)
-    delete binding.branch
-    delete binding.baseCommit
     binding.dirty = true
+    return binding
+  }
+
+  // Step 1: ask git for the canonical toplevel.
+  const toplevel: ExecResult = opts.forceRepoRoot !== undefined
+    ? safeResultFrom(opts.forceRepoRoot)
+    : execGit(cwd, 'rev-parse', '--show-toplevel')
+  if (!toplevel.ok) {
+    // Not a git repo, OR git is missing → non-git binding.
+    binding.workspaceHash = workspaceHash(cwd)
+    binding.dirty = true
+    return binding
+  }
+  // After narrowing, toplevel is {ok:true, stdout:string}.
+  const toplevelPath = toplevel.stdout.trim()
+  if (!toplevelPath) {
+    binding.workspaceHash = workspaceHash(cwd)
+    binding.dirty = true
+    return binding
+  }
+  // `repo` is the canonical root.
+  binding.repo = toplevelPath
+
+  // Step 2: confirm we're inside that work-tree (covers subdir +
+  // linked worktree cases where cwd != toplevel).
+  const inside = execGit(cwd, 'rev-parse', '--is-inside-work-tree')
+  if (!inside.ok || inside.stdout.trim() !== 'true') {
+    // In a `.git` file pointing elsewhere — fall through with
+    // non-git binding rather than fabricate.
+    binding.workspaceHash = workspaceHash(cwd)
+    binding.dirty = true
+    return binding
+  }
+
+  // Step 3: read branch / HEAD / dirty state.
+  const branch = execGit(cwd, 'rev-parse', '--abbrev-ref', 'HEAD')
+  if (branch.ok) {
+    const trimmed = branch.stdout.trim()
+    if (trimmed && !trimmed.includes(' ')) binding.branch = trimmed
+  }
+  const head = execGit(cwd, 'rev-parse', 'HEAD')
+  if (head.ok) {
+    const trimmed = head.stdout.trim()
+    if (/^[0-9a-f]{7,40}$/.test(trimmed)) binding.baseCommit = trimmed
+  }
+
+  // Step 4: dirty detection — staged + unstaged + untracked.
+  const dirtyHash = computeDirtyHash(cwd)
+  if (dirtyHash !== null) {
+    binding.dirty = true
+    binding.diffHash = dirtyHash
+  } else {
+    binding.dirty = false
+    binding.diffHash = 'clean'
   }
 
   return binding
 }
 
-function isGitRepo(cwd: string): boolean {
+/** v0.5.3 Closure (P6): non-fatal `git` runner. */
+function execGit(cwd: string, ...args: string[]): ExecResult {
   try {
-    return existsSync(join(cwd, '.git'))
-  } catch {
-    return false
+    const stdout = execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 2_000,
+    })
+    return { ok: true, stdout }
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message ?? 'git exec failed' }
   }
 }
 
-function safeExec(cwd: string, ...args: string[]): string {
+function safeResultFrom(v: string | null): ExecResult {
+  if (v === null) return { ok: false, reason: 'forceRepoRoot=null' }
+  return { ok: true, stdout: v }
+}
+
+/**
+ * v0.5.3 Closure (P6): dirty hash combines three sources.
+ *   git diff HEAD (unstaged)
+ *   git diff --cached HEAD (staged)
+ *   untracked files: path + size + content hash (capped)
+ *
+ * Returns null when the tree is clean.
+ */
+function computeDirtyHash(cwd: string): string | null {
+  const unstaged = execGit(cwd, 'diff', '--binary', 'HEAD')
+  const staged = execGit(cwd, 'diff', '--binary', '--cached', 'HEAD')
+  // Even if exec returned an error, .stdout may carry an empty
+  // string — fall through and check both stdout buffers.
+  const unstagedOut = unstaged.ok ? unstaged.stdout : ''
+  const stagedOut = staged.ok ? staged.stdout : ''
+
+  const untracked = listUntracked(cwd)
+  if (!unstagedOut.trim() && !stagedOut.trim() && untracked.length === 0) {
+    return null
+  }
+  const hash = createHash('sha256')
+  hash.update('UNSTAGED\0')
+  hash.update(unstagedOut)
+  hash.update('\nSTAGED\0')
+  hash.update(stagedOut)
+  hash.update('\nUNTRACKED\0')
+  for (const t of untracked) {
+    hash.update(`${t.path}\0${t.size}\0${t.contentHash ?? 'n/a'}\n`)
+  }
+  return hash.digest('hex').slice(0, 16)
+}
+
+interface UntrackedEntry {
+  path: string
+  size: number
+  contentHash?: string
+}
+
+const UNTRACKED_HASH_LIMIT = 1_048_576 // 1 MiB
+
+/**
+ * v0.5.3 Closure (P6): walk the working directory's untracked
+ * files. Excludes node_modules / .git / dist / coverage / session
+ * / tmp. Hashes small files inline; large files use the size
+ * alone (truncated flag in the manifest entry).
+ */
+function listUntracked(cwd: string): UntrackedEntry[] {
+  const porcelain = execGit(cwd, 'status', '--porcelain', '--untracked-files=all')
+  if (!porcelain.ok) return []
+  const lines = porcelain.stdout.split('\n').filter((l) => l.length >= 3)
+  const EXCLUDES = new Set(['node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache'])
+  const out: UntrackedEntry[] = []
+  for (const line of lines) {
+    // Porcelain v1:  XY <path> where `??` = untracked.
+    if (!line.startsWith('??')) continue
+    const relPath = line.slice(3).trim()
+    if (!relPath) continue
+    const parts = relPath.split('/')
+    if (parts.some((p) => EXCLUDES.has(p))) continue
+    const abs = isAbsolute(relPath) ? relPath : join(cwd, relPath)
+    try {
+      const st = statSync(abs)
+      if (!st.isFile()) continue
+      let contentHash: string | undefined
+      if (st.size <= UNTRACKED_HASH_LIMIT) {
+        try {
+          const buf = readFileSync(abs)
+          contentHash = createHash('sha256').update(buf).digest('hex').slice(0, 16)
+        } catch { /* unreadable → no content hash */ }
+      }
+      out.push({ path: relPath, size: st.size, contentHash })
+    } catch { /* stat failed; skip */ }
+  }
+  return out
+}
+
+/**
+ * v0.5.3 Closure (P6): non-git workspace hash. We build a SMALL
+ * manifest of {relative path, size, [content hash]} over the
+ * directory tree excluding noise. Same content under
+ * node_modules-style churn → identical hash; content changes →
+ * hash changes.
+ */
+function workspaceManifestHash(rootDir: string): string {
+  const EXCLUDES = new Set(['node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache'])
+  const entries: string[] = []
   try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2_000,
-    })
+    walkForManifest(rootDir, rootDir, EXCLUDES, entries, '')
+  } catch { /* ignore IO errors */ }
+  const hash = createHash('sha256')
+  for (const line of entries.sort()) {
+    hash.update(line)
+    hash.update('\n')
+  }
+  return hash.digest('hex').slice(0, 16)
+}
+
+function walkForManifest(
+  rootDir: string,
+  dir: string,
+  excludes: Set<string>,
+  out: string[],
+  rel: string,
+): void {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
   } catch {
-    return ''
+    return
+  }
+  for (const name of entries) {
+    if (excludes.has(name)) continue
+    const abs = join(dir, name)
+    const childRel = rel ? `${rel}/${name}` : name
+    let st
+    try { st = statSync(abs) } catch { continue }
+    if (st.isDirectory()) {
+      walkForManifest(rootDir, abs, excludes, out, childRel)
+    } else if (st.isFile()) {
+      let contentHash = 'skipped'
+      if (st.size <= UNTRACKED_HASH_LIMIT) {
+        try {
+          const buf = readFileSync(abs)
+          contentHash = createHash('sha256').update(buf).digest('hex').slice(0, 16)
+        } catch { /* unreadable */ }
+      }
+      out.push(`${childRel}|${st.size}|${contentHash}`)
+    }
   }
 }
 
 /**
- * Stable workspace hash. SHA-256 over the absolute path + a
- * per-minute mtime bucket; the same workspace within the same
- * minute produces the same hash. The minute resolution is
- * intentional: a long session does not change the hash while
- * files are being edited.
+ * Non-git workspace binding: repository is the absolute cwd; the
+ * identity is a content-bound manifest hash so the same workspace
+ * under the same files produces the same hash, and any change
+ * changes the hash.
  */
 export function workspaceHash(cwd: string): string {
-  let bucketSig = 'no-stat'
-  try {
-    const st = statSync(cwd)
-    if (st) {
-      const minute = Math.floor(st.mtimeMs / 60_000)
-      bucketSig = String(minute)
-    }
-  } catch {
-    /* keep default */
-  }
-  return createHash('sha256').update(`${cwd}:${bucketSig}`).digest('hex').slice(0, 16)
+  return workspaceManifestHash(cwd)
 }
+
+export { isAbsolute, relative, sep }

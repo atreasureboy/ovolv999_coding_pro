@@ -294,6 +294,11 @@ export function signalsToRoutingInput(s: RoutingSignals): RoutingInput {
   return {
     userGoal: s.userGoal,
     repoFileCount: s.repoFileCount,
+    // v0.5.3 Final (Closure Integrity #1): propagate RepoStats
+    // provenance so the Router's estimator can decide whether to
+    // weight the count exactly, weakly, or skip entirely.
+    repoStatsState: s.repoStatsState,
+    repoStatsLowerBound: s.repoStatsLowerBound,
     filesTouched: s.filesTouched,
     consecutiveFailures: s.recentFailureCount + s.previousRoutingFailures,
     contextUsageRatio: s.contextUsageRatio,

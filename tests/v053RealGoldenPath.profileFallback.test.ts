@@ -23,6 +23,8 @@ import { join } from 'path'
 // @ts-expect-error fixture is a plain .mjs without types
 import { startEchoServer } from './fixtures/openaiEchoServer.mjs'
 import { ExecutionEngine } from '../src/core/engine.js'
+import { EventLog } from '../src/core/eventLog.js'
+import { readFileSync } from 'fs'
 import type { EngineConfig } from '../src/core/types.js'
 
 const TIMEOUT = 90_000
@@ -90,11 +92,13 @@ describe('v0.5.3 Final — Profile A → B real end-to-end', () => {
     try {
     const seen: Array<{ type: string; payload?: unknown }> = []
     void seen
+    const eventLog = new EventLog(join(tmpProj, 'events.jsonl'))
     const cfg = baseConfig({
       baseURL: fx.baseURL,
       cwd: tmpProj,
       provider: 'openai-compatible',
       permissionMode: 'bypassPermissions',
+      eventLog,
       // Two real profiles sharing the same transport. The wire-
       // level difference is the `model` field.
       models: {
@@ -157,49 +161,72 @@ describe('v0.5.3 Final — Profile A → B real end-to-end', () => {
         changedFiles: outcome.changedFiles,
       }))
       // eslint-disable-next-line no-console
-      console.log('routing events:', seen.filter((e) => e.type === 'ROUTING_FALLBACK_APPLIED').length)
-      try {
-        // eslint-disable-next-line no-console
-        console.log('event log:', JSON.stringify(cfg.eventLog?.readAll?.() ?? [], null, 2))
-      } catch {}
+      console.log('event log:', JSON.stringify(eventLog.readAll(), null, 2))
     }
 
-    // (1) The fixture saw BOTH model-a and model-b on the wire —
-    //     this is the entire point of the test. We previously
-    //     asserted model-b was reached but in fact the engine only
-    //     ever called model-a (fake Golden Path).
-    const seenA = fx.requests.some((r) => r.model === 'model-a')
-    const seenB = fx.requests.some((r) => r.model === 'model-b')
-    expect(seenA).toBe(true)
-    expect(seenB).toBe(true)
-
-    // (2) At least one model-a attempt FAILED and at least one
-    //     model-b attempt SUCCEEDED — both went through the real
-    //     ModelGateway.attempt chain, not the fake recordCall path.
-    expect(outcome.modelAttempts.some((a) => a.model === 'model-a' && a.status === 'failed')).toBe(true)
-    expect(outcome.modelAttempts.some((a) => a.model === 'model-b' && a.status === 'succeeded')).toBe(true)
-
-    // (3) The Router's internal ROUTING_FALLBACK_APPLIED event is
-    //     fired into the Router's own listener (not the Engine's
-    //     RunEventEmitter). The behaviour contract is observable
-    //     through the modelAttempts array: at least one failed
-    //     model-a attempt AND at least one succeeded model-b
-    //     attempt prove the Router actually advanced from A to B.
-    //     The previous fake test injected emitFallback by hand —
-    //     that path is not reached from Coordinator onProviderError.
+    // v0.5.3 Closure (P3): STRICT Golden Path. Every assertion is a
+    // structural requirement; the previous `expect([0,1,2]).toContain`
+    // and `expect(['completed','partial']).toContain` are GONE — a
+    // real fallback Golden Path has exactly one correct outcome.
+    const seenA = fx.requests.filter((r) => r.model === 'model-a')
+    const seenB = fx.requests.filter((r) => r.model === 'model-b')
     void seen
 
-    // (4) The Write tool executed via the real ToolScheduler →
-    //     ToolExecutor chain. The side effect is observable on disk.
+    // (1) Wire shape: the FIRST request is the failed model-a.
+    //     The engine may retry model-a multiple times before its
+    //     circuit opens, so we only pin requests[0].model='model-a'
+    //     and that EVERY model-a attempt failed (no model-a response
+    //     was accepted by the engine). All accepted requests are b.
+    expect(seenA.length).toBeGreaterThanOrEqual(1)
+    expect(fx.requests[0].model).toBe('model-a')
+    expect(seenB.length).toBeGreaterThanOrEqual(3)
+
+    // (2) Attempt counts: model-a failed exactly once (the FIRST
+    //     attempt landed the 503; subsequent retries land 503 too
+    //     but Router falls back to model-b after the first). The
+    //     model-b attempts (write + bash + completion) accumulate.
+    const aFailed = outcome.modelAttempts.filter(
+      (a) => a.model === 'model-a' && a.status === 'failed',
+    )
+    expect(aFailed.length).toBeGreaterThanOrEqual(1)
+    const bSucceeded = outcome.modelAttempts.filter(
+      (a) => a.model === 'model-b' && a.status === 'succeeded',
+    )
+    expect(bSucceeded.length).toBeGreaterThanOrEqual(3)
+
+    // (3) Router fallback EXACTLY ONCE per session-turn — the
+    //     spec forbids the engine bouncing between A and B on
+    //     subsequent turns within one model-b sequence.
+    const router = (engine as unknown as { modelRouter?: { getRoutingFailureStats(): { totalFallbacksApplied: number } } }).modelRouter
+    expect(router?.getRoutingFailureStats().totalFallbacksApplied).toBe(1)
+
+    // (4) Side-effect tools ran EXACTLY once each: a single Write
+    //     followed by a single Bash verify. Reads via the EventLog.
+    const toolCalls = eventLog.readAll().filter((e) => e.type === 'tool_call')
+    const writeCalls = toolCalls.filter((e) => (e as { source?: string }).source === 'Write').length
+    const bashCalls = toolCalls.filter((e) => (e as { source?: string }).source === 'Bash').length
+    expect(writeCalls).toBe(1)
+    expect(bashCalls).toBe(1)
+
+    // (5) b.txt exists on disk AND content is exactly what the
+    //     fixture wrote ('fallback-ok').
     const filePath = join(tmpProj, 'b.txt')
     expect(existsSync(filePath)).toBe(true)
+    const onDisk = readFileSync(filePath, 'utf8')
+    expect(onDisk).toBe('fallback-ok')
     expect(outcome.changedFiles).toContain('b.txt')
 
-    // (5) The completion is at least not 'cancelled'/'exhausted' —
-    //     it landed either 'completed' OR 'partial' (CompletionContract
-    //     correctly demoted because no Bash verification followed).
-    //     Both are valid; 'failed' (engine threw) is not.
-    expect(['completed', 'partial']).toContain(outcome.completion.status)
+    // (6) Verification ran AND passed (Write succeeded; Bash
+    //     cat succeeded; engine recorded both).
+    expect(outcome.verification.executed).toBe(true)
+    expect(outcome.verification.passed).toBe(true)
+    expect(outcome.verification.failed.length).toBe(0)
+
+    // (7) Completion status: completed. NOT partial. NOT failed.
+    //     NOT cancelled. Completed. Period.
+    expect(outcome.completion.status).toBe('completed')
+
+    engine.dispose?.()
     } finally {
       process.chdir(originalCwd)
     }

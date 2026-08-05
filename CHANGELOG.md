@@ -2,7 +2,12 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
-## 0.5.3 (unreleased) — Reality Closure
+## 0.5.3 (released) — Closure Integrity
+
+**v0.5.3 is the version in `package.json`.** All section headers,
+README badges, and the CLI `--version` string now agree.
+
+### Reality repairs (P0)
 
 **Stop claiming Done for code that has no production caller.**
 

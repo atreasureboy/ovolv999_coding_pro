@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.5.2",
-  "description": "v0.5.2 Reality Closure — Runtime Truth Convergence",
+  "version": "0.5.3",
+  "description": "v0.5.3 Closure Integrity — candidate → promotion, per-attempt probe truth, two-backend parity, real Golden Path",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",
@@ -51,7 +51,7 @@
     "test:watch": "vitest",
     "test:unit": "vitest run",
     "test:integration": "vitest run tests/gap tests/phase tests/eval",
-    "test:esm": "node tests/esm-runner/repoStats-real-esm.mjs && node tests/esm-runner/sandbox-bwrap-isolation.mjs",
+    "test:esm": "tsx tests/esm-runner/repoStats-real-esm.mjs && tsx tests/esm-runner/sandbox-bwrap-isolation.mjs",
     "eval:wiring": "vitest run evals/wiring-smoke",
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
     "eval:real": "vitest run evals/real",

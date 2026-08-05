@@ -45,9 +45,12 @@ export interface MemoryRecord {
   repo: string
   /** Branch name. Optional. */
   branch?: string
-  /** Commit hash. REQUIRED for kind in {semantic,procedural} when the
-   * memory references code AND the repo is a clean git repo (R3 —
-   * code memories bind to commit on clean git). */
+  /** v0.5.3 Closure (P6/P7): baseCommit is the canonical git HEAD
+   * at write-time. The legacy `commit` field is preserved as an
+   * alias for back-compat with tests that pre-date the rename. */
+  baseCommit?: string
+  /** @deprecated Use `baseCommit`. Kept so existing call-sites
+   *  that pre-date the rename do not break at compile-time. */
   commit?: string
   /** v0.5.3 Final (P0 issue): working-tree dirty flag. Code-bound
    *  entries from a dirty repo MUST carry diffHash, NOT commit. */
@@ -87,25 +90,36 @@ export interface MemoryRecord {
 /** Input shape for `record()` — id/createdAt are assigned by the store. */
 export type MemoryRecordInput = Omit<MemoryRecord, 'id' | 'createdAt'>
 
-/** v0.5.3 Final (P1): in-memory backend for tests. Keeps records
- *  in a Map so test runs do NOT pollute the host filesystem and
- *  do NOT read previously-seeded production records. */
+/**
+ * v0.5.3 Closure Integrity (P4): in-memory backend.
+ *
+ * Contract per the spec:
+ *   - upsert(record) with the same id REPLACES the previous record,
+ *     not appends. Map<id, MemoryRecord> is the natural shape.
+ *   - load(now) returns each id at most once; TTL is honored here
+ *     for parity with JsonlMemoryBackend.
+ *   - delete(id) is idempotent.
+ *   - Return order: insertion order (id ascends with creation).
+ */
 export class InMemoryMemoryBackend implements MemoryBackend {
-  private records: MemoryRecord[] = []
+  private readonly records = new Map<string, MemoryRecord>()
 
   upsert(record: MemoryRecord): void {
-    this.records.push(record)
+    this.records.set(record.id, record)
   }
 
-  load(_now: string): MemoryRecord[] {
-    // We deliberately do NOT handle TTL here — the test store
-    // accepts whatever the test writes.
-    void _now
-    return [...this.records]
+  load(now: string): MemoryRecord[] {
+    const out: MemoryRecord[] = []
+    for (const r of this.records.values()) {
+      // TTL parity with JsonlMemoryBackend.
+      if (r.expiresAt && r.expiresAt < now) continue
+      out.push(r)
+    }
+    return out
   }
 
   delete(id: string): void {
-    this.records = this.records.filter((r) => r.id !== id)
+    this.records.delete(id)
   }
 }
 
@@ -171,11 +185,35 @@ export function referencesCode(content: string): boolean {
 }
 
 // ── Content hashing for conflict detection (R5) ─────────────────────────
+//
+// v0.5.3 Closure (P7): the contentKey MUST include the RevisionBinding
+// so that identical content seen from different branches / diffHashes
+// / workspaceHashes does NOT accidentally merge across revisions.
+// Without revision in the key, a fact observed on `branch=main@HEAD=abc`
+// would silently merge with the same fact observed on
+// `branch=main@HEAD=def` — losing provenance for both.
+//   key = sha256(
+//     repo | branch | baseCommit | dirty | diffHash | workspaceHash
+//         | kind | normalized content)
 
-function contentKey(rec: MemoryRecordInput): string {
-  return createHash('sha256')
-    .update(`${rec.repo}|${rec.kind}|${rec.content.trim().toLowerCase()}`)
-    .digest('hex')
+function contentKey(rec: MemoryRecord | MemoryRecordInput): string {
+  const h = createHash('sha256')
+  h.update(rec.repo ?? '')
+  h.update('\x00')
+  h.update(rec.branch ?? '')
+  h.update('\x00')
+  h.update(rec.baseCommit ?? '')
+  h.update('\x00')
+  h.update(String(rec.dirty ?? false))
+  h.update('\x00')
+  h.update(rec.diffHash ?? '')
+  h.update('\x00')
+  h.update(rec.workspaceHash ?? '')
+  h.update('\x00')
+  h.update(rec.kind)
+  h.update('\x00')
+  h.update(rec.content.trim().toLowerCase())
+  return h.digest('hex')
 }
 
 // ── Default JSONL backend ───────────────────────────────────────────────

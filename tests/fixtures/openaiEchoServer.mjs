@@ -146,24 +146,20 @@ export function startEchoServer(opts = {}) {
           return
         }
         if (mode === 'scenario-c' && body.stream === true) {
-          // count model-b calls specifically (the global `requests.length`
-          // already includes the model-a 503 attempts that returned
-          // before `requests.push` — wait, those push inside the 503
-          // branch too. To keep things deterministic we instead look
-          // at the messages[]: the FIRST model-b request from a fresh
-          // turn sees only the system prompt + user prompt. After
-          // Write is dispatched, the next model-b request sees a
-          // `tool` role response. So:
-          //   - has tool response with file_path=... → Bash verify
-          //   - has tool response already → done
-          //   - otherwise → Write
-          const lastToolMsg = [...(body.messages ?? [])].reverse().find((m) => m && m.role === 'tool')
-          const anyPriorTool = (body.messages ?? []).some((m) => m && m.role === 'tool')
+          // v0.5.3 Closure (P3): full Write → Bash → completion
+          // sequence. Count model-b calls in this server instance;
+          // mbCalls=1 → Write, mbCalls=2 → Bash, mbCalls=3+ → done.
+          let mbCalls = 0
+          for (const r of requests) {
+            if (r.model === 'model-b') mbCalls++
+          }
           let chunks
-          if (anyPriorTool) {
-            chunks = streamChunks(model, 'All done.')
-          } else {
+          if (mbCalls === 1) {
             chunks = streamToolCall(model, 'call_write_b', 'Write', { file_path: 'b.txt', content: 'fallback-ok' })
+          } else if (mbCalls === 2) {
+            chunks = streamToolCall(model, 'call_bash_b', 'Bash', { command: 'cat b.txt' })
+          } else {
+            chunks = streamChunks(model, 'All done.')
           }
           res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
           for (const line of chunks) res.write(line)
