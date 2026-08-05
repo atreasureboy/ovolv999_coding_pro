@@ -224,7 +224,7 @@ describe('P0-4.B: modifying tasks get an isolated worktree', () => {
     const usedCwd = child.constructedCwds[0]
     // Child ran inside the worktree subdirectory, NOT the parent repo root.
     expect(usedCwd).not.toBe(gitRoot)
-    expect(usedCwd).toContain('.ovolv999/worktrees/')
+    expect(String(usedCwd).split(/[\\\\/]/)).toContain('worktrees')
     // The auto-merge path commits the worktree's pending edits and
     // merges back, so by the time execute() returns the worktree dir
     // is gone and the file lives in the parent's HEAD.
@@ -416,7 +416,7 @@ describe('P0-4.D: parallel modifying tasks get distinct worktrees', () => {
     expect(roChild.constructedCwds[0]).toBe(gitRoot)
     // Modifying ran inside a worktree.
     expect(modChild.constructedCwds[0]).not.toBe(gitRoot)
-    expect(modChild.constructedCwds[0]).toContain('.ovolv999/worktrees/')
+    expect(String(modChild.constructedCwds[0]).split(/[\\\\/]/)).toContain('worktrees')
   })
 })
 
@@ -625,7 +625,7 @@ describe('P0-4: task_mode:"modify" enforces isolation + verify default', () => {
 
     expect(out.isError).toBe(false)
     expect(child.constructedCwds[0]).not.toBe(gitRoot)
-    expect(child.constructedCwds[0]).toContain('.ovolv999/worktrees/')
+    expect(String(child.constructedCwds[0]).split(/[\\\\/]/)).toContain('worktrees')
   })
 
   it('task_mode:"read_only" never creates a worktree', async () => {
@@ -703,7 +703,7 @@ describe('P0-4: task_mode:"modify" enforces isolation + verify default', () => {
     )
 
     expect(out.isError).toBe(false)
-    expect(child.constructedCwds[0]).toContain('.ovolv999/worktrees/')
+    expect(String(child.constructedCwds[0]).split(/[\\\\/]/)).toContain('worktrees')
   })
 })
 

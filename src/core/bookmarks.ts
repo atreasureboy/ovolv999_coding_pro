@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { join, resolve, relative } from 'path'
+import { join, resolve, relative, isAbsolute } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -187,7 +187,10 @@ export function formatBookmarkList(bookmarks: Bookmark[], cwd?: string): string 
   const lines: string[] = [`Bookmarks (${bookmarks.length}):`]
   for (let i = 0; i < bookmarks.length; i++) {
     const b = bookmarks[i]
-    const displayPath = cwd ? relative(cwd, b.path) : b.path
+    // v0.6.0 (audit): relative() corrupts already-relative bookmark
+    // paths (e.g. 'src/app.ts' stored relative → '..\..\src\app.ts').
+    // Only relativize absolute paths; keep stored relative paths as-is.
+    const displayPath = cwd && isAbsolute(b.path) ? relative(cwd, b.path) : b.path
     const lineRange = b.endLine ? `:${b.line}-${b.endLine}` : `:${b.line}`
     const tags = b.tags?.length ? ` [${b.tags.join(', ')}]` : ''
     const visits = b.visitCount > 0 ? ` (${b.visitCount} visits)` : ''
@@ -201,7 +204,8 @@ export function formatBookmarkList(bookmarks: Bookmark[], cwd?: string): string 
 }
 
 export function formatBookmarkDetail(bookmark: Bookmark, cwd?: string): string {
-  const displayPath = cwd ? relative(cwd, bookmark.path) : bookmark.path
+  // v0.6.0 (audit): same relative-path guard as formatBookmarkList.
+  const displayPath = cwd && isAbsolute(bookmark.path) ? relative(cwd, bookmark.path) : bookmark.path
   const lines: string[] = [
     `Bookmark: ${bookmark.note}`,
     `  File: ${displayPath}`,

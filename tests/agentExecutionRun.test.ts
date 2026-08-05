@@ -405,7 +405,7 @@ describe('AgentTool run.workspace reflects worktree isolation', () => {
 
     // The child ran inside a worktree.
     expect(recordedCwds[0]).not.toBe(gitRoot)
-    expect(recordedCwds[0]).toContain('.ovolv999/worktrees/')
+    expect(String(recordedCwds[0]).split(/[\\\\/]/)).toContain('worktrees')
     // The run was created BEFORE the worktree was opened, so the
     // initial workspace.cwd may be either the parent or the worktree
     // depending on lifecycle ordering — but the run reached

@@ -140,6 +140,18 @@ function matchInputPattern(pattern: string, toolInput?: Record<string, unknown>)
 
 const DEFAULT_TIMEOUT = 60000
 
+/** Windows-safe `$TOKEN` substitution (see runHook). */
+function expandTokensForWin32(command: string, env: Record<string, string>): string {
+  if (process.platform !== 'win32') return command
+  return command.replace(/\$([A-Z_][A-Z0-9_]*)/g, (m, name: string) => {
+    if (!(name in env)) return m
+    const val = env[name]
+    // cmd metacharacters need quoting; simple values are safe bare.
+    if (/^[A-Za-z0-9_\-./:\\ ]+$/.test(val)) return val
+    return `"${val.replace(/"/g, '""')}"`
+  })
+}
+
 export function runHook(
   hook: HookConfig,
   context: HookContext,
@@ -172,8 +184,16 @@ export function runHook(
     stdio: ['pipe', 'pipe', 'pipe'],
   }
 
+  // v0.6.0 (audit): cmd.exe (Windows) does not expand $VAR references
+  // the way /bin/sh does. Pre-substitute the known env tokens so hooks
+  // like `echo $TOOL_NAME` behave identically on both platforms. Only
+  // tokens that exist in our env are replaced; `$?` / `$$` / user shell
+  // vars are left untouched. Values containing cmd metacharacters are
+  // double-quote wrapped (cmd echo keeps quotes, which is safe).
+  const command = expandTokensForWin32(hook.command, env)
+
   try {
-    const stdout = execSync(hook.command, options) ?? ''
+    const stdout = execSync(command, options) ?? ''
     const duration = Date.now() - start
     return {
       allowed: true,

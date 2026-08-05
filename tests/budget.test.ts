@@ -53,7 +53,9 @@ describe('Token Budget Management', () => {
     it('getPeriodStart for daily returns midnight', () => {
       const date = new Date('2025-06-15T14:30:00Z')
       const start = getPeriodStart('daily', date)
-      expect(start.getHours()).toBe(0)
+      // v0.6.0 (audit): period boundaries are UTC-consistent
+      // (getPeriodKey uses toISOString) — assert UTC midnight.
+      expect(start.getUTCHours()).toBe(0)
     })
 
     it('getPeriodEnd for daily is start + 24h', () => {

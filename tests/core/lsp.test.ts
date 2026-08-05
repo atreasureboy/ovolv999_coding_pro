@@ -12,7 +12,12 @@ describe('LSP protocol', () => {
 
 describe('pathToFileUri', () => {
   it('converts unix absolute path', () => {
-    expect(pathToFileUri('/home/user/file.ts')).toBe('file:///home/user/file.ts')
+    // v0.6.0 (audit): on win32 resolve('/home/...') maps onto the
+    // current drive (C:\home\...) — the POSIX assertion only holds
+    // on POSIX hosts.
+    if (process.platform !== 'win32') {
+      expect(pathToFileUri('/home/user/file.ts')).toBe('file:///home/user/file.ts')
+    }
   })
 
   it('normalizes windows backslashes', () => {
@@ -20,7 +25,9 @@ describe('pathToFileUri', () => {
   })
 
   it('handles relative path with leading slash', () => {
-    expect(pathToFileUri('/foo/bar')).toBe('file:///foo/bar')
+    if (process.platform !== 'win32') {
+      expect(pathToFileUri('/foo/bar')).toBe('file:///foo/bar')
+    }
   })
 })
 

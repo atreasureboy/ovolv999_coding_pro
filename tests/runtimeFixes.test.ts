@@ -22,7 +22,10 @@
  * mutable state.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { ExecutionEngine } from '../src/core/engine.js'
 import { PermissionManager } from '../src/core/permissionSystem.js'
 import { AgentTool } from '../src/tools/agent.js'
@@ -134,12 +137,25 @@ function fakeRenderer() {
   } & Record<string, (...args: unknown[]) => void>
 }
 
+let fixtureCwd = ''
+
+// v0.6.0 (audit): '/tmp' is a POSIX path — on win32 it resolves to a
+// drive-relative path and corrupts joins (C:\C:\Users\...). Use a real
+// temp dir so path math is identical on both platforms.
+beforeAll(() => {
+  fixtureCwd = mkdtempSync(join(tmpdir(), 'ovolv999-runtimefix-'))
+})
+
+afterAll(() => {
+  rmSync(fixtureCwd, { recursive: true, force: true })
+})
+
 function baseConfig(overrides: Partial<EngineConfig> = {}): EngineConfig {
   return {
     apiKey: 'test-key',
     model: 'test-model',
     maxIterations: 10,
-    cwd: '/tmp',
+    cwd: fixtureCwd,
     permissionMode: 'auto',
     permissionManager: undefined,
     enabledModules: [],

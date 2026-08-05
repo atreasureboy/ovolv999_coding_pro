@@ -102,10 +102,11 @@ export function getPeriodKey(period: BudgetPeriod, date = new Date()): string {
     case 'daily':
       return date.toISOString().slice(0, 10) // YYYY-MM-DD
     case 'weekly': {
-      // Get ISO week
+      // Get ISO week (UTC-consistent with daily/monthly; previously
+      // mixed local setDate/getDay with UTC toISOString output).
       const tmp = new Date(date)
-      tmp.setHours(0, 0, 0, 0)
-      tmp.setDate(tmp.getDate() - ((tmp.getDay() + 6) % 7))
+      tmp.setUTCHours(0, 0, 0, 0)
+      tmp.setUTCDate(tmp.getUTCDate() - ((tmp.getUTCDay() + 6) % 7))
       return tmp.toISOString().slice(0, 10)
     }
     case 'monthly':
@@ -119,16 +120,20 @@ export function getPeriodStart(period: BudgetPeriod, date = new Date()): Date {
     case 'session':
       return d
     case 'daily':
-      d.setHours(0, 0, 0, 0)
+      // v0.6.0 (audit): use UTC midnight to match getPeriodKey's
+      // toISOString (UTC) representation. Previously this used local
+      // setHours(0,0,0,0), which made start/end disagree with the
+      // period key in non-UTC timezones (e.g. UTC+8 → 16h shift).
+      d.setUTCHours(0, 0, 0, 0)
       return d
     case 'weekly': {
-      d.setHours(0, 0, 0, 0)
-      d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+      d.setUTCHours(0, 0, 0, 0)
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7))
       return d
     }
     case 'monthly':
-      d.setDate(1)
-      d.setHours(0, 0, 0, 0)
+      d.setUTCDate(1)
+      d.setUTCHours(0, 0, 0, 0)
       return d
   }
 }
@@ -143,7 +148,8 @@ export function getPeriodEnd(period: BudgetPeriod, date = new Date()): Date {
     case 'weekly':
       return new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000)
     case 'monthly':
-      return new Date(start.getFullYear(), start.getMonth() + 1, 1)
+      // v0.6.0 (audit): UTC-consistent month rollover.
+      return new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1))
   }
 }
 

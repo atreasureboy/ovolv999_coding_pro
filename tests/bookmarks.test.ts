@@ -259,7 +259,8 @@ describe('Bookmark System', () => {
       })
       const out = formatBookmarkDetail(bm, cwd)
       expect(out).toContain('main entry')
-      expect(out).toContain('src/app.ts')
+      // v0.6.0 (audit): relative path uses platform separator.
+      expect(out.replace(/\\/g, '/')).toContain('src/app.ts')
       expect(out).toContain('Line: 42')
       expect(out).toContain('Column: 3')
       expect(out).toContain('critical, entry')
