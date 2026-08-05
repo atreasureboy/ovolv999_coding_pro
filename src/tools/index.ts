@@ -2,7 +2,7 @@
  * Tool registry — ovolv999 agent base tools
  */
 
-import type { Tool, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
+import type { Tool, EngineConfig, AgentChildEngineFactory, ToolMetadata } from '../core/types.js'
 import type { ExecutionRunRegistry } from '../core/executionRun.js'
 import type { RunScopedEvidenceResolver } from './taskGraphResolver.js'
 import { BashTool } from './bash.js'
@@ -41,7 +41,40 @@ import { createSearchExtraToolsTool } from './searchExtraTools.js'
 import { createLspTool, loadLspServersFromSettings } from './lspTool.js'
 import { MultiEditTool } from './multiEdit.js'
 import { CodeStructureTool } from './codeStructure.js'
+import { createLazyTool, type LazyTool } from '../core/lazyTool.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
+
+/** v0.6.0: concise helper for building lazy tools. */
+function lazy(
+  name: string,
+  description: string,
+  props: Record<string, string>,
+  required: string[],
+  metadata: ToolMetadata | undefined,
+  factory: () => Tool,
+): LazyTool {
+  const properties: Record<string, { type: string; description?: string }> = {}
+  for (const [k, v] of Object.entries(props)) {
+    properties[k] = { type: v }
+  }
+  return createLazyTool({
+    name,
+    definition: {
+      type: 'function',
+      function: {
+        name,
+        description,
+        parameters: {
+          type: 'object',
+          properties,
+          ...(required.length > 0 ? { required } : {}),
+        },
+      },
+    },
+    metadata,
+    factory,
+  })
+}
 
 /**
  * Wiring for the per-engine AgentTool instance.
@@ -92,6 +125,7 @@ export function createTools(
     : new AgentTool()
 
   return [
+    // ── Core (always eager) ──
     new BashTool(),
     new FileReadTool(),
     new FileWriteTool(),
@@ -102,13 +136,6 @@ export function createTools(
     new WebFetchTool(),
     new WebSearchTool(),
     agent,
-    new TmuxSessionTool(),
-    new ShellSessionTool(),
-    new TaskCreateTool(),
-    new TaskGetTool(),
-    new TaskListTool(),
-    new TaskUpdateTool(),
-    new TaskStopTool(),
     new AskUserQuestionTool(),
     new ExitPlanModeTool(),
     new EnterPlanModeTool(),
@@ -116,19 +143,51 @@ export function createTools(
     new SleepTool(),
     new SnipTool(),
     new NotebookEditTool(),
-    new ClaudeCodeTool(undefined, agentWiring?.runRegistry, agentWiring?.parentRunId),
-    new EnterWorktreeTool(),
-    new ExitWorktreeTool(),
-    new ListWorktreesTool(),
-    new DiagnosticsTool(),
-    new ListMcpResourcesTool(),
-    new ReadMcpResourceTool(),
     new GoalTool(),
     new TaskPlanTool(agentWiring?.taskGraphResolver, agentWiring?.evidenceResolver),
     createSearchExtraToolsTool(),
-    createLspTool({ servers: loadLspServersFromSettings() }),
     new MultiEditTool(),
     new CodeStructureTool(),
+
+    // ── Heavy (lazy) — v0.6.0: ~200ms startup savings ──
+    lazy('Task', 'Launch a new agent to handle complex, multi-step tasks autonomously',
+      { subagent_type: 'string', description: 'string', prompt: 'string' }, ['subagent_type', 'description', 'prompt'],
+      { mutatesState: true, concurrencySafe: false },
+      () => new TaskCreateTool()),
+    lazy('TaskGet', 'Get task details', { task_id: 'string' }, ['task_id'],
+      undefined, () => new TaskGetTool()),
+    lazy('TaskList', 'List all tasks', {}, [],
+      undefined, () => new TaskListTool()),
+    lazy('TaskUpdate', 'Update task status', { task_id: 'string', status: 'string' }, ['task_id'],
+      undefined, () => new TaskUpdateTool()),
+    lazy('TaskStop', 'Stop a running task', { task_id: 'string' }, ['task_id'],
+      undefined, () => new TaskStopTool()),
+    lazy('Tmux', 'Manage tmux sessions for long-running processes', { action: 'string', session: 'string', command: 'string' }, ['action'],
+      { mutatesState: true, concurrencySafe: false },
+      () => new TmuxSessionTool()),
+    lazy('Shell', 'Interactive shell session', { action: 'string', command: 'string' }, ['action'],
+      { mutatesState: true, concurrencySafe: false },
+      () => new ShellSessionTool()),
+    lazy('ClaudeCode', 'Delegate to Claude Code worker', { prompt: 'string', model: 'string', role: 'string', worktree: 'string' }, ['prompt'],
+      { mutatesState: true, concurrencySafe: false },
+      () => new ClaudeCodeTool(undefined, agentWiring?.runRegistry, agentWiring?.parentRunId)),
+    lazy('EnterWorktree', 'Create and enter an isolated git worktree', { branch: 'string', base: 'string' }, ['branch'],
+      { mutatesState: true, concurrencySafe: false },
+      () => new EnterWorktreeTool()),
+    lazy('ExitWorktree', 'Exit and clean up a worktree', { path: 'string' }, [],
+      { mutatesState: true, concurrencySafe: false },
+      () => new ExitWorktreeTool()),
+    lazy('ListWorktrees', 'List active worktrees', {}, [],
+      undefined, () => new ListWorktreesTool()),
+    lazy('Diagnostics', 'Run code diagnostics (tsc, eslint, etc.)', { checker: 'string', file: 'string' }, [],
+      undefined, () => new DiagnosticsTool()),
+    lazy('ListMcpResources', 'List MCP resources', { server: 'string' }, [],
+      undefined, () => new ListMcpResourcesTool()),
+    lazy('ReadMcpResource', 'Read an MCP resource', { uri: 'string' }, ['uri'],
+      undefined, () => new ReadMcpResourceTool()),
+    lazy('LSP', 'Language Server Protocol: go-to-definition, references, hover, completions',
+      { action: 'string', file: 'string', line: 'number', column: 'number' }, ['action', 'file'],
+      undefined, () => createLspTool({ servers: loadLspServersFromSettings() })),
     ...extraTools,
   ]
 }
