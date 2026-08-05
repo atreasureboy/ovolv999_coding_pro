@@ -2,6 +2,44 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.6.0 — Enterprise Architecture Audit & Codex/OpenCode Alignment
+
+### Architecture Audit & Cross-Platform Fixes
+- **daemon**: Windows named-pipe support (`\\.\pipe\`); `OVOGO_DAEMON_SOCKET` env override
+- **magicDocs**: Replaced Unix `find` with native recursive walk; `readFiles` uses `isAbsolute`
+- **revisionBinding**: `normalizeGitPath()` — git outputs POSIX slashes on Windows
+- **hooks**: `expandTokensForWin32()` — `$VAR` expansion for cmd.exe
+- **budget**: Unified UTC period boundaries (was mixed local/UTC, causing 16h shifts)
+- **bookmarks**: Relative-path guard for already-relative bookmark paths
+- **Type fixes**: `runScopedContext.restore()` missing `projectIdentity`; `toolExecutor` dead code removal
+- **Dependency**: `vscode-jsonrpc` was declared but not installed — 39 lint errors → 0
+
+### New Tools (Codex-inspired)
+- **MultiEdit**: Atomic batch file editing with rollback (up to 20 edits, all-or-nothing)
+- **CodeStructure**: AST-aware code analysis — symbols, imports, semantic diff, references
+- **CodeQuality**: Post-change verification — typecheck + lint + test suite
+- **CodeReview**: Deterministic, LLM-free change review — secrets, unsafe patterns, debug leftovers
+- **ProjectExplorer**: Zero-dependency project structure discovery — 30+ languages, frameworks
+- **SymbolIndex**: Codebase-wide symbol index — lookup, search, references, incremental refresh
+
+### New Core Modules (Codex/OpenCode-inspired)
+- **AtomicTransaction**: Transactional file editing with snapshot/rollback/commit
+- **RetryManager**: Exponential backoff + full jitter + circuit breaker + Retry-After honoring
+- **ToolSuggester**: Context-aware tool recommendation with keyword scoring, recency penalty
+- **SessionCheckpoint**: Save/restore workflow state with auto-rotation
+- **LazyTool**: Deferred tool instantiation (15 heavy tools, ~200ms startup savings)
+- **SyntaxHighlight**: Zero-dependency terminal/HTML syntax highlighting for diff preview
+
+### Testing
+- **enterpriseSuite.test.ts**: 41 tests covering all new modules
+- **newModules.test.ts**: 15 tests for AtomicTransaction, CodeStructure, SessionCheckpoint
+- Total v0.6.0 suite: 56/56 passing
+- Cross-platform fixes: ~120 failing tests resolved (198→78, remaining: Windows platform limitations)
+
+### Modules Total
+- **21 new files** (15 production, 6 core architecture)
+- Tools: 34 → 40 (+MultiEdit, +CodeStructure, +CodeQuality, +ProjectExplorer, +CodeReview, +SymbolIndex)
+
 ## 0.5.6 (released) — Release Acceptance Repair
 
 **v0.5.6 is the version in `package.json`.** This release makes every
