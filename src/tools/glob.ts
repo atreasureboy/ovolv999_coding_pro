@@ -14,6 +14,8 @@ export interface GlobInput {
   path?: string
 }
 
+const MAX_RESULTS = 1000
+
 export class GlobTool implements Tool {
   name = 'Glob'
   metadata = {
@@ -72,9 +74,12 @@ export class GlobTool implements Tool {
         return { content: `No files found matching: ${pattern} in ${cwd}. Tip: try a broader pattern (e.g. "**/*.ts"), check the path, or omit 'path' to search cwd.`, isError: false }
       }
 
+      const truncated = files.length > MAX_RESULTS
+      const subset = files.slice(0, MAX_RESULTS)
+
       // Sort by modification time (newest first)
       const withMtime = await Promise.all(
-        files.map(async (f) => {
+        subset.map(async (f) => {
           try {
             const s = await stat(f)
             return { path: f, mtime: s.mtimeMs }
@@ -87,8 +92,9 @@ export class GlobTool implements Tool {
       withMtime.sort((a, b) => b.mtime - a.mtime)
 
       const sorted = withMtime.map((f) => f.path)
+      const header = truncated ? `Showing ${MAX_RESULTS} of ${files.length} files (truncated). Refine your pattern to narrow results.\n` : ''
       return {
-        content: sorted.join('\n'),
+        content: header + sorted.join('\n'),
         isError: false,
       }
     } catch (err: unknown) {

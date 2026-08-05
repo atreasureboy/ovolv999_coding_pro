@@ -5,6 +5,7 @@
  * (generated files, logs, reports) to an isolated per-session directory.
  */
 
+import { existsSync, mkdirSync } from 'fs'
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../core/module.js'
 
 export class WorkspaceModule implements AgentModule {
@@ -14,6 +15,9 @@ export class WorkspaceModule implements AgentModule {
 
   boot(ctx: ModuleBootContext): ModuleBootResult {
     const sessionDir = this.sessionDir ?? ctx.sessionDir
+    if (sessionDir && !existsSync(sessionDir)) {
+      try { mkdirSync(sessionDir, { recursive: true }) } catch { /* best-effort */ }
+    }
     return {
       toolContextPatch: sessionDir ? { sessionDir } : {},
     }

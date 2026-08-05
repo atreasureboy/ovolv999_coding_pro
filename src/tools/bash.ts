@@ -27,7 +27,7 @@
  *       whole subprocess tree)
  */
 
-import { spawn, execSync } from 'child_process'
+import { spawn, execFileSync } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -384,7 +384,7 @@ export class BashTool implements Tool {
       const onBgAbort = () => {
         if (process.platform === 'win32') {
           try {
-            execSync(`taskkill /F /T /PID ${bgChild.pid}`, { stdio: 'ignore', timeout: 5000 })
+            execFileSync('taskkill', ['/F', '/T', '/PID', String(bgChild.pid)], { stdio: 'ignore', timeout: 5000 })
           } catch { /* best-effort */ }
         } else {
           // Negative pid = process group; valid because detached:true.
@@ -685,7 +685,7 @@ export class BashTool implements Tool {
         if (pid === undefined) return
         if (process.platform === 'win32') {
           try {
-            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 })
+            execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', timeout: 5000 })
           } catch { /* best-effort */ }
           try { child.kill(signal) } catch { /* ignore */ }
         } else {

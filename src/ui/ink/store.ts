@@ -439,12 +439,18 @@ export class UIStore {
   clearMessages(): void {
     this.finalizedIds.clear()
     this.nextId = 1
+    if (this.planResolver) { this.planResolver(false); this.planResolver = null }
+    if (this.permissionResolver) { this.permissionResolver({ approved: false, alwaysAllow: false }); this.permissionResolver = null }
+    if (this.selectResolver) { this.selectResolver(null); this.selectResolver = null }
     this.state = {
       ...this.state,
       messages: [],
       committedThroughId: 0,
       streamingText: '',
       streamingReasoning: '',
+      pendingPlan: null,
+      pendingPermission: null,
+      selectOverlay: null,
       renderEpoch: this.state.renderEpoch + 1,
     }
     this.emit()

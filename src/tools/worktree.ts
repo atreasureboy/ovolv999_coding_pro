@@ -15,7 +15,7 @@
  */
 
 import { execSync, execFileSync } from 'child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, renameSync } from 'fs'
 import { join, resolve } from 'path'
 import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -78,7 +78,9 @@ export class WorktreeManager {
     try {
       mkdirSync(join(this.cwd, '.ovolv999'), { recursive: true })
       const list = [...this.active.values()]
-      writeFileSync(this.metaPath(), JSON.stringify(list, null, 2), 'utf8')
+      const tmpPath = this.metaPath() + '.tmp'
+      writeFileSync(tmpPath, JSON.stringify(list, null, 2), 'utf8')
+      renameSync(tmpPath, this.metaPath())
     } catch {
       // Best-effort
     }

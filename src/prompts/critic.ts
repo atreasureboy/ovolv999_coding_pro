@@ -96,8 +96,5 @@ export function parseCriticOutput(output: string): string | null {
     .map((line) => line.trim())
     .filter((line) => /^\[(?:ISSUE|FIX)\]\s+\S/i.test(line))
     .slice(0, 6)
-  return lines.some((line) => /^\[ISSUE\]/i.test(line))
-    && lines.some((line) => /^\[FIX\]/i.test(line))
-    ? lines.join('\n')
-    : null
+  return lines.length > 0 ? lines.join('\n') : null
 }

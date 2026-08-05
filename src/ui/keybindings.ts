@@ -48,6 +48,7 @@ export type KeyAction =
 export interface KeyCombo {
   ctrl?: boolean
   alt?: boolean
+  meta?: boolean
   shift?: boolean
   /** The character or special key name (e.g. 'l', '?', 'enter', 'tab') */
   key: string
@@ -105,7 +106,8 @@ export function parseKeyCombo(combo: string): KeyCombo | null {
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i].trim()
     if (part === 'ctrl') result.ctrl = true
-    else if (part === 'alt' || part === 'meta') result.alt = true
+    else if (part === 'alt') result.alt = true
+    else if (part === 'meta' || part === 'cmd' || part === 'super') result.meta = true
     else if (part === 'shift') result.shift = true
     else {
       // Last part is the key itself
@@ -127,13 +129,15 @@ export function comboToString(combo: KeyCombo): string {
   const mods: string[] = []
   if (combo.ctrl) mods.push('ctrl')
   if (combo.alt) mods.push('alt')
+  if (combo.meta) mods.push('meta')
   if (combo.shift) mods.push('shift')
   return [...mods, combo.key].join('+')
 }
 
 /**
  * Match an Ink-style input/key pair against a combo string.
- * Ink provides: key.ctrl, key.meta (alt), key.shift, input (the char).
+ * Ink provides: key.ctrl (Ctrl), key.meta (Alt/Option), key.shift (Shift).
+ * Note: Ink does NOT expose the Super/Command key separately.
  */
 export function matchCombo(
   input: string,
@@ -143,28 +147,39 @@ export function matchCombo(
   const combo = parseKeyCombo(comboStr)
   if (!combo) return false
 
-  // For ctrl combos, input is the control character (e.g. '\x0c' for ctrl+l)
-  // Ink sets key.ctrl = true. We match on key.ctrl + the letter.
-  if (combo.ctrl) {
-    if (!key.ctrl) return false
-    // Reject if actual press has modifiers the combo doesn't
-    if (key.meta && !combo.alt) return false
-    if (key.shift && !combo.shift) return false
-    // Convert input control char back to letter for comparison
-    const letter = ctrlCharToLetter(input)
-    if (letter === null) return false
-    return letter === combo.key
+  if (combo.meta) {
+    if (combo.ctrl) return matchCtrlCombo(combo, key, input)
+    // meta (Super/Cmd) key combos — Ink doesn't expose Super, so we can't match
+    return false
   }
 
+  // For ctrl combos, input is the control character (e.g. '\x0c' for ctrl+l)
+  if (combo.ctrl) {
+    return matchCtrlCombo(combo, key, input)
+  }
+
+  // Ink's key.meta is Alt/Option, so combo.alt maps to key.meta
   if (combo.alt && !key.meta) return false
   if (combo.shift && !key.shift) return false
-  // Reject if actual press has modifiers the combo doesn't
   if (!combo.alt && key.meta) return false
   if (!combo.shift && key.shift) return false
   if (key.ctrl) return false
 
-  // Plain key match (no modifiers)
   return input === combo.key
+}
+
+function matchCtrlCombo(
+  combo: KeyCombo,
+  key: { ctrl?: boolean; meta?: boolean; shift?: boolean },
+  input: string,
+): boolean {
+  if (!key.ctrl) return false
+  if (combo.meta && !key.meta) return false
+  if (key.meta && !combo.meta && !combo.alt) return false
+  if (key.shift && !combo.shift) return false
+  const letter = ctrlCharToLetter(input)
+  if (letter === null) return false
+  return letter === combo.key
 }
 
 /** Convert a control character (e.g. '\x0c') to its letter ('l') */

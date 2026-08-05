@@ -103,7 +103,7 @@ export function App({
   const state: UIState = useUIStore(store)
   const { exit } = useApp()
   const { stdout } = useStdout()
-  const [history, setHistory] = useState<OpenAIMessage[]>(initialHistory)
+  const historyRef = useRef<OpenAIMessage[]>(initialHistory)
   const [showHelp, setShowHelp] = useState(false)
   const inputHistory = useRef<string[]>(loadInputHistory())
   const turnStartTime = useRef(0)
@@ -119,8 +119,7 @@ export function App({
   useEffect(() => {
     if (state.renderEpoch === renderEpoch.current) return
     renderEpoch.current = state.renderEpoch
-    stdout.write('\x1b[2J\x1b[3J\x1b[H')
-  }, [state.renderEpoch, stdout])
+  }, [state.renderEpoch])
 
   // ── Turn execution ────────────────────────────────────────────────────────
 
@@ -155,8 +154,8 @@ export function App({
       updateTerminalTitle(store.getState().banner?.model ?? model, true)
 
       try {
-        const result = await runTurn(expandedText, history, images.length > 0 ? images : undefined)
-        setHistory(result.newHistory)
+        const result = await runTurn(expandedText, historyRef.current, images.length > 0 ? images : undefined)
+        historyRef.current = result.newHistory
         const elapsed = ((Date.now() - turnStartTime.current) / 1000).toFixed(1)
         if (result.outcome) {
           const { formatOutcomeCardText } = await import('../turnOutcomeCard.js')
@@ -202,11 +201,11 @@ export function App({
         // Bell notification for long-running turns (>5s)
         const elapsed = Date.now() - turnStartTime.current
         if (elapsed > 5000) {
-          if (process.stdout.isTTY) process.stdout.write('\x07')
+          if (stdout.isTTY) stdout.write('\x07')
         }
       }
     },
-    [history, runTurn, dispatchSlash, store, model],
+    [runTurn, dispatchSlash, store, model],
   )
 
   // ── Interrupt ─────────────────────────────────────────────────────────────
@@ -218,8 +217,8 @@ export function App({
   // ── Copy last reply ───────────────────────────────────────────────────────
 
   const handleCopy = useCallback(() => {
-    for (let i = history.length - 1; i >= 0; i--) {
-      const m = history[i]
+    for (let i = historyRef.current.length - 1; i >= 0; i--) {
+      const m = historyRef.current[i]
       if (m.role === 'assistant' && typeof m.content === 'string' && m.content) {
         const ok = copyToClipboard(m.content)
         store.addInfo(ok ? '✓ Copied to clipboard' : '⚠ No clipboard tool found')
@@ -227,7 +226,7 @@ export function App({
       }
     }
     store.addInfo('No assistant reply to copy')
-  }, [history, store])
+  }, [store])
 
   // ── Keybindings (loaded once per cwd) ─────────────────────────────────────
 
@@ -314,7 +313,7 @@ export function App({
 
   // ── Context state for StatusBar ───────────────────────────────────────────
 
-  const tokens = estimateTokens(history)
+  const tokens = estimateTokens(historyRef.current)
   const maxCtx = maxContextTokens ?? 200_000
   const contextPct = maxCtx > 0 ? tokens / maxCtx : 0
   const terminalWidth = safeTerminalWidth(stdout.columns)
@@ -428,7 +427,7 @@ export function App({
       {/* Status bar */}
       <StatusBar
         model={state.banner?.model ?? model}
-        messageCount={history.length}
+        messageCount={historyRef.current.length}
         contextPct={contextPct}
         tokenCount={tokens}
         maxTokens={maxContextTokens}

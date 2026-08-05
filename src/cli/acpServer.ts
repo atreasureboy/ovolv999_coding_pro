@@ -69,7 +69,7 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
           apiKey: opts.apiKey!,
           baseURL: opts.baseURL,
           provider: opts.provider,
-          model: opts.model ?? 'claude-sonnet-4-6',
+          model: opts.model ?? 'gpt-4o',
           permissionMode: 'auto',
           maxIterations: 50,
           hookRunner,

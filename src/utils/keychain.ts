@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { execSync } from 'child_process'
+import { execFileSync, execSync } from 'child_process'
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -138,7 +138,9 @@ function saveFileVault(vault: FileVault, passphrase: string): void {
 
 function keychainGet(key: string): string | null {
   try {
-    const result = execSync(`security find-generic-password -s ${SERVICE_NAME} -a ${key} -w`, {
+    const result = execFileSync('security', [
+      'find-generic-password', '-s', SERVICE_NAME, '-a', key, '-w',
+    ], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -151,13 +153,10 @@ function keychainGet(key: string): string | null {
 
 function keychainSet(key: string, value: string): boolean {
   try {
-    // Delete existing first (ignore errors)
-    execSync(`security delete-generic-password -s ${SERVICE_NAME} -a ${key} 2>/dev/null`, {
-      stdio: 'pipe',
-      timeout: 5000,
-    })
-    // Add new
-    execSync(`security add-generic-password -s ${SERVICE_NAME} -a ${key} -w ${value}`, {
+    try { execFileSync('security', ['delete-generic-password', '-s', SERVICE_NAME, '-a', key], { stdio: 'pipe', timeout: 5000 }) } catch { /* ignore */ }
+    execFileSync('security', [
+      'add-generic-password', '-s', SERVICE_NAME, '-a', key, '-w', value, '-U',
+    ], {
       stdio: 'pipe',
       timeout: 5000,
     })
@@ -169,7 +168,9 @@ function keychainSet(key: string, value: string): boolean {
 
 function keychainDelete(key: string): boolean {
   try {
-    execSync(`security delete-generic-password -s ${SERVICE_NAME} -a ${key}`, {
+    execFileSync('security', [
+      'delete-generic-password', '-s', SERVICE_NAME, '-a', key,
+    ], {
       stdio: 'pipe',
       timeout: 5000,
     })

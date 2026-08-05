@@ -166,8 +166,14 @@ export function listThemes(): Theme[] {
 }
 
 function shouldUseDark(): boolean {
-  // In a real terminal, we'd check the background color
-  // For now, default to dark
+  try {
+    const colorFgBg = process.env.COLORFGBG
+    if (colorFgBg) {
+      const parts = colorFgBg.split(';')
+      const bg = parseInt(parts[1] ?? '0', 10)
+      return bg < 8
+    }
+  } catch { /* fall through */ }
   return true
 }
 

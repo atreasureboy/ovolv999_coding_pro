@@ -18,7 +18,7 @@
 import { createInterface, type Interface as ReadlineInterface } from 'readline'
 import { EventEmitter } from 'events'
 import { writeFileSync, readFileSync } from 'fs'
-import { resolve } from 'path'
+import { resolve, relative, normalize } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -328,8 +328,13 @@ export class ACPServer extends EventEmitter {
         this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "path"')
         return
       }
+      const resolvedPath = resolve(this.cwd, path)
+      if (!this.isPathSafe(resolvedPath)) {
+        this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Path traversal denied')
+        return
+      }
       try {
-        const content = readFileSync(resolve(this.cwd, path), 'utf8')
+        const content = readFileSync(resolvedPath, 'utf8')
         this.respond(id, { path, content })
       } catch (err) {
         this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to read: ${(err as Error).message}`)
@@ -361,8 +366,13 @@ export class ACPServer extends EventEmitter {
     if (this.handlers.onFileWrite) {
       this.handlers.onFileWrite(path, content)
     } else {
+      const resolvedPath = resolve(this.cwd, path)
+      if (!this.isPathSafe(resolvedPath)) {
+        this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Path traversal denied')
+        return
+      }
       try {
-        writeFileSync(resolve(this.cwd, path), content, 'utf8')
+        writeFileSync(resolvedPath, content, 'utf8')
       } catch (err) {
         this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to write: ${(err as Error).message}`)
         return
@@ -370,6 +380,16 @@ export class ACPServer extends EventEmitter {
     }
 
     this.respond(id, { path, written: true })
+  }
+
+  private isPathSafe(resolvedPath: string): boolean {
+    try {
+      const rel = relative(resolve(this.cwd), resolvedPath)
+      const normalized = normalize(rel)
+      return !normalized.startsWith('..') && normalized !== ''
+    } catch {
+      return false
+    }
   }
 
   private respond(id: string | number | undefined, result: unknown): void {

@@ -525,7 +525,6 @@ Use narrow tasks with explicit file scope and required tests. ClaudeCode workers
       // GAP-K: record runId→session so steer() can resolve the pane.
       if (runId) {
     this.runSessions.set(runId, result.session)
-    if (result.taskId) this.runTasks.set(runId, result.taskId)
         // P1-1: persist taskId so a later detached wait({runId}) binds
         // to THIS task's sentinel, not a stale ^[DONE]$.
         if (result.taskId) this.runTasks.set(runId, result.taskId)

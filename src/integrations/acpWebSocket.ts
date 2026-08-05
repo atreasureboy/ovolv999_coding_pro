@@ -59,6 +59,10 @@ export class WebSocketACPTransport implements ACPTransport {
 
   send(frame: string): void {
     if (!this.open) return
+    if (this.sendQueue.length >= 1000) {
+      this.markClosed()
+      return
+    }
     this.sendQueue.push(frame)
     this.flush()
   }
@@ -101,6 +105,7 @@ export class WebSocketACPTransport implements ACPTransport {
     while (this.buffer.length >= 2) {
       const second = this.buffer[1]
       const op = second & 0x0f
+      const masked = (second & 0x80) !== 0
       let payloadLen = this.buffer[0] & 0x7f
       let offset = 2
       if (payloadLen === 126) {
@@ -112,8 +117,24 @@ export class WebSocketACPTransport implements ACPTransport {
         payloadLen = Number(this.buffer.readBigUInt64BE(2))
         offset = 10
       }
+      let maskKey: Buffer | null = null
+      if (masked) {
+        if (this.buffer.length < offset + 4) return
+        maskKey = this.buffer.subarray(offset, offset + 4)
+        offset += 4
+      }
       if (this.buffer.length < offset + payloadLen) return
-      const payload = this.buffer.subarray(offset, offset + payloadLen)
+      if (payloadLen > MAX_FRAME_BYTES) {
+        this.markClosed()
+        return
+      }
+      let payload = this.buffer.subarray(offset, offset + payloadLen)
+      if (maskKey) {
+        payload = Buffer.alloc(payloadLen)
+        for (let i = 0; i < payloadLen; i++) {
+          payload[i] = this.buffer[offset + i] ^ maskKey[i % 4]
+        }
+      }
       this.buffer = this.buffer.subarray(offset + payloadLen)
       this.dispatchFrame(op, payload)
       if (op === 0x8) {

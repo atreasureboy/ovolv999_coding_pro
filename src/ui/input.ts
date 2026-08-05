@@ -20,6 +20,8 @@
 
 import { createInterface, type Interface } from 'readline'
 
+const supportsSignalOption = parseInt((process.versions.node ?? '0').split('.')[0] ?? '0', 10) >= 22
+
 export interface InputResult {
   text: string
   eof: boolean
@@ -177,7 +179,7 @@ export class InputHandler {
         // internally on abort. The callback is not invoked, the
         // readline is not closed. Our onAbort handler settles the
         // outer Promise.
-        if (signal) {
+        if (signal && supportsSignalOption) {
           rl.question(promptText, { signal }, (answer) => {
             if (answer.trim()) {
               this.history.unshift(answer)

@@ -20,9 +20,11 @@ import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { warnConfigOnce } from './diagnostics.js'
 
+import { type PermissionMode } from '../core/permissionSystem.js'
+
 export interface ProjectConfig {
   model?: string
-  permissionMode?: 'auto' | 'ask' | 'deny'
+  permissionMode?: PermissionMode
   maxIterations?: number
   maxContextTokens?: number
   systemPrompt?: string
@@ -32,7 +34,7 @@ export interface ProjectConfig {
 }
 
 const CONFIG_FILES = ['.ovolv999.json', '.ovolv999.jsonc']
-const PERMISSION_MODES = new Set(['auto', 'ask', 'deny'])
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

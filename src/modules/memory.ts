@@ -22,7 +22,6 @@ import {
   type RevisionBinding,
 } from '../core/memoryCandidate.js'
 import { buildRevisionBinding } from '../core/revisionBinding.js'
-import type { RunScopedRuntimeContextStore } from '../core/runtime/runScopedContext.js'
 
 // (Source priority lives in semanticMemory.ts — single source of truth)
 
@@ -256,71 +255,6 @@ export interface MemoryToolContext {
   /** Engine-published: whether the current run's verification passed.
    *  When true, code-bound R1 verification is satisfied. */
   verified?: boolean
-}
-
-// ── memory_search — search semantic memory by keywords/tags ─────────────────
-
-function createMemorySearchTool(semantic: SemanticMemory): Tool {
-  return {
-    name: 'memory_search',
-    metadata: { readOnly: true, concurrencySafe: true },
-    definition: {
-      type: 'function',
-      function: {
-        name: 'memory_search',
-        description: `Search long-term memory for relevant knowledge. Returns entries sorted by confidence and recency.
-
-Use this to recall past learnings, user preferences, or project conventions that might help with the current task.`,
-        parameters: {
-          type: 'object',
-          properties: {
-            query: {
-              type: 'string',
-              description: 'Keywords to search for in memory content',
-            },
-            tags: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Tags to filter by (e.g. ["convention"])',
-            },
-            limit: {
-              type: 'number',
-              description: 'Max results (default: 10)',
-            },
-          },
-        },
-      },
-    } satisfies ToolDefinition,
-
-    execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const query = str(input.query)
-      const tags = Array.isArray(input.tags)
-        ? (input.tags as unknown[]).filter((t): t is string => typeof t === 'string')
-        : []
-      const limit = typeof input.limit === 'number' ? Math.min(input.limit, 30) : 10
-
-      const keywords = query ? query.split(/\s+/).filter(Boolean) : undefined
-      const results = semantic.search({
-        keywords,
-        tags: tags.length > 0 ? tags : undefined,
-        limit,
-      })
-
-      if (results.length === 0) {
-        return Promise.resolve({ content: 'No matching memories found.', isError: false })
-      }
-
-      const lines = results.map((e, i) => {
-        const tagStr = e.tags.length > 0 ? ` [${e.tags.join(', ')}]` : ''
-        return `${i + 1}. (${e.source}) ${e.content}${tagStr} (conf: ${e.confidence})`
-      })
-
-      return Promise.resolve({
-        content: `Found ${results.length} memor${results.length === 1 ? 'y' : 'ies'}:\n\n${lines.join('\n')}`,
-        isError: false,
-      })
-    },
-  }
 }
 
 // ── memory_recall — recall recent episodic events ────────────────────────────

@@ -19,6 +19,7 @@ export interface TodoItem {
 
 // Module-level store — shared across all tool invocations in a session
 let todoList: TodoItem[] = []
+let updateLock = false
 
 function renderTodoList(): string {
   if (todoList.length === 0) return '(no tasks)'
@@ -116,19 +117,31 @@ Operations:
   }
 
   execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+    if (updateLock) {
+      return Promise.resolve({ content: 'Error: todo list is locked by another update', isError: true })
+    }
+    updateLock = true
+    try {
+      return Promise.resolve(this.updateTodos(input))
+    } finally {
+      updateLock = false
+    }
+  }
+
+  private updateTodos(input: Record<string, unknown>): ToolResult {
     const todos = input.todos as TodoItem[] | undefined
 
     if (!Array.isArray(todos)) {
-      return Promise.resolve({ content: 'Error: todos must be an array', isError: true })
+      return { content: 'Error: todos must be an array', isError: true }
     }
 
     // Validate each item
     for (const item of todos) {
       if (!item.id || !item.content || !item.status || !item.priority) {
-        return Promise.resolve({
+        return {
           content: `Error: each todo must have id, content, status, and priority. Got: ${JSON.stringify(item)}`,
           isError: true,
-        })
+        }
       }
     }
 
@@ -155,9 +168,9 @@ Operations:
     }
 
     const rendered = renderTodoList()
-    return Promise.resolve({
+    return {
       content: `Tasks updated:\n${rendered}`,
       isError: false,
-    })
+    }
   }
 }

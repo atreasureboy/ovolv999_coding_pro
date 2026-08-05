@@ -120,7 +120,9 @@ export class SlashSuggester {
   attach(): void {
     if (!this.enabled || this.attached) return
     this.attached = true
-    emitKeypressEvents(process.stdin)
+    if (!process.stdin.listenerCount('keypress')) {
+      emitKeypressEvents(process.stdin)
+    }
     this.keypressListener = (_str, key: { name?: string; sequence?: string; ctrl?: boolean; meta?: boolean }) => {
       // Re-render on printable characters + most non-tab keys. Skip modifiers
       // that don't change the text (arrows move within the same buffer but

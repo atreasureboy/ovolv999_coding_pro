@@ -35,7 +35,7 @@ import type { McpServerConfig } from '../core/mcpClient.js'
 import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
 import type { ConfigDiagnostic } from './diagnostics.js'
 
-const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'])
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'])
 const PERMISSION_PROFILES = new Set(['safe', 'standard', 'autonomous'])
 const PERMISSION_BEHAVIORS = new Set(['allow', 'deny', 'ask'])
 const PERMISSION_SOURCES = new Set(['builtin', 'user', 'project'])

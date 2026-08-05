@@ -1322,7 +1322,14 @@ registerCommand({
   name: 'version',
   description: 'Show ovolv999 version',
   aliases: ['v'],
-  handler: () => text('ovolv999 v0.1.0'),
+  handler: () => {
+    try {
+      const pkg = require('../../package.json') as { version: string }
+      return text(`ovolv999 v${pkg.version}`)
+    } catch {
+      return text('ovolv999 v0.6.0')
+    }
+  },
 })
 
 registerCommand({

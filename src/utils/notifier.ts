@@ -11,7 +11,7 @@
  *   - kitty terminal notifications
  */
 
-import { execSync, type ExecSyncOptions } from 'child_process'
+import { execFileSync, type ExecFileSyncOptions } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ export function isChannelAvailable(channel: NotificationChannel): boolean {
     case 'macos': return process.platform === 'darwin'
     case 'linux':
       try {
-        execSync('which notify-send', { stdio: 'pipe' })
+        execFileSync('which', ['notify-send'], { stdio: 'pipe' })
         return true
       } catch { return false }
     case 'windows': return process.platform === 'win32'
@@ -108,10 +108,10 @@ export function notifyMacOS(opts: NotificationOptions): NotifyResult {
   }
 
   try {
-    execSync(`osascript -e '${parts.join(' ')}'`, {
+    execFileSync('osascript', ['-e', parts.join(' ')], {
       stdio: 'pipe',
       timeout: 5000,
-    } as ExecSyncOptions)
+    } as ExecFileSyncOptions)
     return { channel: 'macos', success: true }
   } catch (err) {
     return { channel: 'macos', success: false, error: (err as Error).message }
@@ -126,20 +126,16 @@ function escapeAppleString(s: string): string {
  * Linux notification via notify-send (libnotify).
  */
 export function notifyLinux(opts: NotificationOptions): NotifyResult {
-  const args = [
-    '--app-name=ovolv999',
-    `"${escapeShell(opts.title)}"`,
-    `"${escapeShell(opts.body)}"`,
-  ]
+  const args: string[] = ['--app-name=ovolv999', opts.title, opts.body]
   if (opts.subtitle) {
-    args.push(`--hint=string:category:"${escapeShell(opts.subtitle)}"`)
+    args.push('--hint=string:category:' + opts.subtitle)
   }
 
   try {
-    execSync(`notify-send ${args.join(' ')}`, {
+    execFileSync('notify-send', args, {
       stdio: 'pipe',
       timeout: 5000,
-    } as ExecSyncOptions)
+    } as ExecFileSyncOptions)
     return { channel: 'linux', success: true }
   } catch (err) {
     return { channel: 'linux', success: false, error: (err as Error).message }
@@ -154,25 +150,21 @@ export function notifyWindows(opts: NotificationOptions): NotifyResult {
     [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
     $balloon = New-Object System.Windows.Forms.NotifyIcon
     $balloon.Icon = [System.Drawing.SystemIcons]::Information
-    $balloon.BalloonTipTitle = '${escapePSString(opts.title)}'
-    $balloon.BalloonTipText = '${escapePSString(opts.body)}'
+    $balloon.BalloonTipTitle = '${opts.title.replace(/'/g, "''")}'
+    $balloon.BalloonTipText = '${opts.body.replace(/'/g, "''")}'
     $balloon.Visible = $true
     $balloon.ShowBalloonTip(5000)
   `.trim()
 
   try {
-    execSync(`powershell -NoProfile -Command "${escapePSString(script)}"`, {
+    execFileSync('powershell', ['-NoProfile', '-Command', script], {
       stdio: 'pipe',
       timeout: 10000,
-    } as ExecSyncOptions)
+    } as ExecFileSyncOptions)
     return { channel: 'windows', success: true }
   } catch (err) {
     return { channel: 'windows', success: false, error: (err as Error).message }
   }
-}
-
-function escapePSString(s: string): string {
-  return s.replace(/'/g, "''").replace(/"/g, '`"')
 }
 
 /**
@@ -201,10 +193,6 @@ export function notifyKitty(opts: NotificationOptions): NotifyResult {
 export function notifyBell(_opts: NotificationOptions): NotifyResult {
   process.stdout.write('\x07')
   return { channel: 'bell', success: true }
-}
-
-function escapeShell(s: string): string {
-  return s.replace(/["$`\\]/g, '\\$&')
 }
 
 // ── Main Entry Point ────────────────────────────────────────────────────────

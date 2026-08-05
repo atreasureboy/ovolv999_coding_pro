@@ -390,7 +390,7 @@ export function formatSkillMarkdown(extraction: SkillExtraction): string {
  * Returns the file path.
  */
 export function saveSkill(cwd: string, extraction: SkillExtraction): string {
-  const dir = join(resolve(cwd), '.ovolv999', 'skills')
+  const dir = join(resolve(cwd), '.ovogo', 'skills')
   mkdirSync(dir, { recursive: true })
 
   const filePath = join(dir, `${extraction.name}.md`)
@@ -404,6 +404,6 @@ export function saveSkill(cwd: string, extraction: SkillExtraction): string {
  * Check if a skill already exists.
  */
 export function skillExists(cwd: string, name: string): boolean {
-  const filePath = join(resolve(cwd), '.ovolv999', 'skills', `${name}.md`)
+  const filePath = join(resolve(cwd), '.ovogo', 'skills', `${name}.md`)
   return existsSync(filePath)
 }
