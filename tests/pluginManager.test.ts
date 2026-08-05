@@ -21,11 +21,25 @@ import { join } from 'path'
 
 let testDir: string
 let origHome: string | undefined
+let origUserProfile: string | undefined
+let origHomeDrive: string | undefined
+let origHomePath: string | undefined
 
 beforeAll(() => {
   testDir = mkdtempSync(join(tmpdir(), 'ovolv999-plugins-'))
   origHome = process.env.HOME
   process.env.HOME = testDir
+  // v0.6.0 (audit): on win32 os.homedir() prefers USERPROFILE (then
+  // HOMEDRIVE+HOMEPATH) over HOME. Redirect all three so the plugin
+  // dir resolves under the tmp test dir instead of the real user
+  // profile (which previously caused cross-test pollution + ENOTEMPTY
+  // when the afterAll rmSync hit the real ~/.ovolv999).
+  origUserProfile = process.env.USERPROFILE
+  origHomeDrive = process.env.HOMEDRIVE
+  origHomePath = process.env.HOMEPATH
+  process.env.USERPROFILE = testDir
+  delete process.env.HOMEDRIVE
+  delete process.env.HOMEPATH
 })
 
 beforeEach(() => {
@@ -40,6 +54,13 @@ beforeEach(() => {
 
 afterAll(() => {
   if (origHome !== undefined) process.env.HOME = origHome
+  else delete process.env.HOME
+  if (origUserProfile !== undefined) process.env.USERPROFILE = origUserProfile
+  else delete process.env.USERPROFILE
+  if (origHomeDrive !== undefined) process.env.HOMEDRIVE = origHomeDrive
+  else delete process.env.HOMEDRIVE
+  if (origHomePath !== undefined) process.env.HOMEPATH = origHomePath
+  else delete process.env.HOMEPATH
   rmSync(testDir, { recursive: true, force: true })
 })
 

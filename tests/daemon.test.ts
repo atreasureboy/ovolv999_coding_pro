@@ -26,7 +26,13 @@ afterEach(async () => {
 describe('daemon', () => {
   describe('Daemon', () => {
     it('starts and creates socket', () => {
-      expect(existsSync(socketPath)).toBe(true)
+      // v0.6.0 (audit): on win32 the daemon binds a named pipe
+      // (no filesystem node) — assert the running state instead.
+      if (process.platform === 'win32') {
+        expect(daemon.getInfo().status).toBe('running')
+      } else {
+        expect(existsSync(socketPath)).toBe(true)
+      }
     })
 
     it('reports running status', () => {
@@ -118,7 +124,14 @@ describe('daemon', () => {
       const client = new DaemonClient('/nonexistent/sock')
       const res = await client.send({ action: 'ping' })
       expect(res.ok).toBe(false)
-      expect(res.error).toContain('not found')
+      // v0.6.0 (audit): on win32 the address is a named pipe — the
+      // existsSync pre-check is skipped and a failed connect surfaces
+      // as ENOENT instead of the 'not found' message.
+      if (process.platform === 'win32') {
+        expect(res.error).toMatch(/ENOENT|not found/i)
+      } else {
+        expect(res.error).toContain('not found')
+      }
     })
 
     it('times out on slow response', async () => {

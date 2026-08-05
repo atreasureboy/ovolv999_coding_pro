@@ -13,6 +13,7 @@
 import { createServer, type Server, Socket } from 'net'
 import { existsSync, unlinkSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { createHash } from 'crypto'
 import { homedir } from 'os'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -91,8 +92,13 @@ export class Daemon {
 
     this.status = 'starting'
 
-    // Clean up stale socket
-    if (existsSync(this.socketPath)) {
+    // v0.6.0 (audit): Windows cannot bind a Unix-domain socket to a
+    // filesystem path (Node treats it as a named pipe and fails with
+    // EACCES). Translate the logical socket path into a named-pipe
+    // address; on POSIX the path is used as-is. Named pipes have no
+    // filesystem node, so the stale-socket cleanup only runs on POSIX.
+    const sock = toSocketPath(this.socketPath)
+    if (process.platform !== 'win32' && existsSync(this.socketPath)) {
       try { unlinkSync(this.socketPath) } catch { /* ignore */ }
     }
 
@@ -111,10 +117,10 @@ export class Daemon {
         reject(err)
       })
 
-      this.server.listen(this.socketPath, () => {
+      this.server.listen(sock, () => {
         this.status = 'running'
         this.startTime = Date.now()
-        this.log(`Daemon started (pid=${process.pid}, socket=${this.socketPath})`)
+        this.log(`Daemon started (pid=${process.pid}, socket=${sock})`)
         resolve()
       })
     })
@@ -128,7 +134,7 @@ export class Daemon {
       })
       this.server = null
     }
-    if (existsSync(this.socketPath)) {
+    if (process.platform !== 'win32' && existsSync(this.socketPath)) {
       try { unlinkSync(this.socketPath) } catch { /* ignore */ }
     }
     this.log('Daemon stopped')
@@ -796,7 +802,10 @@ export class DaemonClient {
   constructor(private readonly socketPath: string) {}
 
   async send(cmd: DaemonCommand, timeoutMs = 5000): Promise<DaemonResponse> {
-    if (!existsSync(this.socketPath)) {
+    // v0.6.0 (audit): on win32 the address is a named pipe — there is
+    // no filesystem node to stat, so the existence pre-check is
+    // skipped (a failed connect reports the real error below).
+    if (process.platform !== 'win32' && !existsSync(this.socketPath)) {
       return { ok: false, error: 'Daemon socket not found. Is the daemon running?' }
     }
 
@@ -841,7 +850,7 @@ export class DaemonClient {
         }
       })
 
-      socket.connect(this.socketPath)
+      socket.connect(toSocketPath(this.socketPath))
     })
   }
 
@@ -863,7 +872,27 @@ export class DaemonClient {
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
+/**
+ * v0.6.0 (audit): resolve the OS-level socket address for a logical
+ * socket path. POSIX uses the filesystem path directly. Windows
+ * cannot bind net sockets to file paths (EACCES) — the address is
+ * translated to a named pipe. The hash keeps the pipe name short
+ * (Windows pipe names have a 256-char limit) and stable per logical
+ * path, so server and client agree without a shared registry.
+ */
+export function toSocketPath(raw: string): string {
+  if (process.platform !== 'win32') return raw
+  const key = createHash('sha256').update(raw).digest('hex').slice(0, 24)
+  return `\\\\.\\pipe\\ovolv999-${key}`
+}
+
 export function getDaemonSocketPath(): string {
+  // v0.6.0 (audit): env override for tests/embedders that need to
+  // point the /daemon slash command at a custom supervisor socket
+  // without homedir surgery or symlinks (which need admin rights on
+  // Windows). Default behaviour is unchanged when unset.
+  const override = process.env.OVOGO_DAEMON_SOCKET
+  if (override && override.trim().length > 0) return override.trim()
   return join(homedir(), '.ovolv999', 'daemon.sock')
 }
 
@@ -872,6 +901,13 @@ export function getDaemonLogPath(): string {
 }
 
 export function isDaemonRunning(): boolean {
+  // v0.6.0 (audit): named pipes have no filesystem node — existsSync
+  // would always report false on Windows. Optimistically return true
+  // there and let the DaemonClient's connect attempt surface the real
+  // answer (a failed connect is fast and reports a truthful error).
+  if (process.platform === 'win32') {
+    return true
+  }
   return existsSync(getDaemonSocketPath())
 }
 

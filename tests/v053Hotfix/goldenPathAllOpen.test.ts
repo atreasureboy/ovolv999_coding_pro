@@ -8,7 +8,7 @@
  *   4. git-subdir Memory round-trip
  */
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { execFileSync } from 'node:child_process'
@@ -77,7 +77,7 @@ describe('Golden Path — git-subdir Memory round-trip', () => {
     process.env.OVOGO_HOME = ovogoHome
     try {
       execFileSync('git', ['init', '--quiet', projectDir], { stdio: 'pipe' })
-      execFileSync('mkdir', ['-p', subdir], { stdio: 'pipe' })
+      mkdirSync(subdir, { recursive: true })
 
       const idFromSubdir = await resolveProjectIdentity({ cwd: subdir })
       expect(idFromSubdir.canonicalRoot).toBe(projectDir)

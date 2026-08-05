@@ -52,7 +52,12 @@ export async function buildRevisionBinding(opts: RevisionBindingOptions = {}): P
     return binding
   }
   // After narrowing, toplevel is {ok:true, stdout:string}.
-  const toplevelPath = toplevel.stdout.trim()
+  // v0.6.0 (audit): git on Windows reports POSIX-style forward slashes
+  // (`C:/path/to/repo`) while mkdtemp/join-produced cwds use backslashes.
+  // Normalize to the input cwd's separator so canonicalRoot compares
+  // equal to the launch path and projectKey stays stable across
+  // representations of the same repo.
+  const toplevelPath = normalizeGitPath(toplevel.stdout.trim(), cwd)
   if (!toplevelPath) {
     binding.workspaceHash = workspaceHash(cwd)
     binding.dirty = true
@@ -110,6 +115,23 @@ function execGit(cwd: string, ...args: string[]): ExecResult {
   } catch (e) {
     return { ok: false, reason: (e as Error).message ?? 'git exec failed' }
   }
+}
+
+/**
+ * v0.6.0 (audit): align a git-reported path with the platform/input
+ * separator style. `git rev-parse --show-toplevel` emits forward
+ * slashes even on Windows (`C:/Users/...`); the input cwd (from
+ * mkdtemp/join) uses backslashes there. Without normalization the
+ * canonicalRoot/projectKey of the SAME repo differ by representation.
+ * Only drive-letter paths are rewritten; UNC/`//server` prefixes are
+ * left untouched (they must stay `//` on win32).
+ */
+function normalizeGitPath(p: string, cwd: string): string {
+  if (process.platform !== 'win32' || !p.includes('/')) return p
+  const drive = /^([A-Za-z]:)\//.exec(p)
+  if (!drive) return p
+  const sep = cwd.includes('\\') ? '\\' : '/'
+  return drive[1] + p.slice(2).replace(/\//g, sep)
 }
 
 function safeResultFrom(v: string | null): ExecResult {

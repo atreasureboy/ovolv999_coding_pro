@@ -11,7 +11,7 @@
  *   - MemoryModule.boot(ctx) with projectIdentity uses canonical
  */
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { execFileSync } from 'node:child_process'
@@ -56,7 +56,7 @@ describe('ProjectIdentity (Hotfix §4)', () => {
     const subdir = join(repoRoot, 'packages', 'a')
     try {
       execFileSync('git', ['init', '--quiet', repoRoot], { stdio: 'pipe' })
-      execFileSync('mkdir', ['-p', subdir], { stdio: 'pipe' })
+      mkdirSync(subdir, { recursive: true })
       const id = await resolveProjectIdentity({ cwd: subdir })
       expect(id.inputCwd).toBe(subdir)
       expect(id.canonicalRoot).toBe(repoRoot)
@@ -86,7 +86,7 @@ describe('ProjectIdentity (Hotfix §4)', () => {
     const subdir = join(repoRoot, 'sub')
     try {
       execFileSync('git', ['init', '--quiet', repoRoot], { stdio: 'pipe' })
-      execFileSync('mkdir', ['-p', subdir], { stdio: 'pipe' })
+      mkdirSync(subdir, { recursive: true })
       const id = await resolveProjectIdentity({ cwd: subdir })
       expect(id.canonicalRoot).toBe(repoRoot)
       const sem = new SemanticMemory(join(repoRoot, '.ovogo'))

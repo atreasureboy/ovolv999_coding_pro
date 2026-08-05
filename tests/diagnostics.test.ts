@@ -24,7 +24,9 @@ describe('diagnostics', () => {
 
       const diags = parseTscOutput(output, process.cwd())
       expect(diags).toHaveLength(2)
-      expect(diags[0].filePath).toBe('src/foo.ts')
+      // v0.6.0 (audit): relative() uses the platform separator
+      // (src\foo.ts on win32) — compare separator-agnostic.
+      expect(diags[0].filePath.replace(/\\/g, '/')).toBe('src/foo.ts')
       expect(diags[0].line).toBe(10)
       expect(diags[0].column).toBe(5)
       expect(diags[0].severity).toBe('error')
@@ -51,7 +53,8 @@ describe('diagnostics', () => {
       ].join('\n')
       const diags = parseTscOutput(output, process.cwd())
       expect(diags).toHaveLength(3)
-      expect(diags.every(d => d.filePath === 'src/a.ts')).toBe(true)
+      // Separator-agnostic (see first test).
+      expect(diags.every(d => d.filePath.replace(/\\/g, '/') === 'src/a.ts')).toBe(true)
     })
   })
 

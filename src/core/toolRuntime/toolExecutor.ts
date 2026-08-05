@@ -394,24 +394,6 @@ export class ToolExecutor {
     }
     eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
 
-    // v0.5.5 §2: record the ToolResult against the Provider
-    // toolCallId in the per-run Registry. Subsequent
-    // tool_observed evidence refs verify against this record.
-    // Tool Call ID MUST come from Assistant tool_calls[].id (the
-    // `callId` parameter). We refuse to overwrite an existing
-    // entry (re-recording would let later calls rewrite the
-    // verdict of earlier ones).
-    const registry = this.deps.sharedState?.toolCallRegistry
-    if (registry && callId) {
-      registry.set(callId, {
-        toolName,
-        resultText: result.content ?? '',
-        isError: result.isError === true,
-        truncated: false,
-        completedAt: Date.now(),
-      })
-    }
-
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
 
     // runtime invariants §四: update WorkingState from the structured tool

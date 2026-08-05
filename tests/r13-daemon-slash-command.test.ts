@@ -186,14 +186,11 @@ describe('R13: /daemon slash command', () => {
     await daemon.start()
     const worker = daemon.addWorker('w-emit', 'echo')
 
-    // Override the default socket path so the slash command reaches
-    // our test daemon. We do this by setting an env var that the
-    // daemon module reads — but `getDaemonSocketPath` is homedir-based.
-    // Workaround: write a socket symlink under the default path.
-    const defaultSock = getDaemonSocketPath()
-    const { unlinkSync: ul, symlinkSync: ssync } = await import('fs')
-    if (fsExists(defaultSock)) ul(defaultSock)
-    ssync(sockPath, defaultSock)
+    // v0.6.0 (audit): point the /daemon slash command at our test
+    // daemon via the OVOGO_DAEMON_SOCKET env override. The previous
+    // symlink workaround needs admin rights on Windows (EPERM).
+    const prevEnv = process.env.OVOGO_DAEMON_SOCKET
+    process.env.OVOGO_DAEMON_SOCKET = sockPath
 
     const eventLog = new EventLog(join(tmpDir, 'engine-events.jsonl'))
     const ctx = makeCtx(eventLog)
@@ -210,7 +207,8 @@ describe('R13: /daemon slash command', () => {
     expect(detail.workerId).toBe(worker.id)
     expect(detail.outcome).toBe('requested')
 
-    ul(defaultSock)
+    if (prevEnv === undefined) delete process.env.OVOGO_DAEMON_SOCKET
+    else process.env.OVOGO_DAEMON_SOCKET = prevEnv
     await daemon.stop()
   })
 
@@ -220,10 +218,10 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
 
-    const defaultSock = getDaemonSocketPath()
-    const { unlinkSync: ul, symlinkSync: ssync } = await import('fs')
-    if (fsExists(defaultSock)) ul(defaultSock)
-    ssync(sockPath, defaultSock)
+    // v0.6.0 (audit): env override instead of the symlink workaround
+    // (symlink needs admin rights on Windows).
+    const prevEnv = process.env.OVOGO_DAEMON_SOCKET
+    process.env.OVOGO_DAEMON_SOCKET = sockPath
 
     const eventLog = new EventLog(join(tmpDir, 'engine-events2.jsonl'))
     const ctx = makeCtx(eventLog)
@@ -237,7 +235,8 @@ describe('R13: /daemon slash command', () => {
     expect(detail.outcome).toBe('failed')
     expect(detail.error).toMatch(/not found/)
 
-    ul(defaultSock)
+    if (prevEnv === undefined) delete process.env.OVOGO_DAEMON_SOCKET
+    else process.env.OVOGO_DAEMON_SOCKET = prevEnv
     await daemon.stop()
   })
 

@@ -21,6 +21,7 @@ import type { RoutingSignals } from '../model/routingSignalCollector.js'
 import type { CompletionVerdict } from './completionContract.js'
 import type { TaskKind } from './taskIntent.js'
 import type { ProjectIdentity } from '../projectIdentity.js'
+import { resolveProjectIdentitySync } from '../projectIdentity.js'
 
 /**
  * v0.5.6 §7 — per-run tool result. `originalText` is what the
@@ -264,6 +265,10 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       evidence: new EvidenceStore(),
       toolCallRegistry: new Map(),
       memoryCandidates: [],
+      // v0.5.6 §8: projectIdentity is a formal (non-serialisable) field —
+      // re-resolve against the current cwd on restore. See the field's
+      // doc comment: "restore() re-resolves via `resolveProjectIdentity`".
+      projectIdentity: resolveProjectIdentitySync(process.cwd()),
       userMessage: snapshot.userMessage ?? '',
       routingSignals: snapshot.routingSignals,
       completionCandidate: snapshot.completionCandidate,

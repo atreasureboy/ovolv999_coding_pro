@@ -19,9 +19,8 @@
  * project's AGENTS.md or written to a separate knowledge file.
  */
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs'
-import { join, relative, extname, basename, dirname } from 'path'
-import { execSync } from 'child_process'
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs'
+import { join, relative, extname, basename, dirname, isAbsolute } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -72,23 +71,32 @@ const DEFAULT_EXCLUDE = [
 
 export function discoverFiles(rootDir: string, include?: string[], maxFiles = 5000): string[] {
   const patterns = include ?? DEFAULT_INCLUDE
+  // v0.6.0 (audit): the previous implementation shelled out to the
+  // Unix `find` command — a no-op (empty result) on Windows and a
+  // subprocess per glob. Replace with a native recursive walk.
+  const exts = new Set(patterns.map((p) => p.replace('**/*.', '').toLowerCase()))
+  const excluded = new Set(DEFAULT_EXCLUDE)
   const files: string[] = []
-  try {
-    for (const pattern of patterns) {
-      try {
-        const ext = pattern.replace('**/*.', '')
-        const out = execSync(
-          `find ${shellQuote(rootDir)} -type f -name '*.${ext}' 2>/dev/null | head -n ${maxFiles}`,
-          { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] },
-        )
-        for (const line of out.trim().split('\n')) {
-          if (line && !DEFAULT_EXCLUDE.some((exc) => line.includes(`/${exc}/`))) {
-            files.push(line)
-          }
-        }
-      } catch { /* find failed for this pattern */ }
+  const stack: string[] = [rootDir]
+  while (stack.length > 0 && files.length < maxFiles) {
+    const dir = stack.pop()!
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue // unreadable/vanished dir — skip
     }
-  } catch { /* fall back to empty */ }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) break
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (!excluded.has(entry.name)) stack.push(full)
+      } else if (entry.isFile()) {
+        const ext = extname(entry.name).slice(1).toLowerCase()
+        if (exts.has(ext)) files.push(full)
+      }
+    }
+  }
 
   // Deduplicate + sort
   const unique = [...new Set(files)].sort()
@@ -107,7 +115,11 @@ function readFiles(rootDir: string, files: string[]): FileContent[] {
   const contents: FileContent[] = []
   for (const file of files) {
     try {
-      const full = file.startsWith('/') ? file : join(rootDir, file)
+      // v0.6.0 (audit): the legacy `find` output was always POSIX
+      // absolute (`/tmp/...`); discoverFiles now returns native
+      // absolute paths (`C:\...` on win32), which do NOT start with
+      // '/'. Use isAbsolute so both forms resolve correctly.
+      const full = isAbsolute(file) ? file : join(rootDir, file)
       const content = readFileSync(full, 'utf8')
       contents.push({ path: relative(rootDir, full), content, lines: content.split('\n').length })
     } catch { /* skip unreadable */ }
@@ -540,10 +552,4 @@ export function formatResult(result: MagicDocsResult): string {
 
 export function formatSection(section: DocSection): string {
   return `### ${section.title}\n${section.content}`
-}
-
-function shellQuote(s: string): string {
-  if (s === '') return "''"
-  if (/^[A-Za-z0-9_:.@/=-]+$/.test(s)) return s
-  return `'${s.replace(/'/g, "'\\''")}'`
 }

@@ -12,7 +12,7 @@
  *   - Reject direct `ltm.query(...)` substitutes for memory_search
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, statSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { execFileSync } from 'node:child_process'
@@ -43,7 +43,8 @@ describe('Memory per-project backend (Hotfix §5)', () => {
     const p3 = defaultMemoryPath('/REPO') // case-only collision
     expect(p1).toBe(p2)
     expect(p1).not.toBe(p3) // different sha256 prefix → different file
-    expect(p1).toContain('.ovogo/projects/')
+    // Separator-agnostic check (Windows uses backslashes, POSIX slashes).
+    expect(p1.split(/[\\/]/)).toContain('projects')
   })
 
   it('git root and git subdir resolve to the same canonicalRoot → same path', async () => {
@@ -51,7 +52,7 @@ describe('Memory per-project backend (Hotfix §5)', () => {
     const subdir = join(repoRoot, 'packages', 'a')
     try {
       execFileSync('git', ['init', '--quiet', repoRoot], { stdio: 'pipe' })
-      execFileSync('mkdir', ['-p', subdir], { stdio: 'pipe' })
+      mkdirSync(subdir, { recursive: true })
 
       const idRoot = await resolveProjectIdentity({ cwd: repoRoot })
       const idSub = await resolveProjectIdentity({ cwd: subdir })
