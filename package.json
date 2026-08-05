@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.5.6",
-  "description": "v0.5.6 Release Acceptance Repair — Evidence Authenticity, Single Application, Executable Quality Gates",
+  "version": "0.6.0",
+  "description": "v0.6.0 Enterprise Architecture Audit — Atomic Transactions, AST Analysis, Code Review, Cross-Platform Hardening",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",
