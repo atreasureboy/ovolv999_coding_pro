@@ -154,11 +154,16 @@ export class AtomicTransaction {
         errors.push(`${snap.backupPath}: ${(err as Error).message}`)
       }
     }
+    // v0.6.0 (audit): mutations counts EVERY file the transaction
+    // touched (created or modified), not just the backups cleaned —
+    // a freshly-created file has an empty backupPath sentinel but is
+    // still a committed mutation.
+    const totalMutations = this.snapshots.size
     // Clear snapshots so they can't be used again
     this.snapshots.clear()
     return {
       ok: errors.length === 0,
-      mutations: cleaned,
+      mutations: totalMutations,
       rolledBack: false,
       error: errors.length > 0 ? errors.join('; ') : undefined,
     }

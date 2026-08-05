@@ -164,6 +164,10 @@ function detectPackageManager(cwd: string): string | null {
   if (existsSync(join(cwd, 'yarn.lock'))) return 'yarn'
   if (existsSync(join(cwd, 'package-lock.json'))) return 'npm'
   if (existsSync(join(cwd, 'bun.lockb'))) return 'bun'
+  // v0.6.0 (audit): a package.json without a lockfile still indicates
+  // an npm-style project — report it rather than null so callers can
+  // act on it.
+  if (existsSync(join(cwd, 'package.json'))) return 'npm'
   return null
 }
 
