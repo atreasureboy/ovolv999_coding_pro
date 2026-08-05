@@ -1,4 +1,4 @@
-# ovolv999 (v0.5.3) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.5.4) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -64,7 +64,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 - **借鉴为主,创新为辅**:借鉴 ~80%,创新 ~20%(指纹规避)
 - **架构/UX/模块设计 直接抄**:协议、UX 模式可借鉴
 
-测试增量:**4695 / 4697 pass**(基线 +243 个,Reflection 删除后 -49 个),8 依赖约束保持。
+测试通过 `pnpm check` 验证 (typecheck + lint + test + test:esm + eval:deterministic + verify:runtime-static + test:runtime-behavior + build + package:verify)。
 
 ### v0.5 Role-aware Multi-Agent
 
@@ -224,7 +224,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ### 其它特性
 
 - **统一 Harness** — 所有 Agent 走同一套 Boot Sequence，按模块配置差异化执行
-- **模块化能力** — memory / critic / workspace / reflection / mcp 五个可组合模块
+- **模块化能力** — memory / critic / workspace / mcp 四个生产模块（reflection 已移至 experimental/）
 - **配置驱动角色** — 探索者、规划者、审查者 = 不同 AgentConfig 配置实例，零代码新增角色
 - **记忆系统** — 引擎层：Semantic（语义知识，来源优先级 user_stated > agent_inferred > tool_observed）+ Episodic（工具轨迹，被动写入）；命令/契约层：KnowledgeBase、TeamMemory、LongTermMemory（R1–R6，尚未接入引擎循环）
 - **来源归因 + 冲突解决** — `user_stated > agent_inferred > tool_observed` 优先级链
@@ -324,7 +324,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ║  │ memory         │  │ Bash/Read/Write/Edit │  │ Semantic: 关键词检索  │  ║
 ║  │ critic         │  │ Glob/Grep/Todo       │  │ Episodic: 工具轨迹    │  ║
 ║  │ workspace      │  │ Web* /Agent/Skill    │  │ KnowledgeBase: 结构化 │  ║
-║  │ reflection     │  │ Plan/Sleep/Snip      │  └──────────────────────┘  ║
+║  │ (experimental) │  │                       │  └──────────────────────┘  ║
 ║  └────────────────┘  │ Worktree/Goal        │                             ║
 ║                      │ Task*/Notebook       │  ┌─ Integration ─────────┐  ║
 ║  ┌─ MCP Client ───┐  │ ClaudeCode/Diag      │  │ LSP (in-process)      │  ║
@@ -353,7 +353,7 @@ const agentConfig: AgentConfig = {
     memory: { enabled: true },      // 记忆检索 + memory_write/search/recall 工具
     critic: { enabled: true },      // 每 N 轮 LLM 纠错
     workspace: { enabled: true },   // sessionDir 产物目录
-    reflection: { enabled: true },  // Run 结束后知识提取 → SemanticMemory
+    // reflection: experimental/ 中保留（disabled by default）
   },
   tools: ['Bash', 'Read', 'Grep'],
   maxIterations: 50,
@@ -365,7 +365,7 @@ const agentConfig: AgentConfig = {
 | `memory` | 关键词相关性检索注入 top-10 | onToolCall 写 episodic | memory_write / memory_search / memory_recall |
 | `critic` | — | onIteration 每 5 轮纠错 | — |
 | `workspace` | 注入 sessionDir 到 ToolContext | — | — |
-| `reflection` | — | onComplete LLM 知识提取 | — |
+| `reflection` (experimental/) | — | onComplete LLM 知识提取 | 默认不启用 |
 | `mcp` | 连接 stdio MCP 服务器并注入工具 | dispose 关闭进程 | `mcp__<server>__<tool>`（动态注入） |
 
 ### AgentConfig — 配置驱动角色（无 agent_type）
@@ -803,8 +803,8 @@ ovolv999/
 │   ├── modules/                     # 内置能力模块
 │   │   ├── memory.ts                # 相关性检索 + 3 memory tools + episodic
 │   │   ├── critic.ts                # 每 N 轮 LLM 纠错
-│   │   ├── workspace.ts             # sessionDir 注入
-│   │   └── reflection.ts            # 知识提取 + session 整合
+│   │   └── workspace.ts             # sessionDir 注入
+│   └── (reflection 在 experimental/ 中保留为 no-op stub)
 │   ├── prompts/                     # 提示词
 │   │   ├── system.ts / tools.ts / critic.ts
 │   ├── ui/                          # 终端 UI (15 文件)
@@ -845,7 +845,7 @@ ovolv999/
 | AgentOS 概念 | ovolv999 实现 |
 |---|---|
 | 统一 Harness（无 agent_type） | `ExecutionEngine` + `AgentConfig` + 4 preset |
-| 模块组合驱动 | `ModuleRegistry` + memory/critic/workspace/reflection |
+| 模块组合驱动 | `ModuleRegistry` + memory/critic/workspace (production) |
 | Boot Sequence | 7 步：identity → modules → boot → prompt → tools → context → trajectory |
 | 来源归因 + 冲突解决 | `user_stated` 必须带 `source_quote` 证明(长度 ≥ 12 + content-token 覆盖 ≥ 60%) |
 | Memory 三原语 | `memory_write` / `memory_search` / `memory_recall` |

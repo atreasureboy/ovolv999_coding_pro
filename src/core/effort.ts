@@ -216,13 +216,14 @@ export const EXECUTION_PROFILES: Record<ExecutionProfile, ExecutionProfileSpec> 
     description: 'Lightweight turn: no Critic, no Reflection, no sub-agents, no task graph. Write access follows TaskIntent.',
   },
   standard: {
-    // EXACTLY the pre-v0.4.1 default module set — a standard turn must
-    // behave byte-for-byte like a v0.4.0 turn (gate test pins this).
-    modules: ['memory', 'critic', 'workspace', 'reflection'],
-    description: 'Default: full module set, engine-configured limits.',
+    // v0.5.3 Hotfix §11: reflection removed from default profile
+    // (moved to experimental/). The standard profile now boots the
+    // four production modules.
+    modules: ['memory', 'critic', 'workspace', 'mcp'],
+    description: 'Default: production module set, engine-configured limits.',
   },
   deep: {
-    modules: ['memory', 'critic', 'workspace', 'reflection'],
+    modules: ['memory', 'critic', 'workspace', 'mcp'],
     maxIterations: 300,
     maxOutputTokens: 32000,
     description: 'Complex refactors / migrations: raised iteration and output budgets.',
@@ -230,7 +231,7 @@ export const EXECUTION_PROFILES: Record<ExecutionProfile, ExecutionProfileSpec> 
   autonomous: {
     // Documentary: --loop entries boot through their own runLoop path;
     // this spec exists so /profile can show and validate the full set.
-    modules: ['memory', 'critic', 'workspace', 'reflection'],
+    modules: ['memory', 'critic', 'workspace', 'mcp'],
     description: 'Background loop autonomy (driven by the --loop entry, not per-turn resolution).',
   },
 }

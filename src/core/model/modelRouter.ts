@@ -22,7 +22,58 @@
  * configured model so the router degrades gracefully when unconfigured.
  */
 
+import { randomUUID } from 'node:crypto'
 import type { TokenUsage } from '../costTracker.js'
+
+/**
+ * v0.5.3 Hotfix §7 — Probe lease ownership token.
+ *
+ * Acquired by `tryAcquireProbe(profileId)` and required by
+ * `finishProbe(lease, outcome)`. The lease is the single proof
+ * that the calling code holds the right to drive the circuit
+ * state transition. Without a valid lease, finishProbe is a
+ * no-op (defensive against misbehaving callers).
+ */
+export interface ProbeLease {
+  /** Unique id used to verify ownership on release. */
+  leaseId: string
+  /** The profile the lease was acquired for. */
+  profileId: string
+  /** The model the profile uses — captured for diagnostics. */
+  model: string
+  /** Wall-clock when the lease was minted. */
+  acquiredAt: number
+}
+
+export type ProbeOutcome = 'success' | 'failure' | 'aborted'
+
+/**
+ * v0.5.3 Hotfix §8 — structured RouteApplication. The Router
+ * returns one of three discriminated outcomes so callers can
+ * distinguish "applied a real fallback" from "no-op (same model
+ * was already current)" from "no profile is available at all".
+ *
+ *   - applied     — the previous config.model was different; we
+ *                   advanced. previousModel carries the value
+ *                   that was in effect BEFORE apply.
+ *   - unchanged   — the requested model equals the current one;
+ *                   this is a no-op emit.
+ *   - unavailable — no profile is available (all circuits open, or
+ *                   no profile matched). decision.selectedModel
+ *                   is empty and reasonCodes include
+ *                   'all-profiles-open' (or equivalent).
+ */
+export type RouteApplication = {
+  kind: 'applied'
+  decision: RoutingDecision
+  previousModel: string
+} | {
+  kind: 'unchanged'
+  decision: RoutingDecision
+} | {
+  kind: 'unavailable'
+  decision: RoutingDecision
+}
 
 /**
  * Routing-time strength scores for a model profile. Deliberately NOT the
@@ -199,6 +250,9 @@ export class ModelRouter {
   // production caller. See recordRetry() doc-comment.
   // Probe lease set (v0.5.3 Final): one probe per profile at a time.
   private readonly probeInFlight = new Set<string>()
+  // v0.5.3 Hotfix §7: active lease tokens keyed by leaseId. Used
+  // to verify that finishProbe's caller actually owns the lease.
+  private readonly activeLeases = new Map<string, ProbeLease>()
   /** v0.5.3 (P1.8): per-profile circuit state. The Coordinator's
    *  global circuit penalizes ALL profiles for one failure; this
    *  per-profile circuit isolates the failing profile so healthy
@@ -258,7 +312,7 @@ export class ModelRouter {
    * manual override. Optionally applies a budget allocation emitted
    * alongside the chosen model.
    */
-  applyRoutingDecision(model: string, budgetAllocation?: BudgetAllocation): void {
+  applyRoutingDecision(model: string, budgetAllocation?: BudgetAllocation, _meta?: { previousModel?: string; reasonCodes?: string[] }): void {
     const trimmed = model?.trim()
     if (!trimmed) return
     // No-op when re-applying the same decision — keeps the event stream
@@ -269,11 +323,42 @@ export class ModelRouter {
       return
     }
     this.lastApplied = { model: trimmed, allocation: budgetAllocation }
-    this.emit('ROUTING_DECISION_APPLIED', { selectedModel: trimmed })
+    // v0.5.3 Hotfix §9: emit the structured payload with
+    // previousModel + reasonCodes so the Engine can surface the
+    // TRUE pre-state and the profile-scoped reason codes.
+    this.emit('ROUTING_DECISION_APPLIED', {
+      selectedModel: trimmed,
+      previousModel: _meta?.previousModel,
+      reasonCodes: _meta?.reasonCodes ?? [],
+    })
     this.sink?.applyRoutingDecision(trimmed, budgetAllocation)
     if (budgetAllocation && (budgetAllocation.maxOutputTokens !== undefined || budgetAllocation.maxInputTokens !== undefined)) {
       this.emit('BUDGET_ALLOCATION_APPLIED', { allocation: budgetAllocation })
     }
+  }
+
+  /**
+   * v0.5.3 Hotfix §8 — structured route application. The Coordinator
+   * uses this to advance config.model and observe a structured
+   * outcome (applied / unchanged / unavailable). Unavailable means
+   * no profile is available — caller must surface a routing-
+   * unavailable error instead of best-effort swallowing it.
+   */
+  applyRouteApplication(decision: RoutingDecision): RouteApplication {
+    if (!decision || decision.selectedModel === '') {
+      return { kind: 'unavailable', decision }
+    }
+    const previous = this.lastApplied?.model ?? ''
+    if (previous === decision.selectedModel) {
+      return { kind: 'unchanged', decision }
+    }
+    // Pass previousModel and reasonCodes through the emission so
+    // downstream consumers observe the TRUE pre-state.
+    this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation, {
+      previousModel: previous,
+      reasonCodes: decision.reasonCodes,
+    })
+    return { kind: 'applied', decision, previousModel: previous }
   }
 
   /** v0.3.1 (runtime truth contract §三.1.1): restore auto-routing after `/model auto`. */
@@ -417,36 +502,66 @@ export class ModelRouter {
   }
 
   /**
-   * v0.5.3 Final (task 7): real probe lease. Returns true iff the
-   * caller has acquired the right to issue ONE probe call against
-   * a half-open profile. Concurrent callers receive false — the
-   * Router's "second probe must be rejected" invariant is enforced
-   * here, not by accident elsewhere. A call returns false if the
-   * circuit is not yet half-open (callers must check
-   * getProfileCircuitState first to drive the cooldown transition).
+   * v0.5.3 Final (task 7) + v0.5.3 Hotfix §7: probe lease ownership
+   * token. Returns the lease iff the caller has acquired the right
+   * to issue ONE probe call against a half-open profile.
+   * Concurrent callers receive null — the Router's "second probe
+   * must be rejected" invariant is enforced here, not by accident
+   * elsewhere. A call returns null if the circuit is not yet
+   * half-open (callers must check getProfileCircuitState first to
+   * drive the cooldown transition).
+   *
+   * The lease is opaque (leaseId) and bound to (profileId, model,
+   * acquiredAt). finishProbe(lease, outcome) verifies the leaseId
+   * before mutating circuit state.
    */
-  tryAcquireProbe(profileId: string): boolean {
+  tryAcquireProbe(profileId: string): ProbeLease | null {
     const state = this.getProfileCircuitState(profileId)
-    if (state !== 'half-open') return false
-    if (this.probeInFlight.has(profileId)) return false
+    if (state !== 'half-open') return null
+    if (this.probeInFlight.has(profileId)) return null
     this.probeInFlight.add(profileId)
-    return true
+    const profile = this.profiles.find((p) => p.id === profileId)
+    const lease: ProbeLease = {
+      leaseId: randomUUID(),
+      profileId,
+      model: profile?.model ?? '',
+      acquiredAt: Date.now(),
+    }
+    this.activeLeases.set(lease.leaseId, lease)
+    return lease
   }
 
   /**
-   * v0.5.3 Final (task 7): complete a probe previously acquired via
-   * tryAcquireProbe. success → CLOSED (and reset failures);
-   * failure → re-OPEN with renewed cooldown.
+   * v0.5.3 Final (task 7) + v0.5.3 Hotfix §7: complete a probe
+   * previously acquired via tryAcquireProbe. The lease token is
+   * required — finishProbe MUST validate leaseId. Mismatched or
+   * unknown leases are silently ignored (defensive against
+   * misbehaving callers). The probe-bound attemptId is recorded
+   * for diagnostics.
+   *
+   *   success → CLOSED (reset failures)
+   *   failure → re-OPEN with renewed cooldown
+   *   aborted → CLOSED (treat probe as inconclusive; do NOT
+   *     open the circuit again — the caller abandoned it)
    */
-  finishProbe(profileId: string, success: boolean): void {
-    this.probeInFlight.delete(profileId)
-    if (success) {
-      this.circuitStates.set(profileId, 'closed')
-      this.consecutiveProfileFailures.set(profileId, 0)
-    } else {
-      this.circuitStates.set(profileId, 'open')
-      this.circuitOpenedAt.set(profileId, Date.now())
+  finishProbe(lease: ProbeLease, outcome: ProbeOutcome): void {
+    const owned = this.activeLeases.get(lease.leaseId)
+    if (!owned) return
+    if (owned.profileId !== lease.profileId) return
+    if (!this.probeInFlight.has(lease.profileId)) {
+      this.activeLeases.delete(lease.leaseId)
+      return
     }
+    this.probeInFlight.delete(lease.profileId)
+    this.activeLeases.delete(lease.leaseId)
+    if (outcome === 'success') {
+      this.circuitStates.set(lease.profileId, 'closed')
+      this.consecutiveProfileFailures.set(lease.profileId, 0)
+    } else if (outcome === 'failure') {
+      this.circuitStates.set(lease.profileId, 'open')
+      this.circuitOpenedAt.set(lease.profileId, Date.now())
+    }
+    // 'aborted' → leave circuit state as-is, just clean the lease.
   }
 
   /** For tests: read the in-flight probe set. */

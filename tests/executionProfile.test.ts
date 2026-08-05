@@ -82,11 +82,12 @@ describe('EXECUTION_PROFILES', () => {
     expect(fast.maxIterations).toBe(30)
   })
 
-  it('standard is EXACTLY the pre-v0.4.1 default (zero-change gate)', () => {
+  it('standard is the production module set (zero-change gate, v0.5.3 Hotfix §11)', () => {
     const standard = EXECUTION_PROFILES.standard
-    // The v0.4.0 default module set, verbatim.
-    expect(standard.modules).toEqual(['memory', 'critic', 'workspace', 'reflection'])
-    // No caps, no tool exclusions — a standard turn behaves like v0.4.0.
+    // v0.5.3 Hotfix §11: reflection moved to experimental/.
+    // Standard now boots the four production modules.
+    expect(standard.modules).toEqual(['memory', 'critic', 'workspace', 'mcp'])
+    // No caps, no tool exclusions.
     expect(standard.maxIterations).toBeUndefined()
     expect(standard.maxOutputTokens).toBeUndefined()
     expect(standard.excludedTools ?? []).toEqual([])
@@ -420,7 +421,7 @@ describe('ExecutionEngine per-turn profile gating (fake client e2e)', () => {
       { type: 'PROFILE_RESOLVED'; profile: ExecutionProfile; modules: string[] } | undefined
     expect(resolved).toBeTruthy()
     expect(resolved!.profile).toBe('standard')
-    expect(resolved!.modules).toEqual(expect.arrayContaining(['memory', 'critic', 'workspace', 'reflection']))
+    expect(resolved!.modules).toEqual(expect.arrayContaining(['memory', 'critic', 'workspace', 'mcp']))
     engine.dispose()
   })
 })

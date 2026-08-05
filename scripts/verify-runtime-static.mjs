@@ -1,24 +1,29 @@
 #!/usr/bin/env node
 /**
- * verify-runtime-truth.mjs — machine-checkable documentation/code consistency.
+ * verify-runtime-static.mjs — STATIC machine-checkable consistency.
  *
- * v0.5.3 (P6) + v0.5.3 Final (task 12) behavioral checks:
+ * v0.5.3 Hotfix §13 split:
+ *   - This script is STATIC ONLY. It checks file references,
+ *     version strings, banned strings, schema drift, and
+ *     default module names.
+ *   - Behavioural correctness lives in Vitest suites:
+ *       - tests/v053Hotfix/* — claim-level evidence, probe leases,
+ *         routing application, observability, etc.
+ *       - tests/v053RealGoldenPath.profileFallback.test.ts — the
+ *         real end-to-end Profile A→B chain.
+ *
+ * Run via `node scripts/verify-runtime-static.mjs` or wired into
+ * `pnpm check` as `pnpm verify:runtime-static`.
+ *
+ * Static checks performed here:
  *   - claimed-wired module must have src/ non-test production reference
  *   - experimental/ files cannot be referenced by src/ as live
- *   - Memory single-write enforcement (LongTermMemory gates BEFORE
- *     SemanticMemory, AND before any parallel write path like
- *     consolidateSession)
- *   - Router signal fields are read by the scorer
- *   - TaskImpact schema enum matches parser vocabulary AND every
- *     schema enum value parses back successfully (round-trip)
- *   - no absolute test counts in long-form docs
- *   - Golden-path test exists
+ *   - default modules no longer include `reflection` (Hotfix §11)
+ *   - no absolute test counts in long-form docs (README/CLAUDE.md)
+ *   - TaskImpact schema enum matches parser vocabulary (round-trip)
  *   - recordRetry / totalRetryAttempts are dead: not wired, not exported
- *   - All-open route returns structured unavailable decision
+ *   - All-open route returns structured unavailable decision (file-level)
  *   - ESM-runner files exist AND are referenced by package.json
- *
- * Run via `node scripts/verify-runtime-truth.mjs` or wired into `pnpm check`.
- * Exits 0 on success, 1 on any mismatch — prints every issue found.
  */
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname, resolve, relative } from 'node:path'
@@ -539,11 +544,12 @@ function parseScopesFromList(listStr) {
 {
   const coordSrc = readText('src/core/runtime/coordinator.ts') ?? ''
   const stripped = coordSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-  const hasAcquire = /router\s*\?\.\s*tryAcquireProbe\s*\(/.test(stripped)
-      || /tryAcquireProbe\s*\(\s*binding\.id\s*\)/.test(stripped)
-  const hasFinish = /router\s*\?\.\s*finishProbe\s*\(/.test(stripped)
-      || /finishProbe\s*\(\s*probeBindingId\s*,/.test(stripped)
-  check('Coordinator consults tryAcquireProbe/finishProbe on the half-open path',
+  // v0.5.3 Hotfix §7: probe lease ownership token. The
+  // Coordinator calls tryAcquireProbe and finishProbe with a
+  // ProbeLease token (not a profileId).
+  const hasAcquire = /tryAcquireProbe\s*\(\s*binding\.id\s*\)/.test(stripped)
+  const hasFinish = /finishProbe\s*\(\s*probeLease\s*,/.test(stripped)
+  check('Coordinator consults tryAcquireProbe/finishProbe (lease-token) on the half-open path',
     hasAcquire && hasFinish,
     `acquire=${hasAcquire}, finish=${hasFinish}`)
 }
@@ -622,22 +628,27 @@ function parseScopesFromList(listStr) {
   const stripped = coordSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
   const hasAcquire = /router[?.]?\.?tryAcquireProbe\s*\(/.test(stripped)
   const hasFinish = /router[?.]?\.?finishProbe\s*\(/.test(stripped)
-  // v0.5.3 Closure (P2): the finishProbe call must be in `finally`
-  // so the lease is released on abort / throw / normal-return.
+  // v0.5.3 Hotfix §7: finishProbe takes a ProbeLease token
+  // (not a profileId). The lease-token signature proves
+  // ownership. The `finally` block must still invoke
+  // finishProbe for abort/throw/normal-return safety.
   const finishProbeInFinally = /try\s*\{[\s\S]*?finally\s*\{[\s\S]*?finishProbe/m.test(stripped)
+  // v0.5.3 Hotfix §7: tryAcquireProbe returns ProbeLease | null.
+  const hasTokenAcquire = /tryAcquireProbe\(/.test(stripped)
+  const hasTokenFinish = /finishProbe\(probeLease/.test(stripped)
   check('Coordinator wires probe lease + finishProbe in finally',
-    hasAcquire && hasFinish && finishProbeInFinally,
-    `acquire=${hasAcquire}, finish=${hasFinish}, inFinally=${finishProbeInFinally}`)
+    hasTokenAcquire && hasTokenFinish && finishProbeInFinally,
+    `acquire=${hasTokenAcquire}, finish=${hasTokenFinish}, inFinally=${finishProbeInFinally}`)
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────
 
 if (failures.length === 0) {
-  console.log('✓ verify-runtime-truth: all checks passed')
+  console.log('✓ verify-runtime-static: all checks passed')
   process.exit(0)
 }
 
-console.log(`\nverify-runtime-truth: ${failures.length} failure(s):\n`)
+console.log(`\nverify-runtime-static: ${failures.length} failure(s):\n`)
 for (const f of failures) console.log('  ' + f)
 console.log('')
 process.exit(1)

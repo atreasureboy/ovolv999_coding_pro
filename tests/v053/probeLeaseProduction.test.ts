@@ -1,8 +1,9 @@
 /**
- * v0.5.3 Final (P1-3): the Router's tryAcquireProbe / finishProbe
- * pair is wired into Coordinator.callLLM. The half-open state must
- * carry exactly one in-flight probe — concurrent callers fall
- * through to the fallback path.
+ * v0.5.3 Final (P1-3) + v0.5.3 Hotfix §7: the Router's
+ * tryAcquireProbe / finishProbe pair is wired into
+ * Coordinator.callLLM. The half-open state must carry exactly one
+ * in-flight probe — concurrent callers fall through to the
+ * fallback path.
  *
  * These tests exercise the Router's lease in isolation (no Engine);
  * the wiring in Coordinator.callLLM calls the same API.
@@ -10,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { ModelRouter, type ModelProfile } from '../../src/core/model/modelRouter.js'
 
-describe('Router.tryAcquireProbe / finishProbe — production wiring (P1-3)', () => {
+describe('Router.tryAcquireProbe / finishProbe — production wiring (P1-3 + Hotfix §7)', () => {
   const profile = (id: string, model: string, roles = ['cheap']): ModelProfile => ({
     id,
     provider: 'openai-compatible',
@@ -37,47 +38,45 @@ describe('Router.tryAcquireProbe / finishProbe — production wiring (P1-3)', ()
   it('first caller acquires the probe; second concurrent caller is rejected', () => {
     const r = newRouter()
     openCircuit(r)
-    // Force half-open: bypass the wall-clock cooldown by manually
-    // transitioning.
     r['circuitStates'].set('p1', 'half-open')
 
-    expect(r.tryAcquireProbe('p1')).toBe(true)
-    expect(r.tryAcquireProbe('p1')).toBe(false) // concurrent
-    expect(r.tryAcquireProbe('p1')).toBe(false) // still concurrent
+    const a1 = r.tryAcquireProbe('p1')
+    expect(a1).not.toBeNull()
+    expect(r.tryAcquireProbe('p1')).toBeNull()
+    expect(r.tryAcquireProbe('p1')).toBeNull()
   })
 
-  it('finishProbe(true) closes the circuit and releases the lease', () => {
+  it('finishProbe(success) closes the circuit and releases the lease', () => {
     const r = newRouter()
     openCircuit(r)
     r['circuitStates'].set('p1', 'half-open')
 
-    expect(r.tryAcquireProbe('p1')).toBe(true)
-    r.finishProbe('p1', true)
+    const acquired = r.tryAcquireProbe('p1')
+    expect(acquired).not.toBeNull()
+    r.finishProbe(acquired!, 'success')
 
     expect(r.getProfileCircuitState('p1')).toBe('closed')
-    // After release, a fresh acquire succeeds.
-    expect(r.tryAcquireProbe('p1')).toBe(false) // closed == no acquire
     expect(r.getProbeInFlight().size).toBe(0)
   })
 
-  it('finishProbe(false) re-opens the circuit and releases the lease', () => {
+  it('finishProbe(failure) re-opens the circuit and releases the lease', () => {
     const r = newRouter()
     openCircuit(r)
     r['circuitStates'].set('p1', 'half-open')
 
-    expect(r.tryAcquireProbe('p1')).toBe(true)
-    r.finishProbe('p1', false)
+    const acquired = r.tryAcquireProbe('p1')
+    expect(acquired).not.toBeNull()
+    r.finishProbe(acquired!, 'failure')
 
     expect(r.getProfileCircuitState('p1')).toBe('open')
     expect(r.getProbeInFlight().size).toBe(0)
-    // Concurrent acquire after re-open is rejected (still no lease).
-    expect(r.tryAcquireProbe('p1')).toBe(false)
+    expect(r.tryAcquireProbe('p1')).toBeNull() // still no lease
   })
 
   it('CLOSED and OPEN profiles reject probe acquisition outright', () => {
     const r = newRouter()
-    expect(r.tryAcquireProbe('p1')).toBe(false) // closed — nothing to probe
+    expect(r.tryAcquireProbe('p1')).toBeNull() // closed
     openCircuit(r)
-    expect(r.tryAcquireProbe('p1')).toBe(false) // open — wait for cooldown
+    expect(r.tryAcquireProbe('p1')).toBeNull() // open
   })
 })

@@ -334,8 +334,8 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     extraTools: skills.size > 0 ? [loadSkillTool] : [],
     enabledModules: projectConfig?.enabledModules
       ?? (settings.mcp?.servers?.length
-        ? ['memory', 'critic', 'workspace', 'reflection', 'mcp']
-        : ['memory', 'critic', 'workspace', 'reflection']),
+        ? ['memory', 'critic', 'workspace', 'mcp']
+        : ['memory', 'critic', 'workspace']),
     agentFactory,
     askUserQuestion: createTerminalAskUserHandler({
       // The handler reads `activePrompt` lazily (it can be null before

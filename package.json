@@ -1,7 +1,7 @@
 {
   "name": "ovolv999",
-  "version": "0.5.3",
-  "description": "v0.5.3 Closure Integrity — candidate → promotion, per-attempt probe truth, two-backend parity, real Golden Path",
+  "version": "0.5.4",
+  "description": "v0.5.4 Hotfix — EffectiveRunId, baseCommit single protocol, ProjectIdentity, per-project Memory backend, Claim-Level Evidence, Probe Lease token, Routing Application structure",
   "license": "MIT",
   "type": "module",
   "main": "dist/bin/ovogogogo.js",
@@ -56,8 +56,9 @@
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
     "eval:real": "vitest run evals/real",
     "typecheck": "tsc --noEmit",
-    "verify:runtime-truth": "node scripts/verify-runtime-truth.mjs",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:esm && pnpm eval:deterministic && pnpm verify:runtime-truth",
+    "verify:runtime-static": "node scripts/verify-runtime-static.mjs",
+    "test:runtime-behavior": "vitest run tests/v053Hotfix tests/v053 tests/v053RealGoldenPath.profileFallback.test.ts tests/v053RealGoldenPath.test.ts tests/memoryRepoIsolation.test.ts tests/sourceQuoteHardening.test.ts tests/memoryBackendContract.test.ts tests/revisionBindingTruth.test.ts tests/memoryConflictProvenance.test.ts tests/probePerAttemptTruth.test.ts tests/probeLeaseProduction.test.ts",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:esm && pnpm eval:deterministic && pnpm verify:runtime-static && pnpm test:runtime-behavior",
     "prepack": "pnpm check && pnpm build && pnpm package:verify"
   },
   "dependencies": {

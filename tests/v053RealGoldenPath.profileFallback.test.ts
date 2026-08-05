@@ -146,8 +146,9 @@ describe('v0.5.3 Final — Profile A → B real end-to-end', () => {
       )
       outcome = r.outcome
     } finally {
-      // We intentionally do NOT dispose; the engine is needed for
-      // subsequent turns.
+      // v0.5.3 Hotfix §12: engine.dispose in finally so a
+      // failed assertion still releases resources.
+      engine.dispose?.()
     }
 
     if (process.env.DEBUG_FALLBACK) {
@@ -179,12 +180,19 @@ describe('v0.5.3 Final — Profile A → B real end-to-end', () => {
     //     was accepted by the engine). All accepted requests are b.
     expect(seenA.length).toBeGreaterThanOrEqual(1)
     expect(fx.requests[0].model).toBe('model-a')
+    // v0.5.3 Hotfix §12 — STRUCTURAL fallback invariants:
+    //   - model-a's circuit OPENS after the retry budget exhausts
+    //   - All NON-model-a requests are model-b
+    //   - At least 3 model-b calls (write, bash, completion)
+    // The EXACT request count depends on retry-budget + circuit-
+    // breaker thresholds (production defaults retry 6 times before
+    // opening). The structural assertion is the same-model block
+    // pattern: 0..N model-a retries → 0..N model-b.
+    expect(fx.requests.every((r, i) => i < seenA.length ? r.model === 'model-a' : r.model === 'model-b')).toBe(true)
     expect(seenB.length).toBeGreaterThanOrEqual(3)
 
-    // (2) Attempt counts: model-a failed exactly once (the FIRST
-    //     attempt landed the 503; subsequent retries land 503 too
-    //     but Router falls back to model-b after the first). The
-    //     model-b attempts (write + bash + completion) accumulate.
+    // (2) Attempt counts: at least one model-a failure; at least
+    //     three model-b successes.
     const aFailed = outcome.modelAttempts.filter(
       (a) => a.model === 'model-a' && a.status === 'failed',
     )
@@ -225,8 +233,6 @@ describe('v0.5.3 Final — Profile A → B real end-to-end', () => {
     // (7) Completion status: completed. NOT partial. NOT failed.
     //     NOT cancelled. Completed. Period.
     expect(outcome.completion.status).toBe('completed')
-
-    engine.dispose?.()
     } finally {
       process.chdir(originalCwd)
     }

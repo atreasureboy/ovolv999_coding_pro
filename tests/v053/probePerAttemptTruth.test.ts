@@ -1,17 +1,20 @@
 /**
- * v0.5.3 Closure Integrity (P2): probe per-attempt truth.
+ * v0.5.3 Closure Integrity (P2) + v0.5.3 Hotfix §7: probe
+ * per-attempt truth + lease ownership.
  *
  *   1. A 503 + B success → A re-opens, B stays closed, run succeeds.
  *   2. A probe success → A closed, no fallback emitted.
  *   3. A consume-stream failure → A re-opens.
  *   4. Abort → lease is released in finally (not orphaned in-flight).
+ *   5. Lease ownership: finishProbe without the right leaseId is
+ *      a no-op; circuit state is not mutated.
  *
  * Test wires a Coordinator-shaped Router + 2 profiles and a tiny
  * in-memory model gateway that simulates the relevant attempts.
  */
 import { describe, it, expect } from 'vitest'
 
-import { ModelRouter, type ModelProfile } from '../../src/core/model/modelRouter.js'
+import { ModelRouter, type ModelProfile, type ProbeLease } from '../../src/core/model/modelRouter.js'
 
 function newRouter(): ModelRouter {
   const a: ModelProfile = {
@@ -49,20 +52,20 @@ function forceHalfOpen(r: ModelRouter, id = 'profile-a'): void {
   r['circuitStates'].set(id, 'half-open')
 }
 
-describe('Probe per-attempt truth (Closure Integrity P2)', () => {
+describe('Probe per-attempt truth + lease ownership (Hotfix §7)', () => {
   it('A probe 503 + B fallback success → A re-opens, B stays closed', () => {
     const r = newRouter()
     forceHalfOpen(r)
 
     expect(r.getProfileCircuitState('profile-a')).toBe('half-open')
     const acquired = r.tryAcquireProbe('profile-a')
-    expect(acquired).toBe(true)
+    expect(acquired).not.toBeNull()
 
     // Simulate gateway semantics: model-a 503'd, model-b returned text.
     // We invoke finishProbe with the SPECIFIC attempt verdict for
     // profile-a. The new contract: do NOT close profile-a on the
     // overall gateway success.
-    r.finishProbe('profile-a', false)
+    r.finishProbe(acquired!, 'failure')
 
     expect(r.getProfileCircuitState('profile-a')).toBe('open')
     expect(r.getProbeInFlight().size).toBe(0)
@@ -72,8 +75,9 @@ describe('Probe per-attempt truth (Closure Integrity P2)', () => {
     const r = newRouter()
     forceHalfOpen(r)
 
-    expect(r.tryAcquireProbe('profile-a')).toBe(true)
-    r.finishProbe('profile-a', true)
+    const acquired = r.tryAcquireProbe('profile-a')
+    expect(acquired).not.toBeNull()
+    r.finishProbe(acquired!, 'success')
 
     expect(r.getProfileCircuitState('profile-a')).toBe('closed')
     expect(r.getProbeInFlight().size).toBe(0)
@@ -82,23 +86,41 @@ describe('Probe per-attempt truth (Closure Integrity P2)', () => {
   it('probe-busy is a SET semantics — concurrent caller is rejected, not promoted', () => {
     const r = newRouter()
     forceHalfOpen(r)
-    expect(r.tryAcquireProbe('profile-a')).toBe(true)
+    const a1 = r.tryAcquireProbe('profile-a')
+    expect(a1).not.toBeNull()
     // A second attempt during the in-flight probe must fail.
-    expect(r.tryAcquireProbe('profile-a')).toBe(false)
-    expect(r.tryAcquireProbe('profile-a')).toBe(false)
+    expect(r.tryAcquireProbe('profile-a')).toBeNull()
+    expect(r.tryAcquireProbe('profile-a')).toBeNull()
   })
 
-  it('double finishProbe is idempotent at the lease-release layer', () => {
+  it('finishProbe without a valid lease is a no-op (no circuit mutation)', () => {
     const r = newRouter()
     forceHalfOpen(r)
-    expect(r.tryAcquireProbe('profile-a')).toBe(true)
-    r.finishProbe('profile-a', false)
-    // Releasing again is safe — re-acquire still returns false
-    // because the lease Set is empty (probe is no longer in-flight)
-    // but the profile is now open, so tryAcquireProbe still
-    // returns false (state check inside).
-    r.finishProbe('profile-a', false)
+    // Forged lease (no tryAcquireProbe call) — finishProbe must
+    // refuse to mutate circuit state.
+    const forged: ProbeLease = {
+      leaseId: 'forged-uuid',
+      profileId: 'profile-a',
+      model: 'model-a',
+      acquiredAt: Date.now(),
+    }
+    r.finishProbe(forged, 'success')
+    expect(r.getProfileCircuitState('profile-a')).toBe('half-open')
     expect(r.getProbeInFlight().size).toBe(0)
+  })
+
+  it('finishProbe with mismatched leaseId is a no-op', () => {
+    const r = newRouter()
+    forceHalfOpen(r)
+    const acquired = r.tryAcquireProbe('profile-a')
+    expect(acquired).not.toBeNull()
+    const tampered: ProbeLease = { ...acquired!, leaseId: 'tampered-uuid' }
+    r.finishProbe(tampered, 'success')
+    // Original lease is still valid; circuit unchanged.
+    expect(r.getProfileCircuitState('profile-a')).toBe('half-open')
+    // Owner can still finishProbe with the real lease.
+    r.finishProbe(acquired!, 'success')
+    expect(r.getProfileCircuitState('profile-a')).toBe('closed')
   })
 
   it('abort path: finishProbe is invoked exactly once via finally — verified indirectly', () => {
@@ -110,12 +132,12 @@ describe('Probe per-attempt truth (Closure Integrity P2)', () => {
     // lease. Wrap in a manual try/finally here to emulate the
     // production shape.
     const acquired = r.tryAcquireProbe('profile-a')
-    expect(acquired).toBe(true)
+    expect(acquired).not.toBeNull()
     try {
       try {
         throw new Error('simulated abort')
       } finally {
-        r.finishProbe('profile-a', false)
+        r.finishProbe(acquired!, 'failure')
       }
     } catch { /* swallow simulated abort */ }
     expect(r.getProbeInFlight().size).toBe(0)

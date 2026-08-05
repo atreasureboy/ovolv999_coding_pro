@@ -36,6 +36,14 @@ export interface ModuleBootContext {
   /** The user's message for this run — used for relevance-based memory retrieval */
   userMessage?: string
   /**
+   * v0.5.3 Hotfix §4: resolved ProjectIdentity. Modules MUST read
+   * `projectIdentity.canonicalRoot` for any per-project file
+   * storage or repo-filtered read. The legacy `cwd` field remains
+   * populated for backwards compatibility but is the user's
+   * launch directory, NOT necessarily the canonical project root.
+   */
+  projectIdentity?: import('./projectIdentity.js').ProjectIdentity
+  /**
    * v0.5.3 (P0.2): shared services supplied by the Engine. Modules
    * MUST read these from the boot context, NOT construct their
    * own. The Engine owns one instance per service and the WorkspaceWatcher

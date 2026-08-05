@@ -50,6 +50,9 @@ export type EventType =
   | 'worker_restart'
   | 'llm_api'
   | 'llm_api_usage_missing'
+  | 'memory_promotion_started'
+  | 'memory_promotion_decided'
+  | 'memory_promotion_rejected'
 
 /** Runtime whitelist — used by isValidEntry to reject unknown event types. */
 const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
@@ -68,6 +71,9 @@ const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   'worker_restart',
   'llm_api',
   'llm_api_usage_missing',
+  'memory_promotion_started',
+  'memory_promotion_decided',
+  'memory_promotion_rejected',
 ])
 
 export interface EventLogEntry {

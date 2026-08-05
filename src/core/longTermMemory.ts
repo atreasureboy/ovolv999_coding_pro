@@ -198,11 +198,17 @@ export function referencesCode(content: string): boolean {
 
 function contentKey(rec: MemoryRecord | MemoryRecordInput): string {
   const h = createHash('sha256')
+  // v0.5.3 Hotfix §3: resolve canonical commit. Records written
+  // after the rename carry baseCommit; legacy records from older
+  // versions carry `commit`. Either path keys the same content
+  // identically so conflict merges don't accidentally separate
+  // legitimate updates from their pre-rename counterparts.
+  const canonicalCommit = rec.baseCommit ?? rec.commit ?? ''
   h.update(rec.repo ?? '')
   h.update('\x00')
   h.update(rec.branch ?? '')
   h.update('\x00')
-  h.update(rec.baseCommit ?? '')
+  h.update(canonicalCommit)
   h.update('\x00')
   h.update(String(rec.dirty ?? false))
   h.update('\x00')
@@ -286,9 +292,22 @@ export class JsonlMemoryBackend implements MemoryBackend {
 
 // ── Default project path ────────────────────────────────────────────────
 
+/**
+ * v0.5.3 Hotfix §5: path includes both a human-readable slug AND
+ * a sha256 prefix of the canonicalRoot. Two different paths that
+ * normalise to the same slug (e.g. `/repo` and `/REPO`) collide
+ * in the legacy implementation; the hash prefix guarantees each
+ * project gets its own file.
+ *
+ * Honour `OVOGO_HOME` env var so tests can redirect storage to
+ * a tmp dir without touching the developer's real `~/.ovogo`.
+ */
 export function defaultMemoryPath(repo: string): string {
+  const baseHome = process.env.OVOGO_HOME || homedir()
   const slug = repo.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'default'
-  return join(homedir(), '.ovogo', 'projects', slug, 'memory', 'longterm.jsonl')
+  // Project identity hash so colliding slugs never share a file.
+  const hashPrefix = createHash('sha256').update(repo).digest('hex').slice(0, 8)
+  return join(baseHome, '.ovogo', 'projects', `${slug}-${hashPrefix}`, 'memory', 'longterm.jsonl')
 }
 
 // ── LongTermMemory facade ───────────────────────────────────────────────
@@ -313,16 +332,62 @@ export interface LongTermMemoryOptions {
 }
 
 export class LongTermMemory {
-  private readonly backend: MemoryBackend
+  private backend: MemoryBackend | null
   private readonly allowUnverified: boolean
   private readonly allowCodeWithoutCommit: boolean
   private readonly now: () => string
+  /** v0.5.3 Hotfix §5: backend is now bound LAZILY when the
+   *  MemoryModule receives a ProjectIdentity at boot. The legacy
+   *  global default (`'default'`) was a cross-project bleed
+   *  waiting to happen. */
+  private pendingBackendFactory: (() => MemoryBackend) | null = null
 
   constructor(opts: LongTermMemoryOptions = {}) {
-    this.backend = opts.backend ?? new JsonlMemoryBackend(defaultMemoryPath('default'))
+    if (opts.backend) {
+      this.backend = opts.backend
+    } else {
+      // v0.5.3 Hotfix §5: do NOT eagerly create a default JSONL
+      // file. Record calls before a backend is bound throw a
+      // structured error so callers (MemoryModule.bindToProject)
+      // cannot silently leak records into a global file.
+      this.backend = null
+      this.pendingBackendFactory = () => new JsonlMemoryBackend(defaultMemoryPath('default'))
+    }
     this.allowUnverified = opts.allowUnverified ?? false
     this.allowCodeWithoutCommit = opts.allowCodeWithoutCommit ?? false
     this.now = opts.now ?? (() => new Date().toISOString())
+  }
+
+  /**
+   * v0.5.3 Hotfix §5: bind (or re-bind) the backend. Used by the
+   * MemoryModule at boot to attach a per-project JSONL file. If
+   * a backend is already bound, replaces it. The previous backend
+   * is dropped — callers must drain it first if they need its
+   * records (rare in this codebase).
+   */
+  bindBackend(backend: MemoryBackend): void {
+    this.backend = backend
+    this.pendingBackendFactory = null
+  }
+
+  /** Returns the current backend if bound, else null. */
+  getBackend(): MemoryBackend | null {
+    return this.backend
+  }
+
+  /**
+   * v0.5.3 Hotfix §5: throw if no backend is bound. The MemoryModule
+   * MUST call `bindBackend(...)` at boot. Lazy default backend was
+   * removed because it cross-contaminated projects.
+   */
+  private requireBackend(): MemoryBackend {
+    if (!this.backend) {
+      throw new Error(
+        'LongTermMemory has no bound backend. MemoryModule.bindToProjectIdentity() ' +
+        'must run at boot to attach a per-project JSONL file before any record()/query() call.',
+      )
+    }
+    return this.backend
   }
 
   /**
@@ -338,6 +403,14 @@ export class LongTermMemory {
    *   R6 — embedding is passed through if supplied
    */
   record(input: MemoryRecordInput): MemoryRecord {
+    // v0.5.3 Hotfix §3: new writes MUST use the canonical
+    // `baseCommit` field. The legacy `commit` slot is read-only
+    // compat for older JSONL rows — promote it here so all reads
+    // see baseCommit and downstream code can rely on a single
+    // canonical field.
+    if (input.commit !== undefined && input.baseCommit === undefined) {
+      input = { ...input, baseCommit: input.commit }
+    }
     // R2 — Reflection source marking.
     if (input.kind === 'reflection' && !input.origin.startsWith('reflection')) {
       throw new Error(
@@ -371,12 +444,13 @@ export class LongTermMemory {
     // check rejected entries that had a workspaceHash but no
     // commit — silently dropping code experiences from non-git
     // repos. Now we accept the right binding per repo state.
+    const canonicalCommit = input.baseCommit ?? input.commit
     if (
       !this.allowCodeWithoutCommit &&
       input.kind !== 'failure' &&
       (input.kind === 'semantic' || input.kind === 'procedural') &&
       referencesCode(input.content) &&
-      !input.commit &&
+      !canonicalCommit &&
       !(input.dirty && input.diffHash) &&
       !input.workspaceHash
     ) {
@@ -384,14 +458,14 @@ export class LongTermMemory {
     }
 
     const now = this.now()
-    const existing = this.backend.load(now)
+    const existing = this.requireBackend().load(now)
 
     // R5 — Conflict-aware merge.
     const key = contentKey(input)
     const priorWithSameContent = existing.find((r) => contentKey(r as MemoryRecordInput) === key)
     if (priorWithSameContent) {
       const merged = this.mergeConflict(priorWithSameContent, input)
-      this.backend.upsert(merged)
+      this.requireBackend().upsert(merged)
       return merged
     }
 
@@ -400,7 +474,7 @@ export class LongTermMemory {
       createdAt: now,
       ...input,
     }
-    this.backend.upsert(record)
+    this.requireBackend().upsert(record)
     return record
   }
 
@@ -411,7 +485,7 @@ export class LongTermMemory {
    */
   query(filter: MemoryQueryFilter = {}): MemoryRecord[] {
     const now = this.now()
-    let records = this.backend.load(now)
+    let records = this.requireBackend().load(now)
     if (filter.repo) records = records.filter((r) => r.repo === filter.repo)
     if (filter.branch) records = records.filter((r) => r.branch === filter.branch)
     if (filter.kind) records = records.filter((r) => r.kind === filter.kind)
@@ -444,30 +518,31 @@ export class LongTermMemory {
   /** Drop expired records permanently. Returns the count removed. */
   collectGarbage(): number {
     const now = this.now()
-    const all = this.backend.load(now) // already excludes expired
+    const all = this.requireBackend().load(now) // already excludes expired
     const expiredIds = new Set(this.scanExpired(now))
-    for (const id of expiredIds) this.backend.delete(id)
+    for (const id of expiredIds) this.requireBackend().delete(id)
     void all
     return expiredIds.size
   }
 
   /** Delete by id. */
   delete(id: string): void {
-    this.backend.delete(id)
+    this.requireBackend().delete(id)
   }
 
   /** Total record count (excluding TTL-expired). */
   size(): number {
-    return this.backend.load(this.now()).length
+    return this.requireBackend().load(this.now()).length
   }
 
   // ── Internal ────────────────────────────────────────────────────────
 
   private scanExpired(now: string): string[] {
     // Re-read raw to find TTL-expired entries that load() filtered out.
-    if (!(this.backend instanceof JsonlMemoryBackend)) return []
-    if (!existsSync(this.backend['filePath'])) return []
-    const raw = readFileSync(this.backend['filePath'], 'utf8')
+    const backend = this.requireBackend()
+    if (!(backend instanceof JsonlMemoryBackend)) return []
+    if (!existsSync(backend['filePath'])) return []
+    const raw = readFileSync(backend['filePath'], 'utf8')
     const lines = raw.split('\n').filter(Boolean)
     const expired: string[] = []
     for (const line of lines) {
@@ -499,8 +574,15 @@ export class LongTermMemory {
         ...existing,
         content: incoming.content,
         confidence: incoming.confidence,
-        commit: incoming.commit ?? existing.commit,
+        // v0.5.3 Hotfix §3: baseCommit is canonical; commit is a
+        // read-only compat alias. Update ALL binding fields so a
+        // conflict merge refreshes the run-binding as well as the
+        // content.
+        baseCommit: incoming.baseCommit ?? existing.baseCommit,
         branch: incoming.branch ?? existing.branch,
+        dirty: incoming.dirty ?? existing.dirty,
+        diffHash: incoming.diffHash ?? existing.diffHash,
+        workspaceHash: incoming.workspaceHash ?? existing.workspaceHash,
         tags: dedupe([...existing.tags, ...incoming.tags]),
         embedding: incoming.embedding ?? existing.embedding,
         verified: incoming.verified || existing.verified,

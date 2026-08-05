@@ -38,6 +38,7 @@ import { getPlanModePrefix } from '../../prompts/system.js'
 import { normalizeCJKInput } from '../strings.js'
 import type { TaskKind } from './taskIntent.js'
 import type { CostTracker } from '../costTracker.js'
+import type { ProjectIdentity } from '../projectIdentity.js'
 
 export interface BootParams {
   userMessage: string
@@ -55,6 +56,12 @@ export interface BootParams {
   fileHistory: FileHistory | null
   eventLog?: EventLog
   eventEmitter?: RunEventEmitter
+  /**
+   * v0.5.3 Hotfix §4: resolved ProjectIdentity. Threads through to
+   * ModuleBootContext so every module binds to canonicalRoot.
+   * If absent, modules fall back to ctx.cwd (legacy path).
+   */
+  projectIdentity?: ProjectIdentity
   /** v0.5.3 (P0.2): shared services from Engine. Modules MUST
    *  receive these via ModuleBootContext.sharedServices. */
   repoStats?: RepoStatsService
@@ -97,6 +104,10 @@ export async function boot(params: BootParams): Promise<BootResult> {
     sessionDir: config.sessionDir,
     config,
     userMessage,
+    // v0.5.3 Hotfix §4: thread the resolved ProjectIdentity so
+    // modules bind to canonicalRoot instead of the user's launch
+    // cwd (which may be a git subdir).
+    projectIdentity: params.projectIdentity,
     // v0.5.3 (P0.2): inject shared services so modules that need
     // them (WorkspaceWatcher in particular) read the SAME instance
     // the Router uses.

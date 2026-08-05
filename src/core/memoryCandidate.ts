@@ -67,7 +67,46 @@ export interface MemoryCandidate {
    * as agent_inferred for safety.
    */
   userSourceVerification?: 'promote' | 'demote-agent_inferred' | 'unverified'
+  /**
+   * v0.5.3 Hotfix §2 — Claim-Level Evidence. Promotion only
+   * succeeds when at least one of:
+   *   - claimedSource === 'user_stated' AND userSourceVerification === 'promote'
+   *   - claimedSource === 'tool_observed' AND a tool_result
+   *     evidence ref verifies against a real ToolResult in the run
+   *   - an explicit verification evidence ref points at a known
+   *     EvidenceStore id
+   *   - a file evidence ref points at a real on-disk file
+   * Candidates without any evidence that resolves to verified=true
+   * are either dropped (during a successful run) or saved as
+   * kind='reflection', verified=false (audit trail).
+   */
+  evidenceRefs?: MemoryEvidenceRef[]
 }
+
+/**
+ * v0.5.3 Hotfix §2 — A single piece of claim-level evidence
+ * backing a MemoryCandidate. Promotion examines each ref and
+ * either resolves it (verified) or rejects the candidate.
+ */
+export type MemoryEvidenceRef =
+  | {
+      kind: 'user_quote'
+      quote: string
+    }
+  | {
+      kind: 'tool_result'
+      toolCallId: string
+      resultQuote: string
+    }
+  | {
+      kind: 'file'
+      path: string
+      contentHash?: string
+    }
+  | {
+      kind: 'verification'
+      evidenceId: string
+    }
 
 // ── RevisionBinding ─────────────────────────────────────────────────────
 
@@ -171,8 +210,13 @@ export function verifySourceQuote(opts: {
     }
   }
   if (!isNormalizedSubstring(quote, opts.userMessage)) {
+    // v0.5.3 Hotfix §2: user_stated validation FAILURE is now
+    // an unconditional DROP. The previous behaviour demoted to
+    // agent_inferred and the candidate could still be promoted
+    // (as a successful semantic record). A forged quote
+    // therefore gave a free pass. Drop closes the loophole.
     return {
-      result: 'demote-agent_inferred',
+      result: 'drop',
       reason: 'sourceQuote not a substring of userMessage',
     }
   }
@@ -180,7 +224,7 @@ export function verifySourceQuote(opts: {
   const coverage = computeContentTokenCoverage(opts.content, quote)
   if (coverage < MIN_CONTENT_TOKEN_COVERAGE) {
     return {
-      result: 'demote-agent_inferred',
+      result: 'drop',
       reason: `content coverage of quote ${coverage.toFixed(2)} < ${MIN_CONTENT_TOKEN_COVERAGE}`,
     }
   }
@@ -228,6 +272,19 @@ export interface PromotionInput {
    * whose sourceQuote fails verification is demoted here.
    */
   revision: RevisionBinding
+  /**
+   * v0.5.3 Hotfix §2: tool-call registry used to validate
+   * tool_observed evidence refs. The MemoryModule.onComplete
+   * path collects ToolResults from the run-scoped context; this
+   * map (toolCallId → resultQuote) lets decidePromotion drop
+   * tool_observed candidates whose toolCallId is unknown or
+   * whose resultQuote isn't in the actual result.
+   *
+   * When absent, tool_observed with tool_result refs are
+   * accepted at the structural level (no further validation);
+   * this keeps the pure function usable in unit tests.
+   */
+  toolCallRegistry?: Map<string, { resultText: string; truncated: boolean; isError: boolean }>
 }
 
 export interface PromotionDecision {
@@ -268,14 +325,17 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
     unresolvedCount === 0
 
   for (const c of input.candidates) {
-    // v0.5.3 Final (P1): user_stated verification is multi-factor.
-    // The model passes `claimedSource='user_stated'` and
-    // `sourceQuote`, but the Engine must verify the quote is real
-    // (substring of userMessage), long enough (a 1-char quote is
-    // forbidden), and that the content is DERIVABLE from the quote
-    // (≥60% content-token coverage). Anything weaker is demoted or
-    // dropped — no laundered content reaches long-term memory.
+    // v0.5.3 Hotfix §2 — Claim-Level Evidence.
+    //
+    // user_stated: drop unconditionally on verification failure.
+    //   No demote, no silent launder. (P0 fix from previous round.)
+    // tool_observed: verify via evidenceRefs (tool_result toolCallId
+    //   belongs to the run + resultQuote exists in real result +
+    //   no truncation).
+    // agent_inferred without evidence: NEVER verified=true. Either
+    //   dropped, or saved as kind='reflection', verified=false.
     let effectiveSource: ClaimedMemorySource = c.claimedSource
+
     if (c.claimedSource === 'user_stated') {
       const verdict = verifySourceQuote({
         sourceQuote: c.sourceQuote,
@@ -283,17 +343,95 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         content: c.content,
       })
       if (verdict.result === 'drop') {
+        // v0.5.3 Hotfix §2: user_stated failures ALWAYS drop. No
+        // demote-to-agent_inferred on success runs. The candidate
+        // contributes nothing to memory.
         dropped.push({ candidateId: c.id, reason: verdict.reason })
-        if (!isFullSuccess) continue
-        // On success runs, drop also demotes to agent_inferred for the
-        // promotion decision below.
-        effectiveSource = 'agent_inferred'
-      } else if (verdict.result === 'demote-agent_inferred') {
+        continue
+      }
+      if (verdict.result === 'demote-agent_inferred') {
+        // Kept as a deprecated back-compat branch. New behaviour
+        // treats demote the same as drop.
         dropped.push({ candidateId: c.id, reason: verdict.reason })
-        if (!isFullSuccess) continue
+        continue
+      }
+      // 'verified' → keep user_stated.
+    } else if (c.claimedSource === 'tool_observed') {
+      // v0.5.3 Hotfix §2: tool_observed requires a tool_result
+      // evidence ref AND that ref must verify against a real
+      // ToolResult in this run.
+      const toolRefs = (c.evidenceRefs ?? []).filter((r) => r.kind === 'tool_result')
+      if (toolRefs.length === 0) {
+        dropped.push({
+          candidateId: c.id,
+          reason: 'tool_observed without tool_result evidence ref',
+        })
+        continue
+      }
+      // Promotion-time registry check: every toolCallId must be
+      // present in the run's actual tool-call registry. The
+      // resultQuote must appear in the recorded resultText, the
+      // result must not be truncated, and must not be an error.
+      if (input.toolCallRegistry) {
+        const registry = input.toolCallRegistry
+        let toolEvidenceOk = true
+        for (const ref of toolRefs) {
+          if (ref.kind !== 'tool_result') continue
+          const entry = registry.get(ref.toolCallId)
+          if (!entry) {
+            dropped.push({
+              candidateId: c.id,
+              reason: `tool_observed references unknown toolCallId ${ref.toolCallId}`,
+            })
+            toolEvidenceOk = false
+            break
+          }
+          if (entry.truncated) {
+            dropped.push({
+              candidateId: c.id,
+              reason: `tool_observed toolCallId ${ref.toolCallId} result is truncated (unverifiable)`,
+            })
+            toolEvidenceOk = false
+            break
+          }
+          if (entry.isError) {
+            dropped.push({
+              candidateId: c.id,
+              reason: `tool_observed toolCallId ${ref.toolCallId} result was an error`,
+            })
+            toolEvidenceOk = false
+            break
+          }
+          if (!entry.resultText.includes(ref.resultQuote)) {
+            dropped.push({
+              candidateId: c.id,
+              reason: `tool_observed toolCallId ${ref.toolCallId} resultQuote not found in ToolResult`,
+            })
+            toolEvidenceOk = false
+            break
+          }
+        }
+        if (!toolEvidenceOk) continue
+      }
+    } else if (c.claimedSource === 'agent_inferred') {
+      // v0.5.3 Hotfix §2: agent_inferred without ANY evidence ref
+      // can NEVER be promoted with verified=true. Either drop, or
+      // save as kind='reflection' for audit purposes (verified=false).
+      const hasEvidence = (c.evidenceRefs ?? []).length > 0
+      if (!hasEvidence) {
+        if (isFullSuccess) {
+          // No evidence + success run → drop. A successful run is
+          // the moment where laundered content would do the most
+          // damage; we don't risk it.
+          dropped.push({
+            candidateId: c.id,
+            reason: 'agent_inferred without evidence ref cannot verify=true on success run',
+          })
+          continue
+        }
+        // Failure run: keep as reflection audit (verified=false).
         effectiveSource = 'agent_inferred'
       }
-      // else 'verified' → proceed with user_stated.
     }
 
     if (isFullSuccess) {
@@ -303,11 +441,10 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         content: c.content.slice(0, 500),
         repo: input.revision.repo,
         branch: input.revision.branch,
-        commit: input.revision.baseCommit,
-        // v0.5.3 Final (P0 issue): propagate the FULL RevisionBinding
-        // so the gate's R3 check accepts the right binding per repo
-        // state. Dirty repos carry diffHash, non-git carries
-        // workspaceHash, clean git carries commit.
+        // v0.5.3 Hotfix §3: baseCommit is the canonical internal
+        // field. `commit` is read-only compat alias; new writes
+        // MUST NOT use it.
+        baseCommit: input.revision.baseCommit,
         dirty: input.revision.dirty,
         diffHash: input.revision.diffHash,
         workspaceHash: input.revision.workspaceHash,
@@ -334,7 +471,7 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         content: c.content.slice(0, 500),
         repo: input.revision.repo,
         branch: input.revision.branch,
-        commit: input.revision.baseCommit,
+        baseCommit: input.revision.baseCommit,
         dirty: input.revision.dirty,
         diffHash: input.revision.diffHash,
         workspaceHash: input.revision.workspaceHash,

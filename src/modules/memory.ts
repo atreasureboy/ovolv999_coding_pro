@@ -14,7 +14,7 @@ import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
 import { getMemoryDir, buildMemorySystemSection } from '../memory/index.js'
 import { str } from '../core/strings.js'
-import { LongTermMemory, defaultMemoryPath } from '../core/longTermMemory.js'
+import { LongTermMemory, defaultMemoryPath, JsonlMemoryBackend } from '../core/longTermMemory.js'
 import {
   decidePromotion,
   makeCandidateId,
@@ -394,13 +394,48 @@ export class MemoryModule implements AgentModule {
   private projectRepo: string = ''
 
   /**
-   * v0.5.3 Final (P0 issue): wire the per-project LongTermMemory
-   * instance. Engine calls this once it has the resolved cwd; boot
-   * re-derives any query filter from the same cwd.
+   * v0.5.3 Final (P0 issue) + v0.5.3 Hotfix §4: bind to the
+   * canonical project root. The legacy `bindToProject(cwd)`
+   * contract is preserved for direct callers but engine boot now
+   * threads a ProjectIdentity through and we read canonicalRoot
+   * from it. A git-subdir launch therefore records and queries
+   * the parent git repo's data, never the subdir.
    */
   bindToProject(cwd: string): void {
     this.projectRepo = cwd
+    this.bindBackendForCwd(cwd)
   }
+
+  /**
+   * v0.5.3 Hotfix §4: bind to a fully-resolved ProjectIdentity.
+   * Prefer this over `bindToProject(cwd)` for new code paths.
+   */
+  bindToProjectIdentity(projectIdentity: import('../core/projectIdentity.js').ProjectIdentity): void {
+    this.projectRepo = projectIdentity.canonicalRoot
+    this.bindBackendForCwd(projectIdentity.canonicalRoot)
+  }
+
+  /**
+   * v0.5.3 Hotfix §5: lazily attach a per-project JsonlMemoryBackend
+   * to the LongTermMemory instance. Called from both
+   * `bindToProject` and `bindToProjectIdentity`. The constructor
+   * no longer creates a default JSONL file — every project gets
+   * its own path derived from `defaultMemoryPath(canonicalRoot)`.
+   * Tests can pin the file path via `OVOGO_HOME` / `HOME` env or
+   * by calling `setLongTermBackendPath` before boot.
+   */
+  private bindBackendForCwd(cwd: string): void {
+    const path = defaultMemoryPath(cwd)
+    this.currentLongTermPath = path
+    // Rebind unconditionally. Each boot re-attaches the per-project
+    // JSONL file. Multiple boots in the same project rewrite the
+    // same path — file state is preserved across boots because
+    // bindBackend replaces the backend reference, not the file.
+    this.longTerm.bindBackend(new JsonlMemoryBackend(path))
+  }
+
+  /** v0.5.3 Hotfix §5: current project's actual backend path. */
+  private currentLongTermPath: string = ''
 
   /** Repo filter — used by every read query below. */
   private repoFilter(): string {
@@ -412,8 +447,12 @@ export class MemoryModule implements AgentModule {
     this.longTerm = ltm
   }
 
+  /**
+   * v0.5.3 Hotfix §5: returns the per-project JSONL file path
+   * for the currently-bound project. Empty string before bind.
+   */
   getLongTermMemoryPath(): string {
-    return defaultMemoryPath('default')
+    return this.currentLongTermPath || defaultMemoryPath(this.projectRepo)
   }
 
   boot(ctx: ModuleBootContext): ModuleBootResult {
@@ -421,9 +460,15 @@ export class MemoryModule implements AgentModule {
     // directly. SemanticMemory is kept for back-compat reads only
     // (until migration; see migrateSemanticToLongTerm below).
     let section = ''
-    // v0.5.3 Final (P0 issue): bind to the boot's cwd so every read
-    // and write below scopes to this project.
-    this.bindToProject(ctx.cwd)
+    // v0.5.3 Hotfix §4: bind to the resolved ProjectIdentity's
+    // canonicalRoot, NOT ctx.cwd. Git-subdir launches must use
+    // the parent git repo's data so memory_search can find
+    // records written from the project root.
+    if (ctx.projectIdentity) {
+      this.bindToProjectIdentity(ctx.projectIdentity)
+    } else {
+      this.bindToProject(ctx.cwd)
+    }
     try {
       const ltmRecords = this.longTerm.query({
         kind: 'semantic',
@@ -515,6 +560,14 @@ export class MemoryModule implements AgentModule {
     // fabricated commit.
     const binding: RevisionBinding = await buildRevisionBinding({ cwd: ctx.cwd })
 
+    // v0.5.3 Hotfix §6: emit MEMORY_PROMOTION_STARTED before
+    // decidePromotion runs. The audit trail can prove the
+    // promoter actually ran (vs being bypassed).
+    ctx.eventLog?.append('memory_promotion_started', 'memory', {
+      runId: ctx.outcome.runId,
+      candidateCount: candidates.length,
+    } as never)
+
     const decision = decidePromotion({
       candidates,
       outcome: ctx.outcome,
@@ -522,13 +575,32 @@ export class MemoryModule implements AgentModule {
       revision: binding,
     })
 
+    for (const drop of decision.dropped) {
+      ctx.eventLog?.append('memory_promotion_rejected', 'memory', {
+        runId: ctx.outcome.runId,
+        candidateId: drop.candidateId,
+        reason: drop.reason,
+      } as never)
+    }
     for (const promo of [...decision.successPromotions, ...decision.failurePromotions]) {
       try {
         this.longTerm.record(promo.memoryInput)
-      } catch {
+        ctx.eventLog?.append('memory_promotion_decided', 'memory', {
+          runId: ctx.outcome.runId,
+          candidateId: promo.candidate.id,
+          kind: promo.memoryInput.kind,
+          verified: promo.memoryInput.verified,
+          origin: promo.memoryInput.origin,
+        } as never)
+      } catch (err) {
         // If a single record is rejected (e.g. commit-binding still
         // missing for an unexpected content shape), drop and
         // continue — we do not let one bad candidate break the run.
+        ctx.eventLog?.append('memory_promotion_rejected', 'memory', {
+          runId: ctx.outcome.runId,
+          candidateId: promo.candidate.id,
+          reason: (err as Error).message,
+        } as never)
       }
     }
   }

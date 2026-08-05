@@ -47,13 +47,14 @@ import {
 } from '../queryStateMachine.js'
 import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
-import type { RoutingInput, ModelRouter } from '../model/modelRouter.js'
+import type { RoutingInput, ModelRouter, ProbeLease, ProbeOutcome } from '../model/modelRouter.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
 import type { ToolRegistry } from '../toolRuntime/toolRegistry.js'
 import type { ModuleManager } from '../moduleRuntime/moduleManager.js'
 import type { SharedRuntimeState } from './sharedState.js'
+import { resolveProjectIdentity } from '../projectIdentity.js'
 import type { RunEventEmitter } from './events.js'
 import { isTerminalRunStatus } from '../executionRun.js'
 import type { ExecutionRunRegistry, RunStatus } from '../executionRun.js'
@@ -205,6 +206,9 @@ export class RuntimeCoordinator {
   }> = []
   /** P1-5: warn at most once per run about usage-less success responses. */
   private usageMissingWarned = false
+  // v0.5.3 Hotfix §4: cache the resolved ProjectIdentity so
+  // 20 sequential turns don't each spawn a fresh `git rev-parse`.
+  private _projectIdentityCache: { cwd: string; identity: import('../projectIdentity.js').ProjectIdentity } | null = null
   // v0.5.3 P0-3: coordinator no longer carries its own provider
   // circuit state. The single source of truth is the ModelRouter's
   // per-profile circuit (consecutiveProfileFailures + circuitStates
@@ -281,46 +285,39 @@ export class RuntimeCoordinator {
       } catch { /* best-effort */ }
     }
 
-    // ── ExecutionRun tracking (GAP-C) ──
-    // If a registry is wired in, mint a `kind='turn'` run that
-    // reflects this turn's lifecycle. The registry is optional so
-    // existing call sites (and tests) that don't supply one keep
-    // working byte-for-byte. All registry calls are best-effort: a
-    // registry bug must NEVER break the actual turn.
+    // ── ExecutionRun tracking (GAP-C + v0.5.3 Hotfix §1) ──
+    // Resolve effectiveRunId ONCE. Whether the registry is wired
+    // in or not, every downstream consumer (activeRunId, RunContext,
+    // ToolContext.execution.runId, MemoryCandidate.runId, TurnOutcome.
+    // runId, Worker parentRunId, finally close) MUST read from this
+    // single binding. No `?? 'unknown'` fallbacks downstream — the
+    // id is guaranteed present from this point.
     const registry = this.deps.runRegistry
-    const runId = registry
+    const registryRun = registry
       ? registry.create({
           kind: 'turn',
           goal: userMessage.slice(0, 200),
           workspace: { cwd: config.cwd },
           parentRunId: effectiveParentRunId,
-        }).runId
+        })
       : undefined
-    if (!runId) {
-      // R5 fallback: when no registry, mint a local id so tools can
-      // resolve the per-run ControlMessageLog. Same prefix as
-      // RunScopedRuntimeContextStore.create() for parity.
-      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      this.deps.runContextStore!.create(localId, { taskKind: 'informational' })
-      this.deps.sharedState.activeRunId = localId
-    } else {
-      this.deps.sharedState.activeRunId = runId
-    }
-    if (runId && registry) {
+    const effectiveRunId =
+      registryRun?.runId
+      ?? createLocalRunId()
+    this.deps.sharedState.activeRunId = effectiveRunId
+    if (registryRun && registry) {
       try {
-        registry.transition(runId, 'preparing', { phase: 'boot' })
+        registry.transition(effectiveRunId, 'preparing', { phase: 'boot' })
       } catch { /* best-effort */ }
     }
     // v0.3.2 (run-scoped runtime contract §Phase 9): lifecycle start marker. Emitted
     // after RUN_STARTED but before the loop begins, so /trace can
     // show "execution started" distinctly from "run started" (the
     // latter is a logical event, the former a runtime event).
-    if (runId) {
-      this.deps.eventEmitter.emit({
-        type: 'RUN_EXECUTION_STARTED',
-        runId,
-      } as never)
-    }
+    this.deps.eventEmitter.emit({
+      type: 'RUN_EXECUTION_STARTED',
+      runId: effectiveRunId,
+    } as never)
 
     // ── ExecutionProfile resolution (v0.4.1 WS4) ──
     // Resolved BEFORE boot so module gating, tool exclusion and the
@@ -361,6 +358,19 @@ export class RuntimeCoordinator {
       modules: profileModules,
     } as never)
 
+    // ── ProjectIdentity (v0.5.3 Hotfix §4) ──
+    // Resolved ONCE per run, before boot, and threaded through to
+    // every subsystem that needs the canonical project root.
+    // Cached on the Coordinator so 20 sequential runs do not each
+    // pay for a fresh `git rev-parse` spawn.
+    if (!this._projectIdentityCache || this._projectIdentityCache.cwd !== config.cwd) {
+      this._projectIdentityCache = {
+        cwd: config.cwd,
+        identity: await resolveProjectIdentity({ cwd: config.cwd }),
+      }
+    }
+    const projectIdentity = this._projectIdentityCache.identity
+
     // ── Boot Sequence ──
     let bootResult
     try {
@@ -381,6 +391,10 @@ export class RuntimeCoordinator {
         eventLog,
         eventEmitter,
         costTracker: this.deps.costTracker,
+        // v0.5.3 Hotfix §4: every module that needs canonicalRoot
+        // reads it from this binding rather than the legacy
+        // bootCtx.cwd.
+        projectIdentity,
         executionProfile: {
           modules: profileModules,
           excludedTools: profileSpec.excludedTools,
@@ -392,14 +406,14 @@ export class RuntimeCoordinator {
       })
     } catch (bootErr) {
       const msg = (bootErr as Error).message || String(bootErr)
-      if (runId && registry) {
-        try { registry.transition(runId, 'failed', { phase: 'boot', error: msg }) } catch { /* best-effort */ }
+      if (registryRun && registry) {
+        try { registry.transition(effectiveRunId, 'failed', { phase: 'boot', error: msg }) } catch { /* best-effort */ }
       }
       throw bootErr
     }
-    if (runId && registry) {
+    if (registryRun && registry) {
       try {
-        registry.transition(runId, 'running', { phase: 'llm' })
+        registry.transition(effectiveRunId, 'running', { phase: 'llm' })
       } catch { /* best-effort */ }
     }
 
@@ -411,15 +425,13 @@ export class RuntimeCoordinator {
     // can read the current runId + parentRunId dynamically. The old
     // pattern of caching parentRunId in a Tool's constructor broke
     // for multi-turn reuse because every turn had a different RunId.
-    if (runId) {
-      toolContext.execution = buildExecutionContext({
-        runId,
-        parentRunId: effectiveParentRunId,
-        cwd: config.cwd,
-        signal: turnAbortController.signal,
-        model: config.model,
-      })
-    }
+    toolContext.execution = buildExecutionContext({
+      runId: effectiveRunId,
+      parentRunId: effectiveParentRunId,
+      cwd: config.cwd,
+      signal: turnAbortController.signal,
+      model: config.model,
+    })
 
     // v0.5.3 P0-1: publish the memory provenance fields into
     // ToolContext so memory_write (and any future gated write) reads
@@ -433,7 +445,7 @@ export class RuntimeCoordinator {
       const ws = this.deps.contextManager.getWorkingState()
       const memoryCtx = {
         repo: config.cwd,
-        sourceRunId: runId ?? 'unknown',
+        sourceRunId: effectiveRunId,
         // True iff the working state's verification record is
         // non-empty AND has no failures. The CompletionContract
         // re-seals the verdict at end of turn; this flag is the
@@ -467,7 +479,7 @@ export class RuntimeCoordinator {
     // is harmless). The previous order (measure → route →
     // budget_check → apply) let the Router see 90% before the
     // compaction kicked in.
-    this.deps.contextManager.setActiveRunId(runId ?? null)
+    this.deps.contextManager.setActiveRunId(effectiveRunId)
     try {
       const initialSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
       await this.deps.contextManager.applyBudgetPolicy({
@@ -494,21 +506,19 @@ export class RuntimeCoordinator {
     // resolution); the event is emitted here for every turn — a fast
     // turn still classifies, the classification is what MADE it fast.
     try {
-    if (runId) {
-      this.deps.eventEmitter.emit({
-        type: 'TASK_INTENT_CLASSIFIED',
-        runId,
-        intent: {
-          kind: taskIntent.kind,
-          source: taskIntent.source,
-          confidence: taskIntent.confidence,
-        },
-      } as never)
-    }
-    if (runId) {
+    this.deps.eventEmitter.emit({
+      type: 'TASK_INTENT_CLASSIFIED',
+      runId: effectiveRunId,
+      intent: {
+        kind: taskIntent.kind,
+        source: taskIntent.source,
+        confidence: taskIntent.confidence,
+      },
+    } as never)
+    {
       const ctxStore = this.deps.runContextStore
       if (ctxStore) {
-        runContext = ctxStore.get(runId) ?? ctxStore.create(runId, {
+        runContext = ctxStore.get(effectiveRunId) ?? ctxStore.create(effectiveRunId, {
           parentRunId: effectiveParentRunId,
           taskKind: 'informational',
           // v0.5.3 Final (task 2): stash the original user message
@@ -544,7 +554,7 @@ export class RuntimeCoordinator {
             }
             try {
               if (mm.publishCandidateSink) {
-                mm.publishCandidateSink(runId, (cand) => {
+                mm.publishCandidateSink(effectiveRunId, (cand) => {
                   runContext!.memoryCandidates.push(cand)
                 })
               }
@@ -556,13 +566,11 @@ export class RuntimeCoordinator {
       } else {
         const store = this.deps.taskGraphStore
         if (store) {
-          let graph = store.get(runId)
-          if (!graph) graph = store.create(runId)
+          let graph = store.get(effectiveRunId)
+          if (!graph) graph = store.create(effectiveRunId)
           this.deps.taskGraph = graph
         }
       }
-    } else {
-      this.deps.taskGraph?.reset()
     }
 
     // v0.3.5: resolve the current TaskGraph from the per-run context
@@ -844,21 +852,40 @@ export class RuntimeCoordinator {
           }
 
           case 'budget_check': {
-            // v0.5.3 Final (P0 issue): measure → apply → re-measure
-            // already happened BEFORE signal collection. The state
-            // machine still visits budget_check (to keep the hook
-            // pre/post-compact timing and the transition graph
-            // intact), so we just fire hooks and transition.
+            // v0.5.3 Hotfix §10 — per-iteration measure → apply →
+            // re-measure. PreCompact/PostCompact hooks fire ONLY
+            // when compaction actually happens (snapshot usage
+            // decreased). This keeps the hook semantics tight:
+            // hooks signal real compaction, not routine measure.
             const compactTrigger: 'auto' | 'manual' = 'auto'
-            if (config.hookRunner?.runPreCompact) {
-              try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
+            const preSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+            let postSnap = preSnap
+            let didCompact = false
+            try {
+              postSnap = await this.deps.contextManager.applyBudgetPolicy({
+                messages,
+                toolDefs,
+                snapshot: preSnap,
+                abortSignal: turnAbortController.signal,
+              })
+              didCompact = postSnap.usageRatio < preSnap.usageRatio
+              if (didCompact) {
+                // Re-measure to honor any post-compact mutations.
+                postSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+              }
+            } catch (err) {
+              // AbortError propagates — caller will catch. Other
+              // errors are best-effort ignored; the snapshot stays
+              // at the pre-applied value (Router still reads it).
+              if ((err as { name?: string }).name === 'AbortError') throw err
             }
-            // Re-measure is idempotent now (post-compact state is
-            // already published). We do one more pass to honor
-            // any mutations that happened during the iterations.
-            this.deps.contextManager.measureBudget({ messages, toolDefs })
-            if (config.hookRunner?.runPostCompact) {
-              try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
+            if (didCompact) {
+              if (config.hookRunner?.runPreCompact) {
+                try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
+              }
+              if (config.hookRunner?.runPostCompact) {
+                try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
+              }
             }
             state = transitionQueryState(state, { type: 'continue' })
             break
@@ -1186,7 +1213,7 @@ export class RuntimeCoordinator {
       }
     }
 
-    eventEmitter.emit({ type: 'RUN_EXECUTION_STOPPED', runId: runId ?? 'unknown', stopReason: result.reason })
+    eventEmitter.emit({ type: 'RUN_EXECUTION_STOPPED', runId: effectiveRunId, stopReason: result.reason })
 
     // ── CompletionContract gate (v0.3.1: SINGLE source of truth) ──
     // stop_sequence only means the model stopped. The real verdict comes
@@ -1337,7 +1364,7 @@ export class RuntimeCoordinator {
     }
 
     // ── ExecutionRun terminal transition (GAP-C) ──
-    if (runId && registry) {
+    if (registryRun && registry) {
       // Map CompletionStatus → RunStatus: exhausted/failed/cancelled are
       // distinct terminal states; everything else non-completed maps to
       // 'blocked' so the RunRegistry contract is preserved.
@@ -1353,9 +1380,9 @@ export class RuntimeCoordinator {
         : result.reason === 'max_iterations' ? 'blocked'
         : 'failed'
       try {
-        const run = registry.get(runId)
+        const run = registry.get(effectiveRunId)
         if (run && !isTerminalRunStatus(run.status)) {
-          registry.transition(runId, targetStatus, {
+          registry.transition(effectiveRunId, targetStatus, {
             phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted'
               : completionVerdict && completionVerdict.status !== 'completed' ? `completion-${completionVerdict.status}`
               : 'completed',
@@ -1376,7 +1403,7 @@ export class RuntimeCoordinator {
       // exact status transition.
       this.deps.eventEmitter.emit({
         type: 'RUN_STATUS_TRANSITIONED',
-        runId,
+        runId: effectiveRunId,
         from: 'running',
         to: targetStatus,
         verdict: serializeVerdict(completionVerdict ?? {
@@ -1408,7 +1435,7 @@ export class RuntimeCoordinator {
       : result.reason === 'max_iterations' ? 'exhausted'
       : (result.completionStatus as CompletionStatus) ?? 'completed'
     const outcome: TurnOutcome = {
-      runId: runId ?? 'unknown',
+      runId: effectiveRunId,
       stopReason: result.reason === 'interrupted' ? 'cancelled'
         : result.reason === 'max_iterations' ? 'max_iterations'
         : result.reason === 'error' ? 'error'
@@ -1498,9 +1525,14 @@ export class RuntimeCoordinator {
 
     return { result, newHistory: messages, outcome }
     } finally {
-      if (runId) {
-        try { this.deps.runContextStore?.close(runId) } catch { /* best-effort */ }
-      }
+      try { this.deps.runContextStore?.close(effectiveRunId) } catch { /* best-effort */ }
+      // v0.5.3 Hotfix §1: clear activeRunId so consecutive turns
+      // never see a stale id from a closed run.
+      try {
+        if (this.deps.sharedState.activeRunId === effectiveRunId) {
+          this.deps.sharedState.activeRunId = null
+        }
+      } catch { /* best-effort */ }
     }
   }
 
@@ -1534,8 +1566,7 @@ export class RuntimeCoordinator {
     // OPEN → fail fast and let the caller advance via
     // nextFallback() to a different profile.
     const router = this.deps.modelRouter
-    let probeAcquired = false
-    let probeBindingId: string | undefined
+    let probeLease: ProbeLease | null = null
     if (router) {
       const binding = router.listProfiles().find((p) => p.model === modelAtStart)
       if (binding) {
@@ -1547,40 +1578,27 @@ export class RuntimeCoordinator {
           )
         }
         if (circuit === 'half-open') {
-          probeAcquired = router.tryAcquireProbe(binding.id)
-          probeBindingId = binding.id
-          if (!probeAcquired) {
-            // v0.5.3 Closure (P2): a busy probe is NOT a terminal
-            // error. The Router has another caller mid-probe for
-            // THIS profile; we advance to the next available
-            // profile and serve that instead. If no fallback
-            // exists the existing structured unavailable decision
-            // fires from route() — but we are NOT in route() here
-            // (we already picked this profile). So when no
-            // fallback chain reaches the Router, surface the
-            // precise condition explicitly.
+          // v0.5.3 Hotfix §7: lease-based probe acquisition. A
+          // null lease means the profile is busy OR not yet
+          // half-open — we don't release anything we don't own.
+          probeLease = router.tryAcquireProbe(binding.id)
+          if (!probeLease) {
+            // Probe busy. Advance to fallback if available.
             const next = router.nextFallback(modelAtStart)
             if (!next) {
-              // Lease MUST still be released (we never acquired it).
-              router.finishProbe(binding.id, false)
-              probeAcquired = false
-              probeBindingId = undefined
+              // No fallback AND no lease: surface as a terminal
+              // routing-unavailable condition.
+              probeLease = null
               throw new Error(
                 `Profile ${binding.id} is half-open with a probe in flight and no fallback available.`,
               )
             }
-            // Advance config.model to the fallback so this turn
-            // proceeds with a healthy profile.
             router.applyRoutingDecision(next)
             modelAtStart = next
-            // The probe lease we did NOT acquire must not be touched
-            // by the post-call cleanup path.
-            probeAcquired = false
-            probeBindingId = undefined
-            // Re-evaluate the now-active profile's circuit. The
-            // fallback may itself be open (rare but possible). We
-            // don't recurse; the next iteration of the state
-            // machine handles it.
+            // We never acquired the lease; the post-call cleanup
+            // path therefore has nothing to release.
+            probeLease = null
+            // Re-evaluate the now-active profile's circuit.
             const newBinding = router.listProfiles().find((p) => p.model === modelAtStart)
             if (newBinding && router.getProfileCircuitState(newBinding.id) === 'open') {
               throw new Error(
@@ -1697,41 +1715,32 @@ export class RuntimeCoordinator {
         })
       }
     } finally {
-      // v0.5.3 Closure (P2): finishProbe MUST be invoked exactly
-      // once per acquired lease — in finally so abort, throw,
-      // and normal-return all release the probe and resolve the
-      // half-open window. Verdict comes from the SPECIFIC attempt
-      // for the probed profile, not the overall gateway result.
-      if (probeAcquired && probeBindingId && router) {
-        // Probe model may have advanced to a fallback during the
-        // half-open-busy path above; that branch sets
-        // probeAcquired=false so we never touch the lease here
-        // for the un-acquired state.
-        const allAttempts = (() => {
-          // We can't see result/attempts here; the caller already
-          // called recordGatewayAttempt which captured them via
-          // this.modelCallsThisRun. The last attempt for the
-          // probed model IS the answer.
-          const calls = this.modelCallsThisRun
-          return calls.length > 0
-            ? calls.map((c) => ({
-                model: c.model,
-                provider: c.provider,
-                success: c.success,
-                latencyMs: c.endedAt - c.startedAt,
-                usage: c.usage
-                  ? { inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, totalTokens: c.usage.inputTokens + c.usage.outputTokens }
-                  : null,
-                error: c.error,
-              }))
-            : []
-        })()
-        const probedBinding = router.listProfiles().find((p) => p.id === probeBindingId)
+      // v0.5.3 Closure (P2) + Hotfix §7: finishProbe MUST be
+      // invoked exactly once per ACQUIRED lease token, in finally
+      // so abort/throw/normal-return all release the lease and
+      // resolve the half-open window. Verdict comes from the
+      // SPECIFIC attempt for the probed profile, not the overall
+      // gateway result. We do NOT call finishProbe unless we own
+      // the lease — the token proves ownership.
+      if (probeLease && router) {
+        const allAttempts = this.modelCallsThisRun.map((c) => ({
+          model: c.model,
+          provider: c.provider,
+          success: c.success,
+          latencyMs: c.endedAt - c.startedAt,
+          usage: c.usage
+            ? { inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, totalTokens: c.usage.inputTokens + c.usage.outputTokens }
+            : null,
+          error: c.error,
+        }))
+        const probedBinding = router.listProfiles().find((p) => p.id === probeLease!.profileId)
         const probeAttempt = probedBinding
           ? allAttempts.find((a) => a.model === probedBinding.model)
           : undefined
-        router.finishProbe(probeBindingId, probeAttempt?.success === true)
-        probeAcquired = false
+        const outcome: ProbeOutcome =
+          probeAttempt?.success === true ? 'success' : 'failure'
+        router.finishProbe(probeLease, outcome)
+        probeLease = null
       }
     }
 
@@ -1832,6 +1841,19 @@ export class RuntimeCoordinator {
     })
   }
 
+}
+
+/**
+ * v0.5.3 Hotfix §1 — mint a stable run id when no RunRegistry is
+ * wired. Single source of truth; every consumer (activeRunId,
+ * RunContext, ToolContext, MemoryCandidate, Worker parent,
+ * TurnOutcome, finally close) binds to it through the Coordinator's
+ * `effectiveRunId` local. Prefixed `local-` so legacy consumers
+ * that try to distinguish registry-managed runs from
+ * registry-less ones still work.
+ */
+export function createLocalRunId(): string {
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 /**

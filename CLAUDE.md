@@ -81,7 +81,7 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 | `core/moduleRuntime/` | 模块生命周期 | moduleManager(拓扑 boot,critical/best_effort) |
 | `core/context/` | 上下文预算 | contextManager, toolResultBudget |
 | `tools/` | 34 个工具 | agent.ts(子引擎+验证闸门), claudeCode.ts(tmux worker), taskPlan.ts(13 action) |
-| `modules/` | 5 个内置模块 | memory, critic, reflection, workspace, mcp |
+| `modules/` | 4 个生产模块 + reflection(experimental/) | memory, critic, workspace, mcp |
 | `ui/` | 三前端共享引擎 | ink/(UIStore 单向桥), vim.ts(纯状态机), statusLine |
 | `commands/` | 89 个 slash 命令 | builtin.ts(3487 行单文件) |
 | `integrations/` | 外部协议 | acp.ts(JSON-RPC stdio), pipeMode |

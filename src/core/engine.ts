@@ -479,11 +479,20 @@ export class ExecutionEngine {
           break
         case 'ROUTING_DECISION_APPLIED': {
           const selectedModel = (evt.payload?.selectedModel ?? '') as string
+          // v0.5.3 Hotfix §9 — previousModel is the model in
+          // effect BEFORE the Router's apply, not config.model
+          // (which may already reflect a stale switch). Reason
+          // codes are scoped to the selected profile only —
+          // never include unhealthy reasons from non-selected
+          // profiles (those belong in the routing input, not the
+          // final decision).
+          const payload = (evt.payload ?? {}) as { previousModel?: string; reasonCodes?: string[] }
+          const from = payload.previousModel ?? this.config.model
           e.emit({
             type: 'ROUTING_APPLIED',
-            from: this.config.model,
+            from: String(from),
             to: String(selectedModel),
-            reasonCodes: [],
+            reasonCodes: payload.reasonCodes ?? [],
           })
           break
         }
@@ -583,22 +592,30 @@ export class ExecutionEngine {
         const router = this.modelRouter
         if (!router.isRoutingEnabled() || router.getManualOverride()) return null
         const decision = router.route(input)
-        if (!decision.selectedModel) return null
+        // v0.5.3 Hotfix §8 — structured application. The
+        // unavailable kind is NOT best-effort swallowed; the
+        // routeModel callback returns null and the caller
+        // surfaces a routing-unavailable error. ROUTING_UNAVAILABLE
+        // event is emitted so consumers can observe the state.
+        const application = router.applyRouteApplication(decision)
+        if (application.kind === 'unavailable') {
+          this.eventLog?.append('protocol', 'engine', {
+            type: 'ROUTING_UNAVAILABLE',
+            reasonCodes: application.decision.reasonCodes,
+          } as never)
+          return null
+        }
+        if (application.kind === 'applied') {
+          try {
+            this.applyRoutingDecision(application.decision.selectedModel, application.decision.budgetAllocation)
+          } catch { return null }
+          return application.decision.selectedModel
+        }
+        // unchanged — allocation still lands.
         try {
-          // v0.3.1: applyRoutingDecision does NOT set manual override —
-          // auto-routing must remain re-routable on subsequent turns.
-          // It also applies decision.budgetAllocation so the Router's
-          // budget-pressure decision actually constrains maxOutputTokens.
-          //
-          // v0.4.1 WS5: call it even when the selected model EQUALS the
-          // current one. switchModel() is a same-model no-op (no
-          // MODEL_CHANGED event, no gateway reset), but the allocation
-          // must still land — the old `!== this.config.model` guard
-          // skipped the whole call and silently dropped the Router's
-          // budget-pressure maxOutputTokens.
-          this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation)
-        } catch { return null }
-        return decision.selectedModel !== this.config.model ? decision.selectedModel : null
+          this.applyRoutingDecision(application.decision.selectedModel, application.decision.budgetAllocation)
+        } catch { /* best-effort */ }
+        return null
       },
     })
 
