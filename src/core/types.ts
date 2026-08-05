@@ -551,8 +551,10 @@ export interface TurnResult {
    * max_iterations — hit maxIterations ceiling
    * error          — hard abort (Ctrl+C × 2) or unrecoverable API error
    * interrupted    — soft pause requested (Ctrl+C × 1), partial history preserved
+   * routing_unavailable — v0.5.5 §6: all profiles in open circuit; the
+   *   Run terminates before any ModelGateway call.
    */
-  reason: 'max_iterations' | 'stop_sequence' | 'error' | 'interrupted'
+  reason: 'max_iterations' | 'stop_sequence' | 'error' | 'interrupted' | 'routing_unavailable'
   output: string
   /**
    * v0.3.3 (background autonomy contract §十二.7): the structured completion verdict from

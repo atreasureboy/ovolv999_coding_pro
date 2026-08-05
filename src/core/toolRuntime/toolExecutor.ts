@@ -57,6 +57,16 @@ export interface ToolExecutorDeps {
   progressMonitor?: ProgressMonitor
   resolveProgressMonitor?: (context: ToolContext) => ProgressMonitor | undefined
   renderer: Renderer
+  /** v0.5.5 §2: per-run ToolResult registry. Populated after
+   *  every tool completion; consumed by MemoryModule.onComplete
+   *  for tool_observed evidence validation. */
+  sharedState?: { toolCallRegistry?: Map<string, {
+    toolName: string
+    resultText: string
+    isError: boolean
+    truncated: boolean
+    completedAt: number
+  }> | null }
   /**
    * R5: hook additionalContext sink. Wired by the coordinator to
    * append `hook_additional_context` messages to the per-run
@@ -349,6 +359,24 @@ export class ToolExecutor {
       void legacyResults
     }
     eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+
+    // v0.5.5 §2: record the ToolResult against the Provider
+    // toolCallId in the per-run Registry. Subsequent
+    // tool_observed evidence refs verify against this record.
+    // Tool Call ID MUST come from Assistant tool_calls[].id (the
+    // `callId` parameter). We refuse to overwrite an existing
+    // entry (re-recording would let later calls rewrite the
+    // verdict of earlier ones).
+    const registry = this.deps.sharedState?.toolCallRegistry
+    if (registry && callId) {
+      registry.set(callId, {
+        toolName,
+        resultText: result.content ?? '',
+        isError: result.isError === true,
+        truncated: false,
+        completedAt: Date.now(),
+      })
+    }
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
 

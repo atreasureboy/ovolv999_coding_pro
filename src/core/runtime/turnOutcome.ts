@@ -25,6 +25,7 @@ export type StopReason =
   | 'max_iterations'
   | 'cancelled'
   | 'error'
+  | 'routing_unavailable'
 
 export interface CompletionEvidence {
   type: string

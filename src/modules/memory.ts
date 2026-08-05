@@ -28,6 +28,44 @@ import type { RunScopedRuntimeContextStore } from '../core/runtime/runScopedCont
 
 // ── memory_write — store knowledge with source attribution ──────────────────
 
+/**
+ * v0.5.5 §1 — parse the model's `evidence_refs` array into
+ * MemoryEvidenceRef[]. Unknown kinds or malformed entries return
+ * null so the tool can refuse the call rather than silently
+ * accepting the ref.
+ */
+export function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidate.js').MemoryEvidenceRef[] | null {
+  const out: import('../core/memoryCandidate.js').MemoryEvidenceRef[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') return null
+    const kind = (entry as { kind?: unknown }).kind
+    if (kind === 'tool_result') {
+      const toolCallId = (entry as { tool_call_id?: unknown }).tool_call_id
+      const resultQuote = (entry as { result_quote?: unknown }).result_quote
+      if (typeof toolCallId !== 'string' || toolCallId.length === 0) return null
+      if (typeof resultQuote !== 'string' || resultQuote.length === 0) return null
+      out.push({ kind: 'tool_result', toolCallId, resultQuote })
+    } else if (kind === 'file') {
+      const path = (entry as { path?: unknown }).path
+      const contentHash = (entry as { content_hash?: unknown }).content_hash
+      if (typeof path !== 'string' || path.length === 0) return null
+      if (contentHash !== undefined && typeof contentHash !== 'string') return null
+      const ref: import('../core/memoryCandidate.js').MemoryEvidenceRef =
+        contentHash !== undefined
+          ? { kind: 'file', path, contentHash }
+          : { kind: 'file', path }
+      out.push(ref)
+    } else if (kind === 'verification') {
+      const evidenceId = (entry as { evidence_id?: unknown }).evidence_id
+      if (typeof evidenceId !== 'string' || evidenceId.length === 0) return null
+      out.push({ kind: 'verification', evidenceId })
+    } else {
+      return null
+    }
+  }
+  return out
+}
+
 function createMemoryWriteTool(semantic: SemanticMemory, ctxProvider: () => MemoryToolContext, candidateSink: (c: MemoryCandidate) => boolean): Tool {
   return {
     name: 'memory_write',
@@ -77,6 +115,48 @@ enter the success-memory read pool.
               type: 'string',
               description: 'REQUIRED when source="user_stated": a contiguous substring of the user\'s original message that proves the user said this. The engine verifies before promoting.',
             },
+            // v0.5.5 §1 — claim-level evidence refs. Each entry
+            // carries enough info to verify the claim against the
+            // current Run's ToolResult registry / file system /
+            // evidence store. user_stated claims do NOT need refs —
+            // they use source_quote instead.
+            evidence_refs: {
+              type: 'array',
+              description: 'Claim-level evidence supporting this memory. REQUIRED when source="tool_observed"; strongly recommended for source="agent_inferred".',
+              items: {
+                oneOf: [
+                  {
+                    type: 'object',
+                    description: 'A specific tool result that this memory derives from.',
+                    properties: {
+                      kind: { const: 'tool_result' },
+                      tool_call_id: { type: 'string', description: 'The Provider-assigned tool_calls[].id of the actual tool invocation.' },
+                      result_quote: { type: 'string', description: 'A normalized contiguous substring of the ToolResult content.' },
+                    },
+                    required: ['kind', 'tool_call_id', 'result_quote'],
+                  },
+                  {
+                    type: 'object',
+                    description: 'A file the memory references.',
+                    properties: {
+                      kind: { const: 'file' },
+                      path: { type: 'string', description: 'Path relative to ProjectIdentity.canonicalRoot. Must not escape the project root.' },
+                      content_hash: { type: 'string', description: 'Optional sha256 of the file content; when present, verified at promotion time.' },
+                    },
+                    required: ['kind', 'path'],
+                  },
+                  {
+                    type: 'object',
+                    description: 'A previously-recorded verification outcome in the Run evidence store.',
+                    properties: {
+                      kind: { const: 'verification' },
+                      evidence_id: { type: 'string' },
+                    },
+                    required: ['kind', 'evidence_id'],
+                  },
+                ],
+              },
+            },
           },
           required: ['content'],
         },
@@ -119,12 +199,28 @@ enter the success-memory read pool.
         })
       }
 
+      // v0.5.5 §1: parse evidence_refs. Refs whose kind is unknown
+      // OR whose required fields are malformed produce a Tool
+      // Error rather than a silent drop. The model sees the failure
+      // and can correct the next call.
+      const rawEvidenceRefs = Array.isArray(input.evidence_refs)
+        ? input.evidence_refs
+        : []
+      const evidenceRefs = parseMemoryEvidenceRefs(rawEvidenceRefs)
+      if (evidenceRefs === null) {
+        return Promise.resolve({
+          content: 'Error: evidence_refs contained a malformed or unknown-kind entry. Each ref must be {kind:"tool_result", tool_call_id, result_quote} | {kind:"file", path[, content_hash]} | {kind:"verification", evidence_id}.',
+          isError: true,
+        })
+      }
+
       const candidate: MemoryCandidate = {
         id: makeCandidateId(),
         runId,
         content: content.slice(0, 500),
         claimedSource,
         sourceQuote,
+        evidenceRefs: evidenceRefs.length > 0 ? evidenceRefs : undefined,
         tags,
         confidence,
         createdAt: new Date().toISOString(),
@@ -573,6 +669,14 @@ export class MemoryModule implements AgentModule {
       outcome: ctx.outcome,
       userMessage,
       revision: binding,
+      // v0.5.5 §2+§3: thread the per-run registries. MemoryModule
+      // pulls them from the runContext the Coordinator passed via
+      // ModuleRunContext.runContext. Both objects are required
+      // for tool_observed validation (Registry) and verification
+      // ref resolution (EvidenceStore).
+      toolCallRegistry: (runContext as unknown as { toolCallRegistry?: Map<string, { resultText: string; truncated: boolean; isError: boolean }> } | undefined)?.toolCallRegistry,
+      projectIdentity: (runContext as unknown as { projectIdentity?: { canonicalRoot: string } } | undefined)?.projectIdentity,
+      evidenceStore: (runContext as unknown as { evidence?: { get(id: string): { status: string; createdAt: number } | undefined } } | undefined)?.evidence,
     })
 
     for (const drop of decision.dropped) {

@@ -219,30 +219,25 @@ describe('Golden Path F — RepoStatsService', () => {
 
 // ── Scenario G: RoutingSignals preserve real failure counters ────────────
 
-describe('Golden Path G — RoutingSignals pass through extended health', () => {
-  it('previousRoutingFailures + totalFallbacksApplied propagate to RoutingInput', () => {
+describe('Golden Path G — RoutingSignals preserve manualOverrideActive only', () => {
+  // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+  // circuitState / consecutiveProviderFailures are NOT decision
+  // inputs anymore. Session-wide counts live in
+  // getRoutingFailureStats() for observability, not for the
+  // Router. The collector still exposes manualOverrideActive.
+  it('manualOverrideActive propagates; previousRoutingFailures does not', () => {
     const signals = collectRoutingSignals({
       userMessage: 'test',
       workingState: { filesRead: [], filesChanged: [], verification: { passed: [], failed: [] }, unresolved: [] },
       contextManager: { recentFailureCount: 1 },
       routerHealth: {
         providerHealth: [{ profileId: 'p1', failRate: 0.3, avgLatencyMs: 200 }],
-        previousRoutingFailures: 4,
-        totalFallbacksApplied: 2,
-        circuitState: 'half-open',
-        consecutiveProviderFailures: 2,
         manualOverrideActive: true,
       },
     })
-    expect(signals.previousRoutingFailures).toBe(4)
-    expect(signals.totalFallbacksApplied).toBe(2)
-    expect(signals.circuitState).toBe('half-open')
-    expect(signals.consecutiveProviderFailures).toBe(2)
     expect(signals.manualOverrideActive).toBe(true)
     const ri = signalsToRoutingInput(signals)
-    expect(ri.previousRoutingFailures).toBe(4)
     expect(ri.manualOverrideActive).toBe(true)
-    expect(ri.circuitState).toBe('half-open')
   })
 })
 

@@ -51,7 +51,6 @@ describe('Router per-profile failure (P1.8)', () => {
       role: 'main',
       needsArchitecture: false,
       providerHealth: [],
-      previousRoutingFailures: 0,
       expectedToolRequirement: 'mixed',
       affectsPublicInterface: false,
       isCrossModule: false,

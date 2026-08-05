@@ -539,6 +539,11 @@ export class ExecutionEngine {
         const log = this.getCurrentControlMessageLog()
         if (log) log.append({ kind: 'hook_additional_context', hookName, context: `[${hookName} on ${toolName}] ${additionalContext}` })
       },
+      // v0.5.5 §2: hand the ToolExecutor a hook into SharedState's
+      // per-run toolCallRegistry so tool results are recorded
+      // against the Provider toolCallId. MemoryModule.onComplete
+      // validates tool_observed evidence refs against this map.
+      sharedState: this.sharedState,
     })
     this.toolScheduler = new ToolScheduler({
       executor: toolExecutor,
@@ -588,34 +593,48 @@ export class ExecutionEngine {
       // (setModel) for this turn. Honours --model//model override priority.
       // v0.3.1: passes the full RoutingDecision (not just the model) so
       // budgetAllocation.maxOutputTokens is applied.
+      //
+      // v0.5.5 §3+§4: the Engine is the SOLE application owner. The
+      // Router ONLY classifies (classifyRouteApplication). The
+      // Engine reads previousModel from this.config.model (the
+      // Engine's actual current state), advances via
+      // applyRoutingDecision, and calls router.markApplied to
+      // close the loop with the structured event emission.
       routeModel: (input) => {
         const router = this.modelRouter
-        if (!router.isRoutingEnabled() || router.getManualOverride()) return null
+        if (!router.isRoutingEnabled() || router.getManualOverride()) {
+          return { kind: 'unchanged' as const, decision: { selectedModel: this.config.model, selectedProfile: '', reasonCodes: ['manual-override'], confidence: 1, estimatedComplexity: 0, fallbackChain: [], budgetAllocation: {} } }
+        }
         const decision = router.route(input)
-        // v0.5.3 Hotfix §8 — structured application. The
-        // unavailable kind is NOT best-effort swallowed; the
-        // routeModel callback returns null and the caller
-        // surfaces a routing-unavailable error. ROUTING_UNAVAILABLE
-        // event is emitted so consumers can observe the state.
-        const application = router.applyRouteApplication(decision)
+        // v0.5.5 §4: previousModel MUST come from the Engine's
+        // actual current state, not Router's lastApplied tracking.
+        const application = router.classifyRouteApplication(decision, this.config.model)
         if (application.kind === 'unavailable') {
-          this.eventLog?.append('protocol', 'engine', {
-            type: 'ROUTING_UNAVAILABLE',
-            reasonCodes: application.decision.reasonCodes,
-          } as never)
-          return null
+          // The Coordinator is the single source of truth for
+          // ROUTING_UNAVAILABLE event emission — it threads the
+          // reasonCodes through to the Outcome. The Engine
+          // callback MUST NOT also emit, or the audit trail will
+          // show two events for one routing failure.
+          return application
         }
         if (application.kind === 'applied') {
           try {
             this.applyRoutingDecision(application.decision.selectedModel, application.decision.budgetAllocation)
-          } catch { return null }
-          return application.decision.selectedModel
+            router.markApplied(
+              application.decision.selectedModel,
+              application.decision.budgetAllocation,
+              application.previousModel,
+              application.decision.reasonCodes,
+            )
+          } catch { /* best-effort */ }
         }
-        // unchanged — allocation still lands.
-        try {
-          this.applyRoutingDecision(application.decision.selectedModel, application.decision.budgetAllocation)
-        } catch { /* best-effort */ }
-        return null
+        // 'unchanged': no state change; allocation may still land.
+        if (application.kind === 'unchanged' && application.decision.budgetAllocation) {
+          try {
+            this.applyRoutingDecision(application.decision.selectedModel, application.decision.budgetAllocation)
+          } catch { /* best-effort */ }
+        }
+        return application
       },
     })
 

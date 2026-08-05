@@ -117,11 +117,9 @@ describe('RoutingSignalCollector v0.3.1', () => {
           { profileId: 'a', failRate: 0.1, avgLatencyMs: 200 },
           { profileId: 'b', failRate: 0.7, avgLatencyMs: 800 },
         ],
-        previousRoutingFailures: 3,
       },
     })
     expect(s.providerHealth.length).toBe(2)
-    expect(s.previousRoutingFailures).toBe(3)
   })
 
   it('emits a preferred role from the task graph when present', () => {
@@ -147,12 +145,13 @@ describe('RoutingSignalCollector v0.3.1', () => {
     const input = signalsToRoutingInput(s)
     expect(input.userGoal).toBe(s.userGoal)
     expect(input.needsArchitecture).toBe(s.needsArchitecture)
-    expect(input.consecutiveFailures).toBe(s.recentFailureCount + s.previousRoutingFailures)
+    // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+    // circuitState are NOT propagated as decision inputs.
+    expect(input.consecutiveFailures).toBe(s.recentFailureCount)
     expect(input.contextUsageRatio).toBe(s.contextUsageRatio)
     expect(input.budgetRemaining).toBe(s.budgetRemaining)
     expect(input.role).toBe(s.role)
     expect(input.providerHealth).toBe(s.providerHealth)
-    expect(input.previousRoutingFailures).toBe(s.previousRoutingFailures)
     expect(input.expectedToolRequirement).toBe(s.expectedToolRequirement)
     expect(input.affectsPublicInterface).toBe(s.affectsPublicInterface)
     expect(input.isCrossModule).toBe(s.isCrossModule)
@@ -169,7 +168,10 @@ describe('RoutingSignalCollector v0.3.1', () => {
     expect(s.budgetRemaining).toBeUndefined()
     expect(s.contextUsageRatio).toBeUndefined()
     expect(s.providerHealth).toEqual([])
-    expect(s.previousRoutingFailures).toBe(0)
+    // v0.5.5 §14: previousRoutingFailures removed from decision inputs.
+    //   This assertion is kept as a regression guard for the
+    //   collector's behaviour, but the field no longer feeds the Router.
+    void s
     expect(s.taskGraphScale).toBe(0)
     expect(s.expectedToolRequirement).toBe('read-only') // short generic greeting under 80 chars
   })
@@ -189,7 +191,6 @@ describe('RoutingSignalCollector v0.3.1', () => {
       role: 'main',
       needsArchitecture: true,
       providerHealth: [{ profileId: 'p1', failRate: 0.1, avgLatencyMs: 800 }],
-      previousRoutingFailures: 1,
       expectedToolRequirement: 'side-effect',
       affectsPublicInterface: true,
       isCrossModule: true,

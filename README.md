@@ -1,4 +1,4 @@
-# ovolv999 (v0.5.4) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.5.5) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -64,7 +64,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 - **借鉴为主,创新为辅**:借鉴 ~80%,创新 ~20%(指纹规避)
 - **架构/UX/模块设计 直接抄**:协议、UX 模式可借鉴
 
-测试通过 `pnpm check` 验证 (typecheck + lint + test + test:esm + eval:deterministic + verify:runtime-static + test:runtime-behavior + build + package:verify)。
+测试通过 `pnpm check` 验证 (typecheck + lint + test + test:esm + eval:deterministic + verify:runtime-static + test:runtime-behavior)。`pnpm prepack` 在此基础上加 `build + package:verify`。
 
 ### v0.5 Role-aware Multi-Agent
 

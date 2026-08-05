@@ -218,13 +218,16 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
     expect(rec?.kind).toBe('failure')
   })
 
-  it('agent_inferred WITH evidence ref + success run → promoted as semantic', () => {
+  it('agent_inferred with file+contentHash evidence → promoted (strong)', () => {
     const d = decidePromotion({
       candidates: [baseCandidate({
         id: 'r2',
         claimedSource: 'agent_inferred',
         content: 'observation backed by file',
-        evidenceRefs: [{ kind: 'file', path: '/repo/file.ts' }],
+        // v0.5.5 §3: file refs require contentHash to qualify as
+        // strong evidence (paired with an evidenceCheck on the
+        // actual file). Bare file refs are weak.
+        evidenceRefs: [{ kind: 'file', path: '/repo/file.ts', contentHash: 'abc123' }],
       })],
       outcome: successOutcome(),
       userMessage: 'whatever',
@@ -232,6 +235,24 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
     })
     expect(d.successPromotions.some((p) => p.candidate.id === 'r2')).toBe(true)
     expect(d.dropped.some((e) => e.candidateId === 'r2')).toBe(false)
+  })
+
+  it('agent_inferred with bare file ref (no contentHash) → dropped (weak)', () => {
+    // v0.5.5 §3: a bare file ref is WEAK. Paired with another
+    // strong ref (tool_result / verification), the combination
+    // qualifies; alone, it does not.
+    const d = decidePromotion({
+      candidates: [baseCandidate({
+        id: 'r3',
+        claimedSource: 'agent_inferred',
+        content: 'observation backed by file but no hash',
+        evidenceRefs: [{ kind: 'file', path: '/repo/file.ts' }],
+      })],
+      outcome: successOutcome(),
+      userMessage: 'whatever',
+      revision: { repo: '/r', dirty: false },
+    })
+    expect(d.dropped.some((e) => e.candidateId === 'r3')).toBe(true)
   })
 
   it('verified user_stated (real quote) → promoted with origin=user_prompt', () => {

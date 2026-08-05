@@ -285,6 +285,20 @@ export interface PromotionInput {
    * this keeps the pure function usable in unit tests.
    */
   toolCallRegistry?: Map<string, { resultText: string; truncated: boolean; isError: boolean }>
+  /**
+   * v0.5.5 §3: project identity for file evidence validation.
+   * File evidence paths are resolved against
+   * `projectIdentity.canonicalRoot` and must not escape it.
+   * Optional — without it, file evidence refs are rejected
+   * outright (no escape validation possible).
+   */
+  projectIdentity?: { canonicalRoot: string }
+  /**
+   * v0.5.5 §3: evidence store lookup for verification refs.
+   * Keys are evidenceId. Only entries with status='passed' AND
+   * createdAt in the current run window are accepted.
+   */
+  evidenceStore?: { get(id: string): { status: string; createdAt: number } | undefined }
 }
 
 export interface PromotionDecision {
@@ -301,6 +315,67 @@ export interface PromotionDecision {
  * the rules above. Pure function — does not write anywhere. The
  * caller (MemoryPromoter.apply) writes the records.
  */
+/**
+ * v0.5.5 §3: classify whether agent_inferred evidence is
+ * "strong enough" to land as verified=true. Pure function — no
+ * I/O. The actual file existence + contentHash checks happen
+ * elsewhere (runContext layer) and the outcome is fed in via
+ * `evidenceCheck` for callers that want pre-computed file
+ * verification.
+ */
+export function classifyAgentInferredEvidence(
+  refs: ReadonlyArray<import('./memoryCandidate.js').MemoryEvidenceRef | { kind: string }>,
+  input: Pick<PromotionInput, 'toolCallRegistry' | 'projectIdentity' | 'evidenceStore'>,
+  evidenceCheck?: (path: string) => { exists: boolean; hashMatches: boolean | null },
+): { ok: true; strong: 'tool_result' | 'file_hash' | 'verification' } | { ok: false; reason: string } {
+  const toolRefs = refs.filter((r): r is { kind: 'tool_result'; toolCallId: string; resultQuote: string } =>
+    (r as { kind?: string }).kind === 'tool_result')
+  const fileRefs = refs.filter((r): r is { kind: 'file'; path: string; contentHash?: string } =>
+    (r as { kind?: string }).kind === 'file')
+  const verifRefs = refs.filter((r): r is { kind: 'verification'; evidenceId: string } =>
+    (r as { kind?: string }).kind === 'verification')
+
+  // Tool-result refs are strong ONLY when the registry proves them.
+  if (toolRefs.length > 0 && input.toolCallRegistry) {
+    for (const ref of toolRefs) {
+      const entry = input.toolCallRegistry.get(ref.toolCallId)
+      if (entry && !entry.isError && !entry.truncated && entry.resultText.includes(ref.resultQuote)) {
+        return { ok: true, strong: 'tool_result' }
+      }
+    }
+  }
+
+  // Verification refs are strong ONLY when the evidence store
+  // confirms a passed status AND the entry is recent.
+  if (verifRefs.length > 0 && input.evidenceStore) {
+    for (const ref of verifRefs) {
+      const e = input.evidenceStore.get(ref.evidenceId)
+      if (e && e.status === 'passed') {
+        return { ok: true, strong: 'verification' }
+      }
+    }
+  }
+
+  // File refs are strong ONLY when contentHash is provided AND
+  // (a) the optional evidenceCheck proves the file exists + hash
+  // matches, OR (b) no evidenceCheck is supplied (best-effort
+  // hash record — the Run layer verifies if available).
+  for (const ref of fileRefs) {
+    if (ref.contentHash) {
+      if (!evidenceCheck) return { ok: true, strong: 'file_hash' }
+      const check = evidenceCheck(ref.path)
+      if (check.exists && check.hashMatches === true) {
+        return { ok: true, strong: 'file_hash' }
+      }
+    }
+  }
+  // Weak file refs paired with one strong ref → strong
+  if (fileRefs.length > 0 && (toolRefs.length > 0 || verifRefs.length > 0)) {
+    return { ok: true, strong: 'verification' }
+  }
+  return { ok: false, reason: 'agent_inferred has no strong evidence (file refs require contentHash + verified hash; tool_result refs require registry match; verification refs require passed status)' }
+}
+
 export function decidePromotion(input: PromotionInput): PromotionDecision {
   const successPromotions: PromotionDecision['successPromotions'] = []
   const failurePromotions: PromotionDecision['failurePromotions'] = []
@@ -414,18 +489,19 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         if (!toolEvidenceOk) continue
       }
     } else if (c.claimedSource === 'agent_inferred') {
-      // v0.5.3 Hotfix §2: agent_inferred without ANY evidence ref
-      // can NEVER be promoted with verified=true. Either drop, or
-      // save as kind='reflection' for audit purposes (verified=false).
-      const hasEvidence = (c.evidenceRefs ?? []).length > 0
-      if (!hasEvidence) {
+      // v0.5.5 §3: agent_inferred evidence must satisfy strong-evidence
+      // requirements to land as verified=true. Strong evidence =
+      //   (tool_result OR file-with-contentHash OR verification).
+      //   Bare file refs without contentHash are WEAK and must be
+      //   paired with another strong ref to qualify.
+      // No evidence at all → never verified=true on success runs.
+      const refs = c.evidenceRefs ?? []
+      const strongResult = classifyAgentInferredEvidence(refs, input)
+      if (!strongResult.ok) {
         if (isFullSuccess) {
-          // No evidence + success run → drop. A successful run is
-          // the moment where laundered content would do the most
-          // damage; we don't risk it.
           dropped.push({
             candidateId: c.id,
-            reason: 'agent_inferred without evidence ref cannot verify=true on success run',
+            reason: strongResult.reason ?? 'agent_inferred without strong evidence',
           })
           continue
         }

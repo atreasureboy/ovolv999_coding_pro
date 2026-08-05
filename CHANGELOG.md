@@ -2,6 +2,74 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.5.5 (released) — Runtime Closure Final
+
+**v0.5.5 is the version in `package.json`.** Evidence wiring, routing
+terminal semantics, and attempt-scoped truth now go through real
+production entry points.
+
+### Evidence production wiring (§1+§3)
+- `memory_write` Schema exposes `evidence_refs: [{kind, ...required}]`.
+  Three kinds: `tool_result`, `file`, `verification`.
+- `parseMemoryEvidenceRefs()` rejects malformed entries with a Tool
+  Error (no silent drop, no permissive coercion).
+- All three kinds are validated structurally at promotion time:
+  `tool_result` against the per-run `toolCallRegistry`,
+  `file` with contentHash against the actual filesystem,
+  `verification` against the per-run EvidenceStore.
+- `agent_inferred` requires STRONG evidence (tool_result / file
+  with contentHash / passed verification). Bare file refs are
+  WEAK and must pair with another strong ref.
+
+### Routing terminal semantics (§2+§8)
+- `RouteApplication` (applied / unchanged / unavailable) replaces
+  string|null. The Coordinator MUST handle unavailable explicitly.
+- All-profiles-open terminates the Run BEFORE any ModelGateway
+  call: `outcome.completion.status === 'blocked'`,
+  `outcome.stopReason === 'routing_unavailable'`, `ROUTING_UNAVAILABLE`
+  event emitted exactly once, `routingUnavailable` SharedState flag
+  set + reset in finally.
+- `classifyRouteApplication(decision, previousModel)` is a pure
+  classification. The Engine is the SOLE application owner; it
+  reads `previousModel` from `this.config.model`, advances via
+  `applyRoutingDecision`, then calls `router.markApplied`.
+- Per-profile `reasonCodes` (`profileScores` field). The final
+  decision's `reasonCodes` = global + selected-profile codes only.
+  Non-selected unhealthy reasons live in `profileScores`.
+
+### Attempt-scoped truth (§9+§11+§12)
+- `ProbeLease` carries `attemptScopeId`. `finishProbe` filters
+  attempts to those in scope; cross-attempt bleed is impossible.
+- `ModelCallAttempt` carries `profileId`, `attemptScopeId`.
+- Probe busy path emits `ROUTING_FALLBACK_APPLIED` BEFORE advancing;
+  no `finishProbe` on un-acquired lease.
+- Abort is distinguished from failure: aborted probes keep the
+  circuit half-open (do not re-open).
+
+### ToolResult Registry (§2+§8)
+- `RunScopedRuntimeContext.toolCallRegistry` records every
+  ToolResult keyed by the Provider `tool_calls[].id`.
+- MemoryModule.onComplete threads the registry into `decidePromotion`
+  for tool_observed evidence validation.
+
+### Lifecycle cleanup (§7)
+- Outer try/catch/finally wraps the entire post-identity Run body.
+  `activeRunId`, `runContext.close()`, candidate-sink close,
+  `routingUnavailable` reset, all run regardless of exit path.
+
+### Per-turn context policy (§10+§17)
+- Hook timing: `measure → plan → PreCompact → compact →
+  re-measure → PostCompact`. PreCompact fires ONLY when plan says
+  compact will run. PostCompact fires ONLY when compact actually
+  succeeded.
+
+### Router signal hygiene (§14)
+- Removed dead signals from `scoreProfile` and `RoutingInput`:
+  `previousRoutingFailures`, `totalFallbacksApplied`, global
+  `circuitState`, global `consecutiveProviderFailures`. Session
+  fallback counts remain exposed via `getRoutingFailureStats()`
+  for observability only.
+
 ## 0.5.3 (released) — Closure Integrity
 
 **v0.5.3 is the version in `package.json`.** All section headers,

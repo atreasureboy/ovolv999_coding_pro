@@ -64,14 +64,10 @@ export interface RoutingSignals {
   role?: string
   needsArchitecture: boolean
   providerHealth: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
-  previousRoutingFailures: number
-  // v0.5.2 (Stage 2.4): extended router-health signals. Optional
-  // — pre-wiring callers omit them and the Router treats them as
-  // 'unknown' (neutral).
-  totalFallbacksApplied?: number
-  // v0.5.3 Final (task 7): removed. Same-model retries never happen.
-  circuitState?: 'closed' | 'open' | 'half-open'
-  consecutiveProviderFailures?: number
+  // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+  // circuitState / consecutiveProviderFailures are NOT decision
+  // inputs. Session-wide counts are exposed via
+  // getRoutingFailureStats() for observability only.
   manualOverrideActive?: boolean
   // expected tool requirement
   expectedToolRequirement: 'none' | 'read-only' | 'mixed' | 'side-effect'
@@ -122,10 +118,10 @@ export interface ContextManagerSnapshot {
 /** Minimal view of ModelRouter health the collector reads. */
 export interface RouterHealthSnapshot {
   providerHealth: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
-  previousRoutingFailures: number
-  // v0.5.2 (Stage 2.4): optional extended health signals. When omitted,
-  // the collector treats them as 'unknown' (neutral).
-  totalFallbacksApplied?: number
+  // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+  // circuitState / consecutiveProviderFailures are NOT decision
+  // inputs. They were session-wide counts that affected every
+  // profile identically and never changed the ranking.
   /** v0.5.3 P0-3: removed (coordinator-local global circuit is
    *  gone). Replaced by per-profile circuit visibility below. */
   circuitState?: 'closed' | 'open' | 'half-open'
@@ -271,13 +267,6 @@ export function collectRoutingSignals(opts: CollectRoutingSignalsOptions): Routi
     role: tg?.preferredRoles[0],
     needsArchitecture: keywordArchitecture || tgArchitecture || (keywordConfig && manyFiles),
     providerHealth: rh?.providerHealth ?? [],
-    previousRoutingFailures: rh?.previousRoutingFailures ?? 0,
-    // v0.5.2 (Stage 2.4): extended router-health signals. Pass
-    // through unchanged so the Router can break out of failing
-    // chains. Omitted fields stay undefined (neutral).
-    totalFallbacksApplied: rh?.totalFallbacksApplied,
-    circuitState: rh?.circuitState,
-    consecutiveProviderFailures: rh?.consecutiveProviderFailures,
     manualOverrideActive: rh?.manualOverrideActive,
     expectedToolRequirement: classifyExpectedToolRequirement(goal, ws),
     affectsPublicInterface: keywordPublic || (tg?.hasPublicInterfaceEdits ?? false),
@@ -300,17 +289,16 @@ export function signalsToRoutingInput(s: RoutingSignals): RoutingInput {
     repoStatsState: s.repoStatsState,
     repoStatsLowerBound: s.repoStatsLowerBound,
     filesTouched: s.filesTouched,
-    consecutiveFailures: s.recentFailureCount + s.previousRoutingFailures,
+    consecutiveFailures: s.recentFailureCount,
     contextUsageRatio: s.contextUsageRatio,
     budgetRemaining: s.budgetRemaining,
     role: s.role,
     needsArchitecture: s.needsArchitecture,
     providerHealth: s.providerHealth,
-    previousRoutingFailures: s.previousRoutingFailures,
-    // v0.5.2 (Stage 2.4): propagate extended health signals.
-    totalFallbacksApplied: s.totalFallbacksApplied,
-    circuitState: s.circuitState,
-    consecutiveProviderFailures: s.consecutiveProviderFailures,
+    // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+    // circuitState / consecutiveProviderFailures are NOT
+    // propagated. Session-wide counts are exposed via
+    // getRoutingFailureStats() for observability only.
     manualOverrideActive: s.manualOverrideActive,
     expectedToolRequirement: s.expectedToolRequirement,
     affectsPublicInterface: s.affectsPublicInterface,

@@ -78,7 +78,11 @@ describe('ModelRouter (Phase 2)', () => {
     for (let i = 0; i < 4; i++) r.recordCall('weak', false, 2000, null)
     const d = r.route({ userGoal: 'hard architecture refactor', needsArchitecture: true })
     expect(d.selectedModel).not.toBe('weak-model')
-    expect(d.reasonCodes.some((c) => c.startsWith('unhealthy'))).toBe(true)
+    // v0.5.5 §13: per-profile reasons live in profileScores, not
+    // the top-level reasonCodes (which carries only global +
+    // selected-profile codes).
+    const weakScore = d.profileScores?.find((s) => s.profileId === 'weak')
+    expect(weakScore?.reasonCodes.some((c) => c.startsWith('unhealthy'))).toBe(true)
   })
 
   it('uses collected failures and impact estimates as complexity signals', () => {
@@ -102,8 +106,10 @@ describe('ModelRouter (Phase 2)', () => {
       userGoal: 'fix the bug',
       providerHealth: [{ profileId: 'weak', failRate: 1, avgLatencyMs: 100 }],
     })
-    expect(d.reasonCodes).toContain('unhealthy:weak')
-    expect(d.reasonCodes).not.toContain('health-from-collector:weak')
+    // v0.5.5 §13: per-profile unhealthy codes live in profileScores.
+    const weakScore = d.profileScores?.find((s) => s.profileId === 'weak')
+    expect(weakScore?.reasonCodes).toContain('unhealthy:weak')
+    expect(weakScore?.reasonCodes).not.toContain('health-from-collector:weak')
   })
 
   it('single-profile router degrades gracefully and still respects override', () => {

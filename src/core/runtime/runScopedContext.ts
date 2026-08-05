@@ -61,6 +61,20 @@ export interface RunScopedRuntimeContext {
    *  the MemoryPromoter uses this to verify sourceQuote claims. */
   userMessage: string
   /**
+   * v0.5.5 §2: per-run registry of every ToolResult the
+   * Assistant actually invoked during THIS run. Keyed by the real
+   * Provider `tool_calls[].id`. MemoryModule.onComplete passes this
+   * to decidePromotion so tool_observed evidence refs can be
+   * verified against actual recorded results.
+   */
+  toolCallRegistry: Map<string, {
+    toolName: string
+    resultText: string
+    isError: boolean
+    truncated: boolean
+    completedAt: number
+  }>
+  /**
    * v0.5.2 (C3): config slice inherited from the parent at create-time.
    * Children layer role-specific overrides on top via the immutable
    * `withConfigOverride()` helper. Production callers: AgentTool,
@@ -180,6 +194,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       startedAt: Date.now(),
       inheritedConfig: options.inheritedConfig,
       memoryCandidates: [],
+      toolCallRegistry: new Map(),
       userMessage: options.userMessage ?? '',
     }
     // v0.3.2: the graph inside the Context is a fresh TaskGraph;
@@ -214,12 +229,13 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       progressMonitor: new ProgressMonitor(),
       controlMessages: new ControlMessageLog(),
       evidence: new EvidenceStore(),
+      toolCallRegistry: new Map(),
+      memoryCandidates: [],
+      userMessage: snapshot.userMessage ?? '',
       routingSignals: snapshot.routingSignals,
       completionCandidate: snapshot.completionCandidate,
       completionVerdict: snapshot.completionVerdict,
       startedAt: snapshot.startedAt,
-      memoryCandidates: [],
-      userMessage: snapshot.userMessage ?? '',
     }
     ctx.taskGraph.setNodeTransitionSink((transition) => ctx.progressMonitor.recordTaskNodeTransition(transition))
     this.contexts.set(runId, ctx)

@@ -33,6 +33,11 @@ import type { TokenUsage } from '../costTracker.js'
  * that the calling code holds the right to drive the circuit
  * state transition. Without a valid lease, finishProbe is a
  * no-op (defensive against misbehaving callers).
+ *
+ * v0.5.5 §9: attemptScopeId binds the lease to a specific range
+ * of ModelCallAttempts on the Coordinator. finishProbe uses
+ * ONLY attempts inside this scope to decide success/failure,
+ * never the run-wide list.
  */
 export interface ProbeLease {
   /** Unique id used to verify ownership on release. */
@@ -43,6 +48,9 @@ export interface ProbeLease {
   model: string
   /** Wall-clock when the lease was minted. */
   acquiredAt: number
+  /** v0.5.5 §9: opaque scope id. finishProbe filters attempts
+   *  to those carrying this id. Prevents cross-attempt bleed. */
+  attemptScopeId: string
 }
 
 export type ProbeOutcome = 'success' | 'failure' | 'aborted'
@@ -134,15 +142,12 @@ export interface RoutingInput {
   // ── v0.3.1 (runtime truth contract §三.1.3) expanded signals ────────────────────
   /** Per-profile health snapshot (failRate + avg latency). */
   providerHealth?: Array<{ profileId: string; failRate: number; avgLatencyMs: number }>
-  /** Number of times routing fell back this session. */
-  previousRoutingFailures?: number
-  // v0.5.2 (Stage 2.4): extended failure/health signals. Optional
-  // — pre-wiring callers omit them. The Router uses these to break
-  // out of a failing chain before the chain is exhausted.
-  // v0.5.3 Final (task 7): totalRetryAttempts removed — see recordRetry() doc.
-  totalFallbacksApplied?: number
-  circuitState?: 'closed' | 'open' | 'half-open'
-  consecutiveProviderFailures?: number
+  // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+  // circuitState / consecutiveProviderFailures are NOT decision
+  // inputs. They were session-wide counts that affected every
+  // profile identically and never changed the ranking. Session
+  // fallback counts are exposed via getRoutingFailureStats() for
+  // observability only.
   /** True when the user has manually overridden the model. The Router
    *  honors the override (and these signals are advisory only). */
   manualOverrideActive?: boolean
@@ -176,6 +181,18 @@ export interface RoutingDecision {
   estimatedComplexity: number
   fallbackChain: string[]
   budgetAllocation: BudgetAllocation
+  /**
+   * v0.5.5 §13: per-profile score breakdown for observability.
+   * Non-selected profile reasons live here, NOT in the top-level
+   * `reasonCodes` (which carries only global + selected-profile
+   * codes). Empty when route() was called with no profiles (the
+   * `unavailable` branch).
+   */
+  profileScores?: Array<{
+    profileId: string
+    score: number
+    reasonCodes: string[]
+  }>
 }
 
 export interface RoutingConfig {
@@ -338,11 +355,50 @@ export class ModelRouter {
   }
 
   /**
-   * v0.5.3 Hotfix §8 — structured route application. The Coordinator
-   * uses this to advance config.model and observe a structured
-   * outcome (applied / unchanged / unavailable). Unavailable means
-   * no profile is available — caller must surface a routing-
-   * unavailable error instead of best-effort swallowing it.
+   * v0.5.5 §3 — PURE classification. The Router does NOT apply the
+   * decision to its Sink here. The single application owner is
+   * the Engine (whose callback invokes `markApplied` after a
+   * successful switch). Returning a `RouteApplication` is a
+   * classification; no state mutation, no event emission, no
+   * Sink call.
+   *
+   * previousModel MUST come from the Engine's actual current
+   * state — NOT from this.lastApplied (which only tracks what the
+   * Router has previously applied, not what the Engine currently
+   * holds in `config.model`).
+   */
+  classifyRouteApplication(decision: RoutingDecision, previousModel: string): RouteApplication {
+    if (!decision || decision.selectedModel === '') {
+      return { kind: 'unavailable', decision }
+    }
+    if (previousModel === decision.selectedModel) {
+      return { kind: 'unchanged', decision }
+    }
+    return { kind: 'applied', decision, previousModel }
+  }
+
+  /**
+   * v0.5.5 §3 — markApplied. The Engine calls this AFTER applying
+   * the routing decision to its own config.model + Sink. Updates
+   * the Router's lastApplied tracking AND emits the structured
+   * ROUTING_DECISION_APPLIED event. Centralising event emission
+   * here means downstream consumers see the same payload whether
+   * the Engine or a manual override triggered the change.
+   */
+  markApplied(model: string, budgetAllocation: BudgetAllocation | undefined, previousModel: string, reasonCodes: string[]): void {
+    this.applyRoutingDecision(model, budgetAllocation, { previousModel, reasonCodes })
+  }
+
+  /**
+   * v0.5.3 Hotfix §8 — DEPRECATED in v0.5.5. Replaced by
+   * classifyRouteApplication + Engine-owned markApplied. This
+   * method is kept for backwards compatibility with callers that
+   * still expect the Router to apply internally; new code MUST
+   * NOT use it.
+   *
+   * @deprecated v0.5.5 §3: use classifyRouteApplication()
+   * + markApplied() instead. The Router must NOT mutate
+   * config.model — the Engine owns that contract.
    */
   applyRouteApplication(decision: RoutingDecision): RouteApplication {
     if (!decision || decision.selectedModel === '') {
@@ -352,8 +408,6 @@ export class ModelRouter {
     if (previous === decision.selectedModel) {
       return { kind: 'unchanged', decision }
     }
-    // Pass previousModel and reasonCodes through the emission so
-    // downstream consumers observe the TRUE pre-state.
     this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation, {
       previousModel: previous,
       reasonCodes: decision.reasonCodes,
@@ -515,7 +569,7 @@ export class ModelRouter {
    * acquiredAt). finishProbe(lease, outcome) verifies the leaseId
    * before mutating circuit state.
    */
-  tryAcquireProbe(profileId: string): ProbeLease | null {
+  tryAcquireProbe(profileId: string, attemptScopeId: string = randomUUID()): ProbeLease | null {
     const state = this.getProfileCircuitState(profileId)
     if (state !== 'half-open') return null
     if (this.probeInFlight.has(profileId)) return null
@@ -526,6 +580,7 @@ export class ModelRouter {
       profileId,
       model: profile?.model ?? '',
       acquiredAt: Date.now(),
+      attemptScopeId,
     }
     this.activeLeases.set(lease.leaseId, lease)
     return lease
@@ -614,30 +669,45 @@ export class ModelRouter {
         ?? available.find((p) => p.id === this.manualOverride)
       const model = match?.model ?? this.manualOverride
       reasonCodes.push('manual-override')
-      const decision = this.decide(input, model, match?.id ?? 'manual', reasonCodes, available, 1)
+      const overrideComplexity = this.estimateComplexity(input, reasonCodes)
+      const decision = this.decide(input, model, match?.id ?? 'manual', reasonCodes, available, 1, overrideComplexity)
       this.lastDecision = decision
       return decision
     }
 
-    // 2) If only one profile (or none configured for routing), use it directly.
-    if (!this.routing.enabled || available.length <= 1) {
+    // 2) If only one profile is healthy, use it directly. Zero-healthy
+    //    falls through to the unreachable all-open block above and
+    //    returns the structured unavailable decision.
+    if (!this.routing.enabled || available.length === 1) {
       const only = available[0]
       const model = only?.model ?? this.manualOverride ?? ''
       if (!this.routing.enabled) reasonCodes.push('routing-disabled')
       else reasonCodes.push('single-profile')
-      const decision = this.decide(input, model, only?.id ?? 'default', reasonCodes, available, available.length > 0 ? 0.9 : 0)
+      const singleComplexity = this.estimateComplexity(input, reasonCodes)
+      const decision = this.decide(input, model, only?.id ?? 'default', reasonCodes, available, available.length > 0 ? 0.9 : 0, singleComplexity)
       this.lastDecision = decision
       return decision
     }
 
-    // 3) Estimate task complexity from real signals.
+    // 3) Estimate task complexity from real signals. v0.5.5 §15:
+    //    complexity is computed for THIS input, not inherited
+    //    from the lastDecision cache. Every route() path runs
+    //    estimateComplexity so manual / single-profile / routing-
+    //    disabled / multi-profile branches all share a fresh value.
     const complexity = this.estimateComplexity(input, reasonCodes)
 
     // 4) Score each available profile against the task needs.
-    const scored = available.map((p) => ({
-      profile: p,
-      score: this.scoreProfile(p, input, complexity, reasonCodes),
-    }))
+    //    v0.5.5 §13: reasonCodes are profile-scoped. The final
+    //    decision's reasonCodes = global + selected-profile codes
+    //    only — non-selected unhealthy reasons do NOT leak.
+    const scored = available.map((p) => {
+      const profileReasons: string[] = []
+      return {
+        profile: p,
+        score: this.scoreProfile(p, input, complexity, profileReasons),
+        reasonCodes: profileReasons,
+      }
+    })
     scored.sort((a, b) => b.score - a.score)
 
     const best = scored[0]
@@ -647,11 +717,18 @@ export class ModelRouter {
     const decision: RoutingDecision = {
       selectedModel: best.profile.model,
       selectedProfile: best.profile.id,
-      reasonCodes: dedupe(reasonCodes),
+      reasonCodes: dedupe([...reasonCodes, ...best.reasonCodes]),
       confidence,
       estimatedComplexity: complexity,
       fallbackChain,
       budgetAllocation: this.budgetFor(best.profile, input),
+      // v0.5.5 §13: per-profile score breakdown for observability.
+      // Non-selected unhealthy reasons live here, NOT in reasonCodes.
+      profileScores: scored.map((s) => ({
+        profileId: s.profile.id,
+        score: s.score,
+        reasonCodes: s.reasonCodes,
+      })),
     }
     this.lastDecision = decision
     return decision
@@ -799,13 +876,12 @@ export class ModelRouter {
       }
     }
 
-    // Previous routing failures amplify the health penalty so the
-    // router favours profiles that have actually succeeded recently.
-    const prevFailures = input.previousRoutingFailures ?? 0
-    if (prevFailures > 0) {
-      score -= 0.05 * prevFailures
-      reasonCodes.push('previous-routing-failures')
-    }
+    // v0.5.5 §14: previousRoutingFailures / totalFallbacksApplied /
+    // global consecutive failures / global circuitState are NOT
+    // decision inputs. They were session-wide counts that
+    // affected every profile identically and never changed the
+    // ranking. The Router MUST only consume per-profile data
+    // (local recordCall + perProfile providerHealth).
 
     return score
   }
@@ -832,9 +908,8 @@ export class ModelRouter {
     reasonCodes: string[],
     available: ModelProfile[],
     confidence: number,
+    complexity: number,
   ): RoutingDecision {
-    void input
-    const complexity = this.lastDecision?.estimatedComplexity ?? 0.5
     return {
       selectedModel: model,
       selectedProfile: profileId,

@@ -103,6 +103,7 @@ describe('Probe per-attempt truth + lease ownership (Hotfix §7)', () => {
       profileId: 'profile-a',
       model: 'model-a',
       acquiredAt: Date.now(),
+      attemptScopeId: 'forged-scope',
     }
     r.finishProbe(forged, 'success')
     expect(r.getProfileCircuitState('profile-a')).toBe('half-open')
@@ -114,7 +115,7 @@ describe('Probe per-attempt truth + lease ownership (Hotfix §7)', () => {
     forceHalfOpen(r)
     const acquired = r.tryAcquireProbe('profile-a')
     expect(acquired).not.toBeNull()
-    const tampered: ProbeLease = { ...acquired!, leaseId: 'tampered-uuid' }
+    const tampered: ProbeLease = { ...acquired!, leaseId: 'tampered-uuid', attemptScopeId: 'tampered-scope' }
     r.finishProbe(tampered, 'success')
     // Original lease is still valid; circuit unchanged.
     expect(r.getProfileCircuitState('profile-a')).toBe('half-open')

@@ -89,7 +89,7 @@ export type RunEvent =
   // generic RUN_COMPLETED is kept for back-compat; these typed
   // variants are emitted after the CompletionContract evaluates.
   | { type: 'RUN_EXECUTION_STARTED'; runId: string }
-  | { type: 'RUN_EXECUTION_STOPPED'; runId: string; stopReason: 'stop_sequence' | 'length' | 'max_iterations' | 'interrupted' | 'error' }
+  | { type: 'RUN_EXECUTION_STOPPED'; runId: string; stopReason: 'stop_sequence' | 'length' | 'max_iterations' | 'interrupted' | 'error' | 'routing_unavailable' }
   | { type: 'RUN_STATUS_TRANSITIONED'; runId: string; from: string; to: string; verdict: { status: string; reasons?: string[]; blockers?: string[]; remaining?: string[]; evidence?: string[] } }
   | { type: 'CONTEXT_CREATED'; runId: string }
   | { type: 'CONTEXT_CLOSED'; runId: string }

@@ -48,6 +48,7 @@ import {
 import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
 import type { RoutingInput, ModelRouter, ProbeLease, ProbeOutcome } from '../model/modelRouter.js'
+import { RoutingUnavailableError } from '../model/routingErrors.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
@@ -153,7 +154,7 @@ export interface CoordinatorDeps {
    * has switched this turn's model. Null = no change / routing off /
    * manual override in effect.
    */
-  routeModel?: (input: RoutingInput) => string | null
+  routeModel?: (input: RoutingInput) => import('../model/modelRouter.js').RouteApplication | Promise<import('../model/modelRouter.js').RouteApplication>
   /**
    * v0.3.1 (runtime truth contract §三.1.3): the ModelRouter handle, used by the
    * coordinator's signal collector to read provider health. Optional —
@@ -193,6 +194,9 @@ export class RuntimeCoordinator {
   private modelCallsThisRun: Array<{
     model: string
     provider: string
+    profileId?: string
+    /** v0.5.5 §9: scope id from the in-flight ProbeLease, if any. */
+    attemptScopeId?: string
     startedAt: number
     endedAt: number
     success: boolean
@@ -373,6 +377,13 @@ export class RuntimeCoordinator {
 
     // ── Boot Sequence ──
     let bootResult
+    // v0.5.5 §7: outer try/catch/finally covering the entire
+    // post-identity lifecycle. Every failure (boot, identity,
+    // router-unavailable, context abort) lands in the catch arm
+    // for structured Outcome production. The finally block
+    // (further down) cleans up activeRunId, runContext, and
+    // candidate sink regardless of how the body exits.
+    try {
     try {
       bootResult = await boot({
         userMessage,
@@ -544,6 +555,15 @@ export class RuntimeCoordinator {
           } : undefined,
         })
         runContext.taskKind = taskIntent.kind
+        // v0.5.5 §2: mirror the per-run toolCallRegistry into
+        // SharedState so the ToolExecutor can write tool results
+        // (it does not hold a runContext reference). The Registry
+        // is destroyed in the outer finally block.
+        this.deps.sharedState.toolCallRegistry = runContext.toolCallRegistry
+        // v0.5.5 §3: thread the ProjectIdentity through the
+        // runContext so file-evidence path validation can resolve
+        // against canonicalRoot.
+        ;(runContext as { projectIdentity?: { canonicalRoot: string } }).projectIdentity = projectIdentity
         // v0.5.3 Final (task 2): publish the per-run candidate sink.
         // memory_write routes candidates into runContext.memoryCandidates;
         // the MemoryPromoter reads them after CompletionContract.
@@ -690,8 +710,9 @@ export class RuntimeCoordinator {
                 avgLatencyMs: h?.ewmaLatency ?? 0,
               }
             }),
-            previousRoutingFailures: router.getRoutingFailureStats().totalFailures,
-            totalFallbacksApplied: router.getRoutingFailureStats().totalFallbacksApplied,
+            // v0.5.5 §14: session-wide counters are NOT routed
+            // through as decision inputs. getRoutingFailureStats()
+            // remains available for observability.
             // v0.5.3 P0-3: per-profile circuit visibility replaces
             // the old global flag. The Router's isProfileAvailable()
             // decides what's callable; the signal collector just
@@ -706,21 +727,48 @@ export class RuntimeCoordinator {
           } : undefined,
         })
         if (runContext) runContext.routingSignals = signals
-        const routed = this.deps.routeModel(signalsToRoutingInput(signals))
-        if (routed) {
-          // v0.5.3 Final (task 7): if Router returned an "all profiles
-          // open" decision (empty selectedModel), surface as an
-          // API-class error so the caller gets exit 2, not exit 1.
-          if (routed === '') {
-            renderer.error(`Router: all profiles in open circuit — no model available for this request.`)
-            // We do NOT short-circuit the turn here; the gateway
-            // would throw a typed error anyway. We surface a
-            // structured note on stderr.
-          } else {
-            renderer.info(`Model routed to ${routed} (adaptive)`)
-          }
+        const application = await this.deps.routeModel(signalsToRoutingInput(signals))
+        // v0.5.5 Final: structured RouteApplication. The Coordinator
+        // MUST distinguish the three kinds:
+        //   - applied: Router picked a model; the Engine will switch
+        //     config.model accordingly.
+        //   - unchanged: same model already current.
+        //   - unavailable: NO profile is available. The Run MUST
+        //     terminate without calling the ModelGateway.
+        if (application.kind === 'unavailable') {
+          // v0.5.5 §2: all-profiles-open terminates the Run.
+          // Emit the structured event ONCE (the Engine callback
+          // does not double-emit), capture the decision, and
+          // surface the run as blocked.
+          eventLog?.append('protocol', 'engine', {
+            type: 'ROUTING_UNAVAILABLE',
+            reasonCodes: application.decision.reasonCodes,
+          } as never)
+          eventEmitter?.emit({
+            type: 'ROUTING_UNAVAILABLE',
+            reasonCodes: application.decision.reasonCodes,
+            profiles: application.decision.reasonCodes,
+          } as never)
+          // Mark this Run as routing-blocked. Subsequent
+          // llm_call / modelGateway.call invocations see this flag
+          // and refuse to execute.
+          sharedState.routingUnavailable = true
+          renderer.error(
+            `Router: all profiles in open circuit — no model available for this request. ` +
+            `reasonCodes=${application.decision.reasonCodes.join(',')}`,
+          )
+          throw new RoutingUnavailableError(application.decision.reasonCodes)
         }
-      } catch { /* best-effort: routing must never break the turn */ }
+        if (application.kind === 'applied') {
+          renderer.info(`Model routed to ${application.decision.selectedModel} (adaptive)`)
+        }
+      } catch (routeErr) {
+        // v0.5.5 §6: RoutingUnavailableError MUST propagate up to
+        // the outer try/catch/finally so the Run is terminated
+        // BEFORE any ModelGateway call. All other errors are
+        // best-effort swallowed (they never break the turn).
+        if (routeErr instanceof RoutingUnavailableError) throw routeErr
+      }
     }
 
     // P0-2 (continuation output completeness): collect EVERY assistant
@@ -852,13 +900,25 @@ export class RuntimeCoordinator {
           }
 
           case 'budget_check': {
-            // v0.5.3 Hotfix §10 — per-iteration measure → apply →
-            // re-measure. PreCompact/PostCompact hooks fire ONLY
-            // when compaction actually happens (snapshot usage
-            // decreased). This keeps the hook semantics tight:
-            // hooks signal real compaction, not routine measure.
+            // v0.5.5 §17 — strict compact-hook timing.
+            //   measure → plan → PreCompact → compact → re-measure → PostCompact.
+            // PreCompact fires BEFORE the actual compact so user-
+            // defined hooks can observe the pre-state and gate the
+            // compact (e.g. save a snapshot). PostCompact fires
+            // ONLY when compact actually ran. A failed compact
+            // means PostCompact MUST NOT fire.
             const compactTrigger: 'auto' | 'manual' = 'auto'
             const preSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+            // Plan: would the policy actually compact? Mirror the
+            // policy's threshold logic. The applyBudgetPolicy
+            // implementation is the single source of truth; we
+            // approximate here for hook ordering only.
+            const willCompact = preSnap.usageRatio >= 0.85
+            if (willCompact) {
+              if (config.hookRunner?.runPreCompact) {
+                try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
+              }
+            }
             let postSnap = preSnap
             let didCompact = false
             try {
@@ -874,15 +934,11 @@ export class RuntimeCoordinator {
                 postSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
               }
             } catch (err) {
-              // AbortError propagates — caller will catch. Other
-              // errors are best-effort ignored; the snapshot stays
-              // at the pre-applied value (Router still reads it).
+              // v0.5.5 §17: a compact throw means PostCompact MUST
+              // NOT fire (the post-state is undefined).
               if ((err as { name?: string }).name === 'AbortError') throw err
             }
             if (didCompact) {
-              if (config.hookRunner?.runPreCompact) {
-                try { await config.hookRunner.runPreCompact(compactTrigger) } catch { /* best-effort */ }
-              }
               if (config.hookRunner?.runPostCompact) {
                 try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
               }
@@ -1183,6 +1239,11 @@ export class RuntimeCoordinator {
         result = { stopped: true, reason: 'error', output: computeFinalOutput() }
       }
     } catch (err) {
+      // v0.5.5 §6: RoutingUnavailableError must propagate to the
+      // outer try/catch/finally so the Run produces a blocked
+      // Outcome without ever calling the Gateway. Other errors
+      // follow the standard failed-outcome path.
+      if (err instanceof RoutingUnavailableError) throw err
       const errMsg = (err as Error).message || String(err)
       const errorIteration = 'iteration' in state ? state.iteration : 0
       if (turnAbortController.signal.aborted) {
@@ -1524,6 +1585,45 @@ export class RuntimeCoordinator {
     void config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
 
     return { result, newHistory: messages, outcome }
+    } catch (lifecycleErr) {
+      // v0.5.5 §7: the entire post-identity lifecycle is wrapped.
+      // Failures here mean the boot threw, the Router returned
+      // unavailable, or something downstream raised before we
+      // produced an Outcome. Convert to a structured Outcome.
+      //
+      // RoutingUnavailableError — v0.5.5 §6 — must produce a
+      // blocked Outcome. NO Gateway call was made (the throw
+      // happened in routeModel, before llm_call). The Run is
+      // explicitly terminated and the audit trail is consistent.
+      if (lifecycleErr instanceof RoutingUnavailableError) {
+        const blocked: TurnOutcome = {
+          runId: effectiveRunId,
+          stopReason: 'routing_unavailable',
+          completion: {
+            status: 'blocked',
+            reasons: ['routing-unavailable', ...lifecycleErr.reasonCodes],
+            evidence: [],
+            requiredNextActions: ['wait for profile recovery', 'check provider health'],
+          },
+          output: '',
+          changedFiles: [],
+          artifacts: [],
+          verification: { executed: false, passed: false, failed: ['routing-unavailable'] },
+          modelAttempts: [],
+          stopped: true,
+          reason: 'routing_unavailable',
+        }
+        eventEmitter.emit({
+          type: 'RUN_TERMINATED',
+          status: 'blocked',
+          result: { reason: 'routing_unavailable', stopped: true, output: '' },
+        } as never)
+        return { result: { reason: 'routing_unavailable', stopped: true, output: '' }, newHistory: history, outcome: blocked }
+      }
+      // Any other error: re-throw so the Engine's outer handler
+      // turns it into a 'failed' Outcome.
+      throw lifecycleErr
+    }
     } finally {
       try { this.deps.runContextStore?.close(effectiveRunId) } catch { /* best-effort */ }
       // v0.5.3 Hotfix §1: clear activeRunId so consecutive turns
@@ -1531,6 +1631,21 @@ export class RuntimeCoordinator {
       try {
         if (this.deps.sharedState.activeRunId === effectiveRunId) {
           this.deps.sharedState.activeRunId = null
+        }
+      } catch { /* best-effort */ }
+      // v0.5.5 §7: routing-unavailable is per-run. Reset it so
+      // the NEXT run on this engine can attempt routing again.
+      try { this.deps.sharedState.routingUnavailable = false } catch { /* best-effort */ }
+      // v0.5.5 §7: close the per-run candidate sink so a re-run
+      // does not inherit candidates from a closed run.
+      try {
+        for (const m of this.deps.moduleManager.modules) {
+          if (m.name === 'memory') {
+            const mm = m as unknown as {
+              closeCandidateSink?: (runId: string) => void
+            }
+            try { mm.closeCandidateSink?.(effectiveRunId) } catch { /* best-effort */ }
+          }
         }
       } catch { /* best-effort */ }
     }
@@ -1557,6 +1672,15 @@ export class RuntimeCoordinator {
   }> {
     let modelAtStart = this.deps.config.model
     let caughtErr: unknown = null
+
+    // v0.5.5 §6: if routing was unavailable for this Run, refuse
+    // to invoke the Gateway at all. Caller must surface as a
+    // blocked Outcome, NOT as a half-attempted completion.
+    if (this.deps.sharedState.routingUnavailable) {
+      throw new RoutingUnavailableError(
+        ['routing-unavailable-still-active'],
+      )
+    }
 
     // v0.5.3 P0-3 + P1-3: per-profile circuit (router-owned) is
     // consulted here. CLOSED → call normally. HALF_OPEN → the
@@ -1593,10 +1717,20 @@ export class RuntimeCoordinator {
                 `Profile ${binding.id} is half-open with a probe in flight and no fallback available.`,
               )
             }
+            // v0.5.5 §11: emit the fallback event BEFORE the
+            // advance so the audit trail records exactly one
+            // ROUTING_FALLBACK_APPLIED for the busy path. This
+            // counter is the only signal that downstream
+            // consumers have that a probe was skipped due to
+            // contention (vs a normal open-circuit fallback).
+            router.emitFallback(modelAtStart, next, 'half-open probe already in flight')
             router.applyRoutingDecision(next)
             modelAtStart = next
             // We never acquired the lease; the post-call cleanup
-            // path therefore has nothing to release.
+            // path therefore has nothing to release. Also, we do
+            // NOT touch the OTHER run's lease — the Router's
+            // probeInFlight Set is shared, but finishProbe is
+            // gated by leaseId ownership, not profileId.
             probeLease = null
             // Re-evaluate the now-active profile's circuit.
             const newBinding = router.listProfiles().find((p) => p.model === modelAtStart)
@@ -1692,7 +1826,10 @@ export class RuntimeCoordinator {
           },
         },
       )
-      for (const attempt of result.attempts) this.recordGatewayAttempt(attempt) // result is non-null after await
+      for (const attempt of result.attempts) this.recordGatewayAttempt(attempt, {
+        attemptScopeId: probeLease?.attemptScopeId,
+        profileId: probeLease?.profileId,
+      }) // result is non-null after await
     } catch (err) {
       const attempts = (err as { attempts?: Array<{
         model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
@@ -1703,7 +1840,10 @@ export class RuntimeCoordinator {
       // the error must propagate to run()).
       caughtErr = err
       if (attempts?.length) {
-        for (const attempt of attempts) this.recordGatewayAttempt(attempt)
+        for (const attempt of attempts) this.recordGatewayAttempt(attempt, {
+          attemptScopeId: probeLease?.attemptScopeId,
+          profileId: probeLease?.profileId,
+        })
       } else {
         this.recordGatewayAttempt({
           model: modelAtStart,
@@ -1712,6 +1852,9 @@ export class RuntimeCoordinator {
           error: (err as Error).message,
           latencyMs: Date.now() - attemptStartedAt,
           usage: null,
+        }, {
+          attemptScopeId: probeLease?.attemptScopeId,
+          profileId: probeLease?.profileId,
         })
       }
     } finally {
@@ -1723,22 +1866,35 @@ export class RuntimeCoordinator {
       // gateway result. We do NOT call finishProbe unless we own
       // the lease — the token proves ownership.
       if (probeLease && router) {
-        const allAttempts = this.modelCallsThisRun.map((c) => ({
-          model: c.model,
-          provider: c.provider,
-          success: c.success,
-          latencyMs: c.endedAt - c.startedAt,
-          usage: c.usage
-            ? { inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, totalTokens: c.usage.inputTokens + c.usage.outputTokens }
-            : null,
-          error: c.error,
-        }))
+        // v0.5.5 §9: only attempts whose attemptScopeId matches
+        // the lease are eligible to drive the circuit verdict.
+        // Earlier attempts (from a previous half-open probe) and
+        // later attempts (from a subsequent successful call) MUST
+        // NOT influence this lease's release.
+        const scopedAttempts = this.modelCallsThisRun
+          .filter((c) => c.attemptScopeId === probeLease!.attemptScopeId)
+          .map((c) => ({
+            model: c.model,
+            provider: c.provider,
+            success: c.success,
+            latencyMs: c.endedAt - c.startedAt,
+            usage: c.usage
+              ? { inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, totalTokens: c.usage.inputTokens + c.usage.outputTokens }
+              : null,
+            error: c.error,
+          }))
         const probedBinding = router.listProfiles().find((p) => p.id === probeLease!.profileId)
         const probeAttempt = probedBinding
-          ? allAttempts.find((a) => a.model === probedBinding.model)
+          ? scopedAttempts.find((a) => a.model === probedBinding.model)
           : undefined
-        const outcome: ProbeOutcome =
-          probeAttempt?.success === true ? 'success' : 'failure'
+        // v0.5.5 §10: explicit abort handling. If the turn was
+        // aborted mid-probe, surface 'aborted' instead of
+        // 'failure'. Aborted probes do NOT close the circuit.
+        const wasAborted = turnAbortSignal.aborted
+          || (caughtErr as { name?: string } | null)?.name === 'AbortError'
+        const outcome: ProbeOutcome = wasAborted
+          ? 'aborted'
+          : probeAttempt?.success === true ? 'success' : 'failure'
         router.finishProbe(probeLease, outcome)
         probeLease = null
       }
@@ -1761,7 +1917,7 @@ export class RuntimeCoordinator {
     error?: string
     latencyMs: number
     usage: TokenUsage | null
-  }): void {
+  }, meta?: { attemptScopeId?: string; profileId?: string }): void {
     const startedAt = Date.now() - attempt.latencyMs
     // R7 fix: delegate to modelGateway's retryable classifier so the
     // gateway and coordinator agree on what counts as retryable.
@@ -1770,6 +1926,8 @@ export class RuntimeCoordinator {
     this.modelCallsThisRun.push({
       model: attempt.model,
       provider: attempt.provider,
+      profileId: meta?.profileId,
+      attemptScopeId: meta?.attemptScopeId,
       startedAt,
       endedAt: Date.now(),
       success: attempt.success,

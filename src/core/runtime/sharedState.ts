@@ -84,6 +84,26 @@ export class SharedRuntimeState {
   activeRunId: string | null = null
   softAbortRequested = false
   softAbortOwner: AbortController | null = null
+  /**
+   * v0.5.5 §2: set to true when the Router returned an
+   * unavailable decision. llm_call / ModelGateway MUST consult
+   * this flag and refuse to execute if it is true.
+   */
+  routingUnavailable = false
+  /**
+   * v0.5.5 §2 — per-run toolCallRegistry mirror. Set by the
+   * Coordinator at run start, populated by the ToolExecutor
+   * after each tool completion, read by MemoryModule.onComplete
+   * for tool_observed evidence validation. The Registry is
+   * destroyed when activeRunId is cleared in the finally block.
+   */
+  toolCallRegistry: Map<string, {
+    toolName: string
+    resultText: string
+    isError: boolean
+    truncated: boolean
+    completedAt: number
+  }> | null = null
 
   /**
    * v0.4.1 WS4 (ExecutionProfile): sticky per-engine profile override
