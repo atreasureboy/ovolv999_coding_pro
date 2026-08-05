@@ -153,4 +153,44 @@ export class EvidenceStore {
     this.evidence.clear()
     this.currentRevision = 0
   }
+
+  /**
+   * v0.5.6 §5 — formal lookup for Memory Evidence validation.
+   *
+   * Returns the TaskEvidence iff ALL of the following hold:
+   *   - the evidenceId exists
+   *   - the evidence's runId matches the supplied currentRunId
+   *   - the evidence is still valid (not stale, not waived-into)
+   *   - the evidence's revision equals the currentRevision
+   *   - if the evidence has an exitCode, it must be 0
+   *   - the kind is in the allow-list for Memory Claim evidence
+   *
+   * Otherwise returns undefined. Callers (the EvidenceValidationService)
+   * must NOT bypass this method with `as unknown as ...` casts.
+   */
+  resolveForRun(
+    evidenceId: string,
+    currentRunId: string,
+    currentRevision: number,
+  ): TaskEvidence | undefined {
+    for (const list of this.evidence.values()) {
+      for (const e of list) {
+        if (e.id !== evidenceId) continue
+        if (e.runId !== currentRunId) return undefined
+        if (!e.valid) return undefined
+        if (e.revision !== currentRevision) return undefined
+        if (e.exitCode !== undefined && e.exitCode !== 0) return undefined
+        const allow: ReadonlyArray<EvidenceKind> = [
+          'command_result',
+          'test_result',
+          'build_result',
+          'file_change',
+          'analysis_result',
+        ]
+        if (!allow.includes(e.kind)) return undefined
+        return e
+      }
+    }
+    return undefined
+  }
 }

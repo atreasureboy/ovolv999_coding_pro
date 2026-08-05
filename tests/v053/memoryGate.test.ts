@@ -27,7 +27,7 @@ describe('Memory Gate (P0.3)', () => {
 
   it('gate failure throws and the record is NOT written', () => {
     const ltm = new LongTermMemory({
-      backend: { upsert() {}, load: () => [], delete() {} } as never,
+      backend: { upsert() {}, load: () => [], delete() {} },
       allowUnverified: false,
       allowCodeWithoutCommit: false,
     })
@@ -50,7 +50,7 @@ describe('Memory Gate (P0.3)', () => {
         upsert: (r: unknown) => upserts.push(r),
         load: () => [],
         delete() {},
-      } as never,
+      },
       allowUnverified: false,
       allowCodeWithoutCommit: false,
     })
@@ -70,7 +70,7 @@ describe('Memory Gate (P0.3)', () => {
 
   it('code references without commit + allowCodeWithoutCommit=false throws', () => {
     const ltm = new LongTermMemory({
-      backend: { upsert() {}, load: () => [], delete() {} } as never,
+      backend: { upsert() {}, load: () => [], delete() {} },
       allowUnverified: true,
       allowCodeWithoutCommit: false,
     })
@@ -88,7 +88,7 @@ describe('Memory Gate (P0.3)', () => {
 
   it('user_stated preference without commit does NOT trigger R3', () => {
     const ltm = new LongTermMemory({
-      backend: { upsert() {}, load: () => [], delete() {} } as never,
+      backend: { upsert() {}, load: () => [], delete() {} },
       allowUnverified: true,
       allowCodeWithoutCommit: false,
     })
@@ -107,7 +107,7 @@ describe('Memory Gate (P0.3)', () => {
 
   it('does NOT accept literal sourceRunId "memory-module" / "memory"', () => {
     const ltm = new LongTermMemory({
-      backend: { upsert() {}, load: () => [], delete() {} } as never,
+      backend: { upsert() {}, load: () => [], delete() {} },
       allowUnverified: true,
       allowCodeWithoutCommit: true,
     })
@@ -134,7 +134,7 @@ describe('Memory Gate (P0.3)', () => {
     expect(adapterBefore).toBe(0)
     // Simulate the gate rejecting — we never call semantic.write.
     const ltm = new LongTermMemory({
-      backend: { upsert() {}, load: () => [], delete() {} } as never,
+      backend: { upsert() {}, load: () => [], delete() {} },
       allowUnverified: false,
     })
     expect(() => ltm.record({

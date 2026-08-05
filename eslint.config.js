@@ -77,6 +77,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/', 'node_modules/', 'tests/fixtures/'],
+    ignores: ['dist/', 'node_modules/', 'tests/fixtures/', 'tests/esm-runner/'],
   },
 )

@@ -324,7 +324,7 @@ function parseImpact(
       flags.estimated_files === undefined) {
     return { impact: undefined }
   }
-  let scopeVal: TaskImpactScope
+  let scopeVal: TaskImpactScope | null = null
   if (typeof scope !== 'string') {
     return { error: `impact_scope must be a string (one of ${TASK_IMPACT_SCOPES.join('|')})` }
   }

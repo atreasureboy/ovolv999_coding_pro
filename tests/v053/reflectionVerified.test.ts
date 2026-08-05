@@ -12,7 +12,7 @@ import { LongTermMemory } from '../../src/core/longTermMemory.js'
 
 function makeLtm(): LongTermMemory {
   return new LongTermMemory({
-    backend: { upsert() {}, load: () => [], delete() {} } as never,
+    backend: { upsert() {}, load: () => [], delete() {} },
     allowUnverified: false,
     allowCodeWithoutCommit: false,
   })

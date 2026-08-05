@@ -37,6 +37,7 @@ describe('RunScopedRuntimeContext inheritedConfig (C3)', () => {
     const ctx = store.create('run-1', {
       taskKind: 'mutation',
       inheritedConfig: parentConfig,
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
     })
     expect(ctx.inheritedConfig).toBeDefined()
     expect(ctx.inheritedConfig!.provider).toBe('openai')
@@ -44,7 +45,10 @@ describe('RunScopedRuntimeContext inheritedConfig (C3)', () => {
   })
 
   it('create() without inheritedConfig leaves it undefined (legacy compat)', () => {
-    const ctx = store.create('run-2', { taskKind: 'informational' })
+    const ctx = store.create('run-2', {
+      taskKind: 'informational',
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
+    })
     expect(ctx.inheritedConfig).toBeUndefined()
   })
 
@@ -81,6 +85,7 @@ describe('RunScopedRuntimeContext inheritedConfig (C3)', () => {
     const ctx = store.create('run-3', {
       taskKind: 'mutation',
       inheritedConfig: parentConfig,
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
     })
     const overridden = withConfigOverride(ctx, { provider: 'anthropic' })
     expect(overridden).not.toBe(ctx)
@@ -91,7 +96,10 @@ describe('RunScopedRuntimeContext inheritedConfig (C3)', () => {
   })
 
   it('withConfigOverride throws when inheritedConfig is missing', () => {
-    const ctx = store.create('run-4', { taskKind: 'informational' })
+    const ctx = store.create('run-4', {
+      taskKind: 'informational',
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
+    })
     expect(() => withConfigOverride(ctx, { provider: 'anthropic' })).toThrow(/no inheritedConfig/)
   })
 
@@ -99,14 +107,17 @@ describe('RunScopedRuntimeContext inheritedConfig (C3)', () => {
     const ctx1 = store.create('run-p', {
       taskKind: 'mutation',
       inheritedConfig: parentConfig,
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
     })
     const ctx2 = store.create('run-c', {
       taskKind: 'mutation',
       inheritedConfig: inheritConfig(ctx1.inheritedConfig!, { provider: 'anthropic' }),
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
     })
     const ctx3 = store.create('run-g', {
       taskKind: 'mutation',
       inheritedConfig: inheritConfig(ctx2.inheritedConfig!, { sandboxEnabled: false }),
+      projectIdentity: { inputCwd: '/r', canonicalRoot: '/r', projectKey: 'k', binding: { repo: '/r', dirty: false } },
     })
     expect(ctx1.inheritedConfig!.provider).toBe('openai')
     expect(ctx2.inheritedConfig!.provider).toBe('anthropic')

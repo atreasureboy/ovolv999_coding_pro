@@ -630,8 +630,8 @@ registerCommand({
       // R12: 7-mode union (was 5-mode legacy list). Including
       // `dontAsk` (auto-approve without prompt) and `bubble`
       // (sandbox-wrap shell) closes the gap with the type union.
-      if (!isValidPermissionMode(mode)) {
-        return text('Unknown permission mode: ' + mode)
+      if (!isValidPermissionMode(String(mode))) {
+        return text(`Unknown permission mode: ${String(mode)}`)
       }
       mgr.setMode(mode)
       return text('Permission mode: ' + mgr.formatMode() + persistPermissionState(ctx))

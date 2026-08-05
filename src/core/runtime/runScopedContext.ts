@@ -20,6 +20,26 @@ import { ControlMessageLog } from './internalControlMessage.js'
 import type { RoutingSignals } from '../model/routingSignalCollector.js'
 import type { CompletionVerdict } from './completionContract.js'
 import type { TaskKind } from './taskIntent.js'
+import type { ProjectIdentity } from '../projectIdentity.js'
+
+/**
+ * v0.5.6 §7 — per-run tool result. `originalText` is what the
+ * tool returned; `exposedText` is what the model actually saw
+ * (after truncation). The two diverge only when the tool result
+ * was truncated by the context budget. Memory Evidence refs to
+ * `resultQuote` MUST match `exposedText`, NOT `originalText` —
+ * the model can only claim to have seen what was exposed.
+ */
+export interface RegisteredToolResult {
+  runId: string
+  callId: string
+  toolName: string
+  originalText: string
+  exposedText: string
+  isError: boolean
+  truncated: boolean
+  completedAt: number
+}
 
 /**
  * Per-run snapshot. Populated progressively across the run lifecycle:
@@ -67,13 +87,17 @@ export interface RunScopedRuntimeContext {
    * to decidePromotion so tool_observed evidence refs can be
    * verified against actual recorded results.
    */
-  toolCallRegistry: Map<string, {
-    toolName: string
-    resultText: string
-    isError: boolean
-    truncated: boolean
-    completedAt: number
-  }>
+  toolCallRegistry: Map<string, RegisteredToolResult>
+  /**
+   * v0.5.6 §8 — ProjectIdentity is a formal RunContext field.
+   * MemoryModule reads this for file-evidence path resolution
+   * (canonicalRoot containment) instead of receiving a separate
+   * parameter from the Coordinator.
+   *
+   * Non-serialisable runtime field: restore() re-resolves via
+   * `resolveProjectIdentity` against the current cwd.
+   */
+  projectIdentity: ProjectIdentity
   /**
    * v0.5.2 (C3): config slice inherited from the parent at create-time.
    * Children layer role-specific overrides on top via the immutable
@@ -132,6 +156,10 @@ export interface RunScopedRuntimeContextStore {
      *  have it, the MemoryPromoter can verify sourceQuote claims
      *  against the user's actual words. */
     userMessage?: string
+    /** v0.5.6 §8: ProjectIdentity required at create-time. The
+     *  Coordinator resolves it before calling create() so the
+     *  RunContext always carries the canonicalRoot. */
+    projectIdentity?: ProjectIdentity
   }): RunScopedRuntimeContext
   get(runId: string): RunScopedRuntimeContext | undefined
   getLatest(): RunScopedRuntimeContext | undefined
@@ -179,6 +207,10 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
      *  once at create-time so the MemoryPromoter can verify
      *  sourceQuote claims later. */
     userMessage?: string
+    /** v0.5.6 §8: ProjectIdentity required at create-time. The
+     *  Coordinator resolves it before calling create() so the
+     *  RunContext always carries the canonicalRoot. */
+    projectIdentity: ProjectIdentity
   }): RunScopedRuntimeContext {
     if (this.contexts.has(runId)) {
       throw new Error(`RunScopedRuntimeContextStore: runId "${runId}" already exists`)
@@ -195,6 +227,7 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
       inheritedConfig: options.inheritedConfig,
       memoryCandidates: [],
       toolCallRegistry: new Map(),
+      projectIdentity: options.projectIdentity,
       userMessage: options.userMessage ?? '',
     }
     // v0.3.2: the graph inside the Context is a fresh TaskGraph;

@@ -62,7 +62,8 @@ import {
 } from './runtime/runScopedContext.js'
 import { RunScopedTaskGraphResolver, RunScopedEvidenceResolver } from '../tools/taskGraphResolver.js'
 import { ContextManager } from './context/contextManager.js'
-import { RepoStatsService, wireRepoStats } from './repoStats.js'
+import type { RepoStatsService} from './repoStats.js';
+import { wireRepoStats } from './repoStats.js'
 import { ToolPolicy } from './toolRuntime/toolPolicy.js'
 import { ToolExecutor } from './toolRuntime/toolExecutor.js'
 import { ToolScheduler } from './toolRuntime/toolScheduler.js'

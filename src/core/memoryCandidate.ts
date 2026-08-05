@@ -142,7 +142,7 @@ export interface RevisionBinding {
 function normalize(s: string): string {
   return s
     .toLowerCase()
-    .replace(/[\s 　]+/g, '')
+    .replace(/[\s  ]+/g, '')
     // Strip CJK speech marks + quote glyphs that fluctuate in chat.
     .replace(/[“”‘’＂＇、。]/g, '')
 }

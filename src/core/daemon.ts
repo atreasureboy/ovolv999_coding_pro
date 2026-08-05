@@ -335,7 +335,7 @@ export class Daemon {
           if (typeof statusFilter === 'string') {
             allowedStatuses = [statusFilter]
           } else if (Array.isArray(statusFilter) && statusFilter.every((s) => typeof s === 'string')) {
-            allowedStatuses = statusFilter as string[]
+            allowedStatuses = statusFilter
           } else {
             return { ok: false, error: `tag-stats invalid status: ${String(statusFilter)}` }
           }
@@ -366,7 +366,7 @@ export class Daemon {
         }
         const passesRange = (s: string): boolean => {
           if (statusGte === null && statusLte === null) return true
-          const order = STATUS_ORDER[s]!
+          const order = STATUS_ORDER[s]
           if (statusGte !== null && order < statusGte) return false
           if (statusLte !== null && order > statusLte) return false
           return true
@@ -383,7 +383,7 @@ export class Daemon {
           if (typeof excludeFilter === 'string') {
             excludedStatuses = [excludeFilter]
           } else if (Array.isArray(excludeFilter) && excludeFilter.every((s) => typeof s === 'string')) {
-            excludedStatuses = excludeFilter as string[]
+            excludedStatuses = excludeFilter
           } else {
             return { ok: false, error: `tag-stats invalid exclude: ${String(excludeFilter)}` }
           }
@@ -561,7 +561,7 @@ export class Daemon {
           if (typeof statusFilter === 'string') {
             allowedStatuses = [statusFilter]
           } else if (Array.isArray(statusFilter) && statusFilter.every((s) => typeof s === 'string')) {
-            allowedStatuses = statusFilter as string[]
+            allowedStatuses = statusFilter
           } else {
             return { ok: false, error: 'restart-worker invalid status payload' }
           }
@@ -578,7 +578,7 @@ export class Daemon {
           if (typeof excludeFilter === 'string') {
             excludedStatuses = [excludeFilter]
           } else if (Array.isArray(excludeFilter) && excludeFilter.every((s) => typeof s === 'string')) {
-            excludedStatuses = excludeFilter as string[]
+            excludedStatuses = excludeFilter
           } else {
             return { ok: false, error: 'restart-worker invalid exclude payload' }
           }

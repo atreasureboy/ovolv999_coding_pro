@@ -662,7 +662,7 @@ export class MemoryModule implements AgentModule {
     ctx.eventLog?.append('memory_promotion_started', 'memory', {
       runId: ctx.outcome.runId,
       candidateCount: candidates.length,
-    } as never)
+    })
 
     const decision = decidePromotion({
       candidates,
@@ -684,7 +684,7 @@ export class MemoryModule implements AgentModule {
         runId: ctx.outcome.runId,
         candidateId: drop.candidateId,
         reason: drop.reason,
-      } as never)
+      })
     }
     for (const promo of [...decision.successPromotions, ...decision.failurePromotions]) {
       try {
@@ -695,7 +695,7 @@ export class MemoryModule implements AgentModule {
           kind: promo.memoryInput.kind,
           verified: promo.memoryInput.verified,
           origin: promo.memoryInput.origin,
-        } as never)
+        })
       } catch (err) {
         // If a single record is rejected (e.g. commit-binding still
         // missing for an unexpected content shape), drop and
@@ -704,7 +704,7 @@ export class MemoryModule implements AgentModule {
           runId: ctx.outcome.runId,
           candidateId: promo.candidate.id,
           reason: (err as Error).message,
-        } as never)
+        })
       }
     }
   }

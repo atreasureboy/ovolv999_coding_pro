@@ -553,6 +553,9 @@ export class RuntimeCoordinator {
             inheritedFrom: effectiveParentRunId ?? 'engine',
             inheritedAt: Date.now(),
           } : undefined,
+          // v0.5.6 §8: ProjectIdentity is now a formal RunContext
+          // field. Resolved once at the top of run(); no casts.
+          projectIdentity,
         })
         runContext.taskKind = taskIntent.kind
         // v0.5.5 §2: mirror the per-run toolCallRegistry into
@@ -560,10 +563,6 @@ export class RuntimeCoordinator {
         // (it does not hold a runContext reference). The Registry
         // is destroyed in the outer finally block.
         this.deps.sharedState.toolCallRegistry = runContext.toolCallRegistry
-        // v0.5.5 §3: thread the ProjectIdentity through the
-        // runContext so file-evidence path validation can resolve
-        // against canonicalRoot.
-        ;(runContext as { projectIdentity?: { canonicalRoot: string } }).projectIdentity = projectIdentity
         // v0.5.3 Final (task 2): publish the per-run candidate sink.
         // memory_write routes candidates into runContext.memoryCandidates;
         // the MemoryPromoter reads them after CompletionContract.
@@ -659,8 +658,7 @@ export class RuntimeCoordinator {
             }
             if (!this.deps.repoStats) return notWired
             const snap = this.deps.repoStats.snapshot(config.cwd)
-            const state = (snap.state === 'pending' ? 'unknown' : snap.state) as
-              'ready' | 'empty' | 'partial' | 'unknown'
+            const state = (snap.state === 'pending' ? 'unknown' : snap.state)
             return {
               state,
               rootDir: snap.stats?.rootDir ?? config.cwd,
@@ -743,7 +741,7 @@ export class RuntimeCoordinator {
           eventLog?.append('protocol', 'engine', {
             type: 'ROUTING_UNAVAILABLE',
             reasonCodes: application.decision.reasonCodes,
-          } as never)
+          })
           eventEmitter?.emit({
             type: 'ROUTING_UNAVAILABLE',
             reasonCodes: application.decision.reasonCodes,
@@ -1905,7 +1903,7 @@ export class RuntimeCoordinator {
     // outer run() so RUN_FAILED is emitted. The finally block
     // only owns the probe-lease lifecycle; the error must still
     // bubble up.
-    if (caughtErr) throw caughtErr
+    if (caughtErr) throw caughtErr instanceof Error ? caughtErr : new Error(String(caughtErr))
 
     return result!
   }

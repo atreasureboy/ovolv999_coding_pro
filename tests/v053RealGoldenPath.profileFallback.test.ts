@@ -36,7 +36,7 @@ interface FixtureHandle {
   requests: Array<{ model: string; stream: boolean }>
 }
 
-function baseConfig(over: Partial<EngineConfig> = {}): EngineConfig {
+function baseConfig(over: Partial<EngineConfig>): EngineConfig {
   return {
     apiKey: 'test-key',
     model: 'model-a',
@@ -45,7 +45,7 @@ function baseConfig(over: Partial<EngineConfig> = {}): EngineConfig {
     permissionMode: 'bypassPermissions',
     enabledModules: [],
     ...over,
-  } as EngineConfig
+  }
 }
 
 function fakeRenderer() {

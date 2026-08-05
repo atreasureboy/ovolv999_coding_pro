@@ -2,6 +2,88 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.5.6 (released) — Release Acceptance Repair
+
+**v0.5.6 is the version in `package.json`.** This release makes every
+acceptance gate actually green and every Memory Claim impossible
+to launder.
+
+### Evidence Authenticity (§3–§6)
+- Single `EvidenceValidationService` owns the validation contract.
+  `decidePromotion` no longer best-effort accepts missing
+  validators.
+- File Evidence: `realpath` + canonicalRoot containment + regular
+  file check + sha256 match against `contentHash`. `../` escape,
+  symlink escape, missing file, directory, device — all reject.
+- Tool-Result Evidence: normalised quote ≥8 chars + ≥50% claim
+  token coverage. One-character, generic words, `ok`, `true`,
+  `0` cannot prove any Claim.
+- Verification Evidence: `EvidenceStore.getById(id)` enforces
+  runId + revision + `valid === true` + exitCode 0 + kind allow-list.
+  Stale / waived entries are refused.
+- All three kinds also require Claim↔Evidence correlation.
+
+### Single Application Owner (§11)
+- `applyRoutingDecision` (Sink-side) split from `recordApplied`
+  (no-Sink). The Engine is the SOLE applier; the Router only
+  records metadata. Production code never reaches a second
+  side-effecting entry point.
+
+### Attempt Profile Identity (§12)
+- Per-attempt `profileId` resolved via Gateway fallback binding
+  or the Decision's model→profile map. Real A→B fallback asserts
+  `attempt[0].profileId === 'profile-a'` and `attempt[1] ===
+  'profile-b'`. `model` is no longer used as a profileId proxy.
+
+### RoutingUnavailable Profile State (§13)
+- `RoutingUnavailableError` carries `profiles: [{profileId,
+  model, circuit}]`. The Router event has a separate `profiles`
+  field. busy-probe-without-fallback is routed through the same
+  unavailable path, never through plain `Error`.
+
+### ToolResult Registry Finalizer (§7)
+- Every tool execution path (unknown, policy deny, permission
+  deny, hook deny, execute throw, normal) lands in one finalizer.
+  `originalText` is preserved; `exposedText` is the model-visible
+  text; `truncated = originalText !== exposedText`. Duplicate
+  `callId` rejected with an explicit event. Registry is bound to
+  `runId` and zeroed in Run finally.
+
+### Compact Policy Plan (§14)
+- `ContextManager.planBudgetPolicy(snapshot)` is the single source
+  of truth. `BudgetPolicyPlan` exposes `willTimeCompact /
+  willMicroCompact / willFullCompact / willMutateMessages /
+  strategy`. Coordinator calls `PreCompact` only when
+  `plan.willMutateMessages`, and `PostCompact` only after the
+  actual compact succeeded. time / micro / full each get a
+  matched pair.
+
+### RunScope ProjectIdentity (§8)
+- `RunScopedRuntimeContext.projectIdentity: ProjectIdentity`
+  is a formal field. `restore()` re-resolves it (non-serializable
+  runtime field). No more `(runContext as unknown as
+  {...}).projectIdentity = ...` casts.
+
+### Identity in Outer Finally (§9)
+- ProjectIdentity resolution now lives INSIDE the outer
+  try/catch/finally. Identity failure, Boot failure, Routing
+  unavailable, Context abort, Gateway throw, Memory onComplete
+  throw all clear `activeRunId`, `runContext`,
+  `candidateSink`, `toolCallRegistry`, `routingUnavailable`.
+
+### Module Completion Observability (§10)
+- `moduleComplete()` no longer swallows errors. Failures emit
+  `MODULE_COMPLETE_FAILED` with `module`, `runId`, `error`. Memory
+  promotion failures add `candidateId`, `evidenceKind`,
+  `failureStage`. `TurnOutcome.moduleCompletionFailures` carries
+  the array for downstream inspection.
+
+### Behavior Test Categorization (§16)
+- `tests/unit/`, `tests/runtime-behavior/`, `tests/golden-path/`.
+  Pure-function tests live in `tests/unit/`. Production
+  end-to-end tests live in `tests/golden-path/`. The misleading
+  "Golden Path" label was removed from `tests/v053RealGoldenPath.*`.
+
 ## 0.5.5 (released) — Runtime Closure Final
 
 **v0.5.5 is the version in `package.json`.** Evidence wiring, routing

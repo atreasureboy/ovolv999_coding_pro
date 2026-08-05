@@ -60,13 +60,7 @@ export interface ToolExecutorDeps {
   /** v0.5.5 §2: per-run ToolResult registry. Populated after
    *  every tool completion; consumed by MemoryModule.onComplete
    *  for tool_observed evidence validation. */
-  sharedState?: { toolCallRegistry?: Map<string, {
-    toolName: string
-    resultText: string
-    isError: boolean
-    truncated: boolean
-    completedAt: number
-  }> | null }
+  sharedState?: { toolCallRegistry?: Map<string, import('../runtime/runScopedContext.js').RegisteredToolResult> | null }
   /**
    * R5: hook additionalContext sink. Wired by the coordinator to
    * append `hook_additional_context` messages to the per-run
@@ -92,6 +86,46 @@ export class ToolExecutor {
     turnNumber: number,
   ): Promise<ToolResult> {
     const { toolRegistry, toolPolicy, permissionManager, renderer, eventEmitter, eventLog } = this.deps
+
+    // v0.5.6 §7 — single finalizer. Every tool path (unknown,
+    // policy deny, permission deny, hook deny, execute throw,
+    // normal) converges here. The Registry MUST record BOTH
+    // originalText (what the tool returned) AND exposedText
+    // (what the model saw, after truncateToolResult). duplicate
+    // callIds are rejected with an explicit event; we never
+    // silently overwrite.
+    const runIdFromContext = (context as { execution?: { runId?: string } }).execution?.runId ?? ''
+    const finalize = (result: ToolResult) => {
+      const originalText = result.content ?? ''
+      const exposedText = this.deps.contextManager.truncateToolResult(originalText)
+      const truncated = exposedText !== originalText
+      const finalResult: ToolResult = truncated ? { ...result, content: exposedText } : result
+      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result: finalResult })
+      const registry = this.deps.sharedState?.toolCallRegistry
+      if (registry && callId) {
+        if (registry.has(callId)) {
+          // Duplicate callId — reject. Emit a structured event.
+          eventEmitter?.emit({
+            type: 'TOOL_RESULT_DUPLICATE_CALL_ID',
+            runId: runIdFromContext,
+            callId,
+            toolName,
+          } as never)
+        } else {
+          registry.set(callId, {
+            runId: runIdFromContext,
+            callId,
+            toolName,
+            originalText,
+            exposedText,
+            isError: finalResult.isError === true,
+            truncated,
+            completedAt: Date.now(),
+          })
+        }
+      }
+      return finalResult
+    }
     const allTools = toolRegistry.getAll()
 
     // R11: helper to emit a permission_decision event. Always best-

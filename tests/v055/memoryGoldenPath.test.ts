@@ -82,7 +82,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     const sem = new SemanticMemory(join(projectDir, '.ovogo'))
     const epi = new EpisodicMemory(projectDir)
     const mod = new MemoryModule(sem, epi)
-    mod.boot({ cwd: projectDir, config: { cwd: projectDir } as never, projectIdentity: id } as never)
+    mod.boot({ cwd: projectDir, config: { cwd: projectDir }, projectIdentity: id } as never)
 
     // Build a real tool result into the registry.
     const toolCallId = 'real-call-001'
@@ -117,7 +117,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
         modelAttempts: [],
         stopped: true,
         reason: 'stop_sequence',
-      } as never,
+      },
       userMessage: 'whatever',
       revision: { repo: id.canonicalRoot, dirty: false, baseCommit: id.binding.baseCommit, diffHash: id.binding.diffHash, workspaceHash: id.binding.workspaceHash },
       toolCallRegistry,
@@ -135,7 +135,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     }
     // Next boot: the MemoryModule's boot section reads from LTM.
     const reBoot = mod.boot({
-      cwd: projectDir, config: { cwd: projectDir } as never,
+      cwd: projectDir, config: { cwd: projectDir },
       projectIdentity: id, userMessage: 'package version',
     } as never)
     const section = (reBoot.systemPromptSections ?? []).join('\n')
@@ -147,7 +147,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     const sem = new SemanticMemory(join(projectDir, '.ovogo'))
     const epi = new EpisodicMemory(projectDir)
     const mod = new MemoryModule(sem, epi)
-    mod.boot({ cwd: projectDir, config: { cwd: projectDir } as never, projectIdentity: id } as never)
+    mod.boot({ cwd: projectDir, config: { cwd: projectDir }, projectIdentity: id } as never)
 
     const eventLog2 = new EventLog(join(projectDir, 'events2.jsonl'))
     const ltm = (mod as unknown as { longTerm: { record: (i: unknown) => unknown; query: (f: unknown) => unknown[] } }).longTerm
@@ -177,7 +177,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
         modelAttempts: [],
         stopped: true,
         reason: 'stop_sequence',
-      } as never,
+      },
       userMessage: 'whatever',
       revision: { repo: id.canonicalRoot, dirty: false, baseCommit: id.binding.baseCommit, diffHash: id.binding.diffHash, workspaceHash: id.binding.workspaceHash },
       toolCallRegistry,
@@ -221,7 +221,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
         modelAttempts: [],
         stopped: true,
         reason: 'stop_sequence',
-      } as never,
+      },
       userMessage: 'whatever',
       revision: { repo: '/r', dirty: false },
       projectIdentity: { canonicalRoot: '/r' },
@@ -234,7 +234,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     const sem = new SemanticMemory(join(projectDir, '.ovogo'))
     const epi = new EpisodicMemory(projectDir)
     const mod = new MemoryModule(sem, epi)
-    mod.boot({ cwd: projectDir, config: { cwd: projectDir } as never, projectIdentity: id } as never)
+    mod.boot({ cwd: projectDir, config: { cwd: projectDir }, projectIdentity: id } as never)
     const ltm = (mod as unknown as { longTerm: { query: (f: unknown) => unknown[] } }).longTerm
 
     const { decidePromotion } = await import('../../src/core/memoryCandidate.js')
@@ -259,7 +259,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
         modelAttempts: [],
         stopped: true,
         reason: 'stop_sequence',
-      } as never,
+      },
       userMessage: 'whatever',
       revision: { repo: id.canonicalRoot, dirty: false, baseCommit: id.binding.baseCommit, diffHash: id.binding.diffHash, workspaceHash: id.binding.workspaceHash },
       projectIdentity: { canonicalRoot: id.canonicalRoot },

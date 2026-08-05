@@ -72,15 +72,15 @@ describe('EffectiveRunId — no RunRegistry wired', () => {
       closed: [] as string[],
     } as never
     const deps: CoordinatorDeps = {
-      config: { cwd: tmpProj, model: 'echo', apiKey: 'k', permissionMode: 'bypassPermissions' } as never,
+      config: { cwd: tmpProj, model: 'echo', apiKey: 'k', permissionMode: 'bypassPermissions' },
       renderer: fakeRenderer(),
       eventLog,
       sharedState,
       runRegistry: undefined, // <- the hotfix path: NO registry
       runContextStore: ctxStore,
       costTracker: undefined as never,
-      backgroundTaskManager: { onComplete: () => {} } as never,
-      permissionManager: { checkToolPermission: async () => true } as never,
+      backgroundTaskManager: { onComplete: () => {} },
+      permissionManager: { checkToolPermission: async () => true },
       fileHistory: null,
       modelGateway: undefined as never,
       contextManager: {
@@ -88,14 +88,14 @@ describe('EffectiveRunId — no RunRegistry wired', () => {
         getWorkingState: () => ({ filesRead: new Set(), filesChanged: new Set(), verification: { passed: [], failed: [] } }),
         measureBudget: () => ({}),
         applyBudgetPolicy: async () => ({}),
-      } as never,
+      },
       toolScheduler: undefined as never,
       toolPolicy: undefined as never,
       toolRegistry: undefined as never,
-      moduleManager: { modules: [], runComplete: async () => {} } as never,
+      moduleManager: { modules: [], runComplete: async () => {} },
       baseTools: [],
-      eventEmitter: { emit: () => {} } as never,
-      modelRouter: undefined as never,
+      eventEmitter: { emit: () => {} },
+      modelRouter: undefined,
     }
     const coord = new RuntimeCoordinator(deps)
     void coord

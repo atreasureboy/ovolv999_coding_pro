@@ -121,12 +121,12 @@ interface OpenAIToolCall {
   function: { name: string; arguments: string }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
+ 
 function isOpenAIToolCall(value: unknown): value is OpenAIToolCall {
   if (!value || typeof value !== 'object') return false
   const obj = value as Record<string, unknown>
   if (obj.type !== 'function') return false
-  // eslint-disable-next-line @typescript-eslint/no-floating-promises
+   
   const fn = obj.function
   if (!fn || typeof fn !== 'object') return false
   const fnObj = fn as Record<string, unknown>
