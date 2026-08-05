@@ -41,6 +41,8 @@ import { createSearchExtraToolsTool } from './searchExtraTools.js'
 import { createLspTool, loadLspServersFromSettings } from './lspTool.js'
 import { MultiEditTool } from './multiEdit.js'
 import { CodeStructureTool } from './codeStructure.js'
+import { CodeQualityTool } from './codeQuality.js'
+import { ProjectExplorerTool } from './projectExplorer.js'
 import { createLazyTool, type LazyTool } from '../core/lazyTool.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
 
@@ -148,6 +150,8 @@ export function createTools(
     createSearchExtraToolsTool(),
     new MultiEditTool(),
     new CodeStructureTool(),
+    new CodeQualityTool(),
+    new ProjectExplorerTool(),
 
     // ── Heavy (lazy) — v0.6.0: ~200ms startup savings ──
     lazy('Task', 'Launch a new agent to handle complex, multi-step tasks autonomously',
@@ -207,6 +211,8 @@ export {
   FileEditTool,
   MultiEditTool,
   CodeStructureTool,
+  CodeQualityTool,
+  ProjectExplorerTool,
   GlobTool,
   GrepTool,
   TodoWriteTool,
