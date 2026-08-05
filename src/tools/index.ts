@@ -39,6 +39,8 @@ import { GoalTool } from './goal.js'
 import { TaskPlanTool } from './taskPlan.js'
 import { createSearchExtraToolsTool } from './searchExtraTools.js'
 import { createLspTool, loadLspServersFromSettings } from './lspTool.js'
+import { MultiEditTool } from './multiEdit.js'
+import { CodeStructureTool } from './codeStructure.js'
 import type { TaskGraphResolver } from './taskGraphResolver.js'
 
 /**
@@ -125,6 +127,8 @@ export function createTools(
     new TaskPlanTool(agentWiring?.taskGraphResolver, agentWiring?.evidenceResolver),
     createSearchExtraToolsTool(),
     createLspTool({ servers: loadLspServersFromSettings() }),
+    new MultiEditTool(),
+    new CodeStructureTool(),
     ...extraTools,
   ]
 }
@@ -142,6 +146,8 @@ export {
   FileReadTool,
   FileWriteTool,
   FileEditTool,
+  MultiEditTool,
+  CodeStructureTool,
   GlobTool,
   GrepTool,
   TodoWriteTool,
