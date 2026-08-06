@@ -122,7 +122,7 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     const e = new ExecutionEngine(baseConfig({ executionRunLogDir: join(tmp, 'logs'), hookRunner }), fakeRenderer(), c as unknown as never)
     holder.engine = e
     e.getEventEmitter().on('RUN_TERMINATED', () => events.push('terminated'))
-    e.getEventEmitter().on('RUN_COMPLETED', () => events.push('completed'))
+
     e.getEventEmitter().on('CONTEXT_CLOSED', () => events.push('closed'))
     await e.runTurn('explain something', [])
     expect(events).toEqual(['terminated', 'hook', 'closed'])
@@ -203,7 +203,6 @@ describe('v0.3.4 TurnOutcome e2e (durable supervisor contract §Phase 12)', () =
     const e = new ExecutionEngine(cfg, fakeRenderer(), c as unknown as never)
     let count = 0
     e.getEventEmitter().on('RUN_TERMINATED', () => { count++ })
-    e.getEventEmitter().on('RUN_COMPLETED', () => { count++ })
     await e.runTurn('explain', [])
     expect(count).toBe(1)
   })

@@ -173,6 +173,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
       model: config.model,
     },
     eventLog,
+    eventEmitter,
     backgroundTaskManager,
     askUserQuestion: config.askUserQuestion,
     exitPlanMode: async (plan: string): Promise<boolean> => {

@@ -1147,10 +1147,12 @@ export class ExecutionEngine {
 
   exitPlanMode(): void {
     this.sharedState.planModeActive = false
+    this.eventEmitter.emit({ type: 'PLAN_MODE_EXITED' })
   }
 
   enterPlanMode(): void {
     this.sharedState.planModeActive = true
+    this.eventEmitter.emit({ type: 'PLAN_MODE_ENTERED' })
   }
 
   queueSnip(keepRecent: number): void {

@@ -1184,10 +1184,12 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         if (!workerAndVerifyOk) {
           worktreeSection = `\n\n---\n[Worktree] preserved ${capturedBranch} at ${capturedPath} (worker/verify incomplete)`
           deliveryOutcome = { status: 'kept_for_review', branch: capturedBranch, path: capturedPath }
+          context.eventEmitter?.emit({ type: 'AGENT_WORKTREE_PRESERVED', runId: runId ?? 'unknown', branch: capturedBranch, reason: 'worker_or_verify_incomplete' })
         } else if (!mergeOnSuccess) {
           // Keep-for-review: leave worktree + branch intact.
           worktreeSection = `\n\n---\n[Worktree] kept ${capturedBranch} at ${capturedPath} (merge_on_success:false)`
           deliveryOutcome = { status: 'kept_for_review', branch: capturedBranch, path: capturedPath }
+          context.eventEmitter?.emit({ type: 'AGENT_WORKTREE_PRESERVED', runId: runId ?? 'unknown', branch: capturedBranch, reason: 'merge_on_success_disabled' })
         } else {
           // Delivery: merge. Auto-commit any uncommitted sub-agent
           // edits first so they aren't silently dropped by
@@ -1199,8 +1201,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           // on failure. The shared helper deletes the branch even when
           // the merge fails, which violates runtime invariants §五 P0-5
           // ("保留 Worktree；保留分支；不删除成果").
+          context.eventEmitter?.emit({ type: 'AGENT_MERGE_STARTED', runId: runId ?? 'unknown', branch: capturedBranch })
           const mergeRes = attemptMerge(context.cwd, capturedBranch)
           if (mergeRes.ok) {
+            context.eventEmitter?.emit({ type: 'AGENT_MERGE_COMPLETED', runId: runId ?? 'unknown', branch: capturedBranch })
             // Merge succeeded — now safe to remove worktree + branch.
             try {
               mgr.removeWorktree(capturedName, { merge: false, deleteBranch: true })
@@ -1217,6 +1221,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
             // call removeWorktree — that would wipe the work.
             worktreeSection = `\n\n---\n[Worktree] delivery blocked: ${mergeRes.message}\n[Conflicts] ${mergeRes.conflicts.length ? mergeRes.conflicts.join(', ') : '(unavailable)'}\n[Branch preserved] ${capturedBranch} at ${capturedPath}`
             deliveryOutcome = { status: 'conflict', branch: capturedBranch, conflicts: mergeRes.conflicts, message: mergeRes.message }
+            context.eventEmitter?.emit({ type: 'AGENT_WORKTREE_PRESERVED', runId: runId ?? 'unknown', branch: capturedBranch, reason: `merge_conflict: ${mergeRes.message}` })
           }
         }
         // wtInfo is consumed — null it so the catch/finally paths
@@ -1278,6 +1283,12 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         delivery: deliveryOutcome.status,
         accepted,
       }, [agentLabel, accepted ? 'success' : 'error'])
+
+      if (accepted) {
+        context.eventEmitter?.emit({ type: 'AGENT_COMPLETION_ACCEPTED', runId: runId ?? 'unknown', description })
+      } else {
+        context.eventEmitter?.emit({ type: 'AGENT_COMPLETION_REJECTED', runId: runId ?? 'unknown', description, reason: finalStatus })
+      }
 
       // Emit through the registry's onEmit hook (if wired to EventBus)
       if (this.runRegistry?.onEmit && runId) {

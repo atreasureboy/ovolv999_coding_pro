@@ -6,15 +6,15 @@ describe('RunEventEmitter', () => {
     const emitter = new RunEventEmitter()
     const received: RunEvent[] = []
     emitter.on('RUN_STARTED', (e) => received.push(e))
-    emitter.on('RUN_COMPLETED', (e) => received.push(e))
+    emitter.on('RUN_TERMINATED', (e) => received.push(e))
 
     emitter.emit({ type: 'RUN_STARTED', userMessage: 'hello' })
     emitter.emit({ type: 'MODEL_REQUESTED', model: 'gpt-4' })
-    emitter.emit({ type: 'RUN_COMPLETED', result: { stopped: true, reason: 'stop_sequence', output: 'done' } })
+    emitter.emit({ type: 'RUN_TERMINATED', status: 'completed', result: { stopped: true, reason: 'stop_sequence', output: 'done' } })
 
     expect(received).toHaveLength(2)
     expect(received[0].type).toBe('RUN_STARTED')
-    expect(received[1].type).toBe('RUN_COMPLETED')
+    expect(received[1].type).toBe('RUN_TERMINATED')
   })
 
   it('unsubscribe stops delivering events', () => {

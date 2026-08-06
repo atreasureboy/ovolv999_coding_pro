@@ -12,6 +12,7 @@ import type { PermissionManager, PermissionMode } from './permissionSystem.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 import type { TaskKind } from './runtime/taskIntent.js'
+import type { RunEventEmitter } from './runtime/events.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -171,6 +172,8 @@ export interface ToolContext {
   sessionDir?: string
   /** Event log for audit trail — best-effort, never throws */
   eventLog?: EventLog
+  /** Typed runtime event bus — tools emit structured events for observability hooks */
+  eventEmitter?: RunEventEmitter
   /** Semantic memory — cross-turn knowledge persistence */
   semanticMemory?: SemanticMemory
   /** Episodic memory — action trajectory persistence */

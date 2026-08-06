@@ -733,6 +733,12 @@ export class RuntimeCoordinator {
         //   - unchanged: same model already current.
         //   - unavailable: NO profile is available. The Run MUST
         //     terminate without calling the ModelGateway.
+        eventEmitter.emit({
+          type: 'ROUTING_DECIDED',
+          selectedModel: application.decision.selectedModel,
+          reasonCodes: application.decision.reasonCodes,
+          estimatedComplexity: application.decision.estimatedComplexity,
+        })
         if (application.kind === 'unavailable') {
           // v0.5.5 §2: all-profiles-open terminates the Run.
           // Emit the structured event ONCE (the Engine callback
@@ -868,6 +874,11 @@ export class RuntimeCoordinator {
                 pm.recordVerification(this.deps.contextManager.getWorkingState().verification.failed.length)
                 const elapsedMin = (Date.now() - turnStartMs) / 60_000
                 const verdict = pm.detectStall(elapsedMin, 1)
+                this.deps.eventEmitter.emit({
+                  type: 'PROGRESS_RECORDED',
+                  kind: verdict.kind === 'progressing' ? 'progress' :
+                        verdict.kind === 'blocked' ? 'stall' : 'replan',
+                })
                 if (verdict.kind !== 'progressing') {
                   renderer.warn(`Stall detected (${verdict.kind}): ${verdict.reason} → suggested: ${verdict.action}`)
                   eventEmitter.emit({ type: 'STALL_DETECTED', kind: verdict.kind, reason: verdict.reason, action: verdict.action })
@@ -882,6 +893,7 @@ export class RuntimeCoordinator {
                       level: verdict.kind === 'hard-stall' ? 'hard' : 'soft',
                       reason: verdict.reason,
                     })
+                    eventEmitter.emit({ type: 'REPLAN_REQUESTED', reason: verdict.reason })
                     stallInterventionApplied = true
                   }
                 } else {
@@ -937,6 +949,14 @@ export class RuntimeCoordinator {
               if ((err as { name?: string }).name === 'AbortError') throw err
             }
             if (didCompact) {
+              const strategy = preSnap.usageRatio >= 0.85 ? 'compaction' :
+                               preSnap.usageRatio >= 0.70 ? 'microCompact' : 'snipCompact'
+              eventEmitter.emit({
+                type: 'CONTEXT_COMPACTED',
+                strategy,
+                tokensBefore: preSnap.estimatedInputTokens,
+                tokensAfter: postSnap.estimatedInputTokens,
+              })
               if (config.hookRunner?.runPostCompact) {
                 try { await config.hookRunner.runPostCompact(compactTrigger) } catch { /* best-effort */ }
               }
@@ -989,6 +1009,18 @@ export class RuntimeCoordinator {
               abortSignal: turnAbortController.signal,
               criticRequested,
             })
+            if (criticRequested) {
+              this.deps.eventEmitter.emit({
+                type: 'CRITIC_COMPLETED',
+                verdict: 'completed',
+                problems: [],
+              })
+              controlMessageLog.append({
+                kind: 'critic_feedback',
+                verdict: 'reviewed',
+                problems: [],
+              })
+            }
             state = transitionQueryState(state, { type: 'continue' })
             break
           }
@@ -1018,6 +1050,14 @@ export class RuntimeCoordinator {
                 turnAbortController.signal,
                 controlMessages,
                 effectiveMaxOutputTokens,
+                (from: string, to: string, reason: string) => {
+                  controlMessageLog.append({
+                    kind: 'provider_fallback',
+                    from,
+                    to,
+                    reason,
+                  })
+                },
               )
             controlMessageLog.clear()
 
@@ -1172,6 +1212,11 @@ export class RuntimeCoordinator {
                     shape,
                     raw_args: tc.arguments.slice(0, 200),
                   })
+                  controlMessageLog.append({
+                    kind: 'tool_recovery',
+                    tool: tc.name,
+                    error: `JSON parse error: expected object, got ${shape}`,
+                  })
                   messages.push({
                     role: 'tool',
                     tool_call_id: tc.id,
@@ -1184,6 +1229,11 @@ export class RuntimeCoordinator {
               } catch {
                 renderer.warn(`Warning: malformed tool arguments for ${tc.name} (JSON parse failed, likely truncated).`)
                 eventLog?.append('tool_call', tc.name, { parse_error: true, raw_args: tc.arguments.slice(0, 200) })
+                controlMessageLog.append({
+                  kind: 'tool_recovery',
+                  tool: tc.name,
+                  error: 'JSON parse failed (likely truncated by max_tokens)',
+                })
                 messages.push({
                   role: 'tool',
                   tool_call_id: tc.id,
@@ -1346,6 +1396,7 @@ export class RuntimeCoordinator {
         residualRisks: review.residualRisks,
         findings: review.findings,
       })
+      this.deps.eventEmitter.emit({ type: 'REVIEW_COMPLETED', verdict: review.verdict, findings: review.findings })
     } catch { /* best-effort */ }
 
     if (result.reason === 'stop_sequence') {
@@ -1411,6 +1462,12 @@ export class RuntimeCoordinator {
         this.deps.eventEmitter.emit({
           type: 'COMPLETION_REJECTED',
           verdict: serializeVerdict(v),
+        })
+        controlMessageLog.append({
+          kind: 'completion_rejected',
+          verdict: v.status,
+          blockers: 'blockers' in v && v.blockers ? v.blockers :
+                     'remaining' in v && v.remaining ? v.remaining : ['completion not accepted'],
         })
       }
     }
@@ -1674,6 +1731,7 @@ export class RuntimeCoordinator {
     // absent (no other callers today) falls back to the plain config value so
     // this helper keeps its pre-v0.4.1 semantics if ever reused.
     turnMaxOutputTokens?: number,
+    onFallback?: (from: string, to: string, reason: string) => void,
   ): Promise<{
     assistantText: string
     finishReason: string | null
@@ -1735,6 +1793,7 @@ export class RuntimeCoordinator {
             // contention (vs a normal open-circuit fallback).
             router.emitFallback(modelAtStart, next, 'half-open probe already in flight')
             router.applyRoutingDecision(next)
+            onFallback?.(modelAtStart, next, 'half-open probe already in flight')
             modelAtStart = next
             // We never acquired the lease; the post-call cleanup
             // path therefore has nothing to release. Also, we do
@@ -1830,6 +1889,7 @@ export class RuntimeCoordinator {
               // and emits the routing-fallback event.
               this.deps.modelRouter.emitFallback(failedModel, next, err.message)
               try { this.deps.modelRouter.applyRoutingDecision(next) } catch { /* best-effort */ }
+              onFallback?.(failedModel, next, err.message)
               return next
             }
             return null
@@ -1981,6 +2041,13 @@ export class RuntimeCoordinator {
           error: attempt.error ?? 'provider attempt failed',
           retryable,
         })
+    this.deps.eventEmitter.emit({
+      type: 'MODEL_CALL_RECORDED',
+      profileId: meta?.profileId ?? 'unknown',
+      ok: attempt.success,
+      latencyMs: attempt.latencyMs,
+      failureReason: attempt.error,
+    })
     const binding = this.deps.modelRouter?.listProfiles().find((p) => p.model === attempt.model)
     // v0.5.3 P0-3: recordCall is invoked EXACTLY ONCE per attempt here.
     // The previous implementation also called recordCall from
