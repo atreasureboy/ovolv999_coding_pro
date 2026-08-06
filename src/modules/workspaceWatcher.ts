@@ -25,18 +25,24 @@ import { homedir } from 'node:os'
 import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleIterationContext, ModuleIterationResult, ModuleRunContext } from '../core/module.js'
 import { WorkspaceWatcher, type WorkspaceChange } from '../core/workspaceWatcher.js'
 import { clearToolIndexCache } from '../core/toolSearch.js'
-import { RepoStatsService } from '../core/repoStats.js'
+import type { RepoStatsService } from '../core/repoStats.js'
 
 const SKILL_DIRS = [
   join(homedir(), '.ovogo', 'skills'),
   join(homedir(), '.ovolv999', 'knowledge'),
 ]
 
+/** Additional watch roots beyond cwd that need cache-invalidation coverage. */
 function collectWatchRoots(cwd: string): string[] {
   const roots: string[] = [cwd]
+  // Global skill/knowledge dirs (conditional on existence).
   for (const dir of SKILL_DIRS) {
     if (existsSync(dir)) roots.push(dir)
   }
+  // Project-level skill dir — saveSkill() writes here so the
+  // watcher must pick up new/removed skill files.
+  const projectSkillsDir = join(cwd, '.ovogo', 'skills')
+  if (existsSync(projectSkillsDir)) roots.push(projectSkillsDir)
   return roots
 }
 
@@ -48,36 +54,39 @@ export class WorkspaceWatcherModule implements AgentModule {
   private lastChanges: WorkspaceChange[] = []
   private lastChangeAt = 0
   private injectedForRun = false
-  /** v0.5.3 (P0.2): shared RepoStatsService instance. Engine is
-   *  REQUIRED to pass this in via the constructor; if omitted the
-   *  module logs a warning AND uses a degraded local instance so
-   *  the cache invalidation contract is visible to callers. */
-  private readonly repoStats: RepoStatsService
+  /** v0.5.3 (P0.2): shared RepoStatsService instance. Injected
+   *  during boot() via ModuleBootContext.sharedServices. The Engine
+   *  is the sole constructor of the shared instance. This field is
+   *  set at boot time — callers must null-guard or treat as
+   *  best-effort (cache invalidation is non-critical). */
+  private repoStats: RepoStatsService | null = null
 
-  constructor(repoStats?: RepoStatsService) {
-    if (repoStats) {
-      this.repoStats = repoStats
-    } else {
-      // Degraded mode — Engine forgot to inject. Module still works
-      // but the Router never sees invalidation events.
-      process.stderr.write(
-        '[workspaceWatcher] WARNING: no RepoStatsService injected; ' +
-          'cache invalidation will not reach the Router.\n',
-      )
-      this.repoStats = new RepoStatsService()
+  constructor(_repoStats?: RepoStatsService) {
+    // v0.6.1: the Engine does not pass deps through module constructors
+    // (module registration uses empty-arg factories). The shared
+    // RepoStatsService is injected during boot() via sharedServices.
+    // We accept the constructor arg for backward compatibility with
+    // test/legacy callers but do NOT create a degraded local instance
+    // — that breaks the shared-cache invariant.
+    if (_repoStats) {
+      this.repoStats = _repoStats
     }
   }
 
   async boot(ctx: ModuleBootContext): Promise<ModuleBootResult> {
-    // v0.5.3 (P0.2): pull the shared RepoStatsService from the boot
-    // context. Engine is the SOLE constructor; if the field is missing
-    // the constructor's warning has already been emitted.
+    // v0.6.1: Inject the shared RepoStatsService. If the Engine
+    // assembled correctly, this is the same instance the Router and
+    // Coordinator use — cache invalidation reaches all consumers.
     const shared = ctx.sharedServices?.repoStats
-    if (shared && shared !== this.repoStats) {
-      // The constructor's `this.repoStats` may have been a degraded
-      // private instance; replace it with the shared one now that
-      // the Engine has had a chance to inject it.
-      ;(this as unknown as { repoStats: RepoStatsService }).repoStats = shared
+    if (shared) {
+      this.repoStats = shared
+    } else if (!this.repoStats) {
+      // Genuinely missing: log once at boot so the operator knows
+      // file-change-triggered repo re-walks won't propagate.
+      process.stderr.write(
+        '[workspaceWatcher] WARNING: no RepoStatsService available; ' +
+          'file change cache invalidation will not reach the Router.\n',
+      )
     }
 
     const roots = collectWatchRoots(ctx.cwd)
@@ -122,7 +131,7 @@ export class WorkspaceWatcherModule implements AgentModule {
     // per-process singleton (RepoStatsService is constructed once
     // per Engine); the watcher can fire from many roots but the
     // service only walks the cwd on the next snapshot() call.
-    this.repoStats.invalidate()
+    this.repoStats?.invalidate()
   }
 
   /**
@@ -171,7 +180,7 @@ export class WorkspaceWatcherModule implements AgentModule {
   }
 
   /** v0.5.3 (P0.2): test seams. */
-  getRepoStats(): RepoStatsService {
+  getRepoStats(): RepoStatsService | null {
     return this.repoStats
   }
 

@@ -10,6 +10,8 @@
 
 import type { Tool, ToolDefinition, ToolContext, ToolResult } from '../core/types.js'
 import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleRunContext } from '../core/module.js'
+import type { MemoryEvidenceRef } from '../core/memoryCandidate.js'
+import type { ProjectIdentity } from '../core/projectIdentity.js'
 import type { SemanticMemory } from '../core/semanticMemory.js'
 import type { EpisodicMemory } from '../core/episodicMemory.js'
 import { getMemoryDir, buildMemorySystemSection } from '../memory/index.js'
@@ -33,8 +35,8 @@ import { buildRevisionBinding } from '../core/revisionBinding.js'
  * null so the tool can refuse the call rather than silently
  * accepting the ref.
  */
-function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidate.js').MemoryEvidenceRef[] | null {
-  const out: import('../core/memoryCandidate.js').MemoryEvidenceRef[] = []
+function parseMemoryEvidenceRefs(raw: unknown[]): MemoryEvidenceRef[] | null {
+  const out: MemoryEvidenceRef[] = []
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') return null
     const kind = (entry as { kind?: unknown }).kind
@@ -49,7 +51,7 @@ function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidat
       const contentHash = (entry as { content_hash?: unknown }).content_hash
       if (typeof path !== 'string' || path.length === 0) return null
       if (contentHash !== undefined && typeof contentHash !== 'string') return null
-      const ref: import('../core/memoryCandidate.js').MemoryEvidenceRef =
+      const ref: MemoryEvidenceRef =
         contentHash !== undefined
           ? { kind: 'file', path, contentHash }
           : { kind: 'file', path }
@@ -65,7 +67,7 @@ function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidat
   return out
 }
 
-function createMemoryWriteTool(semantic: SemanticMemory, ctxProvider: () => MemoryToolContext, candidateSink: (c: MemoryCandidate) => boolean): Tool {
+function createMemoryWriteTool(ctxProvider: () => MemoryToolContext, candidateSink: (c: MemoryCandidate) => boolean): Tool {
   return {
     name: 'memory_write',
     metadata: { mutatesState: true, concurrencySafe: false },
@@ -440,7 +442,7 @@ export class MemoryModule implements AgentModule {
    * v0.5.3 Hotfix §4: bind to a fully-resolved ProjectIdentity.
    * Prefer this over `bindToProject(cwd)` for new code paths.
    */
-  bindToProjectIdentity(projectIdentity: import('../core/projectIdentity.js').ProjectIdentity): void {
+  bindToProjectIdentity(projectIdentity: ProjectIdentity): void {
     this.projectRepo = projectIdentity.canonicalRoot
     this.bindBackendForCwd(projectIdentity.canonicalRoot)
   }
@@ -540,12 +542,12 @@ export class MemoryModule implements AgentModule {
       toolContextPatch: {
         semanticMemory: this.semantic,
         episodicMemory: this.episodic,
+        longTermMemory: this.longTerm,
       },
       tools: [
         // v0.5.3 Final (task 2): tool pushes Candidate into the
         // per-run sink, NOT to LongTermMemory.
         createMemoryWriteTool(
-          this.semantic,
           () => this.currentMemoryContext,
           (cand: MemoryCandidate) => {
             const sink = this.candidateSinks.get(cand.runId)
@@ -608,7 +610,11 @@ export class MemoryModule implements AgentModule {
       // ModuleRunContext.runContext. Both objects are required
       // for tool_observed validation (Registry) and verification
       // ref resolution (EvidenceStore).
-      toolCallRegistry: (runContext as unknown as { toolCallRegistry?: Map<string, { resultText: string; truncated: boolean; isError: boolean }> } | undefined)?.toolCallRegistry,
+      // FIXME: fragile cast chain — RunScopedRuntimeContext doesn't expose
+      // toolCallRegistry/projectIdentity/evidenceStore in its public interface.
+      // These fields exist at runtime but require broader refactoring to wire
+      // through a typed module context. Keep as-is for now.
+      toolCallRegistry: (runContext as unknown as { toolCallRegistry?: Map<string, { exposedText: string; truncated: boolean; isError: boolean }> } | undefined)?.toolCallRegistry,
       projectIdentity: (runContext as unknown as { projectIdentity?: { canonicalRoot: string } } | undefined)?.projectIdentity,
       evidenceStore: (runContext as unknown as { evidence?: { get(id: string): { status: string; createdAt: number } | undefined } } | undefined)?.evidence,
     })

@@ -26,7 +26,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs'
-import { join, relative, extname, basename } from 'path'
+import { join, relative, extname } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -80,14 +80,14 @@ export interface ReviewChange {
 // ── Heuristic rules ─────────────────────────────────────────────────────────
 
 const SECRET_PATTERNS: Array<{ re: RegExp; name: string }> = [
-  { re: /(?:sk|pk|api[_-]?key|secret|token|password|passwd|auth)[-_]?\w*\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/i, name: 'hardcoded-secret' },
+  { re: /(?:sk|pk|api[_-]?key|secret|token|password|passwd|auth)[-_]?\w*\s*[:=]\s*['"][A-Za-z0-9_-]{16,}['"]/i, name: 'hardcoded-secret' },
   { re: /AKIA[0-9A-Z]{16}/, name: 'aws-access-key' },
   { re: /(?:ghp|gho|github_pat)_[A-Za-z0-9_]{20,}/, name: 'github-token' },
   { re: /Bearer\s+[A-Za-z0-9\-._~+/]+=*/, name: 'bearer-token' },
   { re: /mongodb(\+srv)?:\/\/[^\s'"]+:[^\s'"]+@/, name: 'db-connection-string' },
   // v0.6.0 (audit): quoted token values (`= "sk-…"`, `= "ghp_…"`) with
   // no key-name keyword — catches `const X = "sk-1234…"`.
-  { re: /['"](?:sk|pk|ghp|gho|ghu|github_pat|xox[baprs])[-_][A-Za-z0-9_\-]{15,}['"]/, name: 'quoted-token' },
+  { re: /['"](?:sk|pk|ghp|gho|ghu|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{15,}['"]/, name: 'quoted-token' },
 ]
 
 const DEBUG_PATTERNS: Array<{ re: RegExp; name: string }> = [
@@ -190,7 +190,6 @@ function reviewFile(change: ReviewChange, opts: ReviewOptions): ReviewFinding[] 
   const findings: ReviewFinding[] = []
   const newContent = change.newContent ?? ''
   const addedLines = change.addedLines ?? computeAddedLines(change.oldContent, change.newContent)
-  const addedSet = new Set(addedLines)
   const lines = newContent.split('\n')
   const ext = extname(change.file).toLowerCase()
   const isSource = /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|c|h|cpp|hpp|cs|kt|swift)$/.test(ext)

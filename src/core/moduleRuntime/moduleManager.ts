@@ -23,6 +23,7 @@
  */
 
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../module.js'
+import type { RunScopedRuntimeContext } from '../runtime/runScopedContext.js'
 import type { OpenAIMessage, Tool, ToolContext, ToolResult, TurnResult } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import type { Renderer } from '../../ui/renderer.js'
@@ -274,7 +275,7 @@ export class ModuleManager {
     eventLog?: EventLog
     /** v0.5.3 Final (task 2): pass the per-run context for
      *  MemoryModule.onComplete's promoter step. */
-    runContext?: import('../runtime/runScopedContext.js').RunScopedRuntimeContext
+    runContext?: RunScopedRuntimeContext
     userMessage?: string
   }): Promise<void> {
     const { cwd, sessionDir, turnResult, outcome, messages, eventLog, runContext, userMessage } = params

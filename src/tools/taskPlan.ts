@@ -305,7 +305,6 @@ function asStrArr(v: unknown): string[] {
 import {
   TASK_IMPACT_SCOPES,
   isTaskImpactScope,
-  type TaskImpactScope,
   type TaskImpact as TaskImpactCanonical,
 } from '../core/taskImpact.js'
 
@@ -324,14 +323,13 @@ function parseImpact(
       flags.estimated_files === undefined) {
     return { impact: undefined }
   }
-  let scopeVal: TaskImpactScope | null = null
   if (typeof scope !== 'string') {
     return { error: `impact_scope must be a string (one of ${TASK_IMPACT_SCOPES.join('|')})` }
   }
   if (!isTaskImpactScope(scope)) {
     return { error: `impact_scope "${scope}" is invalid; expected one of ${TASK_IMPACT_SCOPES.join('|')}` }
   }
-  scopeVal = scope
+  const scopeVal = scope
   const apf = flags.affects_public_interface
   if (apf !== undefined && typeof apf !== 'boolean') return { error: 'affects_public_interface must be boolean' }
   const cc = flags.changes_configuration

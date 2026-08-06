@@ -29,7 +29,6 @@ export interface SandboxResult {
 
 let detectedBackend: SandboxBackend | null = null
 let bwrapAvailable: boolean | null = null
-const bwrapProbeLogged = false
 
 function detectBackend(): SandboxBackend {
   if (detectedBackend !== null) return detectedBackend
@@ -134,7 +133,7 @@ const DEFAULT_DENY_NETWORK_PROFILE = [
 export function wrapInSandbox(
   command: string,
   options: SpawnOptions,
-  workdir: string,
+  _workdir: string,
 ): { spawnOptions: SpawnOptions; result: SandboxResult } {
   const backend = detectBackend()
   if (backend === 'none') {
@@ -144,7 +143,6 @@ export function wrapInSandbox(
     }
   }
   if (backend === 'sandbox-exec') {
-    const profile = DEFAULT_DENY_NETWORK_PROFILE.map((l) => l.replace('(param "WORKDIR")', `(param "${workdir}")`)).join('\n')
     return {
       spawnOptions: {
         ...options,
@@ -191,7 +189,7 @@ export function spawnInSandbox(
   workdir: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    let argv = args
+    let argv: string[]
     if (detectBackend() === 'sandbox-exec') {
       argv = macOSSandboxExecArgv([command, ...args], workdir)
     } else {

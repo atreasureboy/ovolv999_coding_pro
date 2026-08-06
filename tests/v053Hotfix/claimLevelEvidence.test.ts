@@ -93,7 +93,7 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
   })
 
   it('tool_observed with non-existent toolCallId → drop', () => {
-    const registry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
+    const registry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
     // registry is empty — toolCallId 'no-such-call' is unknown
     const d = decidePromotion({
       candidates: [baseCandidate({
@@ -111,8 +111,8 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
   })
 
   it('tool_observed WITH tool_result ref + real registry entry → promoted', () => {
-    const registry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
-    registry.set('real-call', { resultText: 'something something q appears here', truncated: false, isError: false })
+    const registry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
+    registry.set('real-call', { exposedText: 'something something q appears here', truncated: false, isError: false })
     const d = decidePromotion({
       candidates: [baseCandidate({
         id: 't2',
@@ -130,8 +130,8 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
   })
 
   it('tool_observed with truncated ToolResult → drop', () => {
-    const registry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
-    registry.set('trunc', { resultText: 'q', truncated: true, isError: false })
+    const registry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
+    registry.set('trunc', { exposedText: 'q', truncated: true, isError: false })
     const d = decidePromotion({
       candidates: [baseCandidate({
         id: 't3',
@@ -148,8 +148,8 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
   })
 
   it('tool_observed with error ToolResult → drop', () => {
-    const registry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
-    registry.set('err', { resultText: 'q', truncated: false, isError: true })
+    const registry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
+    registry.set('err', { exposedText: 'q', truncated: false, isError: true })
     const d = decidePromotion({
       candidates: [baseCandidate({
         id: 't4',
@@ -166,8 +166,8 @@ describe('Claim-Level Evidence — Hotfix §2', () => {
   })
 
   it('tool_observed with resultQuote not in result → drop', () => {
-    const registry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
-    registry.set('mismatch', { resultText: 'real but different text', truncated: false, isError: false })
+    const registry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
+    registry.set('mismatch', { exposedText: 'real but different text', truncated: false, isError: false })
     const d = decidePromotion({
       candidates: [baseCandidate({
         id: 't5',

@@ -22,48 +22,21 @@ import { join } from 'path'
 
 import { EventLog } from '../../src/core/eventLog.js'
 import { defaultMemoryPath } from '../../src/core/longTermMemory.js'
+
 import { resolveProjectIdentity } from '../../src/core/projectIdentity.js'
 import { SemanticMemory } from '../../src/core/semanticMemory.js'
 import { EpisodicMemory } from '../../src/core/episodicMemory.js'
 import { MemoryModule } from '../../src/modules/memory.js'
 
-function profile(id: string, model: string): ModelProfile {
-  return {
-    id,
-    provider: 'openai-compatible',
-    model,
-    tier: 'top',
-    roles: ['main'],
-    available: true,
-    capabilities: {
-      reasoning: 0.7, coding: 0.7, contextWindow: 0.6,
-      toolCalling: 0.9, speed: 0.6, cost: 0.4,
-    },
-  }
-}
 
-function fakeRenderer() {
-  const r: Record<string, (...args: unknown[]) => void> = {}
-  for (const k of [
-    'banner','raw','info','warn','error','success','startSpinner','stopSpinner',
-    'beginAssistantText','endAssistantText','streamToken','streamReasoning',
-    'assistantMessage','userMessage','toolCall','toolStart','toolResult',
-    'compactStart','compactDone','contextWarning','cost','compactionNotice',
-    'turnEnd','planModeHeader','agentStart','agentDone','agentSummary',
-    'agentHeartbeat','humanPrompt','writePrompt','closePrompt','newline',
-  ]) r[k] = () => {}
-  return r as never
-}
 
 describe('v0.5.5 §11: Memory production Golden Path', () => {
   let ovogoHome: string
   let projectDir: string
-  let eventLog: EventLog
   beforeEach(async () => {
     ovogoHome = mkdtempSync(join(tmpdir(), 'ovolv999-v055-mem-gp-home-'))
     projectDir = mkdtempSync(join(tmpdir(), 'ovolv999-v055-mem-gp-proj-'))
     process.env.OVOGO_HOME = ovogoHome
-    eventLog = new EventLog(join(projectDir, 'events.jsonl'))
   })
   afterEach(() => {
     try { rmSync(ovogoHome, { recursive: true, force: true }) } catch { /* best-effort */ }
@@ -93,8 +66,8 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     // A's *integration* version. Here we exercise the production
     // MEMORY PROMOTION pathway end-to-end with a real Registry.)
     const { decidePromotion } = await import('../../src/core/memoryCandidate.js')
-    const toolCallRegistry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
-    toolCallRegistry.set(toolCallId, { resultText, truncated: false, isError: false })
+    const toolCallRegistry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
+    toolCallRegistry.set(toolCallId, { exposedText: resultText, truncated: false, isError: false })
     const decision = decidePromotion({
       candidates: [{
         id: 'cA',
@@ -153,7 +126,7 @@ describe('v0.5.5 §11: Memory production Golden Path', () => {
     const ltm = (mod as unknown as { longTerm: { record: (i: unknown) => unknown; query: (f: unknown) => unknown[] } }).longTerm
 
     const { decidePromotion } = await import('../../src/core/memoryCandidate.js')
-    const toolCallRegistry = new Map<string, { resultText: string; truncated: boolean; isError: boolean }>()
+    const toolCallRegistry = new Map<string, { exposedText: string; truncated: boolean; isError: boolean }>()
     // Registry is EMPTY — the ref's toolCallId will be unknown.
     const decision = decidePromotion({
       candidates: [{

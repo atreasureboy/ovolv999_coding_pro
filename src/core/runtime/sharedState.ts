@@ -23,6 +23,7 @@
 import type { Tool } from '../types.js'
 import type { ModelCapabilities } from '../modelCapabilities.js'
 import type { ExecutionProfile } from '../effort.js'
+import type { RegisteredToolResult } from './runScopedContext.js'
 
 export interface ActiveToolCall {
   callId: string
@@ -97,7 +98,7 @@ export class SharedRuntimeState {
    * for tool_observed evidence validation. The Registry is
    * destroyed when activeRunId is cleared in the finally block.
    */
-  toolCallRegistry: Map<string, import('./runScopedContext.js').RegisteredToolResult> | null = null
+  toolCallRegistry: Map<string, RegisteredToolResult> | null = null
 
   /**
    * v0.4.1 WS4 (ExecutionProfile): sticky per-engine profile override

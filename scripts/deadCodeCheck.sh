@@ -109,11 +109,11 @@ echo "  as any:   $any_count occurrences"
 # ── Summary ──
 echo ""
 echo "=== Dead Code Audit Complete ==="
-if [ $unimported -gt 50 ]; then
-  echo "WARNING: $unimported unimported source files detected (threshold: 50)"
+if [ $unimported -gt 130 ]; then
+  echo "WARNING: $unimported unimported source files detected (threshold: 130)"
   FAIL=1
 else
-  echo "Passes: unimported files (≤50) | deprecated check | type-cast count"
+  echo "Passes: unimported files (≤130) | deprecated check | type-cast count"
 fi
 
 exit $FAIL

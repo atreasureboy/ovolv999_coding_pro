@@ -33,6 +33,7 @@ interface McpClient {
 
 export class McpModule implements AgentModule {
   readonly name = 'mcp'
+  criticality = 'best_effort' as const
 
   private clients: McpClient[] = []
 

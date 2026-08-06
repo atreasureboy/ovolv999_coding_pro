@@ -203,7 +203,7 @@ function checkWorkflows(cwd: string, results: CheckResult[]): void {
 }
 
 function checkSkills(cwd: string, results: CheckResult[]): void {
-  const skillsDir = join(cwd, '.ovolv999', 'skills')
+  const skillsDir = join(cwd, '.ovogo', 'skills')
 
   if (!existsSync(skillsDir)) {
     results.push({

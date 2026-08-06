@@ -18,6 +18,16 @@ import { homedir } from 'os'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+function fmtPayloadValue(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  try {
+    return JSON.stringify(v) ?? String(v)
+  } catch {
+    return Object.prototype.toString.call(v)
+  }
+}
+
 export type DaemonStatus = 'running' | 'stopped' | 'starting' | 'error'
 
 export interface DaemonInfo {
@@ -270,7 +280,7 @@ export class Daemon {
         const sortBy = cmd.payload?.sortBy
         const sortDir = cmd.payload?.sortDir
         if (sortDir !== undefined && sortDir !== 'asc' && sortDir !== 'desc') {
-          return { ok: false, error: `list-workers invalid sortDir: ${String(sortDir)}` }
+          return { ok: false, error: `list-workers invalid sortDir: ${fmtPayloadValue(sortDir)}` }
         }
         const rawLimit = cmd.payload?.limit
         const rawOffset = cmd.payload?.offset
@@ -296,7 +306,7 @@ export class Daemon {
         } else if (sortBy === 'createdAt') {
           workers = [...workers].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
         } else if (sortBy !== undefined && sortBy !== 'insertion') {
-          return { ok: false, error: `list-workers invalid sortBy: ${String(sortBy)}` }
+          return { ok: false, error: `list-workers invalid sortBy: ${fmtPayloadValue(sortBy)}` }
         }
         if (sortDir === 'desc') {
           workers = workers.slice().reverse()
@@ -343,7 +353,7 @@ export class Daemon {
           } else if (Array.isArray(statusFilter) && statusFilter.every((s) => typeof s === 'string')) {
             allowedStatuses = statusFilter
           } else {
-            return { ok: false, error: `tag-stats invalid status: ${String(statusFilter)}` }
+            return { ok: false, error: `tag-stats invalid status: ${fmtPayloadValue(statusFilter)}` }
           }
           const valid = ['starting', 'running', 'stopped', 'failed']
           const allValid = allowedStatuses.every((s) => valid.includes(s))
@@ -357,13 +367,13 @@ export class Daemon {
         let statusLte: number | null = null
         if (statusGteRaw !== undefined) {
           if (typeof statusGteRaw !== 'string' || !(statusGteRaw in STATUS_ORDER)) {
-            return { ok: false, error: `tag-stats invalid statusGte: ${String(statusGteRaw)}` }
+            return { ok: false, error: `tag-stats invalid statusGte: ${fmtPayloadValue(statusGteRaw)}` }
           }
           statusGte = STATUS_ORDER[statusGteRaw]!
         }
         if (statusLteRaw !== undefined) {
           if (typeof statusLteRaw !== 'string' || !(statusLteRaw in STATUS_ORDER)) {
-            return { ok: false, error: `tag-stats invalid statusLte: ${String(statusLteRaw)}` }
+            return { ok: false, error: `tag-stats invalid statusLte: ${fmtPayloadValue(statusLteRaw)}` }
           }
           statusLte = STATUS_ORDER[statusLteRaw]!
         }
@@ -379,7 +389,7 @@ export class Daemon {
         }
         const tagFilter = cmd.payload?.tag
         if (tagFilter !== undefined && typeof tagFilter !== 'string') {
-          return { ok: false, error: `tag-stats invalid tag: ${String(tagFilter)}` }
+          return { ok: false, error: `tag-stats invalid tag: ${fmtPayloadValue(tagFilter)}` }
         }
         // R25: exclude-status filter. Symmetric to R21/R22 include.
         // Validated against the same status whitelist.
@@ -391,7 +401,7 @@ export class Daemon {
           } else if (Array.isArray(excludeFilter) && excludeFilter.every((s) => typeof s === 'string')) {
             excludedStatuses = excludeFilter
           } else {
-            return { ok: false, error: `tag-stats invalid exclude: ${String(excludeFilter)}` }
+            return { ok: false, error: `tag-stats invalid exclude: ${fmtPayloadValue(excludeFilter)}` }
           }
           const validE = ['starting', 'running', 'stopped', 'failed']
           if (!excludedStatuses.every((s) => validE.includes(s))) {
@@ -778,7 +788,7 @@ export class Daemon {
         return { ok: true, data: { workerId, status, requestedAt: now } }
       }
       default:
-        return { ok: false, error: `Unknown action: ${cmd.action}` }
+        return { ok: false, error: `Unknown action: ${fmtPayloadValue(cmd.action)}` }
     }
   }
 

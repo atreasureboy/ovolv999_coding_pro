@@ -20,6 +20,7 @@ import {
   semanticDiff,
   type CodeStructure,
   type CodebaseScan,
+  type DiffSymbol,
 } from '../core/codeStructure.js'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 
@@ -124,7 +125,7 @@ export class CodeStructureTool implements Tool {
         }
 
         default:
-          return { content: `Error: unknown action "${action}". Use: analyze, scan, refs, diff`, isError: true }
+          return { content: `Error: unknown action "${action as string}". Use: analyze, scan, refs, diff`, isError: true }
       }
     } catch (err) {
       return { content: `CodeStructure error: ${(err as Error).message}`, isError: true }
@@ -256,7 +257,7 @@ export class CodeStructureTool implements Tool {
     return lines.join('\n')
   }
 
-  private formatDiff(diffs: import('../core/codeStructure.js').DiffSymbol[]): string {
+  private formatDiff(diffs: DiffSymbol[]): string {
     if (diffs.length === 0) {
       return 'No structural changes detected.'
     }

@@ -185,7 +185,6 @@ export const MIN_CONTENT_TOKEN_COVERAGE = 0.6
  */
 export type SourceVerification =
   | { result: 'verified' }
-  | { result: 'demote-agent_inferred'; reason: string }
   | { result: 'drop'; reason: string }
 
 /**
@@ -284,7 +283,7 @@ export interface PromotionInput {
    * accepted at the structural level (no further validation);
    * this keeps the pure function usable in unit tests.
    */
-  toolCallRegistry?: Map<string, { resultText: string; truncated: boolean; isError: boolean }>
+  toolCallRegistry?: Map<string, { exposedText: string; truncated: boolean; isError: boolean }>
   /**
    * v0.5.5 §3: project identity for file evidence validation.
    * File evidence paths are resolved against
@@ -324,7 +323,7 @@ export interface PromotionDecision {
  * verification.
  */
 export function classifyAgentInferredEvidence(
-  refs: ReadonlyArray<import('./memoryCandidate.js').MemoryEvidenceRef | { kind: string }>,
+  refs: ReadonlyArray<MemoryEvidenceRef | { kind: string }>,
   input: Pick<PromotionInput, 'toolCallRegistry' | 'projectIdentity' | 'evidenceStore'>,
   evidenceCheck?: (path: string) => { exists: boolean; hashMatches: boolean | null },
 ): { ok: true; strong: 'tool_result' | 'file_hash' | 'verification' } | { ok: false; reason: string } {
@@ -339,7 +338,7 @@ export function classifyAgentInferredEvidence(
   if (toolRefs.length > 0 && input.toolCallRegistry) {
     for (const ref of toolRefs) {
       const entry = input.toolCallRegistry.get(ref.toolCallId)
-      if (entry && !entry.isError && !entry.truncated && entry.resultText.includes(ref.resultQuote)) {
+      if (entry && !entry.isError && !entry.truncated && entry.exposedText.includes(ref.resultQuote)) {
         return { ok: true, strong: 'tool_result' }
       }
     }
@@ -424,12 +423,6 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
         dropped.push({ candidateId: c.id, reason: verdict.reason })
         continue
       }
-      if (verdict.result === 'demote-agent_inferred') {
-        // Kept as a deprecated back-compat branch. New behaviour
-        // treats demote the same as drop.
-        dropped.push({ candidateId: c.id, reason: verdict.reason })
-        continue
-      }
       // 'verified' → keep user_stated.
     } else if (c.claimedSource === 'tool_observed') {
       // v0.5.3 Hotfix §2: tool_observed requires a tool_result
@@ -445,7 +438,7 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
       }
       // Promotion-time registry check: every toolCallId must be
       // present in the run's actual tool-call registry. The
-      // resultQuote must appear in the recorded resultText, the
+      // resultQuote must appear in the recorded exposedText, the
       // result must not be truncated, and must not be an error.
       if (input.toolCallRegistry) {
         const registry = input.toolCallRegistry
@@ -477,7 +470,7 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
             toolEvidenceOk = false
             break
           }
-          if (!entry.resultText.includes(ref.resultQuote)) {
+          if (!entry.exposedText.includes(ref.resultQuote)) {
             dropped.push({
               candidateId: c.id,
               reason: `tool_observed toolCallId ${ref.toolCallId} resultQuote not found in ToolResult`,

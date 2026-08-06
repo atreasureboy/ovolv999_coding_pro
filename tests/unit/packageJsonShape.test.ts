@@ -5,7 +5,7 @@
  * consistency across README, CHANGELOG, and CLI.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..', '..')
@@ -97,9 +97,7 @@ describe('package.json top-level keys are unique', () => {
         // discard nested object content — we already verified
         // top-level keys via JSON.parse; this is a structural
         // guard against a future regression.
-        const open = c
         i++
-        const close = open === '{' ? '}' : ']'
         let nested = 1
         while (i < end && nested > 0) {
           const cc = raw[i]
@@ -163,7 +161,6 @@ describe('package.json top-level keys are unique', () => {
       const c = raw[i]
       if (c === '{' || c === '[') {
         curDepth++
-        const open = c
         i++
         let nested = 1
         while (i < end && nested > 0) {
@@ -201,8 +198,8 @@ describe('package.json top-level keys are unique', () => {
 describe('version consistency', () => {
   const pkgVersion = (readJSON(join(ROOT, 'package.json')).version as string)
 
-  it('package.json version is 0.5.6', () => {
-    expect(pkgVersion).toBe('0.5.6')
+  it('package.json version is 0.6.1', () => {
+    expect(pkgVersion).toBe('0.6.1')
   })
 
   it('README header matches package.json version', () => {
@@ -222,5 +219,10 @@ describe('version consistency', () => {
     // not hardcode a different version.
     const bin = readText(join(ROOT, 'bin', 'ovogogogo.ts'))
     expect(bin).toMatch(/VERSION.*package\.json/)
+  })
+
+  it('VERSION file matches package.json version', () => {
+    const vf = readText(join(ROOT, 'VERSION')).trim()
+    expect(vf).toBe(pkgVersion)
   })
 })

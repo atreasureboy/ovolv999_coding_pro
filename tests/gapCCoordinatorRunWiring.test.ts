@@ -165,7 +165,7 @@ describe('GAP-C.3: runLoop mints kind=loop parent run', () => {
       passedQualityGates: ['typecheck', 'lint', 'test', 'build'],
       goalHash: 'irrelevant', acceptanceHash: 'irrelevant',
       changedFiles: [], consecutiveNoProgress: 0,
-      consecutiveProviderFailures: 0, consecutiveCommandFailures: 0,
+      consecutiveProviderFailures: 0,
       createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',
     }, null, 2) + '\n')
 

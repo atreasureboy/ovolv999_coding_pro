@@ -91,6 +91,7 @@ export class McpHttpClient {
       throw new Error(
         `MCP OAuth for "${this.server.name}" failed: ${(err as Error).message}. ` +
         'Run `ovolv999 mcp auth ' + this.server.name + '` to authorize.',
+        { cause: err },
       )
     }
   }

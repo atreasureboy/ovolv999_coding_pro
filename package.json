@@ -1,6 +1,6 @@
 {
   "name": "ovolv999",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "v0.6.0 Enterprise Architecture Audit — Atomic Transactions, AST Analysis, Code Review, Cross-Platform Hardening",
   "license": "MIT",
   "type": "module",
@@ -52,7 +52,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/gap tests/phase tests/eval",
     "test:esm": "tsx tests/esm-runner/repoStats-real-esm.mjs && tsx tests/esm-runner/sandbox-bwrap-isolation.mjs",
-    "test:golden-path": "vitest run tests/golden-path",
+    "test:golden-path": "vitest run tests/v052GoldenPath.test.ts tests/v053RealGoldenPath.test.ts tests/v053RealGoldenPath.profileFallback.test.ts",
     "test:runtime-behavior": "vitest run tests/runtime-behavior tests/v053Hotfix tests/v053 tests/v053RealGoldenPath.profileFallback.test.ts tests/v053RealGoldenPath.test.ts tests/memoryRepoIsolation.test.ts tests/sourceQuoteHardening.test.ts tests/memoryBackendContract.test.ts tests/revisionBindingTruth.test.ts tests/memoryConflictProvenance.test.ts tests/probePerAttemptTruth.test.ts tests/probeLeaseProduction.test.ts",
     "eval:wiring": "vitest run evals/wiring-smoke",
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",

@@ -23,7 +23,6 @@ import { ModelGateway } from '../src/core/model/modelGateway.js'
 import { createProviderAdapter } from '../src/core/model/providerAdapter.js'
 import { CriticModule } from '../src/modules/critic.js'
 // ReflectionModule removed from active profile — v0.5.3 Closure P9.
-import { SemanticMemory } from '../src/core/semanticMemory.js'
 import { resolveContextWindow } from '../src/core/compact.js'
 import type { AgentModule } from '../src/core/module.js'
 import type { EngineConfig } from '../src/core/types.js'

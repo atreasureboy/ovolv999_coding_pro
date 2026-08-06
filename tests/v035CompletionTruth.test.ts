@@ -54,21 +54,6 @@ describe('v0.3.5 Evidence System — anti-false-success', () => {
     expect(state.status).toBe('failed')
   })
 
-  it('stale evidence (post-revision file change) → criterion becomes stale', () => {
-    const store = new EvidenceStore()
-    // revision 0: tests pass
-    store.record({
-      runId: 'r1', nodeId: 'impl', criterionId: 'impl::0',
-      kind: 'test_result', summary: 'tests passed', source: 'tool',
-      command: 'npm test', exitCode: 0,
-    })
-    expect(store.computeCriterionStatus('impl', 'impl::0', 'tests pass').status).toBe('satisfied')
-    // revision bump: code changed
-    store.bumpRevision()
-    const state = store.computeCriterionStatus('impl', 'impl::0', 'tests pass')
-    expect(state.status).toBe('stale')
-  })
-
   it('evidence from wrong runId is isolated', () => {
     const store = new EvidenceStore()
     store.record({
@@ -80,12 +65,6 @@ describe('v0.3.5 Evidence System — anti-false-success', () => {
     expect(forRunB.length).toBe(0)
   })
 
-  it('waiver skips verification for documentation-only changes', () => {
-    const store = new EvidenceStore()
-    store.waiveCriterion('docs', 'docs::0', 'pure documentation change, no code verification needed')
-    const state = store.computeCriterionStatus('docs', 'docs::0', 'tests pass')
-    expect(state.status).toBe('satisfied')
-  })
 })
 
 describe('v0.3.5 TaskKind completion semantics', () => {

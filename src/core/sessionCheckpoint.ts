@@ -24,7 +24,7 @@
  *   - Read operations are idempotent
  */
 
-import { mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, existsSync, statSync } from 'fs'
+import { mkdirSync, readFileSync, readdirSync, unlinkSync, existsSync, statSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { atomicWrite } from './atomicWrite.js'

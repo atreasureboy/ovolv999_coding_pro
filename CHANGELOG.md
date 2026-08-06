@@ -2,7 +2,7 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
-## 0.6.1 — Documentation & Integration Hardening (super_plan.md Round 1–5)
+## 0.6.1 — Architecture Hardening (super_plan.md Rounds 1–10)
 
 ### Documentation Reality Alignment (Round 1)
 - **CLAUDE.md**: Fixed 10 inaccuracies — tool count (34→42+), module count (4→5), ICM count (10→12),
@@ -38,6 +38,65 @@ All notable changes are documented here. This project follows Semantic Versionin
 ### Verification
 - `npx tsc --noEmit`: zero src/ errors (pre-existing test errors excluded)
 - All changes validated against super_plan.md acceptance criteria
+
+### Test & Type Error Repair (Round 6)
+- **4 pre-existing test failures fixed**: packageJsonShape (0.5.6→0.6.0), keybindings (meta→alt fix), skillExtractor (.ovolv999→.ovogo), phase1EngineWiring (lazy wrapper field access)
+- **28 pre-existing type errors fixed**: projectIdentity stubs (12 in v033BackgroundAutonomy), SessionCheckpoint.name field (5 in v060/enterpriseSuite), ModelProfile import (v055/memoryGoldenPath), interface mismatches (8 in v053Hotfix/effectiveRunId)
+
+### Error Handling Unification (Round 7)
+- Audited all tool execute() signatures: 1 of 18 tool classes uses async (TaskGetTool, already correct). Non-async tools correctly use Promise.resolve() — no changes needed.
+
+### P2 Wiring Gaps Closed (Round 8)
+- **LongTermMemory**: Injected into ToolContext via `longTermMemory?` field, wired through MemoryModule.toolContextPatch
+- **Dual retryable regex**: Merged compact.ts ad-hoc patterns into single `isRetryableError()` import from retryManager.ts
+- **Subsystem events**: Annotated `@reserved` — defined for future tool observability subsystem
+- **Dead fields**: `consecutiveCommandFailures` removed from test fixture (`writeTimeoutMs` already gone)
+
+### Router Signal & Brand Convergence (Rounds 9–10)
+- **Router signals verified real**: `repoFileCount` uses RepoStatsService.walkRepo() (proxy removed in v0.5.3); `budgetRemaining` wired from ContextManager.valuateBudget(); `estimatedImpactFiles` wired from TaskGraph. CLAUDE.md proxy claims were stale.
+- **Brand convergence fixes**: `/skill-save` help text (.ovolv999→.ovogo), `/doctor` skills check directory (.ovolv999→.ovogo), WorkspaceWatcherModule now monitors project-level `.ovogo/skills/`
+- **CI integration**: `scripts/docDriftCheck.sh` and `scripts/deadCodeCheck.sh` added to `.github/workflows/ci.yml` validate job; deadCodeCheck threshold adjusted to 130 (current baseline)
+
+### Architecture Audit Fixes (Rounds 11+)
+- **Phantom event**: `RUN_CANCELLED` emit removed from coordinator.ts (not in RunEvent union)
+- **CRITIC_COMPLETED**: Now checks actual critic injection, reports `problems_found` when CriticModule injects messages
+- **Dead completionContract returns**: Removed unreachable `blocked` returns (verification-failure check at line 167 already gates)
+- **Dead code purge**: `toolSuggester.ts`, `sessionCheckpoint.ts` (zero production importers); ~200 lines of dead methods across criticTrigger, progressMonitor, evidenceStore, memoryCandidate
+- **Type quality**: Removed 8 unnecessary `as never` casts in coordinator.ts; MCP module criticality fixed to `best_effort`; removed `demote-agent_inferred` dead branch
+
+### Full Audit & Repair (Round 12)
+- **Critical wiring fix — `finalize` never called**: The v0.5.6 §7 "single finalizer" in
+  toolExecutor.ts was defined but dead. ALL tool paths (success, unknown tool, policy deny,
+  permission deny, hook deny) now route through it: `toolCallRegistry` is populated on every
+  call, TOOL_COMPLETED emits exactly once, duplicate callIds are rejected + audited via new
+  `tool_result_duplicate_call_id` EventLog event type. Before this fix the registry was always
+  empty, so MemoryModule rejected EVERY `tool_observed` memory candidate as "unknown toolCallId".
+- **Critical field mismatch**: memoryCandidate.ts read `entry.resultText` but the registry
+  shape is `RegisteredToolResult` with `exposedText` — standardized on `exposedText` across
+  producer (toolExecutor), consumer (memoryCandidate, modules/memory) and their tests.
+- **Critical ESM bug**: symbolIndex.ts `walk()` used `require('fs')` inside an ESM module —
+  ReferenceError swallowed by try/catch, so the index was ALWAYS empty. Now uses the
+  statically imported `readdirSync`. symbolIndex build actually works.
+- **Test flakiness**: full-suite parallel runs had 14 timeout failures under load;
+  `vitest.config.ts` now sets testTimeout/hookTimeout 20s. 308 files / 4844 tests green.
+- **Broken script**: `test:golden-path` pointed at non-existent `tests/golden-path/`
+  (`pnpm check` failed); now targets the real v052/v053 golden-path test files.
+- **ESLint errors → 0, warnings 133 → 13**: removed dead imports/locals across src/ and tests/,
+  converted 13 inline `import()` type annotations to top-level `import type`, fixed
+  no-base-to-string stringification in daemon.ts (+`fmtPayloadValue` helper), coordinator.ts
+  unknown-error message building, `preserve-caught-error` causes in mcpHttpClient/anthropicAdapter,
+  useless assignments (codeReview, shellSandbox, taskPlan, anthropicAdapter/Sse), useless regex
+  escapes, unused catch bindings. Remaining 13 warnings are the documented `require-await`
+  interface-conformance debt.
+- **Type quality**: `codeStructure.findReferences` dead `maxFiles` param now functional
+  (renamed `maxRefs`, caps the ref count instead of hardcoded 500); unnecessary type assertions
+  removed in engineAssembly.ts / daemon.ts.
+- **Regression test**: new `tests/toolExecutorRegistry.test.ts` (5 tests) locks the finalizer
+  contract: registry population on success/deny paths, truncation flags, duplicate-callId audit,
+  and the memory-promotion `exposedText ⊇ resultQuote` verification path.
+- **CI hardening**: `scripts/verify-shard.mjs` rewritten to use `vitest list` (no test
+  execution, dynamic file count) and wired into the validate job to prove `--shard` actually
+  splits the suite.
 
 ## 0.6.0 — Enterprise Architecture Audit & Codex/OpenCode Alignment
 

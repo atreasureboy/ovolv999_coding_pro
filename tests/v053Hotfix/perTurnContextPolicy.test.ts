@@ -75,8 +75,8 @@ describe('Per-turn context policy (Hotfix §10 + §17)', () => {
   it('Above threshold: PreCompact fires BEFORE compact, PostCompact fires AFTER', async () => {
     const order: string[] = []
     const hookRunner: IHookRunner = {
-      runPreCompact: (trigger: 'auto' | 'manual') => { order.push('pre') },
-      runPostCompact: (trigger: 'auto' | 'manual') => { order.push('post') },
+      runPreCompact: (_trigger: 'auto' | 'manual') => { order.push('pre') },
+      runPostCompact: (_trigger: 'auto' | 'manual') => { order.push('post') },
     } as never
     const renderer = {
       compactStart: () => {},
@@ -118,8 +118,8 @@ describe('Per-turn context policy (Hotfix §10 + §17)', () => {
   it('Compact throws: PreCompact may have fired, PostCompact MUST NOT fire', async () => {
     const order: string[] = []
     const hookRunner: IHookRunner = {
-      runPreCompact: (trigger: 'auto' | 'manual') => { order.push('pre') },
-      runPostCompact: (trigger: 'auto' | 'manual') => { order.push('post') },
+      runPreCompact: (_trigger: 'auto' | 'manual') => { order.push('pre') },
+      runPostCompact: (_trigger: 'auto' | 'manual') => { order.push('post') },
     } as never
     const cm = new ContextManager({
       client: { messages: { create: () => { throw new Error('compact failed') } } } as never,

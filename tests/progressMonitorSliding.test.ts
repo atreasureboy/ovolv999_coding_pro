@@ -5,7 +5,6 @@
  *   - A→B→A→B pattern triggers a repeated-failure verdict
  *   - re-running an Edit with the SAME patchHash is NOT progress
  *   - re-running with a NEW patchHash IS progress
- *   - recordMultiAgentVerdict escalates the failure counter
  */
 import { describe, it, expect } from 'vitest'
 import { ProgressMonitor, DEFAULT_THRESHOLDS } from '../src/core/runtime/progressMonitor.js'
@@ -54,20 +53,6 @@ describe('ProgressMonitor v0.3.1 sliding window', () => {
     pm.recordToolCall('Edit', { file_path: 'a.ts' }, { isError: false, content: 'ok' }, 'hash-2')
     const snap = pm.snapshot(1)
     expect(snap.minutesSinceLastMeaningfulProgress).toBeLessThan(1)
-  })
-
-  it('recordMultiAgentVerdict escalates when N agents agree on failure', () => {
-    const pm = new ProgressMonitor(DEFAULT_THRESHOLDS)
-    const fp = 'agent-says-broken-config'
-    const agreed = pm.recordMultiAgentVerdict([fp, fp, fp])
-    expect(agreed).toBe(true)
-    expect(pm.snapshot(0).repeatedErrors).toBeGreaterThan(0)
-  })
-
-  it('recordMultiAgentVerdict returns false when agents disagree', () => {
-    const pm = new ProgressMonitor(DEFAULT_THRESHOLDS)
-    const agreed = pm.recordMultiAgentVerdict(['a', 'b', 'c'])
-    expect(agreed).toBe(false)
   })
 
   it('windowing: old calls beyond 8 are evicted', () => {

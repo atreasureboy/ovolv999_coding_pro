@@ -21,6 +21,7 @@ import type { RoutingSignals } from '../model/routingSignalCollector.js'
 import type { CompletionVerdict } from './completionContract.js'
 import type { TaskKind } from './taskIntent.js'
 import type { ProjectIdentity } from '../projectIdentity.js'
+import type { MemoryCandidate } from '../memoryCandidate.js'
 import { resolveProjectIdentitySync } from '../projectIdentity.js'
 
 /**
@@ -77,7 +78,7 @@ export interface RunScopedRuntimeContext {
    * promotes / demotes / drops each one based on the run verdict.
    * Storage is per-run so a re-run never inherits previous candidates.
    */
-  memoryCandidates: import("../memoryCandidate.js").MemoryCandidate[]
+  memoryCandidates: MemoryCandidate[]
   /** v0.5.3 Final (task 2): per-run snapshot of the user message —
    *  the MemoryPromoter uses this to verify sourceQuote claims. */
   userMessage: string

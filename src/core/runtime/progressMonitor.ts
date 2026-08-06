@@ -193,22 +193,6 @@ export class ProgressMonitor {
   }
 
   /**
-   * v0.3.1: record multiple verdict fingerprints from a sub-agent
-   * (e.g. N agents that each say "this approach failed"). When all
-   * agree, the run is making no progress.
-   */
-  recordMultiAgentVerdict(fingerprints: string[]): boolean {
-    if (fingerprints.length < 2) return false
-    const first = fingerprints[0]
-    if (fingerprints.every((f) => f === first)) {
-      // All agents agree on the same failure → treat as a hard signal
-      this.consecutiveErrors = Math.max(this.consecutiveErrors, 1) + 1
-      return true
-    }
-    return false
-  }
-
-  /**
    * Record a verification result. A drop in failures is meaningful
    * progress; a rise or no change is not.
    */
@@ -312,45 +296,7 @@ function fingerprint(value: unknown): string {
   }
 }
 
-/**
- * Phase 4 intervention: map a stall verdict to a `role:system` nudge to
- * inject into the message history (NOT a user message — system is the
- * runtime-context role, so it doesn't forge user input or pollute the
- * user-visible transcript). Returns null when no intervention is due
- * (progressing, or already-blocked which the terminal transition handles).
- *
- * Pure + deterministic → unit-testable independently of real elapsed time.
- */
-function interventionMessageForStall(verdict: StallVerdict): { role: 'system'; content: string } | null {
-  switch (verdict.kind) {
-    case 'progressing':
-      return null
-    case 'blocked':
-      return null // terminal-transition handles blocked
-    case 'soft-stall':
-      return {
-        role: 'system',
-        content: `[runtime stall guard · soft] ${verdict.reason}. Summarise the concrete evidence you have so far (files changed, tests still failing, root cause hypotheses) and change approach. Do not repeat the same tool calls or commands that have already failed to make progress.`,
-      }
-    case 'hard-stall':
-      return {
-        role: 'system',
-        content: `[runtime stall guard · hard] ${verdict.reason}. STOP the current line of attack. Re-analyse from first principles: what is the actual blocker? If you cannot make further verifiable progress, state the blocker explicitly instead of pretending success.`,
-      }
-    case 'repeated-failure':
-      return {
-        role: 'system',
-        content: `[runtime stall guard · repeated failure] ${verdict.reason}. Stop retrying the identical failing command. Diagnose the root cause before attempting it again, or pivot to a different command.`,
-      }
-    case 'budget-pressure':
-      return {
-        role: 'system',
-        content: `[runtime stall guard · budget] ${verdict.reason}. Narrow scope: prioritise the core acceptance criteria and drop non-essential work so the task can still finish within budget.`,
-      }
-    default:
-      return null
-  }
-}
+
 function stableSort(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableSort)
   if (value && typeof value === 'object') {

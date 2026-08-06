@@ -14,7 +14,6 @@
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult, ToolMetadata } from '../core/types.js'
-import type { ResourceClaim } from '../core/executionRun.js'
 
 export interface LazyToolOptions {
   name: string
@@ -85,6 +84,19 @@ export class LazyTool implements Tool {
   /** True if the real tool has been loaded. */
   get loaded(): boolean {
     return this._real !== null
+  }
+
+  /** Diagnostic state: unloaded | loading | loaded | failed */
+  get state(): 'unloaded' | 'loading' | 'loaded' | 'failed' {
+    if (this._real) return 'loaded'
+    if (this._loadError) return 'failed'
+    if (this._loading) return 'loading'
+    return 'unloaded'
+  }
+
+  /** The load error, if the factory failed. Null otherwise. */
+  get loadError(): Error | null {
+    return this._loadError
   }
 }
 

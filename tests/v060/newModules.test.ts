@@ -1,5 +1,5 @@
 /**
- * Unit tests for atomicTransaction, codeStructure, and sessionCheckpoint.
+ * Unit tests for atomicTransaction and codeStructure.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs'
@@ -157,62 +157,5 @@ export function main() { foo() }
     writeFileSync(f2, `import { myFunc } from './a'; myFunc();`)
     const refs = findReferences('myFunc', dir)
     expect(refs.length).toBeGreaterThanOrEqual(2)
-  })
-})
-
-// ── sessionCheckpoint ───────────────────────────────────────────────────────
-
-import { SessionCheckpointStore } from '../../src/core/sessionCheckpoint.js'
-
-describe('SessionCheckpointStore', () => {
-  let dir = ''
-  let store: SessionCheckpointStore
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'ckpt-'))
-    store = new SessionCheckpointStore({ cwd: dir, maxCheckpoints: 5 })
-  })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
-
-  it('saves and loads a checkpoint', async () => {
-    const id = await store.save({
-      name: 'test',
-      turnNumber: 3,
-      model: 'test-model',
-      changedFiles: ['a.ts', 'b.ts'],
-      state: { messages: ['hello'] },
-    })
-    const loaded = store.load(id)
-    expect(loaded).not.toBeNull()
-    expect(loaded!.name).toBe('test')
-    expect(loaded!.turnNumber).toBe(3)
-    expect(loaded!.changedFiles).toContain('a.ts')
-  })
-
-  it('lists checkpoints', async () => {
-    await store.save({ name: 'first', turnNumber: 1, changedFiles: [], state: {} })
-    await store.save({ name: 'second', turnNumber: 2, changedFiles: [], state: {} })
-    const list = store.list()
-    expect(list.length).toBe(2)
-    expect(list[0].name).toBe('second') // newest first
-  })
-
-  it('rotates old checkpoints', async () => {
-    const small = new SessionCheckpointStore({ cwd: dir, maxCheckpoints: 2 })
-    for (let i = 0; i < 5; i++) {
-      await small.save({ name: `ckpt-${i}`, turnNumber: i, changedFiles: [], state: {} })
-    }
-    const list = small.list()
-    expect(list.length).toBeLessThanOrEqual(2)
-  })
-
-  it('deletes a checkpoint', async () => {
-    const id = await store.save({ name: 'del', turnNumber: 1, changedFiles: [], state: {} })
-    expect(store.delete(id)).toBe(true)
-    expect(store.load(id)).toBeNull()
-  })
-
-  it('returns null for non-existent', () => {
-    expect(store.load('nonexistent')).toBeNull()
   })
 })

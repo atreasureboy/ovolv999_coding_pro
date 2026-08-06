@@ -50,22 +50,7 @@ export class EvidenceStore {
   private readonly evidence = new Map<string, TaskEvidence[]>()
   private currentRevision = 0
 
-  /** Increment the code revision (called when files change). */
-  bumpRevision(): void {
-    this.currentRevision++
-    // Mark all test/build evidence from prior revisions as stale
-    for (const [_nodeId, list] of this.evidence) {
-      for (const e of list) {
-        if (e.valid && e.revision < this.currentRevision &&
-            (e.kind === 'test_result' || e.kind === 'build_result' || e.kind === 'command_result')) {
-          e.valid = false
-          e.invalidReason = `stale: evidence from revision ${e.revision}, current is ${this.currentRevision}`
-        }
-      }
-    }
-  }
-
-  getRevision(): number {
+getRevision(): number {
     return this.currentRevision
   }
 
@@ -114,31 +99,6 @@ export class EvidenceStore {
     return criteria.map((c) => this.computeCriterionStatus(nodeId, c.id, c.description))
   }
 
-  /** Check if all criteria are satisfied or waived. */
-  allSatisfied(nodeId: string, criteria: Array<{ id: string; description: string }>): boolean {
-    const states = this.computeAllCriteria(nodeId, criteria)
-    return states.every((s) => s.status === 'satisfied' || s.status === 'waived')
-  }
-
-  /** Waive a criterion (e.g., for pure documentation changes). */
-  waiveCriterion(nodeId: string, criterionId: string, reason: string): void {
-    const evidence: TaskEvidence = {
-      id: `waive_${Date.now()}`,
-      runId: '',
-      nodeId,
-      criterionId,
-      kind: 'user_confirmation',
-      summary: `Waived: ${reason}`,
-      source: 'explicit_waiver',
-      revision: this.currentRevision,
-      createdAt: new Date().toISOString(),
-      valid: true,
-    }
-    const list = this.evidence.get(nodeId) ?? []
-    list.push(evidence)
-    this.evidence.set(nodeId, list)
-  }
-
   /** Get all evidence for a run (for debugging/trace). */
   forRun(runId: string): TaskEvidence[] {
     const out: TaskEvidence[] = []
@@ -154,43 +114,4 @@ export class EvidenceStore {
     this.currentRevision = 0
   }
 
-  /**
-   * v0.5.6 §5 — formal lookup for Memory Evidence validation.
-   *
-   * Returns the TaskEvidence iff ALL of the following hold:
-   *   - the evidenceId exists
-   *   - the evidence's runId matches the supplied currentRunId
-   *   - the evidence is still valid (not stale, not waived-into)
-   *   - the evidence's revision equals the currentRevision
-   *   - if the evidence has an exitCode, it must be 0
-   *   - the kind is in the allow-list for Memory Claim evidence
-   *
-   * Otherwise returns undefined. Callers (the EvidenceValidationService)
-   * must NOT bypass this method with `as unknown as ...` casts.
-   */
-  resolveForRun(
-    evidenceId: string,
-    currentRunId: string,
-    currentRevision: number,
-  ): TaskEvidence | undefined {
-    for (const list of this.evidence.values()) {
-      for (const e of list) {
-        if (e.id !== evidenceId) continue
-        if (e.runId !== currentRunId) return undefined
-        if (!e.valid) return undefined
-        if (e.revision !== currentRevision) return undefined
-        if (e.exitCode !== undefined && e.exitCode !== 0) return undefined
-        const allow: ReadonlyArray<EvidenceKind> = [
-          'command_result',
-          'test_result',
-          'build_result',
-          'file_change',
-          'analysis_result',
-        ]
-        if (!allow.includes(e.kind)) return undefined
-        return e
-      }
-    }
-    return undefined
-  }
 }

@@ -15,7 +15,7 @@
 
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
-import { join, relative } from 'path'
+import { join } from 'path'
 import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
 import { runDiagnostics, formatDiagnosticsResult } from '../core/diagnostics.js'
 

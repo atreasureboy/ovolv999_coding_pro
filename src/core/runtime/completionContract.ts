@@ -24,17 +24,6 @@
  * evidence. Reviewer findings are folded into the verdict.
  */
 
-/** Internal: 7-state completion status including 'incomplete' (not exposed to consumers).
- *  External consumers use TurnOutcome's 6-state CompletionStatus from turnOutcome.ts. */
-type CompletionStatus =
-  | 'completed'
-  | 'partial'
-  | 'blocked'
-  | 'failed'
-  | 'cancelled'
-  | 'exhausted'
-  | 'incomplete'
-
 import type { AcceptanceCriterion } from './taskIntent.js'
 import type { VerificationState } from './turnOutcome.js'
 export type { AcceptanceCriterion, VerificationState }
@@ -177,10 +166,9 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
 
 
   // ── mutation: requires changes + satisfied acceptance ───────────
+  // verification-failure is already handled at line 167 for ALL taskKinds;
+  // the duplicate check was unreachable dead code (removed).
   if (criteria.length === 0) {
-    if (input.verification.executed && !input.verification.passed) {
-      return { status: 'blocked', blockers: ['verification failed (no acceptance criteria declared)'] }
-    }
     if (input.changedFiles.length === 0 && satisfiedSet.size === 0) {
       residual.push('no acceptance criteria declared and no changes produced — cannot evidence completion')
       return { status: 'incomplete', remaining: ['produce a verifiable change or declare acceptance criteria'] }
@@ -194,9 +182,7 @@ export function evaluateCompletion(input: CompletionInput): CompletionVerdict {
   }
 
   if (unsatisfied.length === 0) {
-    if (input.verification.executed && !input.verification.passed) {
-      return { status: 'blocked', blockers: ['all criteria claimed but verification failed'] }
-    }
+    // verification-failure handled at line 167 (unreachable here — removed).
     if (!input.verification.executed) {
       residual.push('acceptance met but verification was not executed')
     }

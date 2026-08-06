@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { connect } from 'node:net'
-import type { Socket } from 'node:net'
 import { AcpWebSocketServer } from '../../src/integrations/acpWebSocket.js'
 import type { ACPTransport } from '../../src/integrations/acpTransport.js'
 

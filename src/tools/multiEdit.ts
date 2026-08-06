@@ -117,7 +117,7 @@ export class MultiEditTool implements Tool {
 
   async execute(
     input: Record<string, unknown>,
-    context: ToolContext,
+    _context: ToolContext,
   ): Promise<ToolResult> {
     const edits = (input as unknown as MultiEditInput).edits
     if (!Array.isArray(edits) || edits.length === 0) {

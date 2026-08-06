@@ -54,6 +54,7 @@ import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.j
 import { resolveModelTier } from './model/modelTier.js'
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import type { TaskGraph } from './runtime/taskGraph.js'
+import type { ControlMessageLog } from './runtime/internalControlMessage.js'
 import { InMemoryTaskGraphStore, type TaskGraphStore } from './runtime/taskGraphStore.js'
 import {
   InMemoryRunScopedRuntimeContextStore,
@@ -232,7 +233,7 @@ export class ExecutionEngine {
    */
   private readonly resourceScheduler: ResourceScheduler
   /** R5: lazy lookup of current run's ControlMessageLog. Set in constructor. */
-  private getCurrentControlMessageLog: () => import('./runtime/internalControlMessage.js').ControlMessageLog | undefined = () => undefined
+  private getCurrentControlMessageLog: () => ControlMessageLog | undefined = () => undefined
 
   constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
     this.config = applyAgentToConfig(config)
@@ -357,7 +358,7 @@ export class ExecutionEngine {
     const evidenceResolver = new RunScopedEvidenceResolver(this.runContextStore)
 
     // R5: lazy helper to get the current run's ControlMessageLog.
-    this.getCurrentControlMessageLog = (): import('./runtime/internalControlMessage.js').ControlMessageLog | undefined => {
+    this.getCurrentControlMessageLog = (): ControlMessageLog | undefined => {
       const id = this.sharedState.activeRunId
       if (!id) return undefined
       return this.runContextStore.get(id)?.controlMessages

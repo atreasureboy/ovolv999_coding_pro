@@ -15,11 +15,11 @@
  * real onChange callback. The shared instance is the unit of truth.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs'
+import { mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { RepoStatsService, wireRepoStats } from '../../src/core/repoStats.js'
+import { wireRepoStats } from '../../src/core/repoStats.js'
 import { WorkspaceWatcherModule } from '../../src/modules/workspaceWatcher.js'
 
 describe('RepoStats shared instance (P0.2)', () => {

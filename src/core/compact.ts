@@ -10,6 +10,7 @@
 
 import type OpenAI from 'openai'
 import type { OpenAIMessage } from './types.js'
+import { isRetryableError } from './retryManager.js'
 
 /**
  * Detect whether a thrown value represents an abort cancellation rather
@@ -710,7 +711,7 @@ export async function maybeCompact(
       throw err
     }
     const msg = (err as Error).message ?? String(err)
-    const retryable = /429|rate|timeout|ETIMEDOUT|ECONNRESET|503|502|500/i.test(msg)
+    const retryable = isRetryableError(err)
     return { compacted: false, messages, summaryTokens: 0, originalTokens, error: msg, retryable }
   }
 
@@ -814,8 +815,7 @@ export async function maybeCompactWithRetry(
         // next model.
         if (isAbort(err, signal)) throw err
         const msg = (err as Error).message ?? ''
-        const isRetryable =
-          /429|rate|timeout|ETIMEDOUT|ECONNRESET|503|502|500/.test(msg)
+        const isRetryable = isRetryableError(err)
         if (!isRetryable) {
           lastResult = { compacted: false, messages, summaryTokens: 0, originalTokens: estimateTokens(messages), error: msg, retryable: false }
           break

@@ -30,6 +30,7 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { appendTurn, loadTurns } from './sessionStore.js'
 
 export interface DaemonOptions {
   /** Override socket path (default: ~/.ovolv999/daemon.sock). */
@@ -149,7 +150,6 @@ export class DaemonServer extends EventEmitter {
    * after each `op: 'message'` completes.
    */
   recordTurn(sessionId: string, turn: { ts: number; user: string; assistant: string; status: 'completed' | 'failed' | 'partial' | 'blocked'; tokens?: { input: number; output: number } }): void {
-    const { appendTurn } = require('./sessionStore.js') as typeof import('./sessionStore.js')
     appendTurn(sessionId, turn)
   }
 
@@ -158,11 +158,10 @@ export class DaemonServer extends EventEmitter {
    * the session does not exist or has no persisted turns.
    */
   loadHistory(sessionId: string): Array<{ ts: number; user: string; assistant: string; status: 'completed' | 'failed' | 'partial' | 'blocked'; tokens?: { input: number; output: number } }> {
-    const { loadTurns } = require('./sessionStore.js') as typeof import('./sessionStore.js')
     return loadTurns(sessionId)
   }
 
-  private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private handleHttp(req: IncomingMessage, res: ServerResponse): void {
     if (req.method !== 'POST') {
       res.writeHead(405)
       res.end()
@@ -179,8 +178,8 @@ export class DaemonServer extends EventEmitter {
   private async processRequest(req: IncomingMessage, res: ServerResponse, body: string): Promise<void> {
     let parsed: DaemonRequest
     try {
-      parsed = JSON.parse(body)
-    } catch (err) {
+      parsed = JSON.parse(body) as DaemonRequest
+    } catch {
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: false, error: 'invalid json' }))
       return

@@ -14,7 +14,7 @@
  * Errors are explicit (ok / not-ok), not collapsed to "".
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { RevisionBinding } from './memoryCandidate.js'

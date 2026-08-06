@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { McpHttpClient } from '../../src/core/mcpHttpClient.js'
 import { storeToken } from '../../src/integrations/mcpOAuth.js'
-import type { McpServerConfig } from '../../src/core/mcpClient.js'
 
 function mockFetch(responses: Array<{ ok: boolean; status?: number; body: unknown }>): { calls: Array<{ url: string; headers: Record<string, string>; body: unknown }>; impl: typeof fetch } {
   const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = []

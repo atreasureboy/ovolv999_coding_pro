@@ -20,7 +20,6 @@ import { join } from 'path'
 import { RuntimeCoordinator } from '../../src/core/runtime/coordinator.js'
 import type { CoordinatorDeps } from '../../src/core/runtime/coordinator.js'
 import { EventLog } from '../../src/core/eventLog.js'
-import { InMemoryMemoryBackend, LongTermMemory } from '../../src/core/longTermMemory.js'
 
 function fakeRenderer() {
   const r: Record<string, (...args: unknown[]) => void> = {}
@@ -33,10 +32,6 @@ function fakeRenderer() {
     'agentHeartbeat','humanPrompt','writePrompt','closePrompt','newline',
   ]) r[k] = () => {}
   return r as never
-}
-
-const baseDeps = (): CoordinatorDeps => {
-  throw new Error('configured per-test')
 }
 
 describe('EffectiveRunId — no RunRegistry wired', () => {
@@ -72,29 +67,29 @@ describe('EffectiveRunId — no RunRegistry wired', () => {
       closed: [] as string[],
     } as never
     const deps: CoordinatorDeps = {
-      config: { cwd: tmpProj, model: 'echo', apiKey: 'k', permissionMode: 'bypassPermissions' },
+      config: { cwd: tmpProj, model: 'echo', apiKey: 'k', permissionMode: 'bypassPermissions', maxIterations: 0 },
       renderer: fakeRenderer(),
       eventLog,
       sharedState,
       runRegistry: undefined, // <- the hotfix path: NO registry
       runContextStore: ctxStore,
       costTracker: undefined as never,
-      backgroundTaskManager: { onComplete: () => {} },
-      permissionManager: { checkToolPermission: async () => true },
+      backgroundTaskManager: { onComplete: () => {} } as never,
+      permissionManager: { checkToolPermission: async () => true } as never,
       fileHistory: null,
       modelGateway: undefined as never,
       contextManager: {
         setActiveRunId: () => {},
-        getWorkingState: () => ({ filesRead: new Set(), filesChanged: new Set(), verification: { passed: [], failed: [] } }),
-        measureBudget: () => ({}),
-        applyBudgetPolicy: async () => ({}),
-      },
+        getWorkingState: () => ({ filesRead: new Set() as unknown as string[], filesChanged: new Set() as unknown as string[], verification: { passed: [], failed: [] } }) as never,
+        measureBudget: () => ({} as never),
+        applyBudgetPolicy: async () => ({} as never),
+      } as never,
       toolScheduler: undefined as never,
       toolPolicy: undefined as never,
       toolRegistry: undefined as never,
-      moduleManager: { modules: [], runComplete: async () => {} },
+      moduleManager: { modules: [], runComplete: async () => {} } as never,
       baseTools: [],
-      eventEmitter: { emit: () => {} },
+      eventEmitter: { emit: () => {}, handlers: {} as never, on: () => () => {}, off: () => {}, clear: () => {} } as never,
       modelRouter: undefined,
     }
     const coord = new RuntimeCoordinator(deps)

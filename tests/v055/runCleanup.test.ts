@@ -97,7 +97,6 @@ describe('v0.5.5 §16: Run cleanup on every exit path', () => {
 
   it('consecutive runTurn calls: each closes its own RunContext', async () => {
     const eventLog = new EventLog(join(tmpProj, 'events.jsonl'))
-    const router = new ModelRouter([profile('profile-a', 'model-a'), profile('profile-b', 'model-b')], { enabled: true })
     const cfg = {
       apiKey: 'k', model: 'model-a', maxIterations: 10,
       cwd: tmpProj, permissionMode: 'bypassPermissions',

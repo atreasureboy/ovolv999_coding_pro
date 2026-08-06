@@ -290,7 +290,7 @@ export function buildAssistantMessageToAnthropicContent(
   if (text) blocks.push({ type: 'text', text })
   for (const tc of toolCalls) {
     let input: unknown = {}
-    try { input = JSON.parse(tc.arguments || '{}') } catch { input = {} }
+    try { input = JSON.parse(tc.arguments || '{}') } catch { /* keep default {} */ }
     blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input })
   }
   return blocks

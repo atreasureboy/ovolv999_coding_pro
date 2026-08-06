@@ -17,6 +17,8 @@ import type { Tool, ToolContext, ToolResult, OpenAIMessage, TurnResult, EngineCo
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { EventLog } from './eventLog.js'
 import type { RepoStatsService } from './repoStats.js'
+import type { ProjectIdentity } from './projectIdentity.js'
+import type { RunScopedRuntimeContext } from './runtime/runScopedContext.js'
 
 /** Context passed to module factories — provides shared dependencies */
 export interface ModuleContext {
@@ -42,7 +44,7 @@ export interface ModuleBootContext {
    * populated for backwards compatibility but is the user's
    * launch directory, NOT necessarily the canonical project root.
    */
-  projectIdentity?: import('./projectIdentity.js').ProjectIdentity
+  projectIdentity?: ProjectIdentity
   /**
    * v0.5.3 (P0.2): shared services supplied by the Engine. Modules
    * MUST read these from the boot context, NOT construct their
@@ -109,7 +111,7 @@ export interface ModuleRunContext {
   /** v0.5.3 Final (task 2): the per-run RunScopedRuntimeContext, so
    *  MemoryModule.onComplete can read this run's MemoryCandidates
    *  + userMessage snapshot for promotion. */
-  runContext?: import('./runtime/runScopedContext.js').RunScopedRuntimeContext
+  runContext?: RunScopedRuntimeContext
   /** v0.5.3 Final (task 2): the original user message — duplicated
    *  here for engines whose ModuleManager doesn't keep the
    *  context object alive all the way to onComplete. */

@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, readFileSync } from 'fs'
+import { mkdtempSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { CriticModule } from '../src/modules/critic.js'
 // ReflectionModule moved to experimental/ — v0.5.3 Closure P9.
-import { SemanticMemory } from '../src/core/semanticMemory.js'
-import { EpisodicMemory } from '../src/core/episodicMemory.js'
 import { loadSettings, saveProjectSettings } from '../src/config/settings.js'
 import { getCommand } from '../src/commands/index.js'
 import '../src/commands/builtin.js'

@@ -308,7 +308,7 @@ export function exploreProject(cwd: string = process.cwd()): ProjectOverview {
   const pkgPath = join(cwd, 'package.json')
   if (existsSync(pkgPath)) {
     try {
-      pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8'))
+      pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
     } catch { /* ignore */ }
   }
 

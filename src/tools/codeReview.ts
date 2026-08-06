@@ -8,8 +8,6 @@
  * the agent moves on.
  */
 
-import { readFileSync, existsSync } from 'fs'
-import { join } from 'path'
 import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
 import { reviewChanges, formatReviewReport, readChangesFromDisk } from '../core/codeReview.js'
 

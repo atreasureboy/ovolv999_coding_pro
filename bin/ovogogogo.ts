@@ -71,8 +71,6 @@ import { getProjectSettingsPath, saveProjectSettings, loadGlobalProvider } from 
 import { runFirstRunWizard } from '../src/config/wizard.js'
 import { loadSkills, expandSkillPrompt } from '../src/skills/loader.js'
 import type { Skill } from '../src/skills/loader.js'
-import type { SemanticMemory } from '../src/core/semanticMemory.js'
-import type { EpisodicMemory } from '../src/core/episodicMemory.js'
 // consolidateSession removed in v0.5.3 Closure (P5).
 import { dispatchSlashCommand, listCommands, type SlashCommandContext } from '../src/commands/index.js'
 import '../src/commands/builtin.js' // register all built-in commands
@@ -2107,7 +2105,6 @@ async function main(): Promise<void> {
   })
   const {
     engine,
-    config,
     planConfig,
     renderer,
     uiStore,
@@ -2115,8 +2112,6 @@ async function main(): Promise<void> {
     sessionDir,
     resumedHistory,
     hookRunner,
-    semanticMemory,
-    episodicMemory,
     maxContextTokens: maxCtxTokens,
     model: effectiveModel,
   } = assembled

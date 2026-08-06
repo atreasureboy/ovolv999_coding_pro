@@ -29,6 +29,7 @@ import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { RunEventEmitter } from '../runtime/events.js'
 import type { ProgressMonitor } from '../runtime/progressMonitor.js'
+import type { RegisteredToolResult } from '../runtime/runScopedContext.js'
 import { toLegacy, isStructuredResult, type AnyToolResult } from '../structuredToolResult.js'
 
 export type NotifyToolCall = (
@@ -60,7 +61,7 @@ export interface ToolExecutorDeps {
   /** v0.5.5 §2: per-run ToolResult registry. Populated after
    *  every tool completion; consumed by MemoryModule.onComplete
    *  for tool_observed evidence validation. */
-  sharedState?: { toolCallRegistry?: Map<string, import('../runtime/runScopedContext.js').RegisteredToolResult> | null }
+  sharedState?: { toolCallRegistry?: Map<string, RegisteredToolResult> | null }
   /**
    * R5: hook additionalContext sink. Wired by the coordinator to
    * append `hook_additional_context` messages to the per-run
@@ -95,22 +96,28 @@ export class ToolExecutor {
     // callIds are rejected with an explicit event; we never
     // silently overwrite.
     const runIdFromContext = (context as { execution?: { runId?: string } }).execution?.runId ?? ''
-    const finalize = (result: ToolResult) => {
-      const originalText = result.content ?? ''
-      const exposedText = this.deps.contextManager.truncateToolResult(originalText)
+    // precomputed: callers that already truncated result content pass the
+    // original/exposed pair so finalize never double-truncates (the
+    // truncated form slightly exceeds the budget due to the marker, so a
+    // second pass would truncate again and rewrite the spill file).
+    const finalize = (result: ToolResult, precomputed?: { originalText: string; exposedText: string }) => {
+      const originalText = precomputed?.originalText ?? result.content ?? ''
+      const exposedText = precomputed
+        ? precomputed.exposedText
+        : this.deps.contextManager.truncateToolResult(originalText)
       const truncated = exposedText !== originalText
       const finalResult: ToolResult = truncated ? { ...result, content: exposedText } : result
       eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result: finalResult })
       const registry = this.deps.sharedState?.toolCallRegistry
       if (registry && callId) {
         if (registry.has(callId)) {
-          // Duplicate callId — reject. Emit a structured event.
-          eventEmitter?.emit({
-            type: 'TOOL_RESULT_DUPLICATE_CALL_ID',
+          // Duplicate callId — reject. Record to the audit EventLog
+          // (never silently overwrite).
+          eventLog?.append('tool_result_duplicate_call_id', 'tool_executor', {
             runId: runIdFromContext,
             callId,
             toolName,
-          } as never)
+          })
         } else {
           registry.set(callId, {
             runId: runIdFromContext,
@@ -146,8 +153,7 @@ export class ToolExecutor {
     const tool = toolRegistry.get(toolName)
     if (!tool) {
       const result: ToolResult = { content: `Unknown tool: ${toolName}`, isError: true }
-      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-      return result
+      return finalize(result)
     }
 
     // Execution-time policy check (defense in depth)
@@ -160,8 +166,7 @@ export class ToolExecutor {
     )
     if (policyError) {
       const result: ToolResult = { content: policyError, isError: true }
-      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-      return result
+      return finalize(result)
     }
 
     // R5: Permission mode gating — coarse knob before permissionManager.
@@ -173,8 +178,7 @@ export class ToolExecutor {
         content: `Permission mode '${context.permissionMode}' denies ${toolName}`,
         isError: true,
       }
-      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-      return result
+      return finalize(result)
     }
     if (modeGated === 'allow') {
       recordDecision('mode_gate', 'allow', `mode '${context.permissionMode}' allows ${toolName}`)
@@ -193,8 +197,7 @@ export class ToolExecutor {
         content: `Permission rule denied: ${globResult.reason}`,
         isError: true,
       }
-      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-      return result
+      return finalize(result)
     }
     if (globResult.decision === 'allow') {
       recordDecision('glob_engine', 'allow', globResult.reason, globResult.matchedRule?.id)
@@ -223,8 +226,7 @@ export class ToolExecutor {
           content: `Permission denied for ${toolName}. Current mode: ${permissionManager.formatMode()}`,
           isError: true,
         }
-        eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-        return result
+        return finalize(result)
       }
       if (permission === 'ask') {
         recordDecision('permission_manager', 'ask', 'mode suggests ask')
@@ -241,8 +243,7 @@ export class ToolExecutor {
                 : `Permission denied by user for ${toolName}.`,
               isError: true,
             }
-            eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-            return result
+            return finalize(result)
           }
         } else {
           renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
@@ -266,8 +267,7 @@ export class ToolExecutor {
           content: `Tool "${toolName}" denied by hook (${deny.hookName}): ${reason}`,
           isError: true,
         }
-        eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-        return result
+        return finalize(result)
       }
       const ask = hookOutcomes.find((o) => o.decision === 'ask')
       if (ask && this.deps.requestPermission) {
@@ -278,8 +278,7 @@ export class ToolExecutor {
             content: `Tool "${toolName}" denied by hook (${ask.hookName}): ${reason}`,
             isError: true,
           }
-          eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
-          return result
+          return finalize(result)
         }
       }
       const firstWithUpdate = hookOutcomes.find((o) => o.updatedInput)
@@ -358,7 +357,9 @@ export class ToolExecutor {
     }
 
     // Individual tool result truncation (aggregate budget is scheduler's job)
-    result = { ...result, content: this.deps.contextManager.truncateToolResult(result.content) }
+    const originalText = result.content
+    const exposedText = this.deps.contextManager.truncateToolResult(originalText)
+    result = { ...result, content: exposedText }
 
     // Post-tool hook with additionalContext outcome (Phase 2).
     // additionalContext is buffered for the next LLM call; never
@@ -392,7 +393,7 @@ export class ToolExecutor {
       )
       void legacyResults
     }
-    eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result })
+    result = finalize(result, { originalText, exposedText })
 
     this.deps.notifyToolCall(toolName, input, result, turnNumber)
 

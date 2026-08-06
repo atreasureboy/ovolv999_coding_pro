@@ -300,8 +300,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     inkRendererInstance = new InkRendererClass(uiStore)
   }
 
-  const resolvedPermissionMode = (projectConfig?.permissionMode ?? 'auto') as
-    'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'bubble'
+  const resolvedPermissionMode = projectConfig?.permissionMode ?? 'auto'
 
   const config: EngineConfig = {
     model: projectConfig?.model ?? opts.model,

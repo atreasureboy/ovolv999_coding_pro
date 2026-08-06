@@ -198,15 +198,17 @@ export class LspClient extends EventEmitter {
       return false
     }
 
-    if (!proc.pid) {
-      // spawn failed synchronously (e.g. binary not found)
-      return false
-    }
-
     this.proc = proc
 
-    proc.on('error', () => this.markClosed())
+    // Trap the error event in a promise so that async spawn failures
+    // (e.g. ENOENT when the binary doesn't exist) don't become unhandled
+    // exceptions. We race this promise against the LSP initialize handshake.
+    const errorPromise = new Promise<false>((resolve) => {
+      proc.on('error', () => { this.markClosed(); resolve(false) })
+    })
     proc.on('exit', () => this.markClosed())
+
+    if (!proc.pid) return false
 
     if (!proc.stdout || !proc.stdin) {
       return false
@@ -247,24 +249,35 @@ export class LspClient extends EventEmitter {
     this.connection.listen()
 
     try {
-      await this.withTimeout(
-        this.connection.sendRequest('initialize', {
-          processId: process.pid,
-          rootUri: this.rootUri,
-          capabilities: {
-            textDocument: {
-              synchronization: { didOpen: true, didChange: true, didSave: true },
-              publishDiagnostics: { relatedInformation: false },
-              definition: { dynamicRegistration: false },
-              references: { dynamicRegistration: false },
-              hover: { contentFormat: ['plaintext', 'markdown'] },
-              documentSymbol: { dynamicRegistration: false },
+      // Race the initialize handshake against the spawn error. If the
+      // process dies before sending the init response, the errorPromise
+      // resolves to false and we bail out cleanly.
+      const initResult = await Promise.race([
+        this.withTimeout(
+          this.connection.sendRequest('initialize', {
+            processId: process.pid,
+            rootUri: this.rootUri,
+            capabilities: {
+              textDocument: {
+                synchronization: { didOpen: true, didChange: true, didSave: true },
+                publishDiagnostics: { relatedInformation: false },
+                definition: { dynamicRegistration: false },
+                references: { dynamicRegistration: false },
+                hover: { contentFormat: ['plaintext', 'markdown'] },
+                documentSymbol: { dynamicRegistration: false },
+              },
+              workspace: { symbol: true },
             },
-            workspace: { symbol: true },
-          },
-        }),
-        'initialize',
-      )
+          }),
+          'initialize',
+        ).then(() => true as const),
+        errorPromise,
+      ])
+
+      if (!initResult) {
+        this.kill()
+        return false
+      }
 
       this.connection.sendNotification({ method: 'initialized' } as never, {})  // eslint-disable-line @typescript-eslint/no-floating-promises
       this.started = true

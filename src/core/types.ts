@@ -13,6 +13,7 @@ import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 import type { TaskKind } from './runtime/taskIntent.js'
 import type { RunEventEmitter } from './runtime/events.js'
+import type { LongTermMemory } from './longTermMemory.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -289,6 +290,13 @@ export interface ToolContext {
     sourceRunId?: string
     verified?: boolean
   }
+
+  /**
+   * LongTermMemory instance injected by MemoryModule so any tool can
+   * query/write persistent semantic memory through the canonical LTM
+   * path (not just through MemoryModule hooks).
+   */
+  longTermMemory?: LongTermMemory
 }
 
 // ── AskUserQuestion types (shared between tool, context, and REPL) ──────────

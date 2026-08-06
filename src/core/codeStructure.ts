@@ -17,7 +17,7 @@
  * tool definitions and the tool execution hot path.
  */
 
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
+import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join, extname, relative } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -525,7 +525,7 @@ export function semanticDiff(
 export function findReferences(
   symbolName: string,
   rootDir: string,
-  maxFiles = 200,
+  maxRefs = 500,
 ): Array<{ file: string; line: number; context: string }> {
   const refs: Array<{ file: string; line: number; context: string }> = []
   const exclude = new Set([
@@ -536,7 +536,7 @@ export function findReferences(
   ])
 
   const stack: string[] = [rootDir]
-  while (stack.length > 0 && refs.length < 500) {
+  while (stack.length > 0 && refs.length < maxRefs) {
     const dir = stack.pop()!
     let entries
     try {
@@ -545,7 +545,7 @@ export function findReferences(
       continue
     }
     for (const entry of entries) {
-      if (refs.length >= 500) break
+      if (refs.length >= maxRefs) break
       const full = join(dir, entry.name)
       if (entry.isDirectory()) {
         if (!exclude.has(entry.name)) stack.push(full)

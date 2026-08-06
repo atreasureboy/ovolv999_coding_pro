@@ -17,7 +17,7 @@
  * (the session checkpoint system covers cross-session state).
  */
 
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative, extname } from 'path'
 import { extractSymbols, type CodeSymbol } from './codeStructure.js'
 
@@ -92,7 +92,7 @@ export class SymbolIndex {
       const dir = stack.pop()!
       let entries
       try {
-        entries = require('fs').readdirSync(dir, { withFileTypes: true }) as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+        entries = readdirSync(dir, { withFileTypes: true }) as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
       } catch {
         continue
       }

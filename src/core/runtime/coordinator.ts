@@ -47,7 +47,9 @@ import {
 } from '../queryStateMachine.js'
 import type { ProgressMonitor } from './progressMonitor.js'
 import type { ModelGateway } from '../model/modelGateway.js'
-import type { RoutingInput, ModelRouter, ProbeLease, ProbeOutcome } from '../model/modelRouter.js'
+import type { RoutingInput, ModelRouter, ProbeLease, ProbeOutcome, RouteApplication } from '../model/modelRouter.js'
+import type { ProjectIdentity } from '../projectIdentity.js'
+import type { MemoryCandidate } from '../memoryCandidate.js'
 import { RoutingUnavailableError } from '../model/routingErrors.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
@@ -154,7 +156,7 @@ export interface CoordinatorDeps {
    * has switched this turn's model. Null = no change / routing off /
    * manual override in effect.
    */
-  routeModel?: (input: RoutingInput) => import('../model/modelRouter.js').RouteApplication | Promise<import('../model/modelRouter.js').RouteApplication>
+  routeModel?: (input: RoutingInput) => RouteApplication | Promise<RouteApplication>
   /**
    * v0.3.1 (runtime truth contract §三.1.3): the ModelRouter handle, used by the
    * coordinator's signal collector to read provider health. Optional —
@@ -212,7 +214,7 @@ export class RuntimeCoordinator {
   private usageMissingWarned = false
   // v0.5.3 Hotfix §4: cache the resolved ProjectIdentity so
   // 20 sequential turns don't each spawn a fresh `git rev-parse`.
-  private _projectIdentityCache: { cwd: string; identity: import('../projectIdentity.js').ProjectIdentity } | null = null
+  private _projectIdentityCache: { cwd: string; identity: ProjectIdentity } | null = null
   // v0.5.3 P0-3: coordinator no longer carries its own provider
   // circuit state. The single source of truth is the ModelRouter's
   // per-profile circuit (consecutiveProfileFailures + circuitStates
@@ -321,7 +323,7 @@ export class RuntimeCoordinator {
     this.deps.eventEmitter.emit({
       type: 'RUN_EXECUTION_STARTED',
       runId: effectiveRunId,
-    } as never)
+    })
 
     // ── ExecutionProfile resolution (v0.4.1 WS4) ──
     // Resolved BEFORE boot so module gating, tool exclusion and the
@@ -360,7 +362,7 @@ export class RuntimeCoordinator {
       profile: profileResolution.profile,
       source: profileResolution.source,
       modules: profileModules,
-    } as never)
+    })
 
     // ── ProjectIdentity (v0.5.3 Hotfix §4) ──
     // Resolved ONCE per run, before boot, and threaded through to
@@ -525,7 +527,7 @@ export class RuntimeCoordinator {
         source: taskIntent.source,
         confidence: taskIntent.confidence,
       },
-    } as never)
+    })
     {
       const ctxStore = this.deps.runContextStore
       if (ctxStore) {
@@ -569,7 +571,7 @@ export class RuntimeCoordinator {
         for (const m of this.deps.moduleManager.modules) {
           if (m.name === 'memory') {
             const mm = m as unknown as {
-              publishCandidateSink?: (runId: string, sink: (c: import('../memoryCandidate.js').MemoryCandidate) => void) => void
+              publishCandidateSink?: (runId: string, sink: (c: MemoryCandidate) => void) => void
             }
             try {
               if (mm.publishCandidateSink) {
@@ -1010,15 +1012,22 @@ export class RuntimeCoordinator {
               criticRequested,
             })
             if (criticRequested) {
+              // Check whether CriticModule actually injected a message.
+              const lastMsg = messages[messages.length - 1]
+              const lastContent =
+                lastMsg?.role === 'system' && typeof lastMsg.content === 'string'
+                  ? lastMsg.content
+                  : ''
+              const injected = lastContent !== '' && lastContent.startsWith('[runtime critic]')
               this.deps.eventEmitter.emit({
                 type: 'CRITIC_COMPLETED',
-                verdict: 'completed',
-                problems: [],
+                verdict: injected ? 'problems_found' : 'completed',
+                problems: injected ? [lastContent] : [],
               })
               controlMessageLog.append({
                 kind: 'critic_feedback',
-                verdict: 'reviewed',
-                problems: [],
+                verdict: injected ? 'problems_found' : 'reviewed',
+                problems: injected ? [lastContent.slice(0, 200)] : [],
               })
             }
             state = transitionQueryState(state, { type: 'continue' })
@@ -1296,7 +1305,8 @@ export class RuntimeCoordinator {
       const errorIteration = 'iteration' in state ? state.iteration : 0
       if (turnAbortController.signal.aborted) {
         result = { stopped: true, reason: 'interrupted', output: computeFinalOutput() }
-        eventEmitter.emit({ type: 'RUN_CANCELLED', reason: 'user/system cancelled' } as never)
+        // RUN_EXECUTION_STOPPED emitted in finally block below;
+        // no separate RUN_CANCELLED event (removed — not in RunEvent union).
       } else {
       void config.hookRunner?.runOnError?.(err as Error, {
         turnNumber: errorIteration,
@@ -1539,7 +1549,7 @@ export class RuntimeCoordinator {
           reason: 'no verdict',
           evidence: [],
         }),
-      } as never)
+      })
     }
 
     // v0.3.3 (background autonomy contract §十二.7): attach the completion verdict to the
@@ -1627,7 +1637,7 @@ export class RuntimeCoordinator {
 
     // v0.3.4 (durable supervisor contract §Phase 11): emit a status-specific terminal event.
     const terminalStatus = status
-    eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result } as never)
+    eventEmitter.emit({ type: 'RUN_TERMINATED', status: terminalStatus, result })
 
     // R7: Stop hook fires on stop_sequence (model decides to stop).
     if (result.reason === 'stop_sequence' && config.hookRunner?.runStop) {
@@ -1684,7 +1694,7 @@ export class RuntimeCoordinator {
           type: 'RUN_TERMINATED',
           status: 'blocked',
           result: { reason: 'routing_unavailable', stopped: true, output: '' },
-        } as never)
+        })
         return { result: { reason: 'routing_unavailable', stopped: true, output: '' }, newHistory: history, outcome: blocked }
       }
       // Any other error: re-throw so the Engine's outer handler
@@ -1843,7 +1853,7 @@ export class RuntimeCoordinator {
       type: 'MODEL_ATTEMPT_STARTED',
       model: modelAtStart,
       attemptId: this.modelCallsThisRun.length,
-    } as never)
+    })
     try {
       // v0.3.1 (runtime truth contract §七): prepend control messages for this
       // single call. The caller (the LLM state machine) drains the
@@ -1975,7 +1985,19 @@ export class RuntimeCoordinator {
     // outer run() so RUN_FAILED is emitted. The finally block
     // only owns the probe-lease lifecycle; the error must still
     // bubble up.
-    if (caughtErr) throw caughtErr instanceof Error ? caughtErr : new Error(String(caughtErr))
+    if (caughtErr) {
+      if (caughtErr instanceof Error) throw caughtErr
+      const message = typeof caughtErr === 'string'
+        ? caughtErr
+        : (() => {
+            try {
+              return JSON.stringify(caughtErr) ?? 'unknown error'
+            } catch {
+              return 'unknown error'
+            }
+          })()
+      throw new Error(message)
+    }
 
     return result!
   }

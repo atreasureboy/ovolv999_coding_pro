@@ -24,7 +24,6 @@ export interface AnthropicAdapterConfig {
   apiVersion?: string
 }
 
-const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com'
 const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -103,16 +102,10 @@ export class AnthropicAdapter implements ProviderAdapter {
       const final = translator.finalizeWithUsage(undefined)
       yield final
     } catch (err: unknown) {
-      if (signal?.aborted) throw new Error('aborted')
-      throw err instanceof Error ? err : new Error(String(err))
+      if (signal?.aborted) throw new Error('aborted', { cause: err })
+      throw err instanceof Error ? err : new Error(String(err), { cause: err })
     }
   }
-}
-
-interface OpenAIContentPart {
-  type: 'text' | 'image_url'
-  text?: string
-  image_url?: { url: string }
 }
 
 interface OpenAIToolCall {
@@ -212,7 +205,7 @@ function convertOpenAIMessages(
       }
       for (const tc of toolCalls) {
         let input: unknown = {}
-        try { input = JSON.parse(tc.function.arguments || '{}') } catch { input = {} }
+        try { input = JSON.parse(tc.function.arguments || '{}') } catch { /* keep default {} */ }
         blocks.push({
           type: 'tool_use',
           id: tc.id,

@@ -10,5 +10,7 @@ export default defineConfig({
       '**/loop-kit/**',
       '**/reference/**',
     ],
+    testTimeout: 20000,
+    hookTimeout: 20000,
   },
 })

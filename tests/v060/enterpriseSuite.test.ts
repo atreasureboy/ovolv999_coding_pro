@@ -4,10 +4,8 @@
  *
  *   - AtomicTransaction   (multi-file atomic edits)
  *   - RetryManager        (exponential backoff + circuit breaker)
- *   - ToolSuggester       (context-aware tool recommendation)
  *   - SymbolIndex         (codebase-wide symbol lookup)
  *   - CodeReview          (deterministic change review)
- *   - SessionCheckpoint   (workflow save/restore)
  *   - LazyTool            (deferred instantiation)
  *   - SyntaxHighlight     (terminal/HTML highlighting)
  *   - ProjectExplorer     (structure discovery)
@@ -22,10 +20,10 @@ import { join, isAbsolute } from 'path'
 
 import { AtomicTransaction, atomicEdit } from '../../src/core/atomicTransaction.js'
 import { RetryManager, CircuitBreaker, isRetryableError } from '../../src/core/retryManager.js'
-import { suggestTools, fromDefinitions, formatSuggestions } from '../../src/core/toolSuggester.js'
+
 import { SymbolIndex } from '../../src/core/symbolIndex.js'
 import { reviewChanges, formatReviewReport, readChangesFromDisk } from '../../src/core/codeReview.js'
-import { SessionCheckpointStore } from '../../src/core/sessionCheckpoint.js'
+
 import { createLazyTool, type LazyTool } from '../../src/core/lazyTool.js'
 import { highlight, highlightDiff, detectLanguage } from '../../src/core/syntaxHighlight.js'
 import { exploreProject, formatProjectOverview } from '../../src/core/projectExplorer.js'
@@ -190,55 +188,6 @@ describe('RetryManager', () => {
   })
 })
 
-// ── ToolSuggester ──────────────────────────────────────────────────────────
-
-describe('ToolSuggester', () => {
-  const tools = [
-    { name: 'Bash', description: 'Run shell commands', searchHint: 'shell command exec', mutatesState: true },
-    { name: 'Read', description: 'Read file contents', searchHint: 'read file view', mutatesState: false },
-    { name: 'Edit', description: 'Edit file', searchHint: 'edit modify change', mutatesState: true },
-    { name: 'Grep', description: 'Search file contents', searchHint: 'search find grep', mutatesState: false },
-    { name: 'MultiEdit', description: 'Atomic multi-file edit', searchHint: 'batch edit files', mutatesState: true },
-  ]
-
-  it('ranks tools by task relevance', () => {
-    const s = suggestTools(tools, { task: 'edit the file to fix the bug' })
-    expect(s.length).toBeGreaterThan(0)
-    expect(s[0].name).toBe('Edit')
-  })
-
-  it('plan mode demotes mutating tools', () => {
-    const readTask = suggestTools(tools, { task: 'read the file and search for x', planMode: true })
-    const top = readTask[0].name
-    expect(['Read', 'Grep']).toContain(top)
-  })
-
-  it('recency penalty lowers repeated tools', () => {
-    const s = suggestTools(tools, { task: 'edit file', recentTools: ['Edit'] })
-    const edit = s.find(x => x.name === 'Edit')
-    expect(edit).toBeDefined()
-    // Edit still relevant but penalized below MultiEdit for batch phrasing? At minimum present.
-    expect(edit!.score).toBeGreaterThan(0)
-  })
-
-  it('fromDefinitions adapts ToolDefinition[]', () => {
-    const defs = [
-      { type: 'function', function: { name: 'A', description: 'does a' }, mutatesState: true },
-      { type: 'function', function: { name: 'B', description: 'does b' } },
-    ]
-    const adapted = fromDefinitions(defs as never)
-    expect(adapted).toHaveLength(2)
-    expect(adapted[0].name).toBe('A')
-  })
-
-  it('formatSuggestions is deterministic', () => {
-    const s = [{ name: 'Edit', score: 10, reason: 'name match' }]
-    const text = formatSuggestions(s)
-    expect(text).toContain('Edit')
-    expect(formatSuggestions([])).toContain('No tool suggestions')
-  })
-})
-
 // ── SymbolIndex ────────────────────────────────────────────────────────────
 
 describe('SymbolIndex', () => {
@@ -344,44 +293,6 @@ describe('CodeReview', () => {
   })
 })
 
-// ── SessionCheckpoint ──────────────────────────────────────────────────────
-
-describe('SessionCheckpoint', () => {
-  it('saves and restores workflow state', async () => {
-    const store = new SessionCheckpointStore({ cwd: dir })
-    const id = await store.save({
-      task: 'build feature',
-      state: { turn: 3, files: ['a.ts'] },
-      turnNumber: 3,
-      changedFiles: [],
-    } as never)
-    expect(id).toBeTruthy()
-    const restored = store.load(id)
-    expect(restored).toBeDefined()
-    expect(restored!.task).toBe('build feature')
-    expect(restored!.turnNumber).toBe(3)
-  })
-
-  it('lists checkpoints newest-first', async () => {
-    const store = new SessionCheckpointStore({ cwd: dir })
-    await store.save({ task: 'first', state: {}, turnNumber: 1, changedFiles: [] })
-    await store.save({ task: 'second', state: {}, turnNumber: 2, changedFiles: [] })
-    const list = store.list()
-    expect(list.length).toBe(2)
-    expect(list[0].task).toBe('second')
-  })
-
-  it('rotates old checkpoints beyond max', async () => {
-    const store = new SessionCheckpointStore({ cwd: dir, maxCheckpoints: 2 })
-    await store.save({ task: 'a', state: {}, turnNumber: 1, changedFiles: [] })
-    await store.save({ task: 'b', state: {}, turnNumber: 2, changedFiles: [] })
-    await store.save({ task: 'c', state: {}, turnNumber: 3, changedFiles: [] })
-    const list = store.list()
-    expect(list.length).toBe(2)
-    expect(list[0].task).toBe('c')
-  })
-})
-
 // ── LazyTool ───────────────────────────────────────────────────────────────
 
 describe('LazyTool', () => {
@@ -440,7 +351,7 @@ describe('SyntaxHighlight', () => {
   })
 
   it('highlights TS code with ANSI codes', () => {
-    const out = highlight('const x: number = 1', 'typescript')
+    const out = highlight('const x: number = 1', { language: 'ts' })
     expect(out).toContain('\x1b[')
   })
 

@@ -28,7 +28,19 @@ describe('parseKeyCombo', () => {
   })
 
   it('parses meta as alt', () => {
-    expect(parseKeyCombo('meta+k')).toEqual({ alt: true, key: 'k' })
+    expect(parseKeyCombo('meta+k')).toEqual({ meta: true, key: 'k' })
+  })
+
+  it('parses cmd as meta (macOS convention)', () => {
+    expect(parseKeyCombo('cmd+k')).toEqual({ meta: true, key: 'k' })
+  })
+
+  it('parses super as meta (Linux convention)', () => {
+    expect(parseKeyCombo('super+k')).toEqual({ meta: true, key: 'k' })
+  })
+
+  it('parses alt as alt (distinct from meta)', () => {
+    expect(parseKeyCombo('alt+k')).toEqual({ alt: true, key: 'k' })
   })
 
   it('returns null for empty string', () => {
@@ -63,11 +75,30 @@ describe('comboToString', () => {
     expect(comboToString({ key: '?' })).toBe('?')
     expect(comboToString({ alt: true, shift: true, key: 'x' })).toBe('alt+shift+x')
   })
+
+  it('round-trips: parseKeyCombo ∘ comboToString is identity', () => {
+    const combos = ['ctrl+l', 'alt+x', 'meta+k', 'cmd+s', 'super+space', 'shift+tab', '?']
+    for (const str of combos) {
+      const parsed = parseKeyCombo(str)
+      expect(parsed).not.toBeNull()
+      const roundTripped = comboToString(parsed!)
+      // meta/cmd/super all normalize to "meta+" prefix
+      const expected = str.replace(/^(cmd|super)\+/, 'meta+')
+      expect(roundTripped).toBe(expected)
+    }
+  })
+
+  it('comboToString outputs meta for meta modifier (not alt)', () => {
+    expect(comboToString({ meta: true, key: 'k' })).toBe('meta+k')
+  })
+
+  it('comboToString outputs alt for alt modifier', () => {
+    expect(comboToString({ alt: true, key: 'k' })).toBe('alt+k')
+  })
 })
 
 describe('matchCombo', () => {
   it('matches ctrl+l via control character', () => {
-    // Ctrl+L = '\x0c'
     expect(matchCombo('\x0c', { ctrl: true }, 'ctrl+l')).toBe(true)
   })
 
@@ -85,8 +116,8 @@ describe('matchCombo', () => {
 
   it('matches ctrl+a through ctrl+z', () => {
     for (let i = 0; i < 26; i++) {
-      const letter = String.fromCharCode(97 + i) // a-z
-      const ctrlChar = String.fromCharCode(1 + i) // \x01-\x1a
+      const letter = String.fromCharCode(97 + i)
+      const ctrlChar = String.fromCharCode(1 + i)
       expect(matchCombo(ctrlChar, { ctrl: true }, `ctrl+${letter}`)).toBe(true)
     }
   })
@@ -97,6 +128,20 @@ describe('matchCombo', () => {
 
   it('returns false for malformed combo string', () => {
     expect(matchCombo('l', { ctrl: true }, '')).toBe(false)
+  })
+
+  it('distinguishes alt from meta in Ink key events', () => {
+    // Ink's key.meta = Alt/Option (platform convention).
+    // combo.alt maps to Ink's key.meta.
+    // combo.meta (Super/Cmd) cannot be matched through Ink.
+    expect(matchCombo('k', { meta: true }, 'alt+k')).toBe(true)
+    expect(matchCombo('k', {}, 'alt+k')).toBe(false)
+  })
+
+  it('meta (Cmd/Super) combos are not matchable via Ink', () => {
+    // Ink does not expose Super/Cmd key state, so meta-key combos
+    // return false even when key.meta is pressed.
+    expect(matchCombo('k', { meta: true }, 'meta+k')).toBe(false)
   })
 })
 

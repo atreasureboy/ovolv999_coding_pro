@@ -53,6 +53,7 @@ export type EventType =
   | 'memory_promotion_started'
   | 'memory_promotion_decided'
   | 'memory_promotion_rejected'
+  | 'tool_result_duplicate_call_id'
 
 /** Runtime whitelist — used by isValidEntry to reject unknown event types. */
 const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
@@ -74,6 +75,7 @@ const EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   'memory_promotion_started',
   'memory_promotion_decided',
   'memory_promotion_rejected',
+  'tool_result_duplicate_call_id',
 ])
 
 export interface EventLogEntry {

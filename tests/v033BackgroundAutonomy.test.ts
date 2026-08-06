@@ -72,8 +72,8 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
   // ── §2/§3: Per-run isolation ─────────────────────────────────────
   it('§2: each Run gets an independent ProgressMonitor', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx1 = store.create('run-1', { taskKind: 'mutation' })
-    const ctx2 = store.create('run-2', { taskKind: 'mutation' })
+    const ctx1 = store.create('run-1', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
+    const ctx2 = store.create('run-2', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     expect(ctx1.progressMonitor).not.toBe(ctx2.progressMonitor)
     ctx1.progressMonitor.recordVerification(5)
     const snap2 = ctx2.progressMonitor.snapshot(0)
@@ -82,15 +82,15 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
 
   it('§3: each Run gets an independent ControlMessageLog', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx1 = store.create('run-1', { taskKind: 'mutation' })
-    const ctx2 = store.create('run-2', { taskKind: 'mutation' })
+    const ctx1 = store.create('run-1', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
+    const ctx2 = store.create('run-2', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     expect(ctx1.controlMessages).not.toBe(ctx2.controlMessages)
   })
 
   it('§3: each Run gets an independent TaskGraph', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx1 = store.create('run-1', { taskKind: 'mutation' })
-    const ctx2 = store.create('run-2', { taskKind: 'mutation' })
+    const ctx1 = store.create('run-1', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
+    const ctx2 = store.create('run-2', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     ctx1.taskGraph.addNode({ id: 'a', title: 'a', description: '', dependencies: [], acceptanceCriteria: [] })
     expect(ctx1.taskGraph.size()).toBe(1)
     expect(ctx2.taskGraph.size()).toBe(0) // run-2 graph is empty
@@ -98,7 +98,7 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
 
   it('§3: TaskGraph transitions update the same Run progress monitor', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx = store.create('run-1', { taskKind: 'mutation' })
+    const ctx = store.create('run-1', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     ctx.taskGraph.addNode({ id: 'a', title: 'a', description: '', dependencies: [], acceptanceCriteria: [] })
     ctx.taskGraph.start('a')
     ctx.taskGraph.complete('a')
@@ -108,7 +108,7 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
   // ── §5: Context released on close ────────────────────────────────
   it('§5: store.close() removes the context', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const context = store.create('run-x', { taskKind: 'mutation' })
+    const context = store.create('run-x', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     expect(store.has('run-x')).toBe(true)
     store.close('run-x')
     expect(store.has('run-x')).toBe(false)
@@ -119,7 +119,7 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
     const store = new InMemoryRunScopedRuntimeContextStore()
     for (let i = 0; i < 20; i++) {
       const rid = `run-${i}`
-      store.create(rid, { taskKind: 'mutation' })
+      store.create(rid, { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
       store.close(rid)
     }
     expect(store.list()).toHaveLength(0)
@@ -271,10 +271,10 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
   // ── §6: modelCalls cleared ───────────────────────────────────────
   it('§6: ProgressMonitor is fresh per Run (no carry-over)', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx1 = store.create('run-1', { taskKind: 'mutation' })
+    const ctx1 = store.create('run-1', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     ctx1.progressMonitor.recordVerification(3)
     store.close('run-1')
-    const ctx2 = store.create('run-2', { taskKind: 'mutation' })
+    const ctx2 = store.create('run-2', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     const snap = ctx2.progressMonitor.snapshot(0)
     expect(snap.verificationDelta).toBe(0) // fresh, no carry-over from run-1
   })
@@ -282,7 +282,7 @@ describe('v0.3.3 background autonomy regression (background autonomy contract §
   // ── restore ──────────────────────────────────────────────────────
   it('restore(): TaskGraph survives serialize/restore', () => {
     const store = new InMemoryRunScopedRuntimeContextStore()
-    const ctx1 = store.create('run-r', { taskKind: 'mutation' })
+    const ctx1 = store.create('run-r', { taskKind: 'mutation' as const, projectIdentity: { inputCwd: '/tmp/test', canonicalRoot: '/tmp/test', projectKey: 'test', binding: { repo: '/tmp/test', baseCommit: 'abc123', dirty: false, diffHash: 'abc123', workspaceHash: 'abc123' } } })
     ctx1.taskGraph.addNode({ id: 'x', title: 'x', description: '', dependencies: [], acceptanceCriteria: ['test passes'] })
     ctx1.taskGraph.start('x')
     const json = JSON.stringify({

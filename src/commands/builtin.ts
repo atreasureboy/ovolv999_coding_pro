@@ -1578,7 +1578,7 @@ registerCommand({
     const description = parts.slice(1).join(' ')
 
     if (!name) {
-      return text('Usage: /skill-save <name> [description]\n\nThe skill will be extracted from the current session and saved to .ovolv999/skills/<name>.md')
+      return text('Usage: /skill-save <name> [description]\n\nThe skill will be extracted from the current session and saved to .ovogo/skills/<name>.md')
     }
 
     const { extractSkill, saveSkill, skillExists } =

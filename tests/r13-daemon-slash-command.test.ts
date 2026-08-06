@@ -8,10 +8,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
-import { Daemon, DaemonClient, formatDaemonInfo, formatWorkers, getDaemonSocketPath, getDaemonLogPath } from '../src/core/daemon.js'
+import { Daemon, DaemonClient, formatDaemonInfo, formatWorkers } from '../src/core/daemon.js'
 import { getCommand } from '../src/commands/index.js'
 import type { SlashCommandContext } from '../src/commands/index.js'
 import type { OpenAIMessage } from '../src/core/types.js'
@@ -420,8 +420,8 @@ describe('R13: /daemon slash command', () => {
     const logPath = join(tmpDir, 'multi-ws.log')
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
-    const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const web1 = daemon.addWorker('web-1', 'echo', 'web')
+    daemon.addWorker('cli-1', 'echo', 'cli')
+    daemon.addWorker('web-1', 'echo', 'web')
 
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'restart-worker', payload: { workerId: 'tag: cli , web ' } })
@@ -451,8 +451,8 @@ describe('R13: /daemon slash command', () => {
     const logPath = join(tmpDir, 'tagstats.log')
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
-    const w1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const w2 = daemon.addWorker('cli-2', 'echo', 'cli')
+    daemon.addWorker('cli-1', 'echo', 'cli')
+    daemon.addWorker('cli-2', 'echo', 'cli')
     const w3 = daemon.addWorker('web-1', 'echo', 'web')
     // Mark w3 as 'failed' to verify the per-status breakdown
     daemon.updateWorkerStatus(w3.id, 'failed')
@@ -506,7 +506,7 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
+    daemon.addWorker('cli-2', 'echo', 'cli')
     const web1 = daemon.addWorker('web-1', 'echo', 'web')
     // Mark web1 as 'failed' so it doesn't match the running filter
     daemon.updateWorkerStatus(web1.id, 'failed')
@@ -555,7 +555,7 @@ describe('R13: /daemon slash command', () => {
     const logPath = join(tmpDir, 'tagstats-multi.log')
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
-    const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
+    daemon.addWorker('cli-1', 'echo', 'cli')
     const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
     const web1 = daemon.addWorker('web-1', 'echo', 'web')
     daemon.updateWorkerStatus(web1.id, 'failed')
@@ -643,7 +643,7 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
+    daemon.addWorker('cli-2', 'echo', 'cli')
     const web1 = daemon.addWorker('web-1', 'echo', 'web')
     // cli1 → running, cli2 stays starting, web1 → failed
     daemon.updateWorkerStatus(cli1.id, 'running')
@@ -709,7 +709,7 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
+    daemon.addWorker('cli-2', 'echo', 'cli')
     const web1 = daemon.addWorker('web-1', 'echo', 'web')
     // cli1 → failed, web1 → failed; only cli1 should be restarted
     daemon.updateWorkerStatus(cli1.id, 'failed')
@@ -746,7 +746,7 @@ describe('R13: /daemon slash command', () => {
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
     const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
-    const cli3 = daemon.addWorker('cli-3', 'echo', 'cli')
+    daemon.addWorker('cli-3', 'echo', 'cli')
     // cli1 → running, cli2 → failed, cli3 stays starting
     daemon.updateWorkerStatus(cli1.id, 'running')
     daemon.updateWorkerStatus(cli2.id, 'failed')
@@ -850,7 +850,7 @@ describe('R13: /daemon slash command', () => {
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
     const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
-    const web1 = daemon.addWorker('web-1', 'echo', 'web')
+    daemon.addWorker('web-1', 'echo', 'web')
 
     const client = new DaemonClient(sockPath)
     // cli + (not web) → both cli workers qualify (web is excluded even though it has no relation to cli)
@@ -870,8 +870,8 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
     const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
-    const web1 = daemon.addWorker('web-1', 'echo', 'web')
-    const sch1 = daemon.addWorker('sch-1', 'echo', 'scheduler')
+    daemon.addWorker('web-1', 'echo', 'web')
+    daemon.addWorker('sch-1', 'echo', 'scheduler')
 
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'restart-worker', payload: { workerId: 'tag:!web,!scheduler' } })
@@ -970,7 +970,7 @@ describe('R13: /daemon slash command', () => {
     daemon.addWorker('cli-1', 'echo', 'cli')
     daemon.addWorker('cli-2', 'echo', 'cli')
     daemon.addWorker('web-1', 'echo', 'web')
-    const untagged = daemon.addWorker('untagged-1', 'echo')
+    daemon.addWorker('untagged-1', 'echo')
 
     // Wait a bit so all workers have some uptime
     await new Promise((resolve) => setTimeout(resolve, 50))
@@ -1021,7 +1021,7 @@ describe('R13: /daemon slash command', () => {
     const logPath = join(tmpDir, 'tagstats-gte.log')
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
-    const cli1 = daemon.addWorker('cli-1', 'echo', 'cli')
+    daemon.addWorker('cli-1', 'echo', 'cli')
     const cli2 = daemon.addWorker('cli-2', 'echo', 'cli')
     const cli3 = daemon.addWorker('cli-3', 'echo', 'cli')
     // cli1 stays starting (0), cli2 → running (1), cli3 → failed (3)
@@ -1086,7 +1086,7 @@ describe('R13: /daemon slash command', () => {
     const daemon = new Daemon(sockPath, logPath)
     await daemon.start()
     const parent = daemon.addWorker('parent-1', 'echo', 'cli', undefined, ['cli-handler'])
-    const child = daemon.addWorker('child-1', 'echo', 'subcli')  // no parent link in this test
+    daemon.addWorker('child-1', 'echo', 'subcli')  // no parent link in this test
 
     const client = new DaemonClient(sockPath)
     const res = await client.send({ action: 'restart-worker', payload: { workerId: 'tag:cli-handler' } })

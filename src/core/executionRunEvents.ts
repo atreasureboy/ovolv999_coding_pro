@@ -77,9 +77,15 @@ export type CoreRunEventType =
   | 'run.failed'
 
 /**
- * Subsystem-emitted event types (runtime architecture contract §四). These are not
- * fired by the registry; subsystems call the bus's emit helpers
- * (emitToolRequested, emitArtifactCreated, etc.).
+ * Subsystem-emitted event types (runtime architecture contract §四).
+ *
+ * **@reserved** — These event types are defined for a future tool
+ * observability subsystem. Currently there are zero emit points in the
+ * codebase; the coordinator emits tool lifecycle events through
+ * RunEventEmitter (TOOL_STARTED / TOOL_COMPLETED / TOOL_FAILED) instead.
+ * When the observability subsystem is implemented, these types will be
+ * wired through the executionRunEventBus for persistence-first recording.
+ * Do NOT delete — they are documented architecture awaiting integration.
  */
 export type SubsystemEventType =
   | 'tool.requested'
@@ -348,6 +354,8 @@ export class ExecutionRunEventBus {
   emitSteered(runId: string, instruction: string): void {
     this.emit('run.steered', runId, { runId, instruction })
   }
+
+  // ── Subsystem emitters (all @reserved — see SubsystemEventType doc) ──────
 
   /** Tool was requested by the model (just parsed, not yet dispatched). */
   emitToolRequested(runId: string, tool: {

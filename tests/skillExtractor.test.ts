@@ -329,7 +329,7 @@ describe('saveSkill & skillExists', () => {
     try { rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
   })
 
-  it('saves skill to .ovolv999/skills/', () => {
+  it('saves skill to .ovogo/skills/', () => {
     const extraction = {
       name: 'test-skill',
       description: 'Test',
@@ -340,7 +340,7 @@ describe('saveSkill & skillExists', () => {
       prompt: '# Test\n',
     }
     const path = saveSkill(dir, extraction)
-    expect(path).toContain('.ovolv999')
+    expect(path).toContain('.ovogo')
     expect(path).toContain('test-skill.md')
     expect(existsSync(path)).toBe(true)
 

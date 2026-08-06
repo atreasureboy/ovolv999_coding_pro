@@ -23,7 +23,7 @@
  * on disjoint file sets are safe.
  */
 
-import { readFile, copyFile, unlink, rename } from 'fs/promises'
+import { copyFile, unlink, rename } from 'fs/promises'
 import { existsSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { atomicWrite } from './atomicWrite.js'
@@ -143,13 +143,11 @@ export class AtomicTransaction {
       return { ok: false, mutations: 0, rolledBack: true, error: 'Already rolled back' }
     }
     this.committed = true
-    let cleaned = 0
     const errors: string[] = []
     for (const snap of this.snapshots.values()) {
       if (!snap.backupPath) continue
       try {
         await unlink(snap.backupPath)
-        cleaned++
       } catch (err) {
         errors.push(`${snap.backupPath}: ${(err as Error).message}`)
       }

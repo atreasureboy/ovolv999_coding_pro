@@ -209,8 +209,6 @@ describe('Scenario C — real two-profile Profile A → Profile B fallback', () 
 
     // Capture routing events.
     let fallbackCount = 0
-    let firstSelected = ''
-    let lastSelected = ''
     router.setEventListener((event: { type: string; payload?: Record<string, unknown> }) => {
       if (event.type === 'ROUTING_FALLBACK_APPLIED') fallbackCount++
     })
@@ -228,7 +226,6 @@ describe('Scenario C — real two-profile Profile A → Profile B fallback', () 
     const decisionA = router.route(routingInput)
     expect(decisionA.selectedModel).toBe('model-a')
     expect(decisionA.selectedProfile).toBe('profile-a')
-    firstSelected = decisionA.selectedModel
 
     // Step 2: simulate a 503 on model-a. Router records failure,
     // opens the per-profile circuit at threshold 5.
@@ -245,7 +242,6 @@ describe('Scenario C — real two-profile Profile A → Profile B fallback', () 
     const decisionB = router.route(routingInput)
     expect(decisionB.selectedModel).toBe('model-b')
     expect(decisionB.selectedProfile).toBe('profile-b')
-    lastSelected = decisionB.selectedModel
 
     // Step 4: simulate the fallback was actually used + succeeded.
     router.recordCall('profile-b', true, 200, { inputTokens: 11, outputTokens: 7 })
@@ -266,7 +262,7 @@ describe('Scenario C — real two-profile Profile A → Profile B fallback', () 
     // emitFallback above. Two profiles + circuit-open on profile-a
     // is the real Profile A → Profile B shape the spec mandates.
     expect(fallbackCount).toBe(1)
-    expect(firstSelected).toBe('model-a')
-    expect(lastSelected).toBe('model-b')
+    expect(decisionA.selectedModel).toBe('model-a')
+    expect(decisionB.selectedModel).toBe('model-b')
   }, TIMEOUT)
 })

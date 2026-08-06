@@ -208,7 +208,7 @@ export class AcpWebSocketServer {
       server.on('upgrade', (req, socket) => {
         try {
           this.handleUpgrade(req, socket as Socket)
-        } catch (_err) {
+        } catch {
           try { (socket as Socket).destroy() } catch { /* noop */ }
         }
       })
@@ -282,7 +282,7 @@ export class AcpWebSocketServer {
     if (this.options.onConnection) {
       try {
         this.options.onConnection(transport, remoteAddress)
-      } catch (err) {
+      } catch {
         transport.close()
       }
     }
