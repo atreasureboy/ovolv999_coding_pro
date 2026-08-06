@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldInvokeCritic, buildCriticReport, criticReportToGuidance, type CriticSignals } from '../src/core/runtime/criticTrigger.js'
+import { shouldInvokeCritic, type CriticSignals } from '../src/core/runtime/criticTrigger.js'
 import { reviewRun } from '../src/core/runtime/reviewer.js'
 import type { ProgressSnapshot } from '../src/core/runtime/progressMonitor.js'
 
@@ -35,22 +35,6 @@ describe('Adaptive Critic trigger (Phase 5)', () => {
 
   it('invokes when completion is claimed with no changes produced', () => {
     expect(shouldInvokeCritic(baseSignals({ modelClaimingCompletion: true, remainingAcceptanceCount: 1, changedFilesCount: 0 })).invoke).toBe(true)
-  })
-
-  it('buildCriticReport returns block verdict when completion is unsupported', () => {
-    const r = buildCriticReport(baseSignals({ modelClaimingCompletion: true, remainingAcceptanceCount: 1 }))
-    expect(r.verdict).toBe('block')
-    expect(r.unsupportedClaims).toContain('completion')
-    expect(r.detectedProblems.length).toBeGreaterThan(0)
-  })
-
-  it('criticReportToGuidance yields role:system (NOT user), null on clean continue', () => {
-    const clean = buildCriticReport(baseSignals())
-    expect(criticReportToGuidance(clean)).toBeNull()
-    const block = buildCriticReport(baseSignals({ modelClaimingCompletion: true, remainingAcceptanceCount: 1 }))
-    const msg = criticReportToGuidance(block)!
-    expect(msg.role).toBe('system')
-    expect(msg.content).toMatch(/verdict: block/)
   })
 })
 

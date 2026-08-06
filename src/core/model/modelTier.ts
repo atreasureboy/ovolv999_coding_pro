@@ -31,6 +31,7 @@ export function resolveModelTier(profile: Record<string, unknown>): ModelTierRes
   }
 }
 
+/** CLI-only: used by `/model list` in builtin.ts. Not consumed by the runtime engine. */
 export function listConfiguredModelTierProfiles(
   rawProfiles: unknown,
   defaultProvider: string,

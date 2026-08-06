@@ -73,7 +73,7 @@ export function shouldInvokeCritic(s: CriticSignals): CriticTriggerDecision {
  * problems + recommended actions are concretely grounded in run state,
  * not a model hallucination.
  */
-export function buildCriticReport(s: CriticSignals): CriticReport {
+function buildCriticReport(s: CriticSignals): CriticReport {
   const problems: string[] = []
   const actions: string[] = []
   let verdict: CriticVerdict = 'continue'
@@ -123,7 +123,7 @@ export function buildCriticReport(s: CriticSignals): CriticReport {
  * Render the report as a role:system guidance nudge to inject (NOT a
  * user message). Null when the verdict is 'continue' with no problems.
  */
-export function criticReportToGuidance(report: CriticReport): { role: 'system'; content: string } | null {
+function criticReportToGuidance(report: CriticReport): { role: 'system'; content: string } | null {
   if (report.verdict === 'continue' || report.detectedProblems.length === 0) return null
   const lines = [`[runtime critic · verdict: ${report.verdict}]`]
   if (report.detectedProblems.length) lines.push(`Problems: ${report.detectedProblems.join('; ')}`)

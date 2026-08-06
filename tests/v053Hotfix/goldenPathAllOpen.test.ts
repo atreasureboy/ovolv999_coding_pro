@@ -54,9 +54,6 @@ describe('Golden Path — all-profiles-open', () => {
     })
     expect(decision.selectedModel).toBe('')
     expect(decision.reasonCodes).toContain('all-profiles-open')
-    // applyRouteApplication surfaces this as 'unavailable'.
-    const app = router.applyRouteApplication(decision)
-    expect(app.kind).toBe('unavailable')
     // The coordinator MUST NOT call the Gateway when unavailable —
     // the only safe path is a structured error. We assert that
     // by construction: a non-empty selectedModel is required to

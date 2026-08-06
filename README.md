@@ -1,4 +1,4 @@
-# ovolv999 (v0.5.6) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
+# ovolv999 (v0.6.0) — 可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime
 
 <div align="center">
 
@@ -37,7 +37,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 借鉴 | Round | 文档 |
 |---|---|---|
 | **TF-IDF 工具检索 + Defer 加载** (`search_extra_tools`) | R1 | [ADR-008](docs/ADR/008-tfidf-tool-search.md) · [TOOL-SEARCH.md](docs/TOOL-SEARCH.md) |
-| **Hook 协议** (PreToolUse / PostToolUse / UserPromptSubmit 等 9 种事件,JSON stdin/stdout) | R2 | [ADR-009](docs/ADR/009-hook-protocol.md) · [HOOKS.md](docs/HOOKS.md) |
+| **Hook 协议** (PreToolUse / PostToolUse / UserPromptSubmit 等 6 种事件,JSON stdin/stdout) | R2 | [ADR-009](docs/ADR/009-hook-protocol.md) · [HOOKS.md](docs/HOOKS.md) |
 | **7 种 Permission Modes** (default / acceptEdits / plan / auto / bypassPermissions / dontAsk / bubble) | R3 + R5 | [PERMISSION-MODES.md](docs/PERMISSION-MODES.md) |
 | **Sandbox/Bubble 模式** (macOS sandbox-exec + Linux Landlock helper) | R3 + R4 + R5 | [SANDBOX.md](docs/SANDBOX.md) |
 | **ACP WebSocket 传输** (`--acp-ws --port 8765`) + **MCP HTTP + OAuth PKCE** + **Daemon 长会话** | R4 + R5 + R6 | [ACP-WS.md](docs/ACP-WS.md) · [MCP-OAUTH.md](docs/MCP-OAUTH.md) · [DAEMON.md](docs/DAEMON.md) |
@@ -205,8 +205,8 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 | 8 | Worker 崩溃或主进程重启后可恢复状态 | `JsonlEventStore` + `recoverRegistryFromStore` + 引擎启动时标记 in-flight → failed | `tests/gapGEngineRecovery.test.ts` |
 | 9 | 工具并发由资源冲突决定 | `ResourceScheduler`（R/W/X 矩阵）+ 工具 `metadata.claims` 声明 | `tests/gapDToolClaims.test.ts`, `tests/resourceScheduler.test.ts` |
 | 10 | 上下文压缩不丢失关键工作状态 | `WorkingState` + INV-1..INV-5 不变量 + `maybeCompactWithInvariants` | `tests/workingState.test.ts` |
-| 11 | 长期记忆绑定来源和 commit | `LongTermMemory` R1-R6 闸门（验证 / 来源标记 / commit 绑定 / 过期 / 冲突合并）——**契约完整，尚未接入引擎主循环**（仅测试引用） | `tests/longTermMemory.test.ts` |
-| 12 | Provider 差异不泄漏到主 Runtime | 运行时路径：`OpenAICompatibleAdapter`（openai / minimax / openai-compatible，单传输）；`ModelCapabilities` + `ProviderAdapter` 注册表 + `toProviderRequest` / `fromProviderStreamChunk` 为**未接线的规格接口** | `tests/modelCapabilities.test.ts` |
+| 11 | 长期记忆绑定来源和 commit | `LongTermMemory` R1-R6 闸门（验证 / 来源标记 / commit 绑定 / 过期 / 冲突合并）——**✅ 已接入引擎主循环**（MemoryModule 通过 LTM 提供 boot relevance + `memory_search` + 持久化） | `tests/longTermMemory.test.ts` |
+| 12 | Provider 差异不泄漏到主 Runtime | 运行时路径：`OpenAICompatibleAdapter`（anthropic / openai / minimax / openai-compatible，4 可服务）；`ModelCapabilities` + `ProviderAdapter` 注册表 + `toProviderRequest` / `fromProviderStreamChunk` —— **✅ 已接线**：ModelGateway 通过 `ProviderAdapter.stream()` 调用 | `tests/modelCapabilities.test.ts` |
 | 13 | README 展示 Runtime 能力（非工具数量） | 本节 | — |
 
 ### 故障注入覆盖（§十二）
@@ -224,7 +224,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ### 其它特性
 
 - **统一 Harness** — 所有 Agent 走同一套 Boot Sequence，按模块配置差异化执行
-- **模块化能力** — memory / critic / workspace / mcp 四个生产模块（reflection 已移至 experimental/）
+- **模块化能力** — memory / critic / workspace / workspace_watcher / mcp 五个生产模块（reflection 已移至 experimental/）
 - **配置驱动角色** — 探索者、规划者、审查者 = 不同 AgentConfig 配置实例，零代码新增角色
 - **记忆系统** — 引擎层：Semantic（语义知识，来源优先级 user_stated > agent_inferred > tool_observed）+ Episodic（工具轨迹，被动写入）；命令/契约层：KnowledgeBase、TeamMemory、LongTermMemory（R1–R6，尚未接入引擎循环）
 - **来源归因 + 冲突解决** — `user_stated > agent_inferred > tool_observed` 优先级链
@@ -248,7 +248,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 - **自动更新** — semver 比较，npm dist-tag 检查，ignore-list
 - **缓存统计** — prompt-cache hit/miss 追踪，per-model 分解，成本节约
 - **IDE 检测** — 9 种编辑器检测（VSCode/IntelliJ/Vim/Emacs/...），路径转换，扩展推荐
-- **生命周期 Hooks** — 6 种：PreToolCall / PostToolCall / OnError / OnComplete / OnContextOverflow / UserPromptSubmit
+- **生命周期 Hooks** — 6 种：PreToolUse / PostToolUse / UserPromptSubmit / SessionStart / SessionEnd / Notification
 - **Skill 系统** — frontmatter 解析 + 懒加载 + 语义搜索 + auto-suggestion
 - **Plugin 系统** — 动态加载 npm 包/本地路径插件
 - **Permission 系统** — allow/deny 规则 + glob 匹配 + 持久化
@@ -265,7 +265,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                   ovolv999 — 统一 Harness + 模块化 Agent 基座               ║
 ║              多模型 Worker · 结构化 Run 状态机 · 资源调度 · 验证闸门 · 恢复  ║
-║              Runtime: openai · glob · zod · ink · react                     ║
+║              Runtime: openai · glob · zod · ink · react · @anthropic-ai/sdk · chokidar · vscode-jsonrpc           ║
 ╠═══════════════════════════════════════════════════════════════════════════╣
 ║                                                                           ║
 ║  ┌─ AgentConfig ──────────────────────────────────────────────────────┐   ║
@@ -837,7 +837,7 @@ ovolv999/
 │       ├── acp.ts                   # Agent Communication Protocol server
 │       └── pipeMode.ts              # 管道模式
 ├── tests/                           # vitest test suite
-└── package.json                     # runtime: openai/glob/zod/ink/react
+└── package.json                     # runtime: openai/glob/zod/ink/react/@anthropic-ai-sdk/chokidar/vscode-jsonrpc
 ```
 
 ## AgentOS 概念对照
@@ -879,7 +879,7 @@ ovolv999/
 | 终端 UI | Ink + React（默认）/ readline REPL（`--classic` 回退） |
 | 测试 | Vitest |
 | Lint | ESLint (typescript-eslint recommendedTypeChecked) |
-| 运行时依赖 | openai · glob · zod · ink · react |
+| 运行时依赖 | openai · glob · zod · ink · react · @anthropic-ai/sdk · chokidar · vscode-jsonrpc |
 
 ## 构建
 

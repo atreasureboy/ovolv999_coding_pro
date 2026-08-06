@@ -204,9 +204,7 @@ export function getToolDefinitions(tools: Tool[]) {
   return tools.map((t) => t.definition)
 }
 
-export function findTool(tools: Tool[], name: string): Tool | undefined {
-  return tools.find((t) => t.name === name)
-}
+export { findTool } from './findTool.js'
 
 export {
   BashTool,

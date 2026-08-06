@@ -326,15 +326,6 @@ export class ClaudeCodeTool implements Tool, WorkerAdapter {
     return collected
   }
 
-  private transitionTerminal(runId: string, to: RunStatus, patch?: Record<string, unknown>): void {
-    if (!this.runRegistry) return
-    try { this.runRegistry.transition(runId, to, patch) } catch { /* best-effort */ }
-    if (isTerminalRunStatus(to)) {
-      this.runSessions.delete(runId)
-      this.runTasks.delete(runId)
-    }
-  }
-
   /**
    * OPTIONAL: reconnect to a worker after a host restart. Given the
    * original runId + the serialisable descriptor (sessionId),

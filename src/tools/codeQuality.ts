@@ -185,7 +185,7 @@ Checks (comma-separated):
 
     return {
       content: this.formatReport(report),
-      isError: false,
+      isError: !report.passed,
     }
   }
 

@@ -27,6 +27,11 @@ export type ProviderId =
   | 'mistral'
   | 'cohere'
   | 'perplexity'
+  | 'openai-compatible'  // generic OpenAI-compatible fallback
+  | 'minimax'    // MiniMax (OpenAI-compatible via /v1)
+  | 'bedrock'    // AWS Bedrock (stub)
+  | 'vertex'     // GCP Vertex AI (stub)
+  | 'foundry'    // Azure AI Foundry (stub)
   | 'unknown'
 
 export interface ModelInfo {
@@ -158,6 +163,35 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     baseURL: 'https://api.perplexity.ai',
     apiKeyEnv: 'PPLX_API_KEY',
     openAICompatible: true,
+  },
+  'openai-compatible': {
+    id: 'openai-compatible',
+    name: 'OpenAI-Compatible',
+    baseURL: '',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    openAICompatible: true,
+  },
+  minimax: {
+    id: 'minimax',
+    name: 'MiniMax',
+    baseURL: 'https://api.minimax.chat/v1',
+    apiKeyEnv: 'MINIMAX_API_KEY',
+    openAICompatible: true,
+  },
+  bedrock: {
+    id: 'bedrock',
+    name: 'AWS Bedrock',
+    openAICompatible: false,
+  },
+  vertex: {
+    id: 'vertex',
+    name: 'GCP Vertex AI',
+    openAICompatible: false,
+  },
+  foundry: {
+    id: 'foundry',
+    name: 'Azure AI Foundry',
+    openAICompatible: false,
   },
   unknown: {
     id: 'unknown',

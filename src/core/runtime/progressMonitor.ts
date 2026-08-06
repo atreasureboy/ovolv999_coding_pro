@@ -321,7 +321,7 @@ function fingerprint(value: unknown): string {
  *
  * Pure + deterministic → unit-testable independently of real elapsed time.
  */
-export function interventionMessageForStall(verdict: StallVerdict): { role: 'system'; content: string } | null {
+function interventionMessageForStall(verdict: StallVerdict): { role: 'system'; content: string } | null {
   switch (verdict.kind) {
     case 'progressing':
       return null

@@ -21,21 +21,6 @@ import type { ProviderAdapter } from './providerAdapter.js'
 import type { ModelProfile } from './modelRouter.js'
 import type { ProviderRuntimeBinding } from './providerRuntimeBinding.js'
 
-/**
- * Provider ids that the runtime can route to in single-transport mode.
- * This is intentionally a hard list (not the union from providers.ts)
- * because runtime policy diverges from provider metadata:
- *   - 'minimax' is not in providers.ts but is a runtime-eligible
- *     OpenAI-compatible provider (CLI resolves it from baseURL).
- *   - 'openai-compatible' is the generic placeholder the adapter
- *     factory returns when nothing matches.
- */
-export const RUNTIME_KNOWN_PROVIDERS = new Set<string>([
-  'openai',
-  'minimax',
-  'openai-compatible',
-])
-
 export class ProfileValidationError extends Error {
   readonly offendingProfileIds: string[]
   constructor(message: string, offendingProfileIds: string[]) {

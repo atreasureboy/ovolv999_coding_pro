@@ -100,6 +100,26 @@ const PROVIDER_DEFAULTS: Record<
     promptCaching: false,
     usageStreaming: false,
   },
+    'openai-compatible': {
+    promptCaching: false,
+    usageStreaming: false,
+  },
+  minimax: {
+    promptCaching: false,
+    usageStreaming: true,
+  },
+  bedrock: {
+    promptCaching: false,
+    usageStreaming: false,
+  },
+  vertex: {
+    promptCaching: false,
+    usageStreaming: false,
+  },
+  foundry: {
+    promptCaching: false,
+    usageStreaming: false,
+  },
   unknown: {
     promptCaching: false,
     usageStreaming: false,

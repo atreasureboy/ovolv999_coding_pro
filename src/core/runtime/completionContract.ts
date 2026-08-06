@@ -24,7 +24,9 @@
  * evidence. Reviewer findings are folded into the verdict.
  */
 
-export type CompletionStatus =
+/** Internal: 7-state completion status including 'incomplete' (not exposed to consumers).
+ *  External consumers use TurnOutcome's 6-state CompletionStatus from turnOutcome.ts. */
+type CompletionStatus =
   | 'completed'
   | 'partial'
   | 'blocked'
@@ -33,19 +35,9 @@ export type CompletionStatus =
   | 'exhausted'
   | 'incomplete'
 
-export interface AcceptanceCriterion {
-  /** Stable id so the caller can mark a criterion satisfied without
-   *  re-passing the entire list. */
-  id?: string
-  description: string
-  satisfied?: boolean
-}
-
-export interface VerificationState {
-  executed: boolean
-  passed: boolean
-  failed: string[]
-}
+import type { AcceptanceCriterion } from './taskIntent.js'
+import type { VerificationState } from './turnOutcome.js'
+export type { AcceptanceCriterion, VerificationState }
 
 export interface WorkerSummary {
   id: string

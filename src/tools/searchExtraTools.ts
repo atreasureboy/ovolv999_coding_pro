@@ -20,7 +20,7 @@ import {
   type ToolIndexEntry,
   type ToolSearchResult,
 } from '../core/toolSearch.js'
-import { findTool } from './index.js'
+import { findTool } from './findTool.js'
 
 export const SEARCH_EXTRA_TOOLS_NAME = 'search_extra_tools'
 

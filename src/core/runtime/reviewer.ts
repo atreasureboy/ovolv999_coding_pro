@@ -8,8 +8,9 @@
  * Pure → unit-testable.
  */
 
+import type { TaskKind } from './taskIntent.js'
+export type { TaskKind }
 export type ReviewVerdict = 'completed' | 'partial' | 'blocked' | 'failed'
-export type TaskKind = 'informational' | 'analysis' | 'mutation'
 
 export interface ReviewInput {
   taskKind: TaskKind

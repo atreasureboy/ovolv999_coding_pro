@@ -33,7 +33,7 @@ import { buildRevisionBinding } from '../core/revisionBinding.js'
  * null so the tool can refuse the call rather than silently
  * accepting the ref.
  */
-export function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidate.js').MemoryEvidenceRef[] | null {
+function parseMemoryEvidenceRefs(raw: unknown[]): import('../core/memoryCandidate.js').MemoryEvidenceRef[] | null {
   const out: import('../core/memoryCandidate.js').MemoryEvidenceRef[] = []
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') return null

@@ -364,7 +364,7 @@ export interface AgentToolWiring {
 
 export class AgentTool implements Tool, WorkerAdapter {
   name = 'Agent'
-  metadata = { concurrencySafe: true, longRunning: true }
+  metadata = { concurrencySafe: true, longRunning: true, mutatesState: true }
   readonly workerKind = 'agent'
 
   /**

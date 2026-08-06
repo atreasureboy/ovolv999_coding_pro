@@ -312,7 +312,7 @@ describe('PROVIDERS registry integrity', () => {
 
   it('OpenAI-compatible providers have baseURL', () => {
     for (const p of Object.values(PROVIDERS)) {
-      if (p.id === 'unknown') continue
+      if (p.id === 'unknown' || p.id === 'openai-compatible') continue
       if (p.openAICompatible) {
         expect(p.baseURL).toBeTruthy()
       }

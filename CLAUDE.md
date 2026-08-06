@@ -6,12 +6,13 @@
 ## 项目定位
 
 ovolv999 —— **可观测、可控制、可恢复、可验证的多模型 Coding Agent Runtime**。
-TypeScript 5.7 strict ESM,Node ≥ 20,~67k 行 src,测试套件全绿。运行时依赖 8 个:
+TypeScript 5.7 strict ESM,Node ≥ 20,~82k 行 src,测试套件全绿。运行时依赖 8 个:
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
-当前版本:**0.5.3**(package.json / README / VERSION / CHANGELOG 全部一致)。
+当前版本:**0.6.0**(package.json / CHANGELOG / VERSION 一致；README 已更新至 0.6.0)。
+> 本 CLAUDE.md 最后核实: 2026-08-05 (v0.6.0 全量架构审计)。
 
-v0.5.3 Final 关键不变量:
+v0.6.0 关键不变量(延续 v0.5.3):
 
 - **Memory Candidate → Promotion**: `memory_write` 推 MemoryCandidate 到
   `RunScopedRuntimeContext`;`onComplete` + CompletionContract + Reviewer
@@ -80,8 +81,8 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 | `core/toolRuntime/` | 工具运行时 | toolRegistry, toolPolicy(双层防御), toolExecutor, toolScheduler |
 | `core/moduleRuntime/` | 模块生命周期 | moduleManager(拓扑 boot,critical/best_effort) |
 | `core/context/` | 上下文预算 | contextManager, toolResultBudget |
-| `tools/` | 34 个工具 | agent.ts(子引擎+验证闸门), claudeCode.ts(tmux worker), taskPlan.ts(13 action) |
-| `modules/` | 4 个生产模块 + reflection(experimental/) | memory, critic, workspace, mcp |
+| `tools/` | 42+ 个工具 (createTools 41 + loadSkill + MCP 动态) | agent.ts(子引擎+验证闸门), claudeCode.ts(tmux worker), taskPlan.ts(13 action) |
+| `modules/` | 5 个生产模块 (含 workspace_watcher) + reflection(experimental/) | memory, critic, workspace, workspace_watcher, mcp |
 | `ui/` | 三前端共享引擎 | ink/(UIStore 单向桥), vim.ts(纯状态机), statusLine |
 | `commands/` | 89 个 slash 命令 | builtin.ts(3487 行单文件) |
 | `integrations/` | 外部协议 | acp.ts(JSON-RPC stdio), pipeMode |
@@ -92,7 +93,7 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 2. **Claim 并发调度**:工具 `metadata.claims(input)` 声明 R/W/X;`ResourceScheduler.acquire` 原子 all-or-nothing 是**唯一正确性闸门**,分区并行只是优化;无声明默认串行;git 强制 exclusive。
 3. **模型路由**:纯函数打分,`(1-complexity)×cost×0.8` 使简单任务下沉廉价模型;manual override sticky 恒最高;决策带 reasonCodes 供 `/why`。Fallback **只在流建立边界、单次、复用传输**——绝不重放副作用 tool。三态 Provider 熔断器(5 次/30s/半开)。
 4. **完成验证契约**:**模型说 stop ≠ 完成**。7 态:completed/partial/blocked/failed/cancelled/exhausted/incomplete(TurnOutcome 收敛为 6 态对外)。只在**正向失败证据**出现时阻塞;耗尽/部分完成映射 blocked 而非 failed。
-5. **内部控制消息**:10 种类型化信号存 ControlMessageLog,llm_call 时 renderForProvider → **立即 clear**,永不进用户历史/导出。
+5. **内部控制消息**:12 种类型化信号存 ControlMessageLog,llm_call 时 renderForProvider → **立即 clear**,永不进用户历史/导出。
 6. **JSONL EventStore**:零依赖,appendBatch 原子,eventId 去重;EventStore 接口预留 SQLite。
 
 ### 反假成功纵深(项目灵魂)
@@ -105,11 +106,11 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 
 - `.ovogo` / `~/.ovogo`:现役 settings、skills、memory(episodes/semantic.jsonl)、modes
 - `.ovolv999` / `~/.ovolv999`:config.ts、worktrees、knowledge、dream、team-memory、budgets、skill-usage
-- 收敛方向已定(33 vs 108 处引用),迁移需带用户数据搬家方案。
+- 收敛方向已定(57 .ovogo vs 121 .ovolv999 处 src 引用),迁移需带用户数据搬家方案。收敛计划: 此轮不做实际迁移,但引用计数已记录;策略见 super_plan.md §4.2。
 
 ## 文档 vs 现实台账(2026-07-28 核实,README 已按此修订)
 
-**已修 README**:完成契约 7 态(非 6)、TaskPlan 13 action(非 12)、RunEvent 54 变体(非 19)、
+**已修 README**:完成契约 7 态(非 6)、TaskPlan 13 action(非 12)、RunEvent 55 变体(非 19)、
 引擎记忆实为 Semantic+Episodic(KnowledgeBase/TeamMemory 仅命令级)、Auto-Dream 是被动统计库(无 LLM)、
 内置模块 5 个(含 mcp)、能力矩阵 §11 LongTermMemory 与 §12 ProviderAdapter 注册表标注"未接线"、
 §5 路由信号标注部分为代理值。
@@ -117,8 +118,8 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 **代码接线优先级(架构演进 backlog)**:
 - ~~P0 DONE.flag 抗伪造~~ → **已完成(ADR-007,2026-07-28)**:nonce/checkpoint 双路绑定 + 工具写禁 + resume succeeded 短路;遗留:Bash 伪造 checkpoint.json 在 0.x 威胁模型外(沙箱负责)
 - ~~P1 低成本收敛~~ → **已完成(2026-07-28)**:价格表单一真相源(costTracker.getModelPricing 委托 providers.ts MODELS[],null 语义保留驱动 hasUnknownModel;legacy/EOL 模型名刻意落空→"costs may be inaccurate"注记;MODELS[] 补 claude-sonnet-4-6/o1-pro);路由层 `ModelCapabilities`→`RoutingCapabilities`(与 provider 特性类型解歧);`buildFullSystemPrompt` 形参 `memorySection`→`modePrompt`;Loop 每轮对称重读 GOAL/ACCEPTANCE(prompt 正文用 `goalFresh`,三处 checkpoint 哈希现取现算,启动 `goal` 仅留存在性检查/taskId/run 标题);usage 缺失不再静默记 $0(warn 每 run 一次 + EventLog `llm_api_usage_missing` + `usageMissing` 落 TurnOutcome.modelAttempts,绝不伪造零成本调用);checkpoint load() 主文件缺失/损坏回退 checkpoint.previous.json
-- P2 决策项(接线 or 删除):`permissionRules.ts` glob 引擎(未接线,内置 deny 规则浪费)、持久层 subsystem 事件(tool.*/artifact.* 零 emit 点,死接口)、LongTermMemory R1–R6 接入引擎、双 retryable 正则合并、死字段清理(writeTimeoutMs/consecutiveCommandFailures/lastCommit)
+- P2 决策项(接线 or 删除):`permissionRules.ts` glob 引擎(✅ 已接线,toolExecutor.ts 引用)、持久层 subsystem 事件(tool.*/artifact.* 零 emit 点,死接口)、LongTermMemory R1–R6(⚠️ 部分接线 — MemoryModule 通过 LTM 提供 boot relevance + memory_search;引擎级全量接入待补)、双 retryable 正则合并、死字段清理(writeTimeoutMs/consecutiveCommandFailures/lastCommit)
 - P3 大迁移:品牌目录收敛、路由信号真实化(`repoFileCount=filesTouched×10` 代理、`budgetRemaining` 恒 undefined)、Windows 租约指纹降级补救(/proc-only)
 
-**注意**:`ProviderId` 枚举 13 个是元数据层;运行时真正可服务仅 openai / minimax / openai-compatible,
+**注意**:`ProviderId` 枚举 13 个是元数据层;运行时真正可服务仅 anthropic / openai / minimax / openai-compatible (4 可服务),
 全部走 OpenAICompatibleAdapter,引擎为单传输模式(跨 provider profile 在 validateProfiles 硬拒)。

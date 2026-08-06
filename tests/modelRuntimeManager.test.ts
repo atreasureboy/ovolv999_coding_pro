@@ -16,7 +16,6 @@ import {
   resolveBinding,
   BindingRegistry,
   ProfileValidationError,
-  RUNTIME_KNOWN_PROVIDERS,
 } from '../src/core/model/modelRuntimeManager.js'
 import type { ModelProfile } from '../src/core/model/modelRouter.js'
 
@@ -69,14 +68,6 @@ describe('ModelRuntimeManager v0.3.1', () => {
       const e = err as ProfileValidationError
       expect(e.offendingProfileIds).toContain('claude')
     }
-  })
-
-  it('allows minimax as a runtime provider (not in providers.ts but in RUNTIME_KNOWN_PROVIDERS)', () => {
-    expect(RUNTIME_KNOWN_PROVIDERS.has('minimax')).toBe(true)
-    expect(() => validateProfiles({
-      activeProvider: 'minimax',
-      profiles: [p('main', 'MiniMax-M3', 'minimax')],
-    })).not.toThrow()
   })
 
   it('resolveBindings returns one binding per profile sharing the adapter', () => {

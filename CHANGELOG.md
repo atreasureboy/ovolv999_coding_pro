@@ -2,6 +2,43 @@
 
 All notable changes are documented here. This project follows Semantic Versioning while it remains in the `0.x` development series.
 
+## 0.6.1 — Documentation & Integration Hardening (super_plan.md Round 1–5)
+
+### Documentation Reality Alignment (Round 1)
+- **CLAUDE.md**: Fixed 10 inaccuracies — tool count (34→42+), module count (4→5), ICM count (10→12),
+  RunEvent count (54→55), serviceable provider count (3→4), version (0.5.3→0.6.0), line count (~67k→~82k),
+  data directory reference counts (33/108→57/121), permissionRules wiring status, LongTermMemory wiring status
+- **README.md**: Version (v0.5.6→v0.6.0), runtime deps (5→8), Hook names (PreToolCall→PreToolUse etc.),
+  Hook event count (9→6), LongTermMemory/ProviderAdapter wiring status, module count (4→5)
+- **CHANGELOG.md**: Removed stale `"is the version in package.json"` self-references at 0.5.6/0.5.5/0.5.3
+
+### Dead Code Elimination (Round 2)
+- **Removed**: `recordRetry()` (no-op, zero callers), `applyRouteApplication()` (@deprecated, zero callers),
+  `transitionTerminal()` (private, never called), `RUNTIME_KNOWN_PROVIDERS` (zero importers)
+- **Unexported**: `buildCriticReport()`, `criticReportToGuidance()`, `interventionMessageForStall()`,
+  `parseMemoryEvidenceRefs()` — now internal; removed corresponding tests
+- **Type fixes**: `TaskKind` import unified (reviewer.ts→taskIntent.js), `AcceptanceCriterion`/`VerificationState`
+  re-exported from canonical sources, `CompletionStatus` un-exported (internal to completionContract),
+  `ProviderId` unified (providerAdapter.ts now imports from providers.ts; 3 new provider IDs added),
+  `consecutiveProviderFailures` @deprecated removed (actively used)
+- **Circular import**: `findTool` extracted to `src/tools/findTool.ts` (breaks searchExtraTools↔index cycle)
+
+### Deep Integration (Round 3)
+- **ROUTING_UNAVAILABLE**: Added to RunEvent union (was `as never`), removed unsafe cast in coordinator.ts
+- **RUN_COMPLETED**: Removed from RunEvent union (replaced by RUN_TERMINATED)
+- **codeQuality.ts**: `isError` now reflects actual check pass/fail (was always `false`)
+- **agent.ts**: Added `mutatesState: true` metadata (toolScheduler can now correctly identify it)
+- **ReviewResult**: Previously discarded `verdict`/`taskKind`/`satisfiedCriteria`/`residualRisks` now
+  logged to EventLog for observability
+
+### Consistency & Quality (Round 4)
+- **VERSION file**: Created (`0.6.0`) for CI/CD compatibility
+- **modelTier.ts**: `listConfiguredModelTierProfiles` annotated as CLI-only
+
+### Verification
+- `npx tsc --noEmit`: zero src/ errors (pre-existing test errors excluded)
+- All changes validated against super_plan.md acceptance criteria
+
 ## 0.6.0 — Enterprise Architecture Audit & Codex/OpenCode Alignment
 
 ### Architecture Audit & Cross-Platform Fixes
@@ -42,7 +79,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## 0.5.6 (released) — Release Acceptance Repair
 
-**v0.5.6 is the version in `package.json`.** This release makes every
+This release makes every
 acceptance gate actually green and every Memory Claim impossible
 to launder.
 
@@ -124,7 +161,7 @@ to launder.
 
 ## 0.5.5 (released) — Runtime Closure Final
 
-**v0.5.5 is the version in `package.json`.** Evidence wiring, routing
+Evidence wiring, routing
 terminal semantics, and attempt-scoped truth now go through real
 production entry points.
 
@@ -192,7 +229,7 @@ production entry points.
 
 ## 0.5.3 (released) — Closure Integrity
 
-**v0.5.3 is the version in `package.json`.** All section headers,
+All section headers,
 README badges, and the CLI `--version` string now agree.
 
 ### Reality repairs (P0)

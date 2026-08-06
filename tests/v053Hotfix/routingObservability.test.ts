@@ -37,25 +37,6 @@ function newRouter(): ModelRouter {
 }
 
 describe('Routing observability (Hotfix §9)', () => {
-  it('applyRouteApplication emits previousModel + reasonCodes', () => {
-    const router = newRouter()
-    const events: Array<{ type: string; payload: Record<string, unknown> }> = []
-    router.setEventListener((e) => {
-      if (e.type === 'ROUTING_DECISION_APPLIED') events.push(e as never)
-    })
-    const decision = router.route({
-      userGoal: 'do something',
-      repoFileCount: 10,
-      filesTouched: 1,
-      consecutiveFailures: 0,
-      expectedToolRequirement: 'side-effect',
-    })
-    router.applyRouteApplication(decision)
-    expect(events.length).toBe(1)
-    expect(events[0].payload.previousModel).toBe('')
-    expect(Array.isArray(events[0].payload.reasonCodes)).toBe(true)
-  })
-
   it('estimateComplexity runs on every route() — not cached', () => {
     const router = newRouter()
     const d1 = router.route({

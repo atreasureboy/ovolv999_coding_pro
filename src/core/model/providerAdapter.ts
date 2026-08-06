@@ -24,11 +24,11 @@
 
 import type OpenAI from 'openai'
 import type { ToolDefinition } from '../types.js'
+import type { ProviderId } from '../providers.js'
 import { AnthropicAdapter } from './anthropicAdapter.js'
 
 export { AnthropicAdapter } from './anthropicAdapter.js'
-
-export type ProviderId = string
+export type { ProviderId }
 
 /**
  * Provider-agnostic description of one model stream request. The adapter
@@ -82,12 +82,12 @@ export interface ProviderAdapter {
  * Ollama / etc. configurations keep working unchanged.
  */
 export class OpenAICompatibleAdapter implements ProviderAdapter {
-  readonly providerId: string
+  readonly providerId: ProviderId
   private _streamUsageSupported = true
 
   constructor(
     private readonly client: OpenAI,
-    providerId = 'openai-compatible',
+    providerId: ProviderId = 'openai-compatible',
   ) {
     this.providerId = providerId
   }
@@ -164,7 +164,7 @@ export interface ProviderAdapterConfig {
 }
 
 export function createProviderAdapter(cfg: ProviderAdapterConfig): ProviderAdapter {
-  const pid = (cfg.provider ?? 'openai-compatible').toLowerCase()
+  const pid = (cfg.provider ?? 'openai-compatible').toLowerCase() as ProviderId
   if (pid === 'anthropic') {
     return new AnthropicAdapter({
       apiKey: cfg.client.apiKey ?? '',
@@ -183,10 +183,10 @@ export function createProviderAdapter(cfg: ProviderAdapterConfig): ProviderAdapt
  * Listed explicitly so users can see which providers are roadmap items.
  */
 export class StubProviderAdapter implements ProviderAdapter {
-  readonly providerId: string
+  readonly providerId: ProviderId
   private _streamUsageSupported = false
 
-  constructor(providerId: string) {
+  constructor(providerId: ProviderId) {
     this.providerId = providerId
   }
 

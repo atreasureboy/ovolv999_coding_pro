@@ -39,7 +39,6 @@ export type RunEvent =
   | { type: 'ABORT_REQUESTED'; kind: 'soft' | 'hard'; reason: string }
   | { type: 'MAX_ITERATIONS_REACHED'; maxIterations: number }
   | { type: 'STALL_DETECTED'; kind: string; reason: string; action: string }
-  | { type: 'RUN_COMPLETED'; result: TurnResult }
   | { type: 'RUN_TERMINATED'; status: string; result: TurnResult }
   | { type: 'AGENT_COMPLETION_ACCEPTED'; runId: string; description: string }
   | { type: 'AGENT_COMPLETION_REJECTED'; runId: string; description: string; reason: string }
@@ -55,6 +54,7 @@ export type RunEvent =
   | { type: 'MODEL_OVERRIDE_CLEARED' }
   | { type: 'ROUTING_DECIDED'; selectedModel: string; reasonCodes: string[]; estimatedComplexity: number }
   | { type: 'ROUTING_APPLIED'; from: string; to: string; reasonCodes: string[] }
+  | { type: 'ROUTING_UNAVAILABLE'; reasonCodes: string[]; profiles?: string[] }
   | { type: 'ROUTING_FALLBACK'; from: string; to: string; error: string }
   | { type: 'BUDGET_ALLOCATION_APPLIED'; allocation: { maxInputTokens?: number; maxOutputTokens?: number } }
   | { type: 'MODEL_CALL_RECORDED'; profileId: string; ok: boolean; latencyMs: number; failureReason?: string }

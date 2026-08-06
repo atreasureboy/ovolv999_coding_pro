@@ -746,7 +746,7 @@ export class RuntimeCoordinator {
             type: 'ROUTING_UNAVAILABLE',
             reasonCodes: application.decision.reasonCodes,
             profiles: application.decision.reasonCodes,
-          } as never)
+          })
           // Mark this Run as routing-blocked. Subsequent
           // llm_call / modelGateway.call invocations see this flag
           // and refuse to execute.
@@ -1334,6 +1334,18 @@ export class RuntimeCoordinator {
         scopeExcessive: ws.filesChanged.length > 20,
       })
       reviewerFindings = review.findings
+      // Surface reviewer verdict + structured fields via EventLog for observability
+      // (previously discarded — now logged so /trace and /why can surface them).
+      eventLog?.append('protocol', 'reviewer', {
+        verdict: review.verdict,
+        taskKind: review.taskKind,
+        satisfiedCriteria: review.satisfiedCriteria,
+        unsatisfiedCriteria: review.unsatisfiedCriteria,
+        staleEvidence: review.staleEvidence,
+        verificationSummary: review.verificationSummary,
+        residualRisks: review.residualRisks,
+        findings: review.findings,
+      })
     } catch { /* best-effort */ }
 
     if (result.reason === 'stop_sequence') {

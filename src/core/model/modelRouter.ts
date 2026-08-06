@@ -389,32 +389,6 @@ export class ModelRouter {
     this.applyRoutingDecision(model, budgetAllocation, { previousModel, reasonCodes })
   }
 
-  /**
-   * v0.5.3 Hotfix §8 — DEPRECATED in v0.5.5. Replaced by
-   * classifyRouteApplication + Engine-owned markApplied. This
-   * method is kept for backwards compatibility with callers that
-   * still expect the Router to apply internally; new code MUST
-   * NOT use it.
-   *
-   * @deprecated v0.5.5 §3: use classifyRouteApplication()
-   * + markApplied() instead. The Router must NOT mutate
-   * config.model — the Engine owns that contract.
-   */
-  applyRouteApplication(decision: RoutingDecision): RouteApplication {
-    if (!decision || decision.selectedModel === '') {
-      return { kind: 'unavailable', decision }
-    }
-    const previous = this.lastApplied?.model ?? ''
-    if (previous === decision.selectedModel) {
-      return { kind: 'unchanged', decision }
-    }
-    this.applyRoutingDecision(decision.selectedModel, decision.budgetAllocation, {
-      previousModel: previous,
-      reasonCodes: decision.reasonCodes,
-    })
-    return { kind: 'applied', decision, previousModel: previous }
-  }
-
   /** v0.3.1 (runtime truth contract §三.1.1): restore auto-routing after `/model auto`. */
   clearModelOverride(): void {
     if (this.manualOverride === null) return
@@ -435,24 +409,6 @@ export class ModelRouter {
     this.totalRoutingFailures++
     this.totalFallbacksApplied++
     this.emit('ROUTING_FALLBACK_APPLIED', { from, to, error })
-  }
-
-  /**
-   * v0.5.2 (Stage 2.4): record a retry attempt on the same model.
-   * v0.5.3 Final (task 7): REMOVED. ModelGateway never retries the
-   * same model internally — it falls back at the stream boundary.
-   * Without a real production caller the counter was always 0
-   * (decoration). We removed:
-   *   - recordRetry() effect
-   *   - totalRetryAttempts counter
-   *   - the field in getRoutingFailureStats()
-   *   - the field in RouterHealthSnapshot
-   * The method is kept as a no-op for back-compat with any stale
-   * call site.
-   */
-  /** @deprecated v0.5.3 Final — does nothing. */
-  recordRetry(): void {
-    // no-op
   }
 
   /**
