@@ -98,6 +98,19 @@ All notable changes are documented here. This project follows Semantic Versionin
   execution, dynamic file count) and wired into the validate job to prove `--shard` actually
   splits the suite.
 
+### Type Narrowing & Cast Elimination (Round 13)
+- **`as any` in src/ → 0**: Eliminated all 2 `as any` casts in builtin.ts by importing
+  `BudgetType`, `BudgetPeriod`, `KnowledgeCategory`, `WorkerEntry`, `DocSectionType`
+  as type imports.
+- **`as never` in src/ (non-lsp) → 1**: Removed 2 `as never` casts in builtin.ts.
+  Remaining: 1 in agent.ts (needs ExecutionRun partial-construction refactor) +
+  15 in lsp/client.ts (vscode-jsonrpc type limitations).
+- **`as unknown as` reduced**: modules/memory.ts 5→1 (eliminated 4 unnecessary casts
+  accessing `runCtx.memoryCandidates`, `userMessage`, `toolCallRegistry`,
+  `projectIdentity` — all now typed on `RunScopedRuntimeContext`).
+- **Removed 2 unnecessary `(this as unknown as)` casts**: contextManager.ts
+  (`deps` readonly→mutable) and workspaceWatcher.ts (`onChange` was already private).
+
 ## 0.6.0 — Enterprise Architecture Audit & Codex/OpenCode Alignment
 
 ### Architecture Audit & Cross-Platform Fixes

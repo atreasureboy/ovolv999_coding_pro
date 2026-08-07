@@ -581,15 +581,12 @@ export class MemoryModule implements AgentModule {
     }
     if (!ctx.outcome || !ctx.cwd) return
 
-    const runContext = (ctx as unknown as { runContext?: { memoryCandidates?: MemoryCandidate[]; userMessage?: string } }).runContext
-    const candidates = runContext?.memoryCandidates ?? []
-    const userMessage = runContext?.userMessage ?? ''
+    const runCtx = ctx.runContext
+    const candidates = runCtx?.memoryCandidates ?? []
+    const userMessage = runCtx?.userMessage ?? ctx.userMessage ?? ''
 
     if (candidates.length === 0) return
 
-    // v0.5.3 Final (task 3): build a real RevisionBinding from the
-    // workspace. Non-git fallback returns workspaceHash, never a
-    // fabricated commit.
     const binding: RevisionBinding = await buildRevisionBinding({ cwd: ctx.cwd })
 
     // v0.5.3 Hotfix §6: emit MEMORY_PROMOTION_STARTED before
@@ -605,18 +602,11 @@ export class MemoryModule implements AgentModule {
       outcome: ctx.outcome,
       userMessage,
       revision: binding,
-      // v0.5.5 §2+§3: thread the per-run registries. MemoryModule
-      // pulls them from the runContext the Coordinator passed via
-      // ModuleRunContext.runContext. Both objects are required
-      // for tool_observed validation (Registry) and verification
-      // ref resolution (EvidenceStore).
-      // FIXME: fragile cast chain — RunScopedRuntimeContext doesn't expose
-      // toolCallRegistry/projectIdentity/evidenceStore in its public interface.
-      // These fields exist at runtime but require broader refactoring to wire
-      // through a typed module context. Keep as-is for now.
-      toolCallRegistry: (runContext as unknown as { toolCallRegistry?: Map<string, { exposedText: string; truncated: boolean; isError: boolean }> } | undefined)?.toolCallRegistry,
-      projectIdentity: (runContext as unknown as { projectIdentity?: { canonicalRoot: string } } | undefined)?.projectIdentity,
-      evidenceStore: (runContext as unknown as { evidence?: { get(id: string): { status: string; createdAt: number } | undefined } } | undefined)?.evidence,
+      toolCallRegistry: runCtx?.toolCallRegistry,
+      projectIdentity: runCtx?.projectIdentity,
+      // EvidenceStore has richer methods than the PromotionInput
+      // contract; narrow to the required consumer interface.
+      evidenceStore: runCtx?.evidence as unknown as { get(id: string): { status: string; createdAt: number } | undefined } | undefined,
     })
 
     for (const drop of decision.dropped) {

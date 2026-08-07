@@ -36,6 +36,10 @@ import { homedir } from 'os'
 import { ClaudeCodeWorkerManager } from '../core/claudeCodeWorkerManager.js'
 import { copyToClipboard } from '../utils/clipboard.js'
 import type { EditedFileInfo } from '../core/fileHistory.js'
+import type { BudgetType, BudgetPeriod } from '../core/budget.js'
+import type { KnowledgeCategory } from '../core/knowledgeBase.js'
+import type { WorkerEntry } from '../core/daemon.js'
+import type { DocSectionType } from '../core/magicDocs.js'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1988,7 +1992,7 @@ registerCommand({
     }
 
     if (sub === 'add') {
-      const category = parts[1] as any
+      const category = parts[1] as KnowledgeCategory
       const key = parts[2]
       const value = parts.slice(3).join(' ')
       if (!category || !key || !value) {
@@ -2189,7 +2193,7 @@ registerCommand({
       const validPeriods = ['session', 'daily', 'weekly', 'monthly']
       if (!validTypes.includes(type)) return text(`Type must be one of: ${validTypes.join(', ')}`)
       if (!validPeriods.includes(period)) return text(`Period must be one of: ${validPeriods.join(', ')}`)
-      const bm = setBudget(ctx.cwd, { name, type: type as any, period: period as any, limit })
+      const bm = setBudget(ctx.cwd, { name, type: type as BudgetType, period: period as BudgetPeriod, limit })
       return text(`✓ Budget set: ${bm.name} (${bm.type}/${bm.period}) limit=${bm.limit}`)
     }
 
@@ -3036,7 +3040,7 @@ registerCommand({
       // R40 changed the list-workers response to a {workers,total,offset,limit}
       // envelope. Unwrap the workers array before formatting.
       const wrapper = res.data as { workers: unknown[] }
-      return text(formatWorkers(wrapper.workers as never[]))
+      return text(formatWorkers(wrapper.workers as WorkerEntry[]))
     }
 
     if (sub === 'restart') {
@@ -3288,7 +3292,7 @@ registerCommand({
     }
 
     // Specific section
-    const result = md.extractDocs({ rootDir, sections: [sub as never] })
+    const result = md.extractDocs({ rootDir, sections: [sub as DocSectionType] })
     if (result.sections.length === 0) {
       return text(`Unknown section: ${sub}. Available: overview, api, models, config, decisions, patterns, dependencies`)
     }

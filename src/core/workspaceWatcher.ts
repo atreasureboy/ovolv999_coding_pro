@@ -69,7 +69,7 @@ export class WorkspaceWatcher {
   }
 
   setOnChange(handler: ((change: WorkspaceChange) => void) | undefined): void {
-    ;(this as unknown as { onChange?: (change: WorkspaceChange) => void }).onChange = handler
+    this.onChange = handler
   }
 
   start(): void {

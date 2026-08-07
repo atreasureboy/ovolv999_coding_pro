@@ -81,7 +81,7 @@ export interface ContextManagerDeps {
 }
 
 export class ContextManager {
-  private readonly deps: ContextManagerDeps
+  private deps: ContextManagerDeps
 
   private systemPromptTokens = 0
   private lastAssistantTs: number | undefined = undefined
@@ -154,7 +154,7 @@ export class ContextManager {
    */
   onModelChanged(model: string): void {
     if (this.deps.model === model) return
-    ;(this as unknown as { deps: ContextManagerDeps }).deps = { ...this.deps, model }
+    this.deps = { ...this.deps, model }
     this.resolvedContextWindow = null
   }
 

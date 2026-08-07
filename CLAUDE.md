@@ -10,7 +10,7 @@ TypeScript 5.7 strict ESM,Node ≥ 20,~82k 行 src,测试套件全绿。运行�
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
 当前版本:**0.6.0**(package.json / CHANGELOG / VERSION 一致；README 已更新至 0.6.0)。
-> 本 CLAUDE.md 最后核实: 2026-08-06 (v0.6.0 全量架构审计 + Rounds 6-12 完成)。
+> 本 CLAUDE.md 最后核实: 2026-08-06 (v0.6.0 全量架构审计 + Rounds 6-13 完成)。
 
 v0.6.0 关键不变量(延续 v0.5.3):
 
