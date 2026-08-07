@@ -485,6 +485,9 @@ export class LspClient extends EventEmitter {
       this.connection = null
     }
     if (this.proc) {
+      if (this.proc.exitCode === null && !this.proc.killed) {
+        try { this.proc.kill() } catch { /* best-effort */ }
+      }
       this.proc = null
     }
   }

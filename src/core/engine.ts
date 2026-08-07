@@ -830,6 +830,7 @@ export class ExecutionEngine {
       // disposal must not throw
     }
     this.moduleManager.dispose()
+    this.resourceScheduler.dispose()
     // Clear any straggler active-tool-call entries. (ToolScheduler
     // already does this per-call in finally, but a hard abort between
     // batches can leave entries; clearing here is defense-in-depth.)

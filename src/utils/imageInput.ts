@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { join, extname } from 'path'
 import { homedir } from 'os'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ export function getMimeType(path: string): string {
 export function getImageDimensions(path: string): { width: number; height: number } | null {
   try {
     // Try file command (Linux/macOS)
-    const output = execSync(`file "${path}"`, { encoding: 'utf8', timeout: 5000 })
+    const output = execFileSync('file', [path], { encoding: 'utf8', timeout: 5000 })
 
     // Parse output like: "image.png: PNG image data, 1920 x 1080, 8-bit/color/RGBA, non-interlaced"
     const m = output.match(/(\d+)\s*[x×]\s*(\d+)/)
@@ -201,7 +201,7 @@ export function getResizedPath(path: string, maxDimension = MAX_DIMENSION): stri
 
     // Try ImageMagick
     try {
-      execSync(`convert "${path}" -resize ${maxDimension}x${maxDimension}\\> "${resizedPath}"`, {
+      execFileSync('convert', [path, '-resize', `${maxDimension}x${maxDimension}>`, resizedPath], {
         timeout: 10000,
         stdio: 'pipe',
       })
@@ -210,7 +210,7 @@ export function getResizedPath(path: string, maxDimension = MAX_DIMENSION): stri
 
     // Try sips (macOS)
     try {
-      execSync(`sips --resampleHeightWidthMax ${maxDimension} "${path}" --out "${resizedPath}"`, {
+      execFileSync('sips', ['--resampleHeightWidthMax', String(maxDimension), path, '--out', resizedPath], {
         timeout: 10000,
         stdio: 'pipe',
       })
@@ -260,7 +260,7 @@ export function getClipboardImagePath(): string | null {
 
   // Try macOS pngpaste
   try {
-    execSync(`pngpaste "${tmpPath}"`, { timeout: 5000, stdio: 'pipe' })
+    execFileSync('pngpaste', [tmpPath], { timeout: 5000, stdio: 'pipe' })
     if (existsSync(tmpPath) && statSync(tmpPath).size > 0) return tmpPath
   } catch { /* not macOS or pngpaste not installed */ }
 

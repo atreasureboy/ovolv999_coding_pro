@@ -171,7 +171,11 @@ export class DaemonServer extends EventEmitter {
     req.setEncoding('utf8')
     req.on('data', (chunk: string) => { body += chunk })
     req.on('end', () => {
-      void this.processRequest(req, res, body)
+      void this.processRequest(req, res, body).catch(() => {
+        if (!res.headersSent) {
+          try { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'internal error' })) } catch { /* best-effort */ }
+        }
+      })
     })
   }
 

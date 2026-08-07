@@ -111,6 +111,15 @@ All notable changes are documented here. This project follows Semantic Versionin
 - **Removed 2 unnecessary `(this as unknown as)` casts**: contextManager.ts
   (`deps` readonly→mutable) and workspaceWatcher.ts (`onChange` was already private).
 
+### Security & Resilience Fixes (Round 14)
+- **Command injection fixed**: `codeQuality.ts` — LLM-supplied `testPattern` was
+  interpolated into shell string; now uses `execFileSync` with args array.
+  `imageInput.ts` — `file`, `convert`, `sips`, `pngpaste` now use `execFileSync`.
+- **Event bus leak**: `ResourceScheduler` stores unsubscribe + exposes `dispose()`;
+  engine's shutdown calls it.
+- **LSP zombie process**: `markClosed()` kills child process if still alive.
+- **Unhandled rejection**: `daemonServer.ts` catches async handler rejections.
+
 ## 0.6.0 — Enterprise Architecture Audit & Codex/OpenCode Alignment
 
 ### Architecture Audit & Cross-Platform Fixes

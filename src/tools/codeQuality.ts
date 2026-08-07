@@ -13,7 +13,7 @@
  *   - Structured output: errors grouped by file, severity, check type
  */
 
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import type { Tool, ToolDefinition, ToolResult, ToolContext } from '../core/types.js'
@@ -211,18 +211,23 @@ Checks (comma-separated):
     const hasNpm = existsSync(join(cwd, 'package-lock.json'))
 
     let cmd: string
+    let args: string[]
     if (pattern) {
-      cmd = hasVitest
-        ? `npx vitest run ${pattern} --reporter=verbose`
-        : hasPnpm
-          ? `pnpm test -- ${pattern}`
-          : `npm test -- ${pattern}`
+      if (hasVitest) {
+        cmd = 'npx'
+        args = ['vitest', 'run', pattern, '--reporter=verbose']
+      } else {
+        cmd = hasPnpm ? 'pnpm' : 'npm'
+        args = ['test', '--', pattern]
+      }
     } else {
-      cmd = hasPnpm ? 'pnpm test' : hasNpm ? 'npm test' : 'npx vitest run'
+      if (hasPnpm) { cmd = 'pnpm'; args = ['test'] }
+      else if (hasNpm) { cmd = 'npm'; args = ['test'] }
+      else { cmd = 'npx'; args = ['vitest', 'run'] }
     }
 
     try {
-      const out = execSync(cmd, {
+      const out = execFileSync(cmd, args, {
         cwd,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],

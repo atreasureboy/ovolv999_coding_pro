@@ -201,13 +201,19 @@ export class ResourceScheduler {
   }> = []
   private readonly workspaceKey?: string
   private readonly defaultTimeoutMs: number
+  private eventBusUnsub?: () => void
 
   constructor(opts: ResourceSchedulerOptions = {}) {
     this.workspaceKey = opts.workspaceKey
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000
     if (opts.eventBus) {
-      opts.eventBus.on((e) => this.onRunEvent(e))
+      this.eventBusUnsub = opts.eventBus.on((e) => this.onRunEvent(e))
     }
+  }
+
+  dispose(): void {
+    this.eventBusUnsub?.()
+    this.eventBusUnsub = undefined
   }
 
   // ── Public API ───────────────────────────────────────────────────────
