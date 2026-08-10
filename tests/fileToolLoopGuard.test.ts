@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join } from 'path'
 import { FileWriteTool } from '../src/tools/fileWrite.js'
 import { FileEditTool } from '../src/tools/fileEdit.js'
+import { MultiEditTool } from '../src/tools/multiEdit.js'
 import { markFileRead } from '../src/core/fileState.js'
 import type { ToolContext } from '../src/core/types.js'
 
@@ -80,6 +81,34 @@ describe('ADR-007: Edit tool rejects driver-owned .loop files', () => {
     markFileRead(path, 'hello world\n') // satisfy read-before-edit
     const result = await tool.execute(
       { file_path: path, old_string: 'hello', new_string: 'goodbye' }, ctx)
+    expect(result.isError).toBe(false)
+    expect(readFileSync(path, 'utf8')).toBe('goodbye world\n')
+  })
+})
+
+describe('ADR-007: MultiEdit tool rejects driver-owned .loop files', () => {
+  it('refuses every driver-owned file before any mutation', async () => {
+    const tool = new MultiEditTool()
+    mkdirSync(join(tmp, '.loop'), { recursive: true })
+    for (const f of DRIVER_OWNED) {
+      const path = join(tmp, '.loop', f)
+      writeFileSync(path, 'phase: running\n')
+      markFileRead(path, 'phase: running\n')
+      const result = await tool.execute(
+        { edits: [{ file_path: path, old_string: 'running', new_string: 'succeeded' }] }, ctx)
+      expect(result.isError).toBe(true)
+      expect(result.content).toContain('loop supervisor control file')
+      expect(readFileSync(path, 'utf8')).toBe('phase: running\n') // untouched
+    }
+  })
+
+  it('still edits ordinary files in a batch', async () => {
+    const tool = new MultiEditTool()
+    const path = join(tmp, 'batch.md')
+    writeFileSync(path, 'hello world\n')
+    markFileRead(path, 'hello world\n')
+    const result = await tool.execute(
+      { edits: [{ file_path: path, old_string: 'hello', new_string: 'goodbye' }] }, ctx)
     expect(result.isError).toBe(false)
     expect(readFileSync(path, 'utf8')).toBe('goodbye world\n')
   })

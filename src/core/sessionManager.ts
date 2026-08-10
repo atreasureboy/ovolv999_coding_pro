@@ -240,7 +240,7 @@ function isValidMessageShape(msg: unknown): msg is OpenAIMessage {
  *
  * Filename is never consulted — detection is purely from content.
  */
-function isEnvelope(parsed: unknown): parsed is Record<string, unknown> {
+function isEnvelope(parsed: unknown): parsed is EnvelopeRecord {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false
   const obj = parsed as Record<string, unknown>
   return typeof obj.version === 'number'
@@ -257,11 +257,6 @@ type EnvelopeRecord = {
   updatedAt: unknown
   messages: unknown
   lastOutcome?: unknown
-}
-
-/** Narrow an `isEnvelope()`-confirmed object to its declared shape. */
-function asEnvelopeRecord(parsed: Record<string, unknown>): EnvelopeRecord {
-  return parsed as unknown as EnvelopeRecord
 }
 
 /**
@@ -337,7 +332,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     )
   }
 
-  const env = asEnvelopeRecord(parsed)
+  const env = parsed
   const version = env.version
 
   // Gate (1): version range. Done BEFORE field-shape validation so a future
@@ -404,7 +399,9 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
   }
 
   if (version === CURRENT_SESSION_VERSION) {
-    // Same-version short-circuit — no transform needed.
+    // Same-version short-circuit — no transform needed. Gates above
+    // validated version, schema, updatedAt, and every messages entry
+    // (via isValidMessageShape, which narrows to OpenAIMessage).
     return env as unknown as SessionEnvelope
   }
 

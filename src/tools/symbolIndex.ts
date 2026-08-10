@@ -50,7 +50,7 @@ where a symbol is defined or what references it.`,
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { action } = input as unknown as SymbolIndexInput
+    const { action } = input as Partial<SymbolIndexInput>
     const cwd = (context as { cwd?: string }).cwd ?? process.cwd()
 
     if (!this.index) {

@@ -12,7 +12,7 @@
  */
 
 import type { ExecutionEngine } from '../core/engine.js'
-import type { Renderer } from '../ui/renderer.js'
+import type { RendererInterface } from '../ui/renderer.js'
 import type { OpenAIMessage } from '../core/types.js'
 import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
 
@@ -20,7 +20,7 @@ import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js
 
 export interface SlashCommandContext {
   engine: ExecutionEngine
-  renderer: Renderer
+  renderer: RendererInterface
   history: OpenAIMessage[]
   cwd: string
   sessionDir?: string
@@ -43,6 +43,13 @@ export interface SlashCommandContext {
    * target so future saves land in the resumed session directory.
    */
   loadSession?: (name: string) => OpenAIMessage[] | null | undefined
+  /**
+   * Dispatch a slash command string through the REPL's own dispatcher, so a
+   * workflow's `runSlash` step executes real commands instead of a no-op.
+   * Provided by the Ink REPL; absent in non-interactive contexts (pipe/bg).
+   * Returns true if the command was found and executed.
+   */
+  dispatchSlash?: (s: string) => Promise<boolean>
 }
 
 export type SlashCommandResult =

@@ -246,13 +246,18 @@ export class OAuthCallbackServer {
       return Promise.reject(new Error('Server not started'))
     }
 
+    let timeoutTimer: NodeJS.Timeout | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+    })
+
     return Promise.race([
-      this.codePromise,
-      new Promise<{ code: string; state: string }>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`))
-        }, timeoutMs)
+      this.codePromise.finally(() => {
+        if (timeoutTimer) clearTimeout(timeoutTimer)
       }),
+      timeoutPromise,
     ])
   }
 

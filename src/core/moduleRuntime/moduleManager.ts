@@ -26,12 +26,12 @@ import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../module
 import type { RunScopedRuntimeContext } from '../runtime/runScopedContext.js'
 import type { OpenAIMessage, Tool, ToolContext, ToolResult, TurnResult } from '../types.js'
 import type { EventLog } from '../eventLog.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import type { TurnOutcome } from '../runtime/turnOutcome.js'
 
 export interface ModuleManagerDeps {
   modules: AgentModule[]
-  renderer: Renderer
+  renderer: RendererInterface
   eventLog?: EventLog
 }
 
@@ -107,7 +107,7 @@ export interface ModuleBootOptions {
 }
 
 export class ModuleManager {
-  private readonly renderer: Renderer
+  private readonly renderer: RendererInterface
   private readonly eventLog?: EventLog
   /** Modules array — settable for testing (boot-throw regression tests) */
   modules: AgentModule[]

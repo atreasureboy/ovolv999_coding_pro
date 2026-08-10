@@ -83,11 +83,11 @@ describe('messageBus', () => {
       expect(bus.getAgent('a1')!.messageCount).toBe(2)
     })
 
-    it('receives message from queue', () => {
+    it('receives message from queue', async () => {
       bus.registerAgent('a1', 'Alpha')
       bus.registerAgent('a2', 'Beta')
       bus.send('a1', 'a2', 'hello')
-      const msg = bus.receive('a2')
+      const msg = await bus.receive('a2')
       expect(msg).toBeTruthy()
       expect(msg!.content).toBe('hello')
     })

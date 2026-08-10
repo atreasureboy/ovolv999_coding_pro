@@ -96,7 +96,7 @@ Checks (comma-separated):
     context: ToolContext,
   ): Promise<ToolResult> {
     const start = Date.now()
-    const opts = input as unknown as QualityCheckInput
+    const opts = input as Partial<QualityCheckInput>
     const mode = opts.mode ?? 'fast'
     const checks = (opts.checks ?? 'all').split(',').map(s => s.trim())
     const runAll = checks.includes('all')

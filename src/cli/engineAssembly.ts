@@ -288,7 +288,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   // any ExecutionEngine (or planEngine) is constructed, because the engine
   // reads `config.agentFactory` inside its constructor to wire its AgentTool.
   const agentFactory: AgentChildEngineFactory = (childConfig, childRenderer) =>
-    new ExecutionEngine(childConfig, childRenderer as Renderer)
+    new ExecutionEngine(childConfig, childRenderer)
 
   // ── Ink UI mode: create UIStore early so config callbacks can use it ──────
   let uiStore: UIStore | undefined
@@ -429,9 +429,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     enabledModules: ['memory', 'workspace'],
   }
 
-  const engine = new ExecutionEngine(config, inkRendererInstance
-    ? (inkRendererInstance as unknown as Renderer)
-    : renderer)
+  const engine = new ExecutionEngine(config, inkRendererInstance ?? renderer)
 
   // v0.3.1 (runtime truth contract §三.1.1): a project-configured model must
   // be recorded as a STICKY manual override. Without this call, the first

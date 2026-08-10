@@ -347,7 +347,7 @@ Backends (set env vars for better results):
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { query, num_results } = input as unknown as WebSearchInput
+    const { query, num_results } = input as Partial<WebSearchInput>
 
     if (!query || typeof query !== 'string') {
       return { content: 'Error: query is required', isError: true }

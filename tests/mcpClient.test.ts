@@ -137,4 +137,44 @@ describe('McpModule — boot wiring', () => {
     const result = await mod.boot(ctx)
     expect(result.tools ?? []).toHaveLength(0)
   })
+
+  it('T8: boot publishes mcpRegistry in toolContextPatch for connected servers', async () => {
+    const mod = new McpModule()
+    const ctx: ModuleBootContext = {
+      cwd: '/tmp',
+      config: {
+        mcp: {
+          servers: [{ name: 'echo', type: 'stdio', command: [process.execPath, FIXTURE] }],
+        },
+      } as EngineConfig,
+    }
+    const result = await mod.boot(ctx)
+    expect(result.toolContextPatch).toBeDefined()
+    const registry = result.toolContextPatch!.mcpRegistry
+    expect(registry).toBeDefined()
+    expect(registry!.size).toBe(1)
+    expect(registry!.has('echo')).toBe(true)
+    const entry = registry!.get('echo')!
+    expect(entry.serverName).toBe('echo')
+    // The registry entry exposes resource/prompt methods that the tools call.
+    // The echo fixture does not implement resources/prompts, so these resolve to [].
+    await expect(entry.client.listResources()).resolves.toEqual([])
+    await expect(entry.client.listPrompts()).resolves.toEqual([])
+    await mod.dispose()
+  })
+
+  it('T9: boot with NO connected servers does NOT publish mcpRegistry', async () => {
+    const mod = new McpModule()
+    const ctx: ModuleBootContext = {
+      cwd: '/tmp',
+      config: {
+        mcp: {
+          servers: [{ name: 'broken', type: 'stdio', command: [process.execPath, '/nonexistent/file.mjs'] }],
+        },
+      } as EngineConfig,
+    }
+    const result = await mod.boot(ctx)
+    // No server connected → registry empty → patch should be absent (or empty)
+    expect(result.toolContextPatch?.mcpRegistry).toBeFalsy()
+  })
 })

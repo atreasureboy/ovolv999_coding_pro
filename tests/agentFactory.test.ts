@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest'
 import { AgentTool } from '../src/tools/agent.js'
 import { createTools, type AgentWiring } from '../src/tools/index.js'
 import type { EngineConfig, ToolContext, AgentChildEngineFactory } from '../src/core/types.js'
+import type { RendererInterface } from '../src/ui/renderer.js'
 import { resolveAgentConfig } from '../src/core/agentPresets.js'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -55,6 +56,42 @@ function makeParentConfig(overrides: Partial<EngineConfig> = {}): EngineConfig {
 
 function makeContext(cwd: string): ToolContext {
   return { cwd, permissionMode: 'auto' }
+}
+
+/** Minimal RendererInterface stub for tests — only the agent-lifecycle
+ *  methods AgentTool actually calls (agentStart/Done/Summary/Heartbeat).
+ *  Cast once at the boundary so individual test sites stay clean. */
+function stubRenderer(extra: Record<string, unknown> = {}): RendererInterface {
+  return {
+    destroy() {},
+    banner() {},
+    humanPrompt() {},
+    beginAssistantText() {},
+    streamToken() {},
+    endAssistantText() {},
+    toolStart() {},
+    toolResult() {},
+    startSpinner() {},
+    stopSpinner() {},
+    info() {},
+    success() {},
+    error() {},
+    warn() {},
+    agentStart() {},
+    agentDone() {},
+    agentSummary() {},
+    agentHeartbeat() {},
+    compactStart() {},
+    compactDone() {},
+    contextWarning() {},
+    planModeStart() {},
+    planConfirmPrompt() {},
+    writeInterruptPrompt() {},
+    interruptInjected() {},
+    writePrompt() {},
+    newline() {},
+    ...extra,
+  }
 }
 
 /** Build a capturing factory that records every invocation it receives. */
@@ -115,7 +152,7 @@ function recordingPromptFactory(inner: AgentChildEngineFactory, recorder: Record
 describe('AgentTool per-instance wiring — concurrency isolation', () => {
   it('binds a builder model profile to a general-purpose child engine', async () => {
     const recorder: RecordedCall[] = []
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
     const parent = makeParentConfig({
       model: 'architect-model',
       provider: 'openai',
@@ -174,7 +211,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
             }],
           },
         }),
-        parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+        parentRenderer: stubRenderer(),
       })
 
       const result = await tool.execute(
@@ -208,7 +245,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
         ],
       },
     })
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
     const rootTool = new AgentTool({
       factory: capturingFactory('architect', recorder),
       parentConfig: parent,
@@ -246,7 +283,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
           ],
         },
       }),
-      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+      parentRenderer: stubRenderer(),
     })
 
     const result = await tool.execute({
@@ -274,7 +311,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
           ],
         },
       }),
-      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+      parentRenderer: stubRenderer(),
     })
 
     const result = await nestedTool.execute({
@@ -306,7 +343,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
           }],
         },
       }),
-      parentRenderer: { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} },
+      parentRenderer: stubRenderer(),
     })
 
     const result = await tool.execute(
@@ -324,8 +361,8 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
     const recorderA: RecordedCall[] = []
     const recorderB: RecordedCall[] = []
 
-    const rendererA = { tag: 'renderer-A', agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
-    const rendererB = { tag: 'renderer-B', agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const rendererA = stubRenderer({ tag: 'renderer-A' })
+    const rendererB = stubRenderer({ tag: 'renderer-B' })
 
     const parentA: EngineConfig = makeParentConfig({ cwd: '/project/A', sessionDir: '/sessions/A' })
     const parentB: EngineConfig = makeParentConfig({ cwd: '/project/B', sessionDir: '/sessions/B' })
@@ -363,7 +400,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
 
   it('parallel Agent calls within ONE engine all use the parent engine’s cwd (no cross-pollination between siblings)', async () => {
     const calls: RecordedCall[] = []
-    const parentRenderer = { tag: 'parent-renderer', agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const parentRenderer = stubRenderer({ tag: 'parent-renderer' })
     const parentConfig: EngineConfig = makeParentConfig({ cwd: '/shared/cwd', sessionDir: '/shared/session' })
 
     // Wrap the factory so each spawned child records the delegated prompt —
@@ -413,7 +450,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
     // the same parent observe the SAME nextDepth — they cannot drift from
     // each other through a shared module variable or instance field.
     const calls: RecordedCall[] = []
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
     const parentConfig: EngineConfig = makeParentConfig({ initialAgentDepth: 2 })
 
     const tool = new AgentTool({
@@ -447,7 +484,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
     // counter, so two instances with different inherited depths behave
     // independently.
     const calls: RecordedCall[] = []
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
 
     // Instance A starts 5 deep — nextDepth = 5 + 1 = 6 > MAX (5) → rejected.
     const parentA: EngineConfig = makeParentConfig({ initialAgentDepth: 5 })
@@ -487,7 +524,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
     // from tool's childConfig. If the implementation forgot to thread depth,
     // the global cap would never trigger on a long chain.
     const calls: RecordedCall[] = []
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
     const parent: EngineConfig = makeParentConfig({ initialAgentDepth: 4 })
     // nextDepth for tool = 4 + 1 = 5 = MAX → would be rejected.
     // So use a smaller starting depth and prove the depth propagates.
@@ -525,7 +562,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
 
   it('rejects nested spawn when parentConfig.initialAgentDepth = MAX_CALL_DEPTH', async () => {
     // Boundary: inheritedDepth = MAX → nextDepth = MAX + 1 → rejected.
-    const renderer = { agentStart() {}, agentDone() {}, agentSummary() {}, agentHeartbeat() {} }
+    const renderer = stubRenderer()
     const parentConfig: EngineConfig = makeParentConfig({ initialAgentDepth: 5 })
     const tool = new AgentTool({
       factory: capturingFactory('never', []),
@@ -564,7 +601,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
       abort: () => {},
     })
     const parentConfig: EngineConfig = makeParentConfig()
-    const parentRenderer = { tag: 'engine-renderer' }
+    const parentRenderer = stubRenderer({ tag: 'engine-renderer' })
     const wiring: AgentWiring = { factory, parentConfig, parentRenderer }
 
     const tools = createTools([], wiring)
@@ -594,7 +631,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
         abort: () => {},
       }),
       parentConfig: makeParentConfig(),
-      parentRenderer: {},
+      parentRenderer: stubRenderer(),
     }
     const extra = {
       name: 'Extra',
@@ -647,7 +684,7 @@ describe('AgentTool per-instance wiring — concurrency isolation', () => {
         abort: () => {},
       }),
       parentConfig: makeParentConfig(),
-      parentRenderer: {},
+      parentRenderer: stubRenderer(),
     }
     // All three fields are present — sanity check on the type contract.
     expect(wiring.factory).toBeDefined()

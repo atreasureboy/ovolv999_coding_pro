@@ -19,14 +19,14 @@
 import type OpenAI from 'openai'
 import type { OpenAIMessage, ToolDefinition } from '../types.js'
 import type { TokenUsage } from '../costTracker.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
 import type { ProviderAdapter } from './providerAdapter.js'
 import type { EventLog } from '../eventLog.js'
 
 export interface ModelGatewayDeps {
   adapter: ProviderAdapter
-  renderer: Renderer
+  renderer: RendererInterface
   streamConsumer?: StreamConsumer
   /**
    * v0.4.1 C1 (callId truth): forwarded to the default StreamConsumer so
@@ -83,7 +83,7 @@ export class ModelGatewayError extends Error {
 
 export class ModelGateway {
   private readonly adapter: ProviderAdapter
-  private readonly renderer: Renderer
+  private readonly renderer: RendererInterface
   private readonly streamConsumer: StreamConsumer
 
   constructor(deps: ModelGatewayDeps) {

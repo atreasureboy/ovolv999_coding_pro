@@ -43,6 +43,7 @@ import {
   compactionViolations,
   CompactionInvariantError,
 } from '../src/core/workingState.js'
+import type { RendererInterface } from '../src/ui/renderer.js'
 import { AgentTool } from '../src/tools/agent.js'
 import { ExecutionEngine } from '../src/core/engine.js'
 import type { EngineConfig } from '../src/core/types.js'
@@ -304,7 +305,7 @@ describe('L.8: AgentTool.steer() is robust to terminal / unknown runs', () => {
     const t = new AgentTool({
       factory: (() => ({})) as never,
       parentConfig: {} as never,
-      parentRenderer: null,
+      parentRenderer: null as unknown as RendererInterface,
       runRegistry: registry,
     })
     expect(await t.steer('does-not-exist', 'x')).toBe(false)
@@ -315,7 +316,7 @@ describe('L.8: AgentTool.steer() is robust to terminal / unknown runs', () => {
     const t = new AgentTool({
       factory: (() => ({})) as never,
       parentConfig: {} as never,
-      parentRenderer: null,
+      parentRenderer: null as unknown as RendererInterface,
       runRegistry: registry,
     })
     const run = registry.create({ kind: 'agent', goal: 'g', workspace: { cwd: '/r' } })

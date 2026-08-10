@@ -64,7 +64,7 @@ export class PipeRenderer extends Renderer {
   override streamReasoning(_token: string): void {}
   override startSpinner(_verb?: string): void {}
   override stopSpinner(): void {}
-  override writePrompt(): string { return '' }
+  override writePrompt(): void {}
   override closePrompt(_text?: string, _replaceReadline = false): void {}
   override newline(): void {}
 }

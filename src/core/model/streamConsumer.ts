@@ -18,7 +18,7 @@
 import type OpenAI from 'openai'
 import { randomUUID } from 'crypto'
 import { ThinkingTagFilter } from '../thinkingTagFilter.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import type { EventLog } from '../eventLog.js'
 
 /**
@@ -43,7 +43,7 @@ export interface StreamResult {
 const STREAM_TIMEOUT_MS = 120_000
 
 export interface StreamConsumerDeps {
-  renderer: Renderer
+  renderer: RendererInterface
   /** v0.4.1 C1: structured record for stream-protocol anomalies. */
   eventLog?: EventLog
 }

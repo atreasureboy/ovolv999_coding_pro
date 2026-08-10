@@ -1135,9 +1135,9 @@ async function runRepl(
   }
 
   while (true) {
-    const promptPrefix = renderer.writePrompt()
+    renderer.writePrompt()
     slashSuggester.attach()
-    const { text, eof } = await input.readLine(promptPrefix)
+    const { text, eof } = await input.readLine('')
     slashSuggester.detach()
     renderer.closePrompt(text, input.isTTY)
 
@@ -2147,6 +2147,18 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => { cleanup(); process.exit(0) })
   process.on('SIGHUP',  () => { cleanup(); process.exit(0) })
 
+  // Crash handlers for non-Ink modes. The Ink REPL registers its own
+  // comprehensive set via registerCleanup(); pipe, single-shot, loop, and
+  // the vim REPL do not. Without these, an unhandled rejection (e.g. a
+  // daemon socket error, a stream consumer race) would tear the process
+  // down without running `cleanup()` — leaking background tasks, the tmux
+  // worker, and skipping the session save. Wire them unconditionally;
+  // they are idempotent alongside the Ink registration (both call into
+  // the same best-effort `cleanup`, which early-returns once cleanedUp).
+  const crashHandler = (): void => { cleanup(); process.exit(1) }
+  process.on('uncaughtException', crashHandler)
+  process.on('unhandledRejection', crashHandler)
+
   // Wire saveOnExit for non-REPL modes so cleanup() persists the
   // session on every exit path. The REPL wires its own (history-mutating)
   // version; for pipe/loop/single-shot we save the static history we
@@ -2207,7 +2219,7 @@ async function main(): Promise<void> {
     await runInkRepl({
       store: uiStore,
       engine,
-      inkRenderer: inkRendererInstance as unknown as Renderer,
+      inkRenderer: inkRendererInstance,
       version: VERSION,
       model: effectiveModel,
       skills: skillsArray,

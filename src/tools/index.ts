@@ -3,6 +3,7 @@
  */
 
 import type { Tool, EngineConfig, AgentChildEngineFactory, ToolMetadata } from '../core/types.js'
+import type { RendererInterface } from '../ui/renderer.js'
 import type { ExecutionRunRegistry } from '../core/executionRun.js'
 import type { RunScopedEvidenceResolver } from './taskGraphResolver.js'
 import { BashTool } from './bash.js'
@@ -94,7 +95,7 @@ function lazy(
 export interface AgentWiring {
   factory?: AgentChildEngineFactory
   parentConfig?: EngineConfig
-  parentRenderer?: unknown
+  parentRenderer?: RendererInterface
   /**
    * Optional ExecutionRun registry (runtime architecture contract §三). When supplied,
    * AgentTool and ClaudeCodeTool create child runs for every

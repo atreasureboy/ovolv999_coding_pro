@@ -39,7 +39,7 @@ import type {
   Tool,
 } from './types.js'
 import { createTools } from '../tools/index.js'
-import type { Renderer } from '../ui/renderer.js'
+import type { RendererInterface } from '../ui/renderer.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { ModuleManager } from './moduleRuntime/moduleManager.js'
 import { applyAgentToConfig } from './agentPresets.js'
@@ -151,7 +151,7 @@ import type { TurnOutcome } from './runtime/turnOutcome.js'
 export class ExecutionEngine {
   private client: OpenAI
   private config: EngineConfig
-  private renderer: Renderer
+  private renderer: RendererInterface
   private eventLog: EngineConfig['eventLog']
   private moduleManager: ModuleManager
   private costTracker: CostTracker
@@ -235,7 +235,7 @@ export class ExecutionEngine {
   /** R5: lazy lookup of current run's ControlMessageLog. Set in constructor. */
   private getCurrentControlMessageLog: () => ControlMessageLog | undefined = () => undefined
 
-  constructor(config: EngineConfig, renderer: Renderer, client?: OpenAI) {
+  constructor(config: EngineConfig, renderer: RendererInterface, client?: OpenAI) {
     this.config = applyAgentToConfig(config)
     this.renderer = renderer
     this.client = client ?? new OpenAI({
@@ -733,10 +733,16 @@ export class ExecutionEngine {
     )
     if (pending.length === 0) return { reattached: 0, lost: 0 }
 
-    // Find WorkerAdapter tools.
+    // Find WorkerAdapter tools. We duck-type on the `reattach` method
+    // rather than instanceof-checking — adapters are Tools at the
+    // registry layer. The cast is safe because we only invoke members
+    // we just confirmed exist (reattach, and workerKind which all
+    // WorkerAdapters implement); other WorkerAdapter members are
+    // optional/unused here.
     const adapters: WorkerAdapter[] = []
     for (const tool of this.tools) {
-      if (typeof (tool as { reattach?: unknown }).reattach === 'function') {
+      const candidate = tool as Partial<WorkerAdapter>
+      if (typeof candidate.reattach === 'function') {
         adapters.push(tool as unknown as WorkerAdapter)
       }
     }

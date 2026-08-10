@@ -221,7 +221,7 @@ export class LspClient extends EventEmitter {
 
     this.connection.onError(() => this.markClosed())
     this.connection.onNotification(
-      { method: PublishDiagnosticsNotification } as never,
+      PublishDiagnosticsNotification,
       (params: unknown) => {
         const p = params as { uri?: string; diagnostics?: Array<Record<string, unknown>> } | undefined
         if (p?.uri) {
@@ -232,14 +232,14 @@ export class LspClient extends EventEmitter {
       },
     )
     this.connection.onNotification(
-      { method: 'window/logMessage' } as never,
+      'window/logMessage',
       (params: unknown) => {
         const p = params as { message?: string } | undefined
         if (p?.message) this.emit('log', p.message)
       },
     )
     this.connection.onNotification(
-      { method: 'window/showMessage' } as never,
+      'window/showMessage',
       (params: unknown) => {
         const p = params as { message?: string } | undefined
         if (p?.message) this.emit('log', p.message)
@@ -279,7 +279,7 @@ export class LspClient extends EventEmitter {
         return false
       }
 
-      this.connection.sendNotification({ method: 'initialized' } as never, {})  // eslint-disable-line @typescript-eslint/no-floating-promises
+      this.connection.sendNotification('initialized', {})  // eslint-disable-line @typescript-eslint/no-floating-promises
       this.started = true
       return true
     } catch {
@@ -292,8 +292,8 @@ export class LspClient extends EventEmitter {
     if (this.shutdown) return
     this.shutdown = true
     if (this.connection && this.started) {
-      try { await this.withTimeout(this.connection.sendRequest({ method: 'shutdown' } as never, null), 'shutdown', 3000) } catch { /* ignore */ }
-      this.connection.sendNotification({ method: 'exit' } as never, null)  // eslint-disable-line @typescript-eslint/no-floating-promises
+      try { await this.withTimeout(this.connection.sendRequest('shutdown', null), 'shutdown', 3000) } catch { /* ignore */ }
+      this.connection.sendNotification('exit', null)  // eslint-disable-line @typescript-eslint/no-floating-promises
     }
     this.kill()
   }
@@ -318,7 +318,7 @@ export class LspClient extends EventEmitter {
     const version = 1
     this.docVersions.set(uri, version)
     this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
-      { method: 'textDocument/didOpen' } as never,
+      'textDocument/didOpen',
       {
         textDocument: {
           uri,
@@ -335,7 +335,7 @@ export class LspClient extends EventEmitter {
     if (!this.isRunning()) return
     this.docVersions.set(uri, version)
     this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
-      { method: 'textDocument/didChange' } as never,
+      'textDocument/didChange',
       {
         textDocument: { uri, version },
         contentChanges: [{ text }],
@@ -346,7 +346,7 @@ export class LspClient extends EventEmitter {
   saveDocument(uri: string, text?: string): void {
     if (!this.isRunning()) return
     this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
-      { method: 'textDocument/didSave' } as never,
+      'textDocument/didSave',
       { textDocument: { uri }, text },
     )
   }
@@ -354,7 +354,7 @@ export class LspClient extends EventEmitter {
   closeDocument(uri: string): void {
     if (!this.isRunning()) return
     this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
-      { method: 'textDocument/didClose' } as never,
+      'textDocument/didClose',
       { textDocument: { uri } },
     )
   }
@@ -398,7 +398,7 @@ export class LspClient extends EventEmitter {
     const result = await this.withTimeout(
       conn.sendRequest(
         DefinitionRequest,
-        { textDocument: { uri }, position } as never,
+        { textDocument: { uri }, position },
       ),
       'definition',
     )
@@ -411,7 +411,7 @@ export class LspClient extends EventEmitter {
     const result = await this.withTimeout(
       conn.sendRequest(
         ReferencesRequest,
-        { textDocument: { uri }, position, context: { includeDeclaration: true } } as never,
+        { textDocument: { uri }, position, context: { includeDeclaration: true } },
       ),
       'references',
     )
@@ -423,7 +423,7 @@ export class LspClient extends EventEmitter {
     return await this.withTimeout(
       conn.sendRequest(
         HoverRequest,
-        { textDocument: { uri }, position } as never,
+        { textDocument: { uri }, position },
       ),
       'hover',
     )
@@ -434,7 +434,7 @@ export class LspClient extends EventEmitter {
     const result = await this.withTimeout(
       conn.sendRequest(
         DocumentSymbolRequest,
-        { textDocument: { uri } } as never,
+        { textDocument: { uri } },
       ),
       'documentSymbol',
     )
@@ -446,7 +446,7 @@ export class LspClient extends EventEmitter {
     const conn = this.requireConn()
     try {
       const result = await this.withTimeout(
-        conn.sendRequest(WorkspaceSymbolRequest, { query } as never),
+        conn.sendRequest(WorkspaceSymbolRequest, { query }),
         'workspace/symbol',
       )
       return (result as LspSymbol[]) ?? []

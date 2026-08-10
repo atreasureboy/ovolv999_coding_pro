@@ -17,14 +17,14 @@
  */
 
 import type { Tool } from '../types.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>()
   private readonly discovered = new Set<string>()
-  private readonly renderer?: Renderer
+  private readonly renderer?: RendererInterface
 
-  constructor(renderer?: Renderer) {
+  constructor(renderer?: RendererInterface) {
     this.renderer = renderer
   }
 

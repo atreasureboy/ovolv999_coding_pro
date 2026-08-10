@@ -20,6 +20,7 @@ import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { AtomicTransaction } from '../core/atomicTransaction.js'
 import { FileEditTool } from './fileEdit.js'
+import { isLoopDriverOwnedPath } from '../core/pathSecurity.js'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 
@@ -56,7 +57,7 @@ export class MultiEditTool implements Tool {
     mutatesState: true,
     concurrencySafe: false,
     claims: (input: Record<string, unknown>): ResourceClaim[] => {
-      const edits = (input as unknown as { edits?: unknown[] }).edits
+      const edits = (input as { edits?: unknown[] }).edits
       if (!Array.isArray(edits)) return []
       return edits
         .filter((e) => typeof (e as Record<string, unknown>).file_path === 'string')
@@ -119,7 +120,7 @@ export class MultiEditTool implements Tool {
     input: Record<string, unknown>,
     _context: ToolContext,
   ): Promise<ToolResult> {
-    const edits = (input as unknown as MultiEditInput).edits
+    const edits = (input as Partial<MultiEditInput>).edits
     if (!Array.isArray(edits) || edits.length === 0) {
       return { content: 'Error: edits must be a non-empty array', isError: true }
     }
@@ -185,6 +186,20 @@ export class MultiEditTool implements Tool {
     if (!edit.file_path || typeof edit.file_path !== 'string') {
       return { ok: false, error: `${prefix} file_path is required` }
     }
+
+    // ADR-007: .loop/ supervisor control files are driver-owned (see
+    // pathSecurity.isLoopDriverOwnedPath). Reject before any read/stat so
+    // a refused edit never touches the atomic transaction. MultiEdit must
+    // enforce the same guard as FileEdit/FileWrite — without it the model
+    // could forge .loop/DONE.flag or checkpoint.json via a batch edit.
+    if (isLoopDriverOwnedPath(edit.file_path)) {
+      return {
+        ok: false,
+        error: `${prefix} ${edit.file_path} is a loop supervisor control file — only the Driver may write it. ` +
+          `To signal completion, write .loop/CANDIDATE_DONE.flag; the Supervisor verifies independently.`,
+      }
+    }
+
     if (!edit.old_string && edit.old_string !== '') {
       return { ok: false, error: `${prefix} old_string is required` }
     }

@@ -108,12 +108,15 @@ function toMarkdown(messages: OpenAIMessage[], options: ExportOptions): string {
 
       case 'assistant':
         lines.push('## Assistant', '')
-        if (includeReasoning && (msg as unknown as { reasoning?: string }).reasoning) {
-          lines.push('<details><summary>Reasoning</summary>', '')
-          lines.push('```')
-          lines.push((msg as unknown as { reasoning: string }).reasoning)
-          lines.push('```')
-          lines.push('</details>', '')
+        if (includeReasoning) {
+          const reasoning = (msg as OpenAIMessage & { reasoning?: string }).reasoning
+          if (reasoning) {
+            lines.push('<details><summary>Reasoning</summary>', '')
+            lines.push('```')
+            lines.push(reasoning)
+            lines.push('```')
+            lines.push('</details>', '')
+          }
         }
         lines.push(truncated)
         lines.push('')
@@ -136,7 +139,7 @@ function toMarkdown(messages: OpenAIMessage[], options: ExportOptions): string {
 
       case 'tool':
         if (includeTools) {
-          const toolName = (msg as unknown as { name?: string; tool_call_id?: string }).name ?? 'tool'
+          const toolName = msg.name ?? 'tool'
           lines.push(`<details><summary>Tool Result: ${toolName}</summary>`, '')
           lines.push('```')
           lines.push(truncated)

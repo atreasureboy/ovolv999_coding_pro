@@ -9,7 +9,7 @@
  */
 
 import type { Tool, ToolDefinition, ToolContext, ToolResult } from '../core/types.js'
-import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleRunContext } from '../core/module.js'
+import type { AgentModule, ModuleBootContext, ModuleBootResult, ModuleRunContext, MemoryModuleControl } from '../core/module.js'
 import type { MemoryEvidenceRef } from '../core/memoryCandidate.js'
 import type { ProjectIdentity } from '../core/projectIdentity.js'
 import type { SemanticMemory } from '../core/semanticMemory.js'
@@ -184,8 +184,7 @@ enter the success-memory read pool.
 
       // v0.5.3 P0-1 (kept): read runId from ToolContext so the
       // candidate is bound to the just-minted runId.
-      const ctx = (context as unknown as { memoryToolContext?: MemoryToolContext })
-        .memoryToolContext ?? ctxProvider()
+      const ctx = context.memoryToolContext ?? ctxProvider()
       const runId = str(ctx.sourceRunId) || str(input.sourceRunId) || 'unknown'
 
       // user_stated ALWAYS requires a source_quote — even before
@@ -366,7 +365,7 @@ function scoreRelevance(
 
 // ── MemoryModule ────────────────────────────────────────────────────────────
 
-export class MemoryModule implements AgentModule {
+export class MemoryModule implements AgentModule, MemoryModuleControl {
   readonly name = 'memory'
 
   constructor(
@@ -542,7 +541,6 @@ export class MemoryModule implements AgentModule {
       toolContextPatch: {
         semanticMemory: this.semantic,
         episodicMemory: this.episodic,
-        longTermMemory: this.longTerm,
       },
       tools: [
         // v0.5.3 Final (task 2): tool pushes Candidate into the
@@ -604,9 +602,14 @@ export class MemoryModule implements AgentModule {
       revision: binding,
       toolCallRegistry: runCtx?.toolCallRegistry,
       projectIdentity: runCtx?.projectIdentity,
-      // EvidenceStore has richer methods than the PromotionInput
-      // contract; narrow to the required consumer interface.
-      evidenceStore: runCtx?.evidence as unknown as { get(id: string): { status: string; createdAt: number } | undefined } | undefined,
+      // PromotionInput.evidenceStore expects { get(id) → {status,createdAt} }.
+      // EvidenceStore has richer methods (getValidEvidence/computeCriterionStatus)
+      // but no get(id) yet, so the verif-ref promotion path stays
+      // best-effort (returns weak, never falsely strong) until that seam
+      // is added. See memoryCandidate.ts:349 — it calls .get(evidenceId).
+      // We pass undefined rather than a cast that would imply the method
+      // exists; this keeps the contract honest.
+      evidenceStore: undefined,
     })
 
     for (const drop of decision.dropped) {

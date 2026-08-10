@@ -163,3 +163,23 @@ export interface AgentModule {
    */
   onModelChanged?(model: string): void
 }
+
+/**
+ * Coordinator-side control surface for the memory module. The Coordinator
+ * narrows an `AgentModule` whose `name === 'memory'` to this interface
+ * instead of duck-typing the methods with `as unknown as` at each call site.
+ * `MemoryModule` implements this; the interface lives here (not in memory.ts)
+ * so `coordinator.ts` can depend on the contract without a circular import on
+ * the concrete module.
+ */
+export interface MemoryModuleControl {
+  publishMemoryContext(ctx: {
+    repo?: string
+    branch?: string
+    commit?: string
+    sourceRunId?: string
+    verified?: boolean
+  }): void
+  publishCandidateSink(runId: string, sink: (c: import('./memoryCandidate.js').MemoryCandidate) => void): void
+  closeCandidateSink(runId: string): void
+}

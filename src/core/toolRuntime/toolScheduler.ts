@@ -20,7 +20,7 @@
 
 import type { OpenAIMessage, Tool, ToolContext, IHookRunner } from '../types.js'
 import type { EventLog } from '../eventLog.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import type { ContextManager } from '../context/contextManager.js'
 import type { ToolExecutor } from './toolExecutor.js'
 import type { ToolRegistry } from './toolRegistry.js'
@@ -97,7 +97,7 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): Too
 export interface ToolSchedulerDeps {
   executor: ToolExecutor
   toolRegistry: ToolRegistry
-  renderer: Renderer
+  renderer: RendererInterface
   eventLog?: EventLog
   hookRunner?: IHookRunner
   contextManager: ContextManager

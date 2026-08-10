@@ -12,6 +12,7 @@
  */
 
 import type { UIStore } from './store.js'
+import type { RendererInterface } from '../renderer.js'
 
 const VERBS = [
   'Thinking', 'Analyzing', 'Processing', 'Computing',
@@ -19,7 +20,7 @@ const VERBS = [
   'Searching', 'Drafting',
 ]
 
-export class InkRenderer {
+export class InkRenderer implements RendererInterface {
   private store: UIStore
 
   constructor(store: UIStore) {

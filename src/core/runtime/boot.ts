@@ -112,7 +112,7 @@ export async function boot(params: BootParams): Promise<BootResult> {
     // them (WorkspaceWatcher in particular) read the SAME instance
     // the Router uses.
     sharedServices: {
-      repoStats: (params as unknown as { repoStats?: RepoStatsService }).repoStats,
+      repoStats: params.repoStats,
     },
   }
   const bootOutput = await moduleManager.boot(bootCtx, executionProfile ? { only: executionProfile.modules } : {})

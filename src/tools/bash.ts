@@ -284,7 +284,7 @@ export class BashTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { command, timeout, run_in_background, description, follow_mode, acceptable_exit_codes } = input as unknown as BashInput
+    const { command, timeout, run_in_background, description, follow_mode, acceptable_exit_codes } = input as Partial<BashInput>
 
     if (!command || typeof command !== 'string') {
       return { content: 'Error: command is required and must be a string', isError: true }

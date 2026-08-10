@@ -91,7 +91,7 @@ export class CodeStructureTool implements Tool {
     _context: ToolContext,
   ): Promise<ToolResult> {
     const { action, file, dir, symbol, old_content, new_content } =
-      input as unknown as CodeStructureInput
+      input as Partial<CodeStructureInput>
 
     try {
       switch (action) {
@@ -125,7 +125,7 @@ export class CodeStructureTool implements Tool {
         }
 
         default:
-          return { content: `Error: unknown action "${action as string}". Use: analyze, scan, refs, diff`, isError: true }
+          return { content: `Error: unknown action "${action ?? '(none)'}". Use: analyze, scan, refs, diff`, isError: true }
       }
     } catch (err) {
       return { content: `CodeStructure error: ${(err as Error).message}`, isError: true }

@@ -13,7 +13,7 @@ import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 import type { TaskKind } from './runtime/taskIntent.js'
 import type { RunEventEmitter } from './runtime/events.js'
-import type { LongTermMemory } from './longTermMemory.js'
+import type { RendererInterface } from '../ui/renderer.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -58,7 +58,7 @@ export interface ChildEngineLike {
  */
 export type AgentChildEngineFactory = (
   config: EngineConfig,
-  renderer: unknown,
+  renderer: RendererInterface,
 ) => ChildEngineLike
 
 /** Content part for multimodal messages (vision/image support). */
@@ -97,7 +97,13 @@ export interface ToolResult {
 export interface ToolMetadata {
   /** Safe to expose in plan/read-only mode. */
   readOnly?: boolean
-  /** Default concurrency behavior when isConcurrencySafe is not implemented. */
+  /**
+   * Advisory static concurrency hint. This is NOT read by the scheduler:
+   * `partitionToolCalls` decides parallelization purely from
+   * `metadata.claims` (see GAP-D), and `ResourceScheduler.acquire()` is
+   * the sole correctness gate. The hint is retained for documentation and
+   * tooling (e.g. read-only filters) but has no runtime scheduling effect.
+   */
   concurrencySafe?: boolean
   /** Tool may mutate workspace files or local state. */
   mutatesState?: boolean
@@ -120,9 +126,10 @@ export interface ToolMetadata {
    * that should be held for the duration of the call.
    *
    * Returning an empty array (or omitting the function) means the
-   * tool makes no claim and is unscheduled. Tools that already
-   * declare `concurrencySafe: true` typically also omit this since
-   * their reads are idempotent and don't need serialization.
+   * tool makes no claim and is unscheduled (runs serially). This is
+   * the ONLY mechanism that affects parallel scheduling; the
+   * `concurrencySafe` metadata field and `Tool.isConcurrencySafe`
+   * method are advisory and not read by the scheduler.
    */
   claims?: (input: Record<string, unknown>) => ResourceClaim[]
 }
@@ -133,10 +140,14 @@ export interface Tool {
   definition: ToolDefinition
   execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>
   /**
-   * Per-input concurrency check (Claude Code pattern).
-   * If implemented, engine uses this instead of the static CONCURRENCY_SAFE_TOOLS set.
-   * Returns true if this specific call can run in parallel with other safe calls.
-   * Default (not implemented) → falls back to static set.
+   * Per-input concurrency advisory (Claude Code pattern).
+   *
+   * NOT consulted by the scheduler. `partitionToolCalls` decides
+   * parallelization purely from `metadata.claims` (GAP-D), and
+   * `ResourceScheduler.acquire()` is the sole correctness gate. This
+   * method is retained for tooling/tests that want a per-input read of
+   * whether a call is side-effect-free, but its return value has no
+   * effect on whether the call is partitioned into a parallel batch.
    */
   isConcurrencySafe?(input: Record<string, unknown>): boolean
 }
@@ -290,13 +301,21 @@ export interface ToolContext {
     sourceRunId?: string
     verified?: boolean
   }
-
   /**
-   * LongTermMemory instance injected by MemoryModule so any tool can
-   * query/write persistent semantic memory through the canonical LTM
-   * path (not just through MemoryModule hooks).
+   * MCP server registry — name → entry, published by McpModule at boot.
+   * The ListMcpResources / ReadMcpResource tools read this to enumerate
+   * resources and prompts from connected MCP servers without depending
+   * on the concrete transport classes. Absent when no MCP servers are
+   * configured or all failed to connect.
    */
-  longTermMemory?: LongTermMemory
+  mcpRegistry?: Map<string, {
+    client: {
+      listResources: () => Promise<Array<{ uri: string; name?: string; description?: string; mimeType?: string }>>
+      readResource: (uri: string) => Promise<Array<{ uri: string; mimeType?: string; text?: string; blob?: string }>>
+      listPrompts: () => Promise<Array<{ name: string; description?: string; arguments?: Array<{ name: string; description?: string; required?: boolean }> }>>
+    }
+    serverName: string
+  }>
 }
 
 // ── AskUserQuestion types (shared between tool, context, and REPL) ──────────

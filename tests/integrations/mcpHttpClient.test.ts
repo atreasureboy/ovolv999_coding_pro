@@ -108,7 +108,7 @@ describe('McpHttpClient', () => {
 
   it('invokes tools/call with name + arguments', async () => {
     const { calls, impl } = mockFetch([
-      { ok: true, body: { result: { content: 'ok' } } },
+      { ok: true, body: { result: { content: [{ type: 'text', text: 'ok' }] } } },
     ])
     const client = new McpHttpClient(
       { name: 'srv', type: 'http', url: 'https://mcp.example.com' },
@@ -116,7 +116,45 @@ describe('McpHttpClient', () => {
     )
     await client.connect()
     const result = await client.callTool('foo', { x: 1 })
-    expect(result).toEqual({ content: 'ok' })
+    expect(result).toEqual({ content: 'ok', isError: false })
     expect(calls[0]?.body).toMatchObject({ method: 'tools/call', params: { name: 'foo', arguments: { x: 1 } } })
+  })
+
+  it('listResources / readResource / listPrompts parse responses', async () => {
+    const { calls, impl } = mockFetch([
+      { ok: true, body: { result: { resources: [{ uri: 'file:///a', name: 'A', description: 'd', mimeType: 'text/plain' }] } } },
+      { ok: true, body: { result: { contents: [{ uri: 'file:///a', mimeType: 'text/plain', text: 'hello' }] } } },
+      { ok: true, body: { result: { prompts: [{ name: 'summarize', description: 'Summarize', arguments: [{ name: 'topic', required: true }] }] } } },
+    ])
+    const client = new McpHttpClient(
+      { name: 'srv', type: 'http', url: 'https://mcp.example.com' },
+      { fetchImpl: impl },
+    )
+    await client.connect()
+
+    const resources = await client.listResources()
+    expect(resources).toEqual([{ uri: 'file:///a', name: 'A', description: 'd', mimeType: 'text/plain' }])
+
+    const contents = await client.readResource('file:///a')
+    expect(contents).toEqual([{ uri: 'file:///a', mimeType: 'text/plain', text: 'hello' }])
+
+    const prompts = await client.listPrompts()
+    expect(prompts).toEqual([{ name: 'summarize', description: 'Summarize', arguments: [{ name: 'topic', description: undefined, required: true }] }])
+
+    expect(calls.map((c) => (c.body as { method: string }).method)).toEqual(['resources/list', 'resources/read', 'prompts/list'])
+  })
+
+  it('listResources and listPrompts return empty on error (best-effort)', async () => {
+    const { impl } = mockFetch([
+      { ok: false, status: 404, body: { error: { code: -32601, message: 'not found' } } },
+      { ok: false, status: 404, body: { error: { code: -32601, message: 'not found' } } },
+    ])
+    const client = new McpHttpClient(
+      { name: 'srv', type: 'http', url: 'https://mcp.example.com' },
+      { fetchImpl: impl },
+    )
+    await client.connect()
+    await expect(client.listResources()).resolves.toEqual([])
+    await expect(client.listPrompts()).resolves.toEqual([])
   })
 })

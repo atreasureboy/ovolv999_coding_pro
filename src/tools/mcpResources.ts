@@ -8,17 +8,10 @@
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 
-interface McpRegistryEntry {
-  client: {
-    listResources: () => Promise<Array<{ uri: string; name?: string; description?: string; mimeType?: string }>>
-    readResource: (uri: string) => Promise<Array<{ uri: string; mimeType?: string; text?: string; blob?: string }>>
-    listPrompts: () => Promise<Array<{ name: string; description?: string; arguments?: Array<{ name: string; description?: string; required?: boolean }> }>>
-  }
-  serverName: string
-}
+type McpRegistryEntry = NonNullable<ToolContext['mcpRegistry']> extends Map<string, infer E> ? E : never
 
 function getRegistry(ctx: ToolContext): Map<string, McpRegistryEntry> | undefined {
-  return (ctx as unknown as { mcpRegistry?: Map<string, McpRegistryEntry> }).mcpRegistry
+  return ctx.mcpRegistry
 }
 
 // ── ListMcpResources ────────────────────────────────────────────────────────

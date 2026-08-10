@@ -9,7 +9,7 @@
  * streaming, sampling, resources/prompts protocols.
  */
 
-import type { McpServerConfig, McpToolInfo } from './mcpClient.js'
+import type { McpServerConfig, McpToolInfo, McpResourceInfo, McpResourceContent, McpPromptInfo } from './mcpClient.js'
 import { getValidToken } from '../integrations/mcpOAuth.js'
 
 export interface McpHttpClientOptions {
@@ -130,15 +130,79 @@ export class McpHttpClient {
     return result.tools
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ content: string; isError: boolean }> {
     const result = await this.call<{ content: unknown; isError?: boolean }>(
       'tools/call',
       { name, arguments: args },
     )
-    return result
+    const rawContent = result?.content
+    const contentArr: unknown[] = Array.isArray(rawContent) ? rawContent : []
+    const text = contentArr
+      .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+      .map((c) => (typeof c.text === 'string' ? c.text : ''))
+      .filter((t) => t.length > 0)
+      .join('\n')
+    return { content: text, isError: result?.isError === true }
   }
 
   async close(): Promise<void> {
     this.connected = false
+  }
+
+  /** List resources exposed by the HTTP server (best-effort — 404 → empty). */
+  async listResources(): Promise<McpResourceInfo[]> {
+    try {
+      const result = await this.call<{ resources?: unknown }>('resources/list', {})
+      const resources = (result?.resources ?? []) as unknown[]
+      return resources
+        .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+        .map((r) => ({
+          uri: typeof r.uri === 'string' ? r.uri : '',
+          name: typeof r.name === 'string' ? r.name : undefined,
+          description: typeof r.description === 'string' ? r.description : undefined,
+          mimeType: typeof r.mimeType === 'string' ? r.mimeType : undefined,
+        }))
+        .filter((r) => r.uri.length > 0)
+    } catch {
+      return []
+    }
+  }
+
+  /** Read a resource by URI. */
+  async readResource(uri: string): Promise<McpResourceContent[]> {
+    const result = await this.call<{ contents?: unknown }>('resources/read', { uri })
+    const rawContents = result?.contents
+    const arr: unknown[] = Array.isArray(rawContents) ? rawContents : []
+    return arr
+      .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+      .map((c) => ({
+        uri: typeof c.uri === 'string' ? c.uri : uri,
+        mimeType: typeof c.mimeType === 'string' ? c.mimeType : undefined,
+        text: typeof c.text === 'string' ? c.text : undefined,
+        blob: typeof c.blob === 'string' ? c.blob : undefined,
+      }))
+  }
+
+  /** List prompts exposed by the HTTP server (best-effort — 404 → empty). */
+  async listPrompts(): Promise<McpPromptInfo[]> {
+    try {
+      const result = await this.call<{ prompts?: unknown }>('prompts/list', {})
+      const prompts = (result?.prompts ?? []) as unknown[]
+      return prompts
+        .filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null)
+        .map((p) => ({
+          name: typeof p.name === 'string' ? p.name : '',
+          description: typeof p.description === 'string' ? p.description : undefined,
+          arguments: Array.isArray(p.arguments)
+            ? (p.arguments as Array<{ name: string; description?: string; required?: boolean }>)
+            : undefined,
+        }))
+        .filter((p) => p.name.length > 0)
+    } catch {
+      return []
+    }
   }
 }

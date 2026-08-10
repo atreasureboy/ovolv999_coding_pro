@@ -69,7 +69,7 @@ Read-only and instant (no LLM call) — run it after editing to self-check.`,
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { files, baseDir } = input as unknown as CodeReviewInput
+    const { files, baseDir } = input as Partial<CodeReviewInput>
     const cwd = (context as { cwd?: string }).cwd ?? process.cwd()
     const root = baseDir ?? cwd
 

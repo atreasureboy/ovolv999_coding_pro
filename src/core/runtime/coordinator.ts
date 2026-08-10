@@ -36,7 +36,7 @@ import type { CostTracker } from '../costTracker.js'
 import type { BackgroundTaskManager } from '../backgroundTaskManager.js'
 import type { FileHistory } from '../fileHistory.js'
 import type { PermissionManager } from '../permissionSystem.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import type { EventLog } from '../eventLog.js'
 import {
   transitionQueryState,
@@ -56,6 +56,7 @@ import type { ToolPolicy } from '../toolRuntime/toolPolicy.js'
 import type { ToolScheduler, ParsedToolCall } from '../toolRuntime/toolScheduler.js'
 import type { ToolRegistry } from '../toolRuntime/toolRegistry.js'
 import type { ModuleManager } from '../moduleRuntime/moduleManager.js'
+import type { AgentModule, MemoryModuleControl } from '../module.js'
 import type { SharedRuntimeState } from './sharedState.js'
 import { resolveProjectIdentity } from '../projectIdentity.js'
 import type { RunEventEmitter } from './events.js'
@@ -101,7 +102,7 @@ interface StreamingToolCall {
 
 export interface CoordinatorDeps {
   config: EngineConfig
-  renderer: Renderer
+  renderer: RendererInterface
   eventLog?: EventLog
   costTracker: CostTracker
   backgroundTaskManager: BackgroundTaskManager
@@ -472,9 +473,7 @@ export class RuntimeCoordinator {
       // initial snapshot and the gate would reject every write.
       for (const m of this.deps.moduleManager.modules) {
         if (m.name === 'memory') {
-          const mm = m as unknown as {
-            publishMemoryContext?: (c: typeof memoryCtx) => void
-          }
+          const mm = m as AgentModule & Partial<MemoryModuleControl>
           try { mm.publishMemoryContext?.(memoryCtx) } catch { /* best-effort */ }
           // candidateSink publish happens AFTER runContext is created
           // — see below.
@@ -570,9 +569,7 @@ export class RuntimeCoordinator {
         // the MemoryPromoter reads them after CompletionContract.
         for (const m of this.deps.moduleManager.modules) {
           if (m.name === 'memory') {
-            const mm = m as unknown as {
-              publishCandidateSink?: (runId: string, sink: (c: MemoryCandidate) => void) => void
-            }
+            const mm = m as AgentModule & Partial<MemoryModuleControl>
             try {
               if (mm.publishCandidateSink) {
                 mm.publishCandidateSink(effectiveRunId, (cand) => {
@@ -1718,9 +1715,7 @@ export class RuntimeCoordinator {
       try {
         for (const m of this.deps.moduleManager.modules) {
           if (m.name === 'memory') {
-            const mm = m as unknown as {
-              closeCandidateSink?: (runId: string) => void
-            }
+            const mm = m as AgentModule & Partial<MemoryModuleControl>
             try { mm.closeCandidateSink?.(effectiveRunId) } catch { /* best-effort */ }
           }
         }

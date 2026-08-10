@@ -244,7 +244,7 @@ registerCommand({
     const profiles: ConfiguredModelTierProfile[] = configuredProfiles.length > 0
       ? configuredProfiles
       : routedProfiles.map((profile) => {
-        const resolution = resolveModelTier(profile as unknown as Record<string, unknown>)
+        const resolution = resolveModelTier(profile)
         return {
           id: profile.id,
           provider: profile.provider,
@@ -1472,7 +1472,7 @@ registerCommand({
         cwd: ctx.cwd,
         runSlash: async (cmd: string) => {
           // Dispatch slash command through the context's dispatcher if available
-          const dispatch = (ctx as unknown as { dispatchSlash?: (s: string) => Promise<boolean> }).dispatchSlash
+          const dispatch = ctx.dispatchSlash
           if (typeof dispatch === 'function') {
             await dispatch(cmd)
             return `(executed: ${cmd})`

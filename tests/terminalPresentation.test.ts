@@ -32,7 +32,8 @@ describe('terminal presentation', () => {
     expect(plain).toContain('SYSTEMS')
     expect(plain).toContain('● READY')
 
-    const promptPrefix = renderer.writePrompt()
+    const promptPrefix = renderer.promptPrefix()
+    renderer.writePrompt()
     renderer.closePrompt()
     renderer.beginAssistantText()
     renderer.streamToken('first line\nsecond line')

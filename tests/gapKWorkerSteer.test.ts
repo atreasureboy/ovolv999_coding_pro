@@ -13,6 +13,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { ClaudeCodeTool } from '../src/tools/claudeCode.js'
+import type { RendererInterface } from '../src/ui/renderer.js'
 import { AgentTool } from '../src/tools/agent.js'
 import { ExecutionRunRegistry } from '../src/core/executionRun.js'
 import type { WorkerAdapter } from '../src/core/workerAdapter.js'
@@ -168,7 +169,7 @@ describe('GAP-K: AgentTool.steer()', () => {
 
   it('queues the instruction for an active run and returns true', async () => {
     const registry = new ExecutionRunRegistry()
-    const t = new AgentTool({ factory: (() => ({})) as never, parentConfig: {} as never, parentRenderer: null, runRegistry: registry })
+    const t = new AgentTool({ factory: (() => ({})) as never, parentConfig: {} as never, parentRenderer: null as unknown as RendererInterface, runRegistry: registry })
     const run = registry.create({
       kind: 'agent', goal: 'g', workspace: { cwd: '/r' },
     })
@@ -183,7 +184,7 @@ describe('GAP-K: AgentTool.steer()', () => {
 
   it('returns false for a terminal run', async () => {
     const registry = new ExecutionRunRegistry()
-    const t = new AgentTool({ factory: (() => ({})) as never, parentConfig: {} as never, parentRenderer: null, runRegistry: registry })
+    const t = new AgentTool({ factory: (() => ({})) as never, parentConfig: {} as never, parentRenderer: null as unknown as RendererInterface, runRegistry: registry })
     const run = registry.create({
       kind: 'agent', goal: 'g', workspace: { cwd: '/r' },
     })
@@ -200,7 +201,7 @@ describe('GAP-K: AgentTool.steer()', () => {
     const t = new AgentTool({
       factory: (() => ({})) as never,
       parentConfig: {} as never,
-      parentRenderer: null,
+      parentRenderer: null as unknown as RendererInterface,
       runRegistry: registry,
       onSteered: (_id, instr) => steered.push(instr),
     })

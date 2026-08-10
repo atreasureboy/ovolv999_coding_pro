@@ -61,7 +61,7 @@ export class FileReadTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
-    const { file_path, offset, limit } = input as unknown as ReadFileInput
+    const { file_path, offset, limit } = input as Partial<ReadFileInput>
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }

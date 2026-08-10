@@ -3,14 +3,27 @@
  *
  * The tool name is namespaced as `mcp__<server>__<tool>` to avoid collisions
  * with built-in tools and across multiple MCP servers. Calls are forwarded to
- * the owning McpStdioClient via tools/call.
+ * the owning MCP client (stdio or http transport) via tools/call.
  *
  * Metadata is intentionally conservative (non-readOnly, non-concurrent,
  * network-capable): MCP tool side effects are unknown to the host.
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
-import type { McpStdioClient, McpToolInfo } from '../core/mcpClient.js'
+import type { McpToolInfo } from '../core/mcpClient.js'
+
+/**
+ * Minimal client surface required by the adapter. Both McpStdioClient and
+ * McpHttpClient satisfy this; McpModule passes whichever transport it
+ * created. Keeping the dependency on an interface (not a concrete class)
+ * is what lets one adapter serve both transports.
+ */
+export interface McpCallClient {
+  callTool(name: string, args: Record<string, unknown>): Promise<{
+    content: string
+    isError: boolean
+  }>
+}
 
 function toObjectSchema(schema: unknown): ToolDefinition['function']['parameters'] {
   if (
@@ -36,7 +49,7 @@ export class McpToolAdapter implements Tool {
   constructor(
     private readonly serverName: string,
     private readonly toolInfo: McpToolInfo,
-    private readonly client: McpStdioClient,
+    private readonly client: McpCallClient,
   ) {
     this.name = `mcp__${serverName}__${toolInfo.name}`
     this.definition = {
@@ -58,7 +71,7 @@ export class McpToolAdapter implements Tool {
       const result = await this.client.callTool(this.toolInfo.name, input)
       return {
         content: result.content || `(MCP tool ${this.toolInfo.name} returned no text content)`,
-        isError: result.isError,
+        isError: result.isError === true,
       }
     } catch (err) {
       return {

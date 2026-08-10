@@ -19,7 +19,7 @@
 import type { Tool, ToolContext, ToolDefinition, ToolResult, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
 import type { AgentConfig } from '../core/agentPresets.js'
 import { resolveAgentConfig, validateAgentConfig, PRESET_NAMES } from '../core/agentPresets.js'
-import { Renderer } from '../ui/renderer.js'
+import { Renderer, type RendererInterface } from '../ui/renderer.js'
 import { tmuxLayout } from '../ui/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -338,7 +338,7 @@ function clonePermissionManager(mgr: PermissionManager): PermissionManager {
 export interface AgentToolWiring {
   factory?: AgentChildEngineFactory
   parentConfig?: EngineConfig
-  parentRenderer?: unknown
+  parentRenderer?: RendererInterface
   /**
    * Optional ExecutionRun registry (runtime architecture contract §三 Phase 2). When
    * supplied, every Agent invocation creates a child ExecutionRun,
@@ -399,7 +399,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    * these fields. */
   private readonly factory: AgentChildEngineFactory | undefined
   private readonly parentConfig: EngineConfig | undefined
-  private readonly parentRenderer: unknown
+  private readonly parentRenderer: RendererInterface | undefined
   private readonly runRegistry: ExecutionRunRegistry | undefined
   private readonly parentRunId: string | undefined
 
@@ -795,12 +795,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       }
     }
 
-    const mainRenderer = parentRenderer as {
-      agentStart:     (desc: string, type: string) => void
-      agentDone:      (desc: string, success: boolean) => void
-      agentSummary:   (agentType: string, desc: string, summary: string) => void
-      agentHeartbeat: (agentType: string, desc: string, elapsedSec: number) => void
-    }
+    const mainRenderer = parentRenderer
     const agentDisplayLabel = `${agentLabel} · ${modelAssignment.tier}/${modelAssignment.role}/${modelAssignment.profileId}`
     mainRenderer.agentStart(description, agentDisplayLabel)
     const agentStartTime = Date.now()
@@ -893,9 +888,9 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
 
     const paneLabel = `[${agentDisplayLabel}] ${description}`
     const paneSlot = tmuxLayout.acquireSlot(paneLabel)
-    const childRenderer = paneSlot
+    const childRenderer: RendererInterface = paneSlot
       ? Renderer.forFile(paneSlot.logFile)
-      : (parentRenderer as Renderer)
+      : parentRenderer
 
     // ── P0-3 (runtime invariants §四): Worktree isolation MUST be fail-closed ──
     // For modify tasks the Runtime creates an isolated git worktree
@@ -1294,9 +1289,28 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       if (this.runRegistry?.onEmit && runId) {
         try {
           const run = this.runRegistry.get(runId)
+          // When the run is missing from the registry (e.g. an agent
+          // spawned before the registry existed), synthesize a minimal
+          // terminal record so the transition event still fires. The
+          // `phase`/`acceptance`/`budget`/`resources`/`artifacts` fields
+          // default to empty values — this is a best-effort emit inside
+          // a try/catch, never the authoritative record.
           this.runRegistry.onEmit({
             kind: 'transition',
-            run: run ?? { runId, kind: 'agent' as const, status: finalStatus, goal: description, workspace: { cwd: context.cwd } } as never,
+            run: run ?? {
+              runId,
+              kind: 'agent',
+              status: finalStatus,
+              goal: description,
+              workspace: { cwd: context.cwd },
+              phase: 'completed',
+              acceptance: [],
+              budget: {},
+              resources: [],
+              artifacts: [],
+              createdAt: '',
+              updatedAt: '',
+            },
             from: 'running',
             to: finalStatus,
           })

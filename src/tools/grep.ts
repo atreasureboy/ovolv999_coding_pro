@@ -93,7 +93,7 @@ export class GrepTool implements Tool {
       output_mode = 'files_with_matches',
       context: contextLines,
       case_insensitive,
-    } = input as unknown as GrepInput
+    } = input as Partial<GrepInput>
 
     // include shorthand: "ts" → glob "*.ts"
     const effectiveGlob = globPattern ?? (includePattern ? `*.${includePattern}` : undefined)

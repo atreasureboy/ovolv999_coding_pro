@@ -20,7 +20,7 @@
 import OpenAI from 'openai'
 
 export interface ProbeClient {
-  models?: { list: (opts?: unknown) => Promise<unknown> }
+  models?: { list: (...args: unknown[]) => Promise<unknown> }
   chat: {
     completions: {
       create: (params: Record<string, unknown>, opts?: unknown) => Promise<AsyncIterable<unknown>>

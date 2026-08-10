@@ -7,7 +7,7 @@
  * Usage (from bin/ovogogogo.ts):
  *   const store = new UIStore()
  *   const inkRenderer = new InkRenderer(store)
- *   const engine = new ExecutionEngine(config, inkRenderer as unknown as Renderer)
+ *   const engine = new ExecutionEngine(config, inkRenderer)
  *   await runInkRepl({ store, engine, version, model, ... })
  */
 
@@ -17,7 +17,7 @@ import { join } from 'path'
 import type { UIStore } from './store.js'
 import type { ExecutionEngine } from '../../core/engine.js'
 import type { OpenAIMessage } from '../../core/types.js'
-import type { Renderer } from '../renderer.js'
+import type { RendererInterface } from '../renderer.js'
 import type { TurnOutcome } from '../../core/runtime/turnOutcome.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
@@ -29,7 +29,7 @@ import { warnOnce } from '../../utils/warnOnce.js'
 export interface InkReplOptions {
   store: UIStore
   engine: ExecutionEngine
-  inkRenderer: Renderer
+  inkRenderer: RendererInterface
   version: string
   model: string
   skills: Array<{ name: string; description: string }>

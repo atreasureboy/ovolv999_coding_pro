@@ -132,7 +132,19 @@ export class MessageBus extends EventEmitter {
     return message
   }
 
-  receive(agentId: string, timeout = 0): AgentMessage | null {
+  /**
+   * Dequeue the next message for `agentId`.
+   *
+   * - If a message is already queued: returns it synchronously.
+   * - If `timeout > 0`: returns a Promise that resolves with the next
+   *   arriving message (or null on timeout). Callers MUST await the
+   *   result when passing a positive timeout.
+   * - Otherwise: returns null synchronously.
+   *
+   * The union return type is intentional — the synchronous and async
+   * branches are distinguished by the `timeout` argument.
+   */
+  receive(agentId: string, timeout = 0): AgentMessage | null | Promise<AgentMessage | null> {
     const queue = this.queues.get(agentId)
     if (!queue) return null
 
@@ -141,13 +153,13 @@ export class MessageBus extends EventEmitter {
     }
 
     if (timeout > 0) {
-      return new Promise((resolve) => {
+      return new Promise<AgentMessage | null>((resolve) => {
         const timer = setTimeout(() => {
           this.off(`message:${agentId}`, handler)
           resolve(null)
         }, timeout)
 
-        const handler = (msg: AgentMessage) => {
+        const handler = (msg: AgentMessage): void => {
           clearTimeout(timer)
           this.off(`message:${agentId}`, handler)
           const q = this.queues.get(agentId)
@@ -155,7 +167,7 @@ export class MessageBus extends EventEmitter {
           else resolve(msg)
         }
         this.once(`message:${agentId}`, handler)
-      }) as unknown as AgentMessage | null
+      })
     }
 
     return null

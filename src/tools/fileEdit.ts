@@ -81,7 +81,7 @@ export class FileEditTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { file_path, old_string, new_string, replace_all } = input as unknown as EditFileInput
+    const { file_path, old_string, new_string, replace_all } = input as Partial<EditFileInput>
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }

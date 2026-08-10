@@ -23,7 +23,7 @@ import { classifyCommandRisk } from '../riskClassifier.js'
 import { gateByPermissionMode } from './permissionModeGate.js'
 import { evaluateDefaultGlobRule, sessionApprovalCache, extractPrimaryArg } from '../permissionRules.js'
 import type { EventLog } from '../eventLog.js'
-import type { Renderer } from '../../ui/renderer.js'
+import type { RendererInterface } from '../../ui/renderer.js'
 import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
@@ -57,7 +57,7 @@ export interface ToolExecutorDeps {
   /** Phase 4: records every tool result for stall detection. */
   progressMonitor?: ProgressMonitor
   resolveProgressMonitor?: (context: ToolContext) => ProgressMonitor | undefined
-  renderer: Renderer
+  renderer: RendererInterface
   /** v0.5.5 §2: per-run ToolResult registry. Populated after
    *  every tool completion; consumed by MemoryModule.onComplete
    *  for tool_observed evidence validation. */

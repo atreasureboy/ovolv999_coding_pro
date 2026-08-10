@@ -138,9 +138,51 @@ function wrapDisplayText(text: string, width: number): string[] {
   return lines
 }
 
+// ── RendererInterface ───────────────────────────────────────
+// The structural contract every frontend renderer (Renderer, PipeRenderer,
+// InkRenderer) satisfies. Extracted from Renderer so call sites hold the
+// interface, not the concrete class — eliminating `as unknown as Renderer`
+// duck-type casts at the InkRenderer boundary and `as { agentStart... }`
+// casts in AgentTool. InkRenderer omits closePrompt (no caller — the Ink
+// prompt is component-driven); the interface marks it optional so the
+// concrete Renderer can still declare it. streamReasoning is optional on
+// Renderer itself (declared as a `?` method), preserved here the same way.
+
+export interface RendererInterface {
+  destroy(): void
+  banner(version: string, model: string): void
+  humanPrompt(text: string): void
+  beginAssistantText(): void
+  streamToken(token: string): void
+  streamReasoning?(token: string): void
+  endAssistantText(): void
+  toolStart(name: string, input: Record<string, unknown>, callId?: string): void
+  toolResult(name: string, result: string, isError: boolean, callId?: string): void
+  startSpinner(verb?: string): void
+  stopSpinner(): void
+  info(msg: string): void
+  success(msg: string): void
+  error(msg: string): void
+  warn(msg: string): void
+  agentStart(desc: string, type?: string): void
+  agentDone(desc: string, ok: boolean): void
+  agentSummary(type: string, desc: string, summary: string): void
+  agentHeartbeat(type: string, desc: string, sec: number): void
+  compactStart(tokens: number): void
+  compactDone(orig: number, sum: number): void
+  contextWarning(tokens: number, max: number, pct: number): void
+  planModeStart(): void
+  planConfirmPrompt(): void
+  writeInterruptPrompt(): void
+  interruptInjected(msg: string): void
+  writePrompt(): void
+  newline(): void
+  closePrompt?(text?: string, replaceReadline?: boolean): void
+}
+
 // ── Renderer ────────────────────────────────────────────────
 
-export class Renderer {
+export class Renderer implements RendererInterface {
   private spinTimer: ReturnType<typeof setInterval> | null = null
   private spinFrame = 0
   private spinVerb = 0
@@ -172,7 +214,7 @@ export class Renderer {
   static forFile(path: string): Renderer {
     const fs = createWriteStream(path, { flags: 'a' })
     fs.on('error', () => {})
-    return new Renderer({ stream: fs as unknown as NodeJS.WritableStream })
+    return new Renderer({ stream: fs })
   }
 
   /** Close the underlying stream if it's a file stream (prevents fd leak) */
@@ -563,12 +605,24 @@ export class Renderer {
 
   // ── REPL ──────────────────────────────────────────────────
 
-  writePrompt(): string {
+  writePrompt(): void {
     this.flushStartup()
     const inner = Math.min(Math.max(this.width - 6, 58), 90)
     const label = ' ask ovolv999 '
     const line = '─'.repeat(Math.max(8, inner - label.length - 1))
     this.w(`\n  ${C.slate}╭─${R}${C.electric}${label}${R}${C.slate}${line}╮${R}\n`)
+    // The prompt prefix (the `│ › ` cursor line) was previously returned to
+    // the caller so it could write the user's typed text on the same line.
+    // No caller consumes the return value (REPL prompt is component-driven in
+    // Ink, readline-managed in vim); returning void aligns with InkRenderer
+    // and lets both implement RendererInterface without a cast.
+  }
+
+  /** Concrete-only: the `│ › ` cursor-line prefix written to the terminal
+   *  on the line below the prompt box. Exposed so tests can assert against
+   *  the rendered prompt text without writePrompt returning it. Not part of
+   *  RendererInterface — InkRenderer does not write a cursor line. */
+  promptPrefix(): string {
     return `  ${C.slate}│${R} ${C.gold}›${R} `
   }
 

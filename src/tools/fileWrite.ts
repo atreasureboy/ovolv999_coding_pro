@@ -55,7 +55,7 @@ export class FileWriteTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { file_path, content } = input as unknown as WriteFileInput
+    const { file_path, content } = input as Partial<WriteFileInput>
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }

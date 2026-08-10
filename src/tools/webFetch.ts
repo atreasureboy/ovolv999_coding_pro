@@ -188,7 +188,7 @@ Large pages are truncated — use start_index to paginate.`,
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { url, max_length, start_index } = input as unknown as WebFetchInput
+    const { url, max_length, start_index } = input as Partial<WebFetchInput>
 
     if (!url || typeof url !== 'string') {
       return { content: 'Error: url is required', isError: true }

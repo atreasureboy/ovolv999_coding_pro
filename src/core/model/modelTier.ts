@@ -18,7 +18,7 @@ export interface ConfiguredModelTierProfile {
   capabilities: Record<string, number>
 }
 
-export function resolveModelTier(profile: Record<string, unknown>): ModelTierResolution {
+export function resolveModelTier(profile: { tier?: string; roles?: unknown }): ModelTierResolution {
   if (profile.tier === 'top' || profile.tier === 'secondary') {
     return { tier: profile.tier, inferred: false }
   }

@@ -6,7 +6,7 @@
  */
 
 import type { ModelCallAttempt, TurnOutcome } from '../core/runtime/turnOutcome.js'
-import type { Renderer } from './renderer.js'
+import type { RendererInterface } from './renderer.js'
 
 export interface OutcomeCardOptions {
   outcome: TurnOutcome
@@ -91,7 +91,7 @@ export function formatOutcomeCardText(opts: OutcomeCardOptions): string {
   return lines.join('\n')
 }
 
-export function renderOutcomeCard(renderer: Renderer, opts: OutcomeCardOptions): void {
+export function renderOutcomeCard(renderer: RendererInterface, opts: OutcomeCardOptions): void {
   const cardText = formatOutcomeCardText(opts)
   const status = opts.outcome.completion?.status ?? 'completed'
   if (status === 'completed') {

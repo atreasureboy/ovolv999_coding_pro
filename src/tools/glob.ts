@@ -53,7 +53,7 @@ export class GlobTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { pattern, path: searchPath } = input as unknown as GlobInput
+    const { pattern, path: searchPath } = input as Partial<GlobInput>
 
     if (!pattern || typeof pattern !== 'string') {
       return { content: 'Error: pattern is required', isError: true }

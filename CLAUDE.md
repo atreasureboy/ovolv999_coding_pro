@@ -9,10 +9,10 @@ ovolv999 —— **可观测、可控制、可恢复、可验证的多模型 Codi
 TypeScript 5.7 strict ESM,Node ≥ 20,~82k 行 src,测试套件全绿。运行时依赖 8 个:
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
-当前版本:**0.6.0**(package.json / CHANGELOG / VERSION 一致；README 已更新至 0.6.0)。
-> 本 CLAUDE.md 最后核实: 2026-08-06 (v0.6.0 全量架构审计 + Rounds 6-13 完成)。
+当前版本:**0.6.1**(package.json / CHANGELOG / VERSION / README 一致)。
+> 本 CLAUDE.md 最后核实: 2026-08-10 (v0.6.1 全量架构审计 + Rounds 6-14 完成)。
 
-v0.6.0 关键不变量(延续 v0.5.3):
+v0.6.1 关键不变量(延续 v0.5.3):
 
 - **Memory Candidate → Promotion**: `memory_write` 推 MemoryCandidate 到
   `RunScopedRuntimeContext`;`onComplete` + CompletionContract + Reviewer
@@ -121,11 +121,21 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 - ~~P2 接线与清理~~ → **已完成(2026-08-05,Rounds 6-10)**:
   - `permissionRules.ts` glob 引擎:✅ 已接线(toolExecutor.ts 引用)
   - 持久层 subsystem 事件(tool.*/artifact.*):已标注 `@reserved` — 定义保留供未来工具可观测性子系统
-  - LongTermMemory:已通过 ToolContext 注入(`longTermMemory?`),MemoryModule 写入 toolContextPatch
+  - LongTermMemory:经核实,LTM 通过 MemoryModule 闭包消费(boot query + memory_search 工具闭包注入),**非**经 ToolContext。`ToolContext.longTermMemory` 字段为死管路(注入但零消费),已于 Round 16 移除。
   - 双 retryable 正则:已合并 — compact.ts 统一引用 `isRetryableError()` 自 retryManager.ts
   - 死字段清理:`writeTimeoutMs`/`consecutiveCommandFailures` 已移除,`lastCommit` 确认局部使用
   - CI 硬化:`scripts/docDriftCheck.sh` + `scripts/deadCodeCheck.sh` 接入 `.github/workflows/ci.yml`
   - 品牌收敛:修复 `/skill-save` 帮助文字(`.ovolv999`→`.ovogo`)、`/doctor` 技能检查目录(`.ovolv999`→`.ovogo`)、WorkspaceWatcher 补监控项目级 `.ovogo/skills/`
+- ~~P2.5 安全与韧性~~ → **已完成(2026-08-07,Round 14)**:
+  - 命令注入:`codeQuality.ts` testPattern + `imageInput.ts` file/convert/sips/pngpaste 改用 `execFileSync`(数组参数,非字符串拼接)
+  - 事件总线泄漏:`ResourceScheduler` 存储 unsubscribe 句柄,`dispose()` 接入 engine shutdown
+  - 僵尸 LSP:`lsp/client.ts` `markClosed()` 杀存活子进程
+  - 未捕获异步拒绝:`daemonServer.ts` async handler 捕获拒绝,返回 HTTP 500
+- ~~P2.6 死契约与类型谎言收敛~~ → **已完成(2026-08-10,Round 16)**:
+  - `Tool.isConcurrencySafe` / `ToolMetadata.concurrencySafe`:JSDoc 原引用不存在的静态 `CONCURRENCY_SAFE_TOOLS` 集合,误导为调度权威。实际 `partitionToolCalls` 纯 claims 驱动,`ResourceScheduler.acquire()` 是唯一正确性闸门。JSDoc 已改为 advisory,不再谎称 "engine uses this"。
+  - `ToolContext.longTermMemory`:死字段(注入零消费),已移除字段+注入+import;LTM 经 MemoryModule 闭包消费的事实已记入 CLAUDE.md。
+  - `messageBus.receive()`:返回类型谎言(`as unknown as` 把 Promise 强转为同步值),改为诚实的联合返回类型 `AgentMessage | null | Promise<AgentMessage | null>`。
+  - `oauth.waitForCode()`:超时计时器在 codePromise 先 resolve 时不清理(轻微泄漏),改用 `.finally(clearTimeout)`。
 - P3 大迁移:品牌目录收敛(引用计数已记录,迁移需用户数据搬家方案)、Windows 租约指纹降级补救(/proc-only)
 
 **路由信号状态(2026-08-05 核实)**:

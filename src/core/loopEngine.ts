@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto'
 import { runCommandSync } from './commandRunner.js'
 import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo, type LoopCheckpoint } from './loopSupervisor.js'
 import type { ExecutionEngine } from './engine.js'
-import type { Renderer } from '../ui/renderer.js'
+import type { RendererInterface } from '../ui/renderer.js'
 import { isTerminalRunStatus } from './executionRun.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 
@@ -328,7 +328,7 @@ function runFullGates(cwd: string): { passed: boolean; results: string[] } {
 /** Run the autonomous loop */
 export async function runLoop(
   engine: ExecutionEngine,
-  renderer: Renderer,
+  renderer: RendererInterface,
   config: LoopConfig,
 ): Promise<void> {
   const { cwd, loopDir } = config
