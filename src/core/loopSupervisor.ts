@@ -6,6 +6,7 @@
  * Provides checkpoint persistence for crash recovery.
  */
 import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, mkdirSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { join, dirname } from 'path'
 import { hostname } from 'os'
 import { randomUUID } from 'crypto'
@@ -233,19 +234,99 @@ export class LoopLeaseManager {
 
 }
 
+/**
+ * Build a portable process identity for `pid` so stale-lease takeover can
+ * detect PID reuse across reboots / process restarts.
+ *
+ * The identity must be (a) stable for the lifetime of the process, (b)
+ * different after the process exits and its PID is reused. The strongest
+ * signal is the kernel's per-process start time. We read it straight from
+ * `/proc/<pid>/stat` on Linux (field 22, the start time in clock ticks
+ * since boot), and combine it with `boot_id` so a reboot that recycles
+ * the same PID + start tick still yields a different identity.
+ *
+ * On non-Linux platforms `/proc` is absent, so `getProcessStartTime()`
+ * falls back to a portable subprocess probe (wmic on Windows, ps on
+ * macOS/BSD). That probe returns the process creation time, which is the
+ * closest cross-platform equivalent to the start-time field.
+ *
+ * For the CURRENT process we additionally synthesize an identity from
+ * `process.uptime()` (the wall-clock ms at which this Node process
+ * started) — this needs no subprocess and is exact. It is used as the
+ * final fallback when the subprocess probe is unavailable or fails.
+ */
 export function getProcessIdentity(pid: number): string | null {
+  const startTime = getProcessStartTime(pid)
+  if (startTime !== null) {
+    let bootId = ''
+    try { bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() } catch { /* optional / non-Linux */ }
+    return `${hostname()}:${bootId}:${pid}:${startTime}`
+  }
+  // Last-resort fallback: only valid for the current process, where
+  // process.uptime() gives an exact start timestamp with no probe needed.
+  // For other PIDs on a platform without a working probe, we genuinely
+  // cannot establish an identity — returning null lets the caller
+  // (tryTakeover) refuse the takeover rather than silently proceeding.
+  return pid === process.pid ? CURRENT_PROCESS_IDENTITY : null
+}
+
+/**
+ * Resolve the start time of `pid` as a string, or null if it cannot be
+ * determined. Linux reads `/proc/<pid>/stat` directly (no subprocess);
+ * other platforms shell out to a portable probe. Never throws.
+ */
+function getProcessStartTime(pid: number): string | null {
+  // Linux fast path: parse /proc/<pid>/stat. Field 22 (1-indexed in the
+  // man page) is the start time in clock ticks since boot; it is at
+  // index 19 after stripping the comm field (which may contain spaces
+  // and is wrapped in parens, so we cut after the last ')').
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
     const close = stat.lastIndexOf(')')
     if (close < 0) return null
     const fields = stat.slice(close + 2).split(/\s+/)
     const startTime = fields[19]
-    if (!startTime) return null
-    let bootId = ''
-    try { bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() } catch { /* optional */ }
-    return `${hostname()}:${bootId}:${pid}:${startTime}`
+    return startTime || null
   } catch {
-    return pid === process.pid ? CURRENT_PROCESS_IDENTITY : null
+    // /proc unavailable (non-Linux) or PID gone — fall through to probe.
+  }
+  return probeProcessStartTime(pid)
+}
+
+/**
+ * Portable subprocess probe for a process's creation/start time, used on
+ * platforms without `/proc` (Windows, macOS, BSD). Returns the raw
+ * stdout (trimmed) so the caller can embed it verbatim in the identity
+ * string — the exact units differ per platform, but all we need is a
+ * value that is stable for a live process and changes on PID reuse.
+ *
+ * `wmic` is used on Windows (deprecated by Microsoft but present on all
+ * currently supported Windows releases); `ps -o lstart` elsewhere. Both
+ * are invoked with a hard 2s timeout and swallowed errors.
+ */
+function probeProcessStartTime(pid: number): string | null {
+  const isWindows = process.platform === 'win32'
+  try {
+    if (isWindows) {
+      // wmic process where ProcessId=<pid> get CreationDate /value
+      // → "CreationDate=20260811000000.000000+000"
+      const out = execFileSync(
+        'wmic',
+        ['process', 'where', `ProcessId=${pid}`, 'get', 'CreationDate', '/value'],
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim()
+      const match = out.match(/CreationDate=(.+)/)
+      return match ? match[1].trim() : null
+    }
+    // macOS / *BSD: `ps -o lstart= -p <pid>` → "Mon Aug 11 10:45:07 2026"
+    const out = execFileSync(
+      'ps',
+      ['-o', 'lstart=', '-p', String(pid)],
+      { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+    return out || null
+  } catch {
+    return null
   }
 }
 
