@@ -219,6 +219,13 @@ export class Renderer implements RendererInterface {
 
   /** Close the underlying stream if it's a file stream (prevents fd leak) */
   destroy(): void {
+    // R18: stop the spinner interval FIRST so the 60ms tick can't fire
+    // renderSpin() against a nulled/closed stream after destroy. The
+    // interval is not unref()'d (it drives visible UI), so leaving it
+    // armed would also keep the event loop alive. agent.ts destroys
+    // child renderers at four exit points (success/error/abort/worktree)
+    // and a spinner may be active at any of them.
+    this.stopSpinner()
     if (this.stream && typeof (this.stream as { end?: () => void }).end === 'function') {
       (this.stream as { end: () => void }).end()
     }

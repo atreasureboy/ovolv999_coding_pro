@@ -296,7 +296,11 @@ export function stopSession(id: string, graceMs = 5000): boolean {
       try { process.kill(meta.pid!, 'SIGKILL') } catch { /* ignore */ }
     }
   }
-  setTimeout(checkLiveness, graceMs)
+  // R18: unref the liveness re-check so a pending escalation cannot keep
+  // the event loop alive after stopSession returns (process exit would
+  // hang for up to graceMs otherwise). One-shot, so no clear needed.
+  const livenessTimer = setTimeout(checkLiveness, graceMs)
+  livenessTimer.unref()
 
   // Write exit file so refreshSessionStatus classifies it as "stopped"
   try {

@@ -779,11 +779,14 @@ export class Daemon {
         // later. In a real subprocess world this would track the
         // child's spawn + health probe completion.
         const status = worker.status
-        setTimeout(() => {
+        // R18: unref so a pending restart state-transition cannot keep the
+        // event loop alive if the daemon is stop()'d within the 50ms window.
+        const restartTimer = setTimeout(() => {
           if (this.workers.get(workerId)?.status === 'starting') {
             this.updateWorkerStatus(workerId, 'running')
           }
         }, 50)
+        restartTimer.unref()
         this.log(`Worker restart requested: ${worker.name} (${workerId})`)
         return { ok: true, data: { workerId, status, requestedAt: now } }
       }

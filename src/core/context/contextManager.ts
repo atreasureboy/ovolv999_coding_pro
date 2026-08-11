@@ -420,10 +420,16 @@ export class ContextManager {
         })
         this.consecutiveCompactFailures = 0
         this.suppressCompactWarning = true
-        void this.deps.hookRunner?.runOnContextOverflow?.(
-          compactResult.originalTokens,
-          compactResult.summaryTokens,
-        )
+        // R18: runOnContextOverflow may return a Promise (HookResult[] |
+        // Promise<HookResult[]>). `void` alone drops it; attach .catch()
+        // so an async hook rejection cannot surface as unhandledRejection
+        // mid-turn. Best-effort — hook failures must not break compaction.
+        try {
+          void Promise.resolve(this.deps.hookRunner?.runOnContextOverflow?.(
+            compactResult.originalTokens,
+            compactResult.summaryTokens,
+          )).catch(() => { /* best-effort hook */ })
+        } catch { /* best-effort: sync throw from hook entry */ }
         // v0.5.3 Final (task 9): re-measure AFTER compaction so the
         // Router reads the post-compaction usage, not the value that
         // triggered compaction.

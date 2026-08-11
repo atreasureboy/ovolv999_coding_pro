@@ -827,8 +827,15 @@ export class ExecutionEngine {
    */
   dispose(): void {
     // R7: SessionEnd hook fires once at engine dispose (best-effort).
+    // R18: runSessionEnd is async — `void` discards the promise, so a
+    // surrounding sync try/catch only catches synchronous throws, not
+    // async rejections (which would surface as an unhandledRejection /
+    // process warning). Attach .catch() to the promise itself.
     if (this.config.hookRunner?.runSessionEnd) {
-      try { void this.config.hookRunner.runSessionEnd('dispose') } catch { /* best-effort */ }
+      try {
+        void this.config.hookRunner.runSessionEnd('dispose')
+          .catch(() => { /* best-effort: dispose must not throw */ })
+      } catch { /* best-effort: sync throw from .runSessionEnd entry */ }
     }
     try {
       this.backgroundTaskManager.dispose()
