@@ -91,7 +91,7 @@ function makeEngine(store: UIStore, tools: Tool[] = []) {
   const client = new FakeOpenAI()
   const engine = new ExecutionEngine(
     baseConfig({ extraTools: tools }),
-    renderer as unknown as ConstructorParameters<typeof ExecutionEngine>[1],
+    renderer,
     client as unknown as ConstructorParameters<typeof ExecutionEngine>[2],
   )
   return { engine, client, renderer }

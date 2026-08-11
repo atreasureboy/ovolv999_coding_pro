@@ -19,8 +19,20 @@
  */
 import OpenAI from 'openai'
 
+/**
+ * Deliberately loose structural seam for the provider probe. The real
+ * OpenAI client's methods have narrow SDK param types
+ * (`ChatCompletionCreateParamsNonStreaming`, `RequestOptions`) that are
+ * NOT contravariantly compatible with the broad `Record<string, unknown>`
+ * signature test doubles use — so wiring the real client requires a
+ * single `as unknown as ProbeClient` cast at the DI boundary (see
+ * `probeProvider`). That cast is safe: ProbeClient only exposes the two
+ * method shapes the probe invokes, and the test doubles that implement
+ * it directly are structurally exact. Keeping the seam loose is the
+ * point — it lets tests inject any minimal double without SDK coupling.
+ */
 export interface ProbeClient {
-  models?: { list: (...args: unknown[]) => Promise<unknown> }
+  models?: { list: (...args: never[]) => Promise<unknown> }
   chat: {
     completions: {
       create: (params: Record<string, unknown>, opts?: unknown) => Promise<AsyncIterable<unknown>>

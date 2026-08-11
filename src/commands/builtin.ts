@@ -253,7 +253,12 @@ registerCommand({
           tierInferred: resolution.inferred,
           roles: profile.roles,
           available: profile.available,
-          capabilities: profile.capabilities as unknown as Record<string, number>,
+          // Spread to widen the concrete RoutingCapabilities interface into
+          // the Record<string, number> index-signature shape that
+          // ConfiguredModelTierProfile.capabilities expects. The runtime
+          // value is unchanged — this avoids the `as unknown as` cast that
+          // previously hid the interface↔index-signature mismatch.
+          capabilities: { ...profile.capabilities },
         }
       })
     if (profiles.length === 0) return text('No model profiles configured.')

@@ -80,14 +80,17 @@ export class AnthropicAdapter implements ProviderAdapter {
   ): AsyncGenerator<OpenAI.Chat.ChatCompletionChunk> {
     const translator = new AnthropicChunkTranslator(modelId)
     try {
-      // R8: pass beta header via SDK options defaultHeaders (SDK supports it)
-      // We use the `anthropic-beta` header through the `extraHeaders` proxy
-      // (older SDKs) or via the explicit `anthropicBeta` field on params.
-      if (betaHeader) {
-        ;(params as unknown as { anthropic_beta?: string }).anthropic_beta = betaHeader
-      }
-      const options: { signal?: AbortSignal } = {}
+      // The Anthropic SDK's MessageCreateParams has no `anthropic_beta` /
+      // `betas` field — beta features are selected by sending the
+      // `anthropic-beta` HTTP header on the request. The SDK's second
+      // argument to `messages.stream` is a Core.RequestOptions that
+      // accepts `headers`, so we pass the beta header there instead of
+      // mutating the typed params object via a cast. (The prior code
+      // attached `anthropic_beta` to params via `as unknown as`, which
+      // the SDK silently ignores — the header never reached the wire.)
+      const options: { signal?: AbortSignal; headers?: Record<string, string> } = {}
       if (signal) options.signal = signal
+      if (betaHeader) options.headers = { 'anthropic-beta': betaHeader }
       const sdkStream = this.client.messages.stream(params, options)
       for await (const event of sdkStream) {
         if (signal?.aborted) {
@@ -230,12 +233,21 @@ function translateEvent(
   translator: AnthropicChunkTranslator,
 ): OpenAI.Chat.ChatCompletionChunk[] {
   const adapted = adaptEvent(event)
+  // adaptEvent returns a Record<string, unknown> shaped to match AnthropicEvent.
+  // The cast is a structural narrowing: adaptEvent's switch mirrors the
+  // AnthropicEvent union members field-for-field, but TS can't verify the
+  // record-to-union correspondence through the generic Record return, so we
+  // assert the provenance here at the single push() boundary.
   if (adapted) return translator.push(adapted as unknown as AdaptedEvent)
   return []
 }
 
-function adaptEvent(event: Anthropic.MessageStreamEvent): Record<string, unknown> | null {
+function adaptEvent(event: Anthropic.MessageStreamEvent): (Record<string, unknown> & { type: string }) | null {
   const e = event as unknown as Record<string, unknown> & { type: string }
+  return adaptEventRecord(e)
+}
+
+function adaptEventRecord(e: Record<string, unknown> & { type: string }): (Record<string, unknown> & { type: string }) | null {
   switch (e.type) {
     case 'message_start': {
       const m = (e.message ?? {}) as Record<string, unknown>

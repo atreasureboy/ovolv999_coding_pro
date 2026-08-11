@@ -356,6 +356,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
       new Error(`history schema "${observed}" does not match expected "${expectedSchema}" for version ${version}`),
     )
   }
+  const schema: string = env.schema
 
   // Gate (3): timestamp field is a real ISO instant.
   if (!isValidIsoTimestamp(env.updatedAt)) {
@@ -367,6 +368,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
       ),
     )
   }
+  const updatedAt: string = env.updatedAt
 
   // Gate (4): messages array. Missing/non-array is treated as corrupt here.
   if (!Array.isArray(env.messages)) {
@@ -398,17 +400,27 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     )
   }
 
+  // Same-version short-circuit — no transform needed. Gates above
+  // validated version, schema, updatedAt, and every messages entry
+  // (via isValidMessageShape, which narrows to OpenAIMessage). We
+  // rebuild the typed envelope from the validated fields rather than
+  // double-casting the loose EnvelopeRecord — the gates are the safety
+  // net, and the explicit construction makes the provenance visible.
+  const currentEnv: SessionEnvelope = {
+    version: env.version,
+    schema,
+    updatedAt,
+    messages: messages as OpenAIMessage[],
+    lastOutcome: env.lastOutcome,
+  }
   if (version === CURRENT_SESSION_VERSION) {
-    // Same-version short-circuit — no transform needed. Gates above
-    // validated version, schema, updatedAt, and every messages entry
-    // (via isValidMessageShape, which narrows to OpenAIMessage).
-    return env as unknown as SessionEnvelope
+    return currentEnv
   }
 
   if (version === 1) {
     // Safe: gate (4) validated every entry against isValidMessageShape;
     // the cast only sheds the Array.isArray `any[]` narrowing.
-    return migrateV1ToV2(env, messages as OpenAIMessage[])
+    return migrateV1ToV2(env, messages as OpenAIMessage[], updatedAt)
   }
 
   // Future intermediate versions add a dispatch branch above.
@@ -443,11 +455,11 @@ function isValidOutcomeSummary(value: unknown): value is OutcomeSummary {
  * upgrade is not a user edit, and the gate above already proved it is a
  * valid ISO instant.
  */
-function migrateV1ToV2(env: EnvelopeRecord, messages: OpenAIMessage[]): SessionEnvelope {
+function migrateV1ToV2(env: EnvelopeRecord, messages: OpenAIMessage[], updatedAt: string): SessionEnvelope {
   return {
     version: CURRENT_SESSION_VERSION,
     schema: CURRENT_SESSION_SCHEMA,
-    updatedAt: String(env.updatedAt),
+    updatedAt,
     messages: messages.map((m) => ({ ...m })),
   }
 }

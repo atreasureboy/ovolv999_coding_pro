@@ -214,9 +214,24 @@ export class LspClient extends EventEmitter {
       return false
     }
 
+    // vscode-jsonrpc's package.json `typings` points at the transport-
+    // agnostic `lib/common/api.d.ts`, whose `createMessageConnection`
+    // only accepts the abstract MessageReader/MessageWriter (built on the
+    // RAL _ReadableStream/_WritableStream interfaces — NOT Node's
+    // Readable/Writable). The Node-specific overload that accepts
+    // NodeJS.ReadableStream directly lives in `lib/node/main.d.ts`, which
+    // is unreachable through the package's declared type entry.
+    //
+    // At runtime the Node RAL is installed and createMessageConnection's
+    // StreamMessageReader/Writer path accepts Node streams, so the stream
+    // objects are structurally fine — only the static type is too narrow.
+    // We wrap the cast in a named adapter so the boundary is explicit and
+    // auditable rather than two inline `as unknown as` hides.
+    const jsonrpcStreamReader = proc.stdout as unknown as Parameters<typeof createMessageConnection>[0]
+    const jsonrpcStreamWriter = proc.stdin as unknown as Parameters<typeof createMessageConnection>[1]
     this.connection = createMessageConnection(
-      proc.stdout as unknown as Parameters<typeof createMessageConnection>[0],
-      proc.stdin as unknown as Parameters<typeof createMessageConnection>[1],
+      jsonrpcStreamReader,
+      jsonrpcStreamWriter,
     )
 
     this.connection.onError(() => this.markClosed())

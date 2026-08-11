@@ -294,7 +294,10 @@ export function App({
       if (sigintCount.current >= 2) {
         exit()
       }
-      setTimeout(() => { sigintCount.current = 0 }, 1500)
+      // R18: unref so the reset timer can't keep the event loop alive if
+      // the app exits within the 1.5s window. One-shot, ref-only mutation.
+      const reset = setTimeout(() => { sigintCount.current = 0 }, 1500)
+      reset.unref()
       return
     }
 
