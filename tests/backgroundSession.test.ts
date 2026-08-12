@@ -17,7 +17,7 @@ import {
   formatSessionList, formatSessionDetail,
   type SessionMetadata,
 } from '../src/core/backgroundSession.js'
-import { existsSync, rmSync, mkdirSync, writeFileSync, mkdtempSync } from 'fs'
+import { existsSync, rmSync, mkdirSync, writeFileSync, mkdtempSync, appendFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -226,6 +226,97 @@ describe('backgroundSession', () => {
       const iter = handle.stream[Symbol.asyncIterator]()
       const result = await iter.next()
       expect(result.done).toBe(true)
+    })
+  })
+
+  describe('attachToSession lifecycle (real log streaming)', () => {
+    it('yields lines appended to the log after attach', async () => {
+      // A real "detached session": metadata points at a log file we append
+      // to out-of-band, mimicking the child process writing its own log.
+      saveMetadata(makeMeta({ id: 'live1', status: 'running', pid: process.pid }))
+      const logPath = getLogPath('live1')
+      writeFileSync(logPath, 'before-attach\n') // pre-attach content is NOT re-read (offset = size at attach)
+
+      // Fast poll so the test stays snappy.
+      const handle = attachToSession('live1', 20)!
+      const iter = handle.stream[Symbol.asyncIterator]()
+
+      // Give the first poll tick a chance to land (it reads the current
+      // size as the baseline offset, so 'before-attach' must NOT appear).
+      await new Promise((r) => setTimeout(r, 35))
+
+      // Append two new lines — the child "spoke".
+      appendFileSync(logPath, 'first-line\nsecond-line\n')
+
+      const a = await iter.next()
+      expect(a.done).toBe(false)
+      expect(a.value).toBe('first-line')
+      const b = await iter.next()
+      expect(b.done).toBe(false)
+      expect(b.value).toBe('second-line')
+
+      handle.stop()
+    })
+
+    it('a second appends-after-poll batch yields on the next next() call', async () => {
+      saveMetadata(makeMeta({ id: 'live2', status: 'running', pid: process.pid }))
+      const logPath = getLogPath('live2')
+      writeFileSync(logPath, '')
+
+      const handle = attachToSession('live2', 20)!
+      const iter = handle.stream[Symbol.asyncIterator]()
+      await new Promise((r) => setTimeout(r, 35))
+
+      appendFileSync(logPath, 'batch-one\n')
+      const a = await iter.next()
+      expect(a.value).toBe('batch-one')
+
+      // No pending appends — next() blocks on the queue. Append more, then
+      // the poll tick should deliver it.
+      const pendingNext = iter.next()
+      appendFileSync(logPath, 'batch-two\n')
+      const b = await pendingNext
+      expect(b.done).toBe(false)
+      expect(b.value).toBe('batch-two')
+
+      handle.stop()
+    })
+
+    it('stop() resolves a pending next() with done:true (no hang)', async () => {
+      saveMetadata(makeMeta({ id: 'live3', status: 'running', pid: process.pid }))
+      writeFileSync(getLogPath('live3'), '')
+      const handle = attachToSession('live3', 20)!
+      const iter = handle.stream[Symbol.asyncIterator]()
+
+      // No appends → next() blocks forever waiting for resolveNext.
+      const pending = iter.next()
+      // Race: if stop() doesn't resolve the pending promise, this hangs and
+      // the test times out. stop() must call resolveNext({ done: true }).
+      handle.stop()
+      const result = await pending
+      expect(result.done).toBe(true)
+    })
+
+    it('does not keep the event loop alive after stop() (poll timer cleared)', async () => {
+      saveMetadata(makeMeta({ id: 'live4', status: 'running', pid: process.pid }))
+      writeFileSync(getLogPath('live4'), '')
+      const handle = attachToSession('live4', 20)!
+
+      // The poll timer is unref'd (R23), so it never blocks exit anyway —
+      // but stop() must also clearTimeout so a future caller that re-ref's
+      // the timer (or a Node version where unref is unavailable) cannot
+      // resurrect it. We assert stop() leaves no scheduled work by checking
+      // that the iterator completes AND a subsequent appends does NOT wake
+      // a fresh next() — the poll loop has stopped.
+      handle.stop()
+      const iter = handle.stream[Symbol.asyncIterator]()
+      const result = await iter.next()
+      expect(result.done).toBe(true)
+
+      // Append after stop — the (now-dead) poll loop must not deliver it.
+      appendFileSync(getLogPath('live4'), 'should-not-arrive\n')
+      const result2 = await iter.next()
+      expect(result2.done).toBe(true)
     })
   })
 

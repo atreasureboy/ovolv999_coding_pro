@@ -618,17 +618,18 @@ export class Renderer implements RendererInterface {
     const label = ' ask ovolv999 '
     const line = '─'.repeat(Math.max(8, inner - label.length - 1))
     this.w(`\n  ${C.slate}╭─${R}${C.electric}${label}${R}${C.slate}${line}╮${R}\n`)
-    // The prompt prefix (the `│ › ` cursor line) was previously returned to
-    // the caller so it could write the user's typed text on the same line.
-    // No caller consumes the return value (REPL prompt is component-driven in
-    // Ink, readline-managed in vim); returning void aligns with InkRenderer
-    // and lets both implement RendererInterface without a cast.
+    // The `│ › ` cursor line is NOT drawn here — the caller must obtain it
+    // via promptPrefix() and pass it to readline as the question prompt, so
+    // the user's typed text appears on the same line as the cursor glyph.
+    // Drawing it here AND letting readline echo it would duplicate the line.
   }
 
-  /** Concrete-only: the `│ › ` cursor-line prefix written to the terminal
-   *  on the line below the prompt box. Exposed so tests can assert against
-   *  the rendered prompt text without writePrompt returning it. Not part of
-   *  RendererInterface — InkRenderer does not write a cursor line. */
+  /** Concrete-only: the `│ › ` cursor-line prefix the caller passes to
+   *  readline as the `readLine(promptText)` argument. Not part of
+   *  RendererInterface — InkRenderer renders its own prompt component and
+   *  PipeRenderer suppresses the prompt entirely. closePrompt's
+   *  `promptWidth = 6` (the row-backup count for redraw) is calibrated to
+   *  displayWidth(this string); keep them in lockstep. */
   promptPrefix(): string {
     return `  ${C.slate}│${R} ${C.gold}›${R} `
   }
@@ -636,7 +637,13 @@ export class Renderer implements RendererInterface {
   closePrompt(text?: string, replaceReadline = false): void {
     const inner = Math.min(Math.max(this.width - 6, 58), 90)
     if (text !== undefined && replaceReadline) {
-      const promptWidth = 6
+      // promptWidth is the display width of promptPrefix() — the `│ › `
+      // cursor line readline echoed. We back up that many columns (plus the
+      // text the user typed) to compute how many terminal rows the live
+      // input occupied, then erase them so the framed redraw lands cleanly.
+      // Keep this in lockstep with promptPrefix(); displayWidth() is the
+      // canonical computation (it accounts for double-width glyphs).
+      const promptWidth = displayWidth(this.promptPrefix())
       const occupiedRows = Math.max(1, Math.ceil((promptWidth + displayWidth(text)) / this.width))
       this.w(`\x1b[${occupiedRows + 1}A\r\x1b[0J`)
       const label = ' ask ovolv999 '

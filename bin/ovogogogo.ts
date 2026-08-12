@@ -1135,9 +1135,17 @@ async function runRepl(
   }
 
   while (true) {
+    // writePrompt draws the prompt box's top border only. The `│ › ` cursor
+    // line is obtained separately via promptPrefix() and passed to readline
+    // as the question prompt, so the user's typed text appears on the same
+    // line as the glyph (fix(ui) 1b4353c). Round 16 changed writePrompt to
+    // return void for interface uniformity and dropped this argument,
+    // leaving readLine('') — the cursor line was never shown and closePrompt
+    // miscounted rows. Restore the contract: draw the box, hand readline the
+    // cursor-line prefix. PipeRenderer/InkRenderer are no-ops for both.
     renderer.writePrompt()
     slashSuggester.attach()
-    const { text, eof } = await input.readLine('')
+    const { text, eof } = await input.readLine(renderer.promptPrefix())
     slashSuggester.detach()
     renderer.closePrompt(text, input.isTTY)
 
