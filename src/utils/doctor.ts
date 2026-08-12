@@ -99,7 +99,11 @@ function checkDirectoryStructure(cwd: string, results: CheckResult[]): void {
     return
   }
 
-  const expectedSubdirs = ['workflows', 'skills', 'worktrees']
+  // Skills live under `.ovogo/skills/` (see skills/loader.ts + the dedicated
+  // checkSkills() below), NOT under `.ovolv999/`. Only workflows and worktrees
+  // are real `.ovolv999/` subdirs — listing 'skills' here checked a dir the
+  // project never writes, a stale entry from the pre-brand-split layout.
+  const expectedSubdirs = ['workflows', 'worktrees']
   for (const sub of expectedSubdirs) {
     const path = join(ovolvDir, sub)
     if (existsSync(path)) {

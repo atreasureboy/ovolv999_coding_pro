@@ -78,7 +78,7 @@ All notable changes are documented here. This project follows Semantic Versionin
   ReferenceError swallowed by try/catch, so the index was ALWAYS empty. Now uses the
   statically imported `readdirSync`. symbolIndex build actually works.
 - **Test flakiness**: full-suite parallel runs had 14 timeout failures under load;
-  `vitest.config.ts` now sets testTimeout/hookTimeout 20s. 308 files / 4844 tests green.
+  `vitest.config.ts` now sets testTimeout/hookTimeout 20s. Full suite green.
 - **Broken script**: `test:golden-path` pointed at non-existent `tests/golden-path/`
   (`pnpm check` failed); now targets the real v052/v053 golden-path test files.
 - **ESLint errors → 0, warnings 133 → 13**: removed dead imports/locals across src/ and tests/,

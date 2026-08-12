@@ -21,7 +21,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync,
-  readdirSync, statSync, appendFileSync,
+  readdirSync, statSync, appendFileSync, openSync, closeSync, fstatSync,
 } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -216,15 +216,33 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
   // Write an empty log file so the path exists before we open the fd
   writeFileSync(logPath, '')
 
+  // Open the log in append mode and pass the fd as the child's stdout AND
+  // stderr. The OS dup2's the fd into the child's fd 1/2, so the child's
+  // stdout/stderr are redirected straight to the log file at the kernel
+  // level — no child-side self-detection, monkey-patching, or env var
+  // needed. The background session does not need to know it is background.
+  // (Previously this was stdio:['ignore','ignore','ignore'] with a fragile
+  // child-side appendFileSync monkey-patch keyed off OVOLV999_SESSION_ID —
+  // see initChildLogCapture, now retained only as a legacy fallback.)
+  let logFd: number | null = null
+  try {
+    logFd = openSync(logPath, 'a')
+  } catch { /* fall back to ignore stdio below */ }
+
   const bin = resolveOvogogogoBin()
   const env = { ...process.env, ...options.env, OVOLV999_SESSION_ID: id }
+
+  // stdio config: pipe the log fd to both stdout & stderr when we have it.
+  const stdio: ['ignore', number | 'ignore', number | 'ignore'] = logFd !== null
+    ? ['ignore', logFd, logFd]
+    : ['ignore', 'ignore', 'ignore']
 
   let proc: ChildProcess
   try {
     proc = spawn(process.execPath, [bin, ...spawnArgs], {
       cwd,
       detached: true,
-      stdio: ['ignore', 'ignore', 'ignore'],
+      stdio,
       env,
     })
   } catch {
@@ -233,21 +251,23 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
       proc = spawn(bin, spawnArgs, {
         cwd,
         detached: true,
-        stdio: ['ignore', 'ignore', 'ignore'],
+        stdio,
         env,
       })
     } catch {
+      if (logFd !== null) { try { closeSync(logFd) } catch { /* ignore */ } }
       throw new Error(`Failed to spawn background session: ${bin}`)
     }
   }
 
-  // Redirect child stdout+stderr to the log file via a re-open in append mode.
-  // We can't pass an fd directly with detached + ignore, so we spawn a tiny
-  // log-writer loop in the parent that drains proc.stdout — BUT since we
-  // set stdio to 'ignore', there's nothing to drain. Instead the child must
-  // redirect its own output. We pass the log path via env so the child can
-  // open it. For now, mark this as a known limitation: logs are populated
-  // by the child process itself when it detects OVOLV999_SESSION_ID.
+  // The child inherits the log fd via dup2; the parent must NOT close it
+  // while the child lives, and on `detached: true` the child outlives the
+  // parent. We leave it open for the parent's lifetime — it is freed when
+  // the parent process exits. (Closing in the parent after spawn does NOT
+  // affect the child's inherited copy, but keeping it avoids any race
+  // where the parent exits immediately and the OS reaps the fd before the
+  // child's dup2 completes.)
+
   const pid = proc.pid ?? null
 
   // Unref so the parent can exit independently
@@ -393,6 +413,33 @@ export function attachToSession(id: string, pollMs = 500): AttachResult | null {
   const queue: string[] = []
   let resolveNext: ((value: IteratorResult<string>) => void) | null = null
 
+  /**
+   * Drain any buffered lines into a pending consumer, then — if the session
+   * is no longer running — finalize the stream so the `for await` consumer
+   * exits in bounded time. Without this, `ovolv999 attach <id>` on a
+   * completed/stopped session hangs forever: the poll timer keeps ticking,
+   * but nothing ever resolves the pending `next()` with `done: true`.
+   * (Black-box E2E: tests/cli/attachE2E.test.ts test 2.)
+   */
+  const finalizeIfDone = (): void => {
+    if (stopped) return
+    const fresh = getSession(id)
+    if (!fresh || fresh.status === 'running') return
+    // Session ended. Flush any buffered lines first, then end the stream.
+    if (queue.length > 0 || resolveNext === null) {
+      if (queue.length === 0 && resolveNext === null) {
+        stopped = true
+        if (timer) { clearTimeout(timer); timer = null }
+      }
+      return
+    }
+    // resolveNext is pending and queue is empty → end now.
+    stopped = true
+    if (timer) { clearTimeout(timer); timer = null }
+    resolveNext({ value: undefined, done: true })
+    resolveNext = null
+  }
+
   const poll = (): void => {
     if (stopped) return
     try {
@@ -410,22 +457,28 @@ export function attachToSession(id: string, pollMs = 500): AttachResult | null {
           }
         }
       }
-      // Also detect process exit
-      const fresh = getSession(id)
-      if (fresh && fresh.status !== 'running' && queue.length === 0 && !resolveNext) {
-        // Drain complete
-      }
+      // If the session is no longer running, end the stream once the log is
+      // fully drained — see finalizeIfDone.
+      finalizeIfDone()
     } catch { /* ignore */ }
 
     if (!stopped) {
-      // R23: unref the recursive poll timer so an abandoned attachment
-      // (caller never calls stop()) cannot keep the event loop alive.
+      // R23 originally unref'd the recursive poll timer to prevent an
+      // abandoned attachment from keeping the event loop alive. But the
+      // ONLY production caller is the `ovolv999 attach <id>` CLI, where
+      // this poll timer is the work the process exists to do: it must
+      // stay alive until a log line arrives, the session ends, or the
+      // user hits Ctrl-C. With the timer unref'd, a pending
+      // `for await (line of stream)` is NOT itself a ref handle, so Node
+      // sees zero refs and exits immediately — attach dies before it can
+      // deliver the first line. (Verified by black-box E2E:
+      // tests/cli/attachE2E.test.ts.) Keep the timer REF'd so it keeps
+      // the loop alive for the attach CLI. Abandoned non-CLI callers must
+      // call stop() (they always have — the unit tests do).
       timer = setTimeout(poll, pollMs)
-      if (typeof timer.unref === 'function') timer.unref()
     }
   }
   timer = setTimeout(poll, pollMs)
-  if (typeof timer.unref === 'function') timer.unref()
 
   const stream: AsyncIterable<string> = {
     [Symbol.asyncIterator]() {
@@ -498,9 +551,18 @@ export function cleanStaleSessions(maxAge = 7 * 24 * 60 * 60 * 1000): number {
 // ── Child-side log capture ──────────────────────────────────────────────────
 
 /**
- * Called by the spawned ovolv999 process itself: redirects its stdout
- * and stderr to the session log file when OVOLV999_SESSION_ID is set.
- * This is how background sessions capture their output.
+ * Called by the spawned ovolv999 process itself. When the parent spawned the
+ * session via `stdio: ['ignore', logFd, logFd]` (the modern path), the OS has
+ * already dup2'd the log fd into the child's fd 1/2, so `process.stdout` and
+ * `process.stderr` already write straight to the log file. In that case the
+ * monkey-patch below would DOUBLE-write (one copy via the OS redirect, one via
+ * the appendFileSync), so we detect that condition and skip the patch — only
+ * the exit-code writer still runs.
+ *
+ * The legacy detection key is `OVOLV999_SESSION_ID`. For processes launched
+ * the old way (`stdio: 'ignore'` with no fd), stdout/stderr are not the log
+ * file, so the monkey-patch is required and is applied. This keeps backward
+ * compatibility with any session spawned before the fd-passing change.
  */
 export function initChildLogCapture(): string | null {
   const sessionId = process.env.OVOLV999_SESSION_ID
@@ -509,27 +571,35 @@ export function initChildLogCapture(): string | null {
   const logPath = getLogPath(sessionId)
   ensureSessionsDir()
 
-  // Tee: write to the log AND keep the original stream (so pipe mode
-  // still works if someone backgrounds a pipe run).
-  const origWrite = process.stdout.write.bind(process.stdout)
-  const origErrWrite = process.stderr.write.bind(process.stderr)
+  // Detect whether stdout is ALREADY the log file. When the parent passed
+  // `stdio: ['ignore', logFd, logFd]`, fd 1 is the log fd and its destination
+  // path matches `logPath`. fstat(fd) + stat(path) and compare dev/ino pair.
+  const alreadyRedirected = stdoutIsLogFile(logPath)
 
-  const appendLog = (data: unknown): void => {
-    try {
-      appendFileSync(logPath, data as string | Uint8Array)
-    } catch { /* ignore disk errors */ }
+  if (!alreadyRedirected) {
+    // Legacy path: stdout is not the log file. Tee writes to the log AND
+    // keeps the original stream (so pipe mode still works if someone
+    // backgrounds a pipe run).
+    const origWrite = process.stdout.write.bind(process.stdout)
+    const origErrWrite = process.stderr.write.bind(process.stderr)
+
+    const appendLog = (data: unknown): void => {
+      try {
+        appendFileSync(logPath, data as string | Uint8Array)
+      } catch { /* ignore disk errors */ }
+    }
+
+    process.stdout.write = (data: unknown, ..._rest: unknown[]): boolean => {
+      appendLog(data)
+      return origWrite(data as string | Uint8Array)
+    }
+    process.stderr.write = (data: unknown, ..._rest: unknown[]): boolean => {
+      appendLog(data)
+      return origErrWrite(data as string | Uint8Array)
+    }
   }
 
-  process.stdout.write = (data: unknown, ..._rest: unknown[]): boolean => {
-    appendLog(data)
-    return origWrite(data as string | Uint8Array)
-  }
-  process.stderr.write = (data: unknown, ..._rest: unknown[]): boolean => {
-    appendLog(data)
-    return origErrWrite(data as string | Uint8Array)
-  }
-
-  // Write exit code on process end
+  // Write exit code on process end — runs in both modes.
   process.on('exit', (code) => {
     try {
       writeFileSync(getExitPath(sessionId), `${code ?? 0}\n`)
@@ -537,6 +607,22 @@ export function initChildLogCapture(): string | null {
   })
 
   return sessionId
+}
+
+/**
+ * Return true iff the child's stdout (fd 1) currently points at the same
+ * file as `logPath` (by device + inode). Used by {@link initChildLogCapture}
+ * to decide whether the OS-level redirect is already in place. Never throws.
+ */
+function stdoutIsLogFile(logPath: string): boolean {
+  try {
+    const stdoutFd = 1
+    const fdStat = fstatSync(stdoutFd)
+    const pathStat = statSync(logPath)
+    return fdStat.dev === pathStat.dev && fdStat.ino === pathStat.ino
+  } catch {
+    return false
+  }
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
