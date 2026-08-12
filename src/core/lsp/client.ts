@@ -294,7 +294,8 @@ export class LspClient extends EventEmitter {
         return false
       }
 
-      this.connection.sendNotification('initialized', {})  // eslint-disable-line @typescript-eslint/no-floating-promises
+      void this.connection.sendNotification('initialized', {})
+        .catch(() => { /* best-effort: LSP notification dropped */ })
       this.started = true
       return true
     } catch {
@@ -308,7 +309,8 @@ export class LspClient extends EventEmitter {
     this.shutdown = true
     if (this.connection && this.started) {
       try { await this.withTimeout(this.connection.sendRequest('shutdown', null), 'shutdown', 3000) } catch { /* ignore */ }
-      this.connection.sendNotification('exit', null)  // eslint-disable-line @typescript-eslint/no-floating-promises
+      void this.connection.sendNotification('exit', null)
+        .catch(() => { /* best-effort: LSP notification dropped */ })
     }
     this.kill()
   }
@@ -332,7 +334,7 @@ export class LspClient extends EventEmitter {
     if (!this.isRunning()) return Promise.resolve()
     const version = 1
     this.docVersions.set(uri, version)
-    this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
+    void this.connection?.sendNotification(
       'textDocument/didOpen',
       {
         textDocument: {
@@ -343,35 +345,39 @@ export class LspClient extends EventEmitter {
         },
       },
     )
+      .catch(() => { /* best-effort: LSP notification dropped */ })
     return Promise.resolve()
   }
 
   changeDocument(uri: string, text: string, version: number): void {
     if (!this.isRunning()) return
     this.docVersions.set(uri, version)
-    this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
+    void this.connection?.sendNotification(
       'textDocument/didChange',
       {
         textDocument: { uri, version },
         contentChanges: [{ text }],
       },
     )
+      .catch(() => { /* best-effort: LSP notification dropped */ })
   }
 
   saveDocument(uri: string, text?: string): void {
     if (!this.isRunning()) return
-    this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
+    void this.connection?.sendNotification(
       'textDocument/didSave',
       { textDocument: { uri }, text },
     )
+      .catch(() => { /* best-effort: LSP notification dropped */ })
   }
 
   closeDocument(uri: string): void {
     if (!this.isRunning()) return
-    this.connection?.sendNotification(  // eslint-disable-line @typescript-eslint/no-floating-promises
+    void this.connection?.sendNotification(
       'textDocument/didClose',
       { textDocument: { uri } },
     )
+      .catch(() => { /* best-effort: LSP notification dropped */ })
   }
 
   // ── Diagnostics ───────────────────────────────────────────────────────

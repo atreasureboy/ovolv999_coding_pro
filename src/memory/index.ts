@@ -40,7 +40,7 @@ function projectSlug(cwd: string): string {
 /** Get the memory directory for a given cwd (matches SemanticMemory's path) */
 export function getMemoryDir(cwd: string): string {
   const slug = projectSlug(cwd)
-  const dir = join(homedir(), '.ovogo', 'projects', slug, 'memory')
+  const dir = join(process.env.OVOGO_HOME || homedir(), '.ovogo', 'projects', slug, 'memory')
   try { mkdirSync(dir, { recursive: true }) } catch { /* best-effort */ }
   return dir
 }

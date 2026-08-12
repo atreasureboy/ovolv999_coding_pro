@@ -703,7 +703,10 @@ export class BackgroundTaskManager {
           resolve({ ...t.info })
           return
         }
-        setTimeout(poll, 100)
+        // R23: unref so this bounded poll cannot keep the event loop alive
+        // during its window (bounded by timeoutMs, default 30s).
+        const pollTimer = setTimeout(poll, 100)
+        if (typeof pollTimer.unref === 'function') pollTimer.unref()
       }
       poll()
     })

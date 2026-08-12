@@ -1305,10 +1305,18 @@ export class RuntimeCoordinator {
         // RUN_EXECUTION_STOPPED emitted in finally block below;
         // no separate RUN_CANCELLED event (removed — not in RunEvent union).
       } else {
-      void config.hookRunner?.runOnError?.(err as Error, {
+      // best-effort: async hook rejections must not crash the turn
+      // (unhandledRejection is process-fatal via cleanup.ts:59).
+      // Promise.resolve() wraps the possibly-undefined / possibly-sync
+      // HookResult[] return so .catch() is safe to call; a SYNC throw
+      // from the hook propagates to the caller (preserving the existing
+      // contract that a throwing onComplete fails the turn — see
+      // v034OutcomeE2e "closes the run context when a completion hook
+      // throws"). Mirrors contextManager.ts:428-431.
+      void Promise.resolve(config.hookRunner?.runOnError?.(err as Error, {
         turnNumber: errorIteration,
         lastToolName,
-      })
+      })).catch(() => { /* best-effort: onError hook */ })
       // v0.4.1 WS8 (render-once): the coordinator does NOT render the error
       // itself. It emits RUN_FAILED + returns a failed outcome; the FRONTEND
       // is the single renderer (Ink: App.handleSubmit catch; classic:
@@ -1654,9 +1662,18 @@ export class RuntimeCoordinator {
       userMessage,
     })
 
-    void config.hookRunner?.runOnComplete?.(result)
+    // best-effort: async hook rejections must not crash the turn
+    // (unhandledRejection is process-fatal via cleanup.ts:59).
+    // Promise.resolve() wraps the possibly-undefined / possibly-sync
+    // HookResult[] return; a SYNC throw propagates to the caller
+    // (existing contract: a throwing onComplete fails the turn — see
+    // v034OutcomeE2e "closes the run context when a completion hook
+    // throws"). Mirrors contextManager.ts:428-431.
+    void Promise.resolve(config.hookRunner?.runOnComplete?.(result))
+      .catch(() => { /* best-effort: onComplete hook */ })
     // v0.3.4 (durable supervisor contract §Phase 1): Hook receives the full TurnOutcome
-    void config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome)
+    void Promise.resolve(config.hookRunner?.runOnCompleteWithOutcome?.(result, outcome))
+      .catch(() => { /* best-effort: onCompleteWithOutcome hook */ })
 
     return { result, newHistory: messages, outcome }
     } catch (lifecycleErr) {

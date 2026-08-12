@@ -326,7 +326,7 @@ describe('backgroundSession', () => {
   describe('startBackgroundSession (integration)', () => {
     it('creates metadata and log files', () => {
       // Use a trivial task with a fake bin to avoid actually launching ovolv999
-      process.env.OVOGV999_BIN = '/dev/null'
+      process.env.OVOLV999_BIN = '/dev/null'
       try {
         const result = startBackgroundSession({ task: 'noop' })
         expect(result.sessionId).toMatch(/^sess-/)
@@ -336,7 +336,7 @@ describe('backgroundSession', () => {
         expect(meta!.task).toBe('noop')
         expect(meta!.status).toBe('running')
       } finally {
-        delete process.env.OVOGV999_BIN
+        delete process.env.OVOLV999_BIN
       }
     }, 10000)
   })

@@ -121,6 +121,10 @@ export class ShellSessionTool implements Tool {
       try { fs.mkdirSync(logDir, { recursive: true }) } catch { /* ignore */ }
       const logFile   = path.join(logDir, `${id}.log`)
       const logStream = fs.createWriteStream(logFile, { flags: 'a' })
+      // best-effort: an unwritable log file (disk full, permissions) emits
+      // 'error' with no handler → process crash. Swallow so the session
+      // keeps running without log capture rather than dying.
+      logStream.on('error', () => { /* best-effort: session log unwritable */ })
 
       const server = net.createServer((socket) => {
         const conn = _sessions.get(id)

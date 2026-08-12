@@ -68,7 +68,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       store.clearMessages()
     },
     runPrompt: (prompt: string) => {
-      void runOneTurn(prompt)
+      void runOneTurnSafe(prompt)
     },
     runLoop: async ({ restart }) => {
       const { runLoop } = await import('../../core/loopEngine.js')
@@ -159,6 +159,24 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
     } finally {
       store.setRunning(false)
       store.setSpinner(false)
+    }
+  }
+
+  // v0.5.5 (lifecycle): the floating runOneTurn call sites below (slash
+  // `prompt` action, slashCtx.runPrompt via /retry) do NOT return the
+  // promise into App.handleSubmit's try/catch — so a rejection there
+  // would become an unhandledRejection (process-fatal via cleanup.ts:59).
+  // This wrapper renders the error card itself, mirroring App.handleSubmit:182-191,
+  // so those paths get the same render-once card without duplicating logic.
+  // The normal submit path (runTurn prop, SITE 1) still returns runOneTurn
+  // directly so handleSubmit remains the single renderer for that path.
+  async function runOneTurnSafe(prompt: string): Promise<void> {
+    try {
+      await runOneTurn(prompt)
+    } catch (err: unknown) {
+      if ((err as Error).name === 'AbortError') return
+      const { formatErrorCardText } = await import('../../utils/apiError.js')
+      store.addError(formatErrorCardText(err, opts.sessionDir, store.getState().apiAttempts))
     }
   }
 
@@ -274,7 +292,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
             instance.unmount()
             return true
           case 'prompt':
-            void runOneTurn(result.value)
+            void runOneTurnSafe(result.value)
             return true
           case 'clear-history':
             history.length = 0

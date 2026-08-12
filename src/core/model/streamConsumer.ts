@@ -83,6 +83,10 @@ export class StreamConsumer {
         }
       }
     }, 10_000)
+    // R23: unref so the watchdog cannot keep the event loop alive if the
+    // SDK's async iterator doesn't promptly honor the abort (the exact hang
+    // it detects). Matches agent.ts:1062 / loopSupervisor.ts:204.
+    if (typeof watchdog.unref === 'function') watchdog.unref()
 
     try {
       for await (const chunk of stream) {

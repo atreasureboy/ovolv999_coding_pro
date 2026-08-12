@@ -189,11 +189,11 @@ export function refreshSessionStatus(id: string): SessionMetadata | null {
 // ── Start Session ───────────────────────────────────────────────────────────
 
 /**
- * Resolve the ovolv999 executable to spawn. Honors the OVOGV999_BIN
+ * Resolve the ovolv999 executable to spawn. Honors the OVOLV999_BIN
  * env var (useful for tests), otherwise uses process.argv[1].
  */
 function resolveOvogogogoBin(): string {
-  if (process.env.OVOGV999_BIN) return process.env.OVOGV999_BIN
+  if (process.env.OVOLV999_BIN) return process.env.OVOLV999_BIN
   if (process.argv[1]) return process.argv[1]
   return 'ovolv999'
 }
@@ -217,7 +217,7 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
   writeFileSync(logPath, '')
 
   const bin = resolveOvogogogoBin()
-  const env = { ...process.env, ...options.env, OVOGV999_SESSION_ID: id }
+  const env = { ...process.env, ...options.env, OVOLV999_SESSION_ID: id }
 
   let proc: ChildProcess
   try {
@@ -247,11 +247,16 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
   // set stdio to 'ignore', there's nothing to drain. Instead the child must
   // redirect its own output. We pass the log path via env so the child can
   // open it. For now, mark this as a known limitation: logs are populated
-  // by the child process itself when it detects OVOGV999_SESSION_ID.
+  // by the child process itself when it detects OVOLV999_SESSION_ID.
   const pid = proc.pid ?? null
 
   // Unref so the parent can exit independently
   try { proc.unref() } catch { /* ignore */ }
+  // R23: a post-spawn 'error' event (EAGAIN, fork-exec failure) has no
+  // handler at the other spawn sites — but a detached background session
+  // is non-fatal to the parent, so swallow it. refreshSessionStatus will
+  // classify the dead session on the next poll.
+  proc.on('error', () => { /* best-effort: detached child spawn failure */ })
 
   const meta: SessionMetadata = {
     id,
@@ -413,10 +418,14 @@ export function attachToSession(id: string, pollMs = 500): AttachResult | null {
     } catch { /* ignore */ }
 
     if (!stopped) {
+      // R23: unref the recursive poll timer so an abandoned attachment
+      // (caller never calls stop()) cannot keep the event loop alive.
       timer = setTimeout(poll, pollMs)
+      if (typeof timer.unref === 'function') timer.unref()
     }
   }
   timer = setTimeout(poll, pollMs)
+  if (typeof timer.unref === 'function') timer.unref()
 
   const stream: AsyncIterable<string> = {
     [Symbol.asyncIterator]() {
@@ -490,11 +499,11 @@ export function cleanStaleSessions(maxAge = 7 * 24 * 60 * 60 * 1000): number {
 
 /**
  * Called by the spawned ovolv999 process itself: redirects its stdout
- * and stderr to the session log file when OVOGV999_SESSION_ID is set.
+ * and stderr to the session log file when OVOLV999_SESSION_ID is set.
  * This is how background sessions capture their output.
  */
 export function initChildLogCapture(): string | null {
-  const sessionId = process.env.OVOGV999_SESSION_ID
+  const sessionId = process.env.OVOLV999_SESSION_ID
   if (!sessionId) return null
 
   const logPath = getLogPath(sessionId)

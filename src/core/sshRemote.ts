@@ -166,7 +166,7 @@ function targetStr(profile: SshProfile): string {
 export function testConnection(profile: SshProfile): SshConnectionTest {
   const start = Date.now()
   try {
-    const args = buildSshArgs(profile, 'echo "__OVOGV999_SSH_OK__"; node --version 2>/dev/null || echo "no-node"')
+    const args = buildSshArgs(profile, 'echo "__OVOLV999_SSH_OK__"; node --version 2>/dev/null || echo "no-node"')
     const result = execSync(`ssh ${args.map(shellQuote).join(' ')}`, {
       encoding: 'utf8',
       stdio: 'pipe',
@@ -174,7 +174,7 @@ export function testConnection(profile: SshProfile): SshConnectionTest {
     })
     const latency = Date.now() - start
 
-    if (result.includes('__OVOGV999_SSH_OK__')) {
+    if (result.includes('__OVOLV999_SSH_OK__')) {
       const versionMatch = result.match(/v(\d+\.\d+\.\d+)/)
       return {
         connected: true,
