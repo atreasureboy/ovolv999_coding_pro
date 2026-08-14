@@ -194,7 +194,7 @@ describe('executeWorkflow', () => {
   it('executes a shell step successfully', async () => {
     const wf: Workflow = {
       name: 'shell-test',
-      steps: [{ name: 'echo', type: 'shell', command: 'echo "test output"' }],
+      steps: [{ name: 'echo', type: 'shell', command: 'echo test output' }],
     }
     const result = await executeWorkflow(wf, makeCtx({ cwd: dir }))
     expect(result.success).toBe(true)
@@ -324,7 +324,7 @@ describe('executeWorkflow', () => {
     mkdirSync(join(dir, 'subdir'), { recursive: true })
     const wf: Workflow = {
       name: 'cwd-test',
-      steps: [{ name: 'pwd', type: 'shell', command: 'pwd', cwd: 'subdir' }],
+      steps: [{ name: 'pwd', type: 'shell', command: 'node -e "process.stdout.write(process.cwd())"', cwd: 'subdir' }],
     }
     const result = await executeWorkflow(wf, makeCtx({ cwd: dir }))
     expect(result.steps[0].output).toContain('subdir')
@@ -333,7 +333,7 @@ describe('executeWorkflow', () => {
   it('records duration for each step', async () => {
     const wf: Workflow = {
       name: 'timing',
-      steps: [{ type: 'shell', command: 'sleep 0.1' }],
+      steps: [{ type: 'shell', command: 'node -e "setTimeout(()=>{},100)"' }],
     }
     const result = await executeWorkflow(wf, makeCtx({ cwd: dir }))
     expect(result.steps[0].durationMs).toBeGreaterThanOrEqual(80)

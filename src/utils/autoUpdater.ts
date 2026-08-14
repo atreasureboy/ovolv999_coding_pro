@@ -9,6 +9,7 @@ import { execSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { createRequire } from 'module'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -41,11 +42,12 @@ const REGISTRY_URL = 'https://registry.npmjs.org'
 
 export function getCurrentVersion(): string {
   try {
-    const pkgPath = join(process.cwd(), 'package.json')
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string }
-      return pkg.version ?? '0.0.0'
-    }
+    // Resolve our OWN package.json relative to this module — never
+    // process.cwd() (which is the USER's project dir when installed
+    // globally, and would report a foreign version or 0.0.0).
+    const selfRequire = createRequire(import.meta.url)
+    const pkg = selfRequire('../../package.json') as { version?: string }
+    return pkg.version ?? '0.0.0'
   } catch { /* ignore */ }
   return '0.0.0'
 }

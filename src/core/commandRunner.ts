@@ -69,9 +69,14 @@ export async function runCommand(spec: CommandSpec): Promise<CommandResult> {
   const child = spawn(executable, args, {
     cwd,
     env: env ?? process.env,
-    detached: true, // own process group → kill(-pid) reaches the tree
+    // detached:true enables process-group kill on POSIX, but on Windows it
+    // DETACHES stdio pipes when combined with shell:true (output silently
+    // lost) and flashes a new console. Only detach off-Windows; killTree
+    // handles win32 via taskkill /T.
+    detached: process.platform !== 'win32',
     stdio: [stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     shell,
+    windowsHide: true,
   })
 
   let timedOut = false
@@ -134,7 +139,20 @@ export async function runCommand(spec: CommandSpec): Promise<CommandResult> {
 
     function killTree(): void {
       try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL')
+        if (child.pid === undefined) return
+        if (process.platform === 'win32') {
+          // No negative-pid process-group kill on Windows. taskkill /T
+          // walks the whole tree; fire-and-forget with a child.kill()
+          // fallback so the kill itself never blocks or throws.
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          }).on('error', () => {
+            try { child.kill('SIGKILL') } catch { /* best-effort */ }
+          })
+        } else {
+          process.kill(-child.pid, 'SIGKILL')
+        }
       } catch {
         // best-effort — pgid may already be gone.
       }

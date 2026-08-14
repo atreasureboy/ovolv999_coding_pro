@@ -499,13 +499,27 @@ export class BackgroundTaskManager {
     // grandchild (e.g. backgrounded `sleep 30 &`) via process.kill(-pid).
     // Windows has no process-group primitive, so we leave detached=false
     // there — killProcessTree() falls back to a single-PID signal.
-    const invocation = getShellInvocation(command)
-    const proc = spawn(invocation.shell, invocation.args, {
-      cwd: options?.cwd,
-      detached: process.platform !== 'win32',
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    //
+    // win32: spawn(cmd.exe, ['/c', command]) is BROKEN for commands with
+    // nested quotes — Node quotes the whole arg, cmd strips it, and the
+    // inner script never runs (observed: `node -e "process.exit(3)"`
+    // exits 0 silently). Use shell:true on the raw string instead; Node
+    // builds the correct command line itself.
+    const proc = process.platform === 'win32'
+      ? spawn(command, {
+          cwd: options?.cwd,
+          detached: false,
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: true,
+          windowsHide: true,
+        })
+      : spawn(getShellInvocation(command).shell, getShellInvocation(command).args, {
+          cwd: options?.cwd,
+          detached: true,
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
 
     task.process = proc
     info.pid = proc.pid ?? null

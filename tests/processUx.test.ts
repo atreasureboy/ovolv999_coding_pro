@@ -141,7 +141,7 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
     const filePath = join(workDir, 'test.txt')
     fakeClient.push(toolCallStream('c1', 'Write', { file_path: filePath, content: 'hello' }))
     fakeClient.push(stopStream('File written.'))
-    fakeClient.push(toolCallStream('c2', 'Bash', { command: `test -f ${filePath}` }))
+    fakeClient.push(toolCallStream('c2', 'Bash', { command: `node -e "process.exit(require('fs').existsSync(process.argv[1]) ? 0 : 1)" "${filePath}"` }))
     fakeClient.push(stopStream('File written and verified.'))
 
     const engine = makeEngine()

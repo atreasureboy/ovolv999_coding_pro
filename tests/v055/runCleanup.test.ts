@@ -16,24 +16,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { ExecutionEngine } from '../../src/core/engine.js'
-import { ModelRouter, type ModelProfile } from '../../src/core/model/modelRouter.js'
+import { ModelRouter } from '../../src/core/model/modelRouter.js'
 import { EventLog } from '../../src/core/eventLog.js'
 import type { EngineConfig } from '../../src/core/types.js'
-
-function profile(id: string, model: string): ModelProfile {
-  return {
-    id,
-    provider: 'openai-compatible',
-    model,
-    tier: 'top',
-    roles: ['main'],
-    available: true,
-    capabilities: {
-      reasoning: 0.7, coding: 0.7, contextWindow: 0.6,
-      toolCalling: 0.9, speed: 0.6, cost: 0.4,
-    },
-  }
-}
 
 function fakeRenderer() {
   const r: Record<string, (...args: unknown[]) => void> = {}
@@ -64,11 +49,6 @@ describe('v0.5.5 §16: Run cleanup on every exit path', () => {
 
   it('all-profiles-open path: activeRunId cleared, routingUnavailable reset', async () => {
     const eventLog = new EventLog(join(tmpProj, 'events.jsonl'))
-    const router = new ModelRouter([profile('profile-a', 'model-a'), profile('profile-b', 'model-b')], { enabled: true })
-    for (let i = 0; i < 5; i++) {
-      router.recordCall('profile-a', false, 100, null)
-      router.recordCall('profile-b', false, 100, null)
-    }
     const cfg = {
       apiKey: 'k', model: 'model-a', maxIterations: 10,
       cwd: tmpProj, permissionMode: 'bypassPermissions',
@@ -85,6 +65,13 @@ describe('v0.5.5 §16: Run cleanup on every exit path', () => {
       },
     } as unknown as EngineConfig
     const engine = new ExecutionEngine(cfg, fakeRenderer())
+    // Open the circuits on the ENGINE's router — a standalone ModelRouter
+    // instance is not wired into the engine and would not affect routing.
+    const engineRouter = (engine as unknown as { modelRouter: ModelRouter }).modelRouter
+    for (let i = 0; i < 5; i++) {
+      engineRouter.recordCall('profile-a', false, 100, null)
+      engineRouter.recordCall('profile-b', false, 100, null)
+    }
     try {
       await engine.runTurn('first', [])
       const sharedState = (engine as unknown as { coordinator: { deps: { sharedState: { routingUnavailable: boolean; activeRunId: string | null } } } }).coordinator.deps.sharedState
@@ -102,11 +89,16 @@ describe('v0.5.5 §16: Run cleanup on every exit path', () => {
       cwd: tmpProj, permissionMode: 'bypassPermissions',
       enabledModules: [], eventLog,
       provider: 'openai-compatible',
+      // Unreachable local endpoint: run 1 must fail FAST (ECONNREFUSED)
+      // instead of hitting a real network endpoint.
+      baseURL: 'http://127.0.0.1:9',
       models: {
         profiles: [
           { id: 'profile-a', provider: 'openai-compatible', model: 'model-a', tier: 'top', roles: ['main'], available: true,
+            baseURL: 'http://127.0.0.1:9',
             capabilities: { reasoning: 0.7, coding: 0.7, contextWindow: 0.6, toolCalling: 0.9, speed: 0.6, cost: 0.4 } },
           { id: 'profile-b', provider: 'openai-compatible', model: 'model-b', tier: 'top', roles: ['cheap'], available: true,
+            baseURL: 'http://127.0.0.1:9',
             capabilities: { reasoning: 0.6, coding: 0.7, contextWindow: 0.5, toolCalling: 0.9, speed: 0.8, cost: 0.2 } },
         ],
         routing: { enabled: true },

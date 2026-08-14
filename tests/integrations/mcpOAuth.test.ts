@@ -103,13 +103,18 @@ describe('Token refresh', () => {
 describe('Token store', () => {
   let dir: string
   let oldHome: string | undefined
+  let oldUserProfile: string | undefined
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mcp-oauth-'))
     oldHome = process.env.HOME
+    oldUserProfile = process.env.USERPROFILE
+    // os.homedir() reads HOME on POSIX but USERPROFILE on win32 — set both.
     process.env.HOME = dir
+    process.env.USERPROFILE = dir
   })
   afterEach(() => {
     process.env.HOME = oldHome
+    if (oldUserProfile !== undefined) process.env.USERPROFILE = oldUserProfile
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -146,13 +151,17 @@ describe('Token store', () => {
 describe('getValidToken', () => {
   let dir: string
   let oldHome: string | undefined
+  let oldUserProfile: string | undefined
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mcp-oauth-'))
     oldHome = process.env.HOME
+    oldUserProfile = process.env.USERPROFILE
     process.env.HOME = dir
+    process.env.USERPROFILE = dir
   })
   afterEach(() => {
     process.env.HOME = oldHome
+    if (oldUserProfile !== undefined) process.env.USERPROFILE = oldUserProfile
     rmSync(dir, { recursive: true, force: true })
   })
 

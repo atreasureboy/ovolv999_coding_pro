@@ -143,7 +143,11 @@ describe('statusLineCustom', () => {
 
   describe('renderStatusLine — script mode', () => {
     it('runs a shell script with env vars', () => {
-      const out = renderStatusLine(baseCtx, { script: 'echo "MODE=$STATUS_MODE MODEL=$STATUS_MODEL"' })
+      // node -e is the only truly cross-platform "script" (POSIX $VAR and
+      // cmd %VAR% expansions differ; process.env works everywhere).
+      const out = renderStatusLine(baseCtx, {
+        script: 'node -e "process.stdout.write(\'MODE=\' + process.env.STATUS_MODE + \' MODEL=\' + process.env.STATUS_MODEL)"',
+      })
       expect(out).toContain('MODE=plan')
       expect(out).toContain('MODEL=claude-sonnet-4')
     })

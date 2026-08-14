@@ -118,13 +118,12 @@ interface FileVault {
 function loadFileVault(passphrase: string): FileVault {
   const path = getVaultFilePath()
   if (!existsSync(path)) return { entries: [] }
-  try {
-    const raw = readFileSync(path, 'utf8')
-    const decrypted = decrypt(raw, passphrase)
-    return JSON.parse(decrypted) as FileVault
-  } catch {
-    return { entries: [] }
-  }
+  const raw = readFileSync(path, 'utf8')
+  // A decrypt failure (wrong passphrase / corrupted vault) must NOT be
+  // treated as an empty vault — returning empty here would let the next
+  // setSecret() overwrite and silently destroy every stored entry.
+  const decrypted = decrypt(raw, passphrase)
+  return JSON.parse(decrypted) as FileVault
 }
 
 function saveFileVault(vault: FileVault, passphrase: string): void {

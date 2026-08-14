@@ -117,7 +117,7 @@ describe('P0-6.B: executeWorkflow threads step results end-to-end', () => {
       name: 'serial-chain',
       steps: [
         { name: 'a', type: 'shell', command: 'echo AAA' },
-        { name: 'b', type: 'shell', command: 'echo "got ${{ steps.a.output }}"' },
+        { name: 'b', type: 'shell', command: 'echo got ${{ steps.a.output }}' },
       ],
     }
     const result = await executeWorkflow(wf, makeCtx())
@@ -177,7 +177,7 @@ describe('P0-6.B: executeWorkflow threads step results end-to-end', () => {
       name: 'fail-branch',
       steps: [
         { name: 'fail', type: 'shell', command: 'exit 7', continueOnError: true },
-        { name: 'recover', type: 'shell', command: 'echo "recovered from ${{ steps.fail.exitCode }}"', if: 'failure' },
+        { name: 'recover', type: 'shell', command: 'echo recovered from ${{ steps.fail.exitCode }}', if: 'failure' },
       ],
     }
     const result = await executeWorkflow(wf, makeCtx())

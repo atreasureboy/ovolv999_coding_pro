@@ -48,6 +48,13 @@ function shellEsc(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
 }
 
+/** Whitelist of tmux key names accepted by the `keys` action.
+ *  Prevents shell/command injection through the raw `key` tool argument. */
+const TMUX_KEY_RE = /^[A-Za-z0-9 ,./;:=+\-[\]{}()`~!@#$%^&*<>?_|]$|^(?:C|M)-[A-Za-z0-9@^_[\]\\]$|^(?:Enter|Escape|Esc|Space|Tab|BSpace|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert|Delete)$|^(?:F[1-9]|F1[0-2])$/
+function isSafeTmuxKey(key: string): boolean {
+  return key.length <= 8 && TMUX_KEY_RE.test(key)
+}
+
 /** Split text into ≤50-char chunks for safe send-keys paste */
 function chunkText(text: string, size = 50): string[] {
   const chunks: string[] = []
@@ -229,6 +236,9 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
 
     if (!name) return { content: 'Error: session is required for keys', isError: true }
     if (!key)  return { content: 'Error: key is required for keys (e.g. C-c, C-d, Escape, Enter)', isError: true }
+    if (!isSafeTmuxKey(key)) {
+      return { content: `Error: unsupported key "${key}". Allowed: C-<x>, M-<x>, Enter, Escape, Space, Tab, BSpace, arrows, F1-F12, single characters.`, isError: true }
+    }
 
     if (!await sessionExists(name)) {
       return { content: `Session "${name}" not found. Use: TmuxSession({ action: "list" })`, isError: true }

@@ -39,7 +39,7 @@ function shellWorkflow(steps: Array<{ name?: string; command: string; continueOn
 // ─────────────────────────────────────────────────────────────────────
 describe('executeWorkflow without a registry works exactly as before', () => {
   it('runs to completion without throwing', async () => {
-    const wf = shellWorkflow([{ command: 'true' }])
+    const wf = shellWorkflow([{ command: 'exit 0' }])
     const result = await executeWorkflow(wf, ctx())
     expect(result.success).toBe(true)
     expect(result.workflowName).toBe('test-wf')
@@ -53,8 +53,8 @@ describe('executeWorkflow with a registry walks the state machine', () => {
   it('creates a workflow run and transitions to succeeded on all-pass', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = shellWorkflow([
-      { command: 'true', name: 'first' },
-      { command: 'true', name: 'second' },
+      { command: 'exit 0', name: 'first' },
+      { command: 'exit 0', name: 'second' },
     ])
 
     const result = await executeWorkflow(wf, ctx({
@@ -92,7 +92,7 @@ describe('executeWorkflow with a registry walks the state machine', () => {
     const registry = new ExecutionRunRegistry()
     const wf: Workflow = {
       name: 'bare-name',
-      steps: [{ name: 's', type: 'shell', command: 'true' }],
+      steps: [{ name: 's', type: 'shell', command: 'exit 0' }],
     }
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
     expect(registry.list()[0].goal).toBe('bare-name')
@@ -106,7 +106,7 @@ describe('executeWorkflow failure path lands in failed', () => {
   it('transitions to failed when a step exits non-zero', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = shellWorkflow([
-      { command: 'false', name: 'boom' }, // exit 1
+      { command: 'exit 1', name: 'boom' }, // exit 1
     ])
 
     const result = await executeWorkflow(wf, ctx({ runRegistry: registry }))
@@ -120,8 +120,8 @@ describe('executeWorkflow failure path lands in failed', () => {
   it('transitions to succeeded (workflow run) when continueOnError keeps the workflow going, but P1-11 status is succeeded_with_warnings', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = shellWorkflow([
-      { command: 'false', name: 'soft-fail', continueOnError: true },
-      { command: 'true', name: 'recovery' },
+      { command: 'exit 1', name: 'soft-fail', continueOnError: true },
+      { command: 'exit 0', name: 'recovery' },
     ])
 
     const result = await executeWorkflow(wf, ctx({ runRegistry: registry }))
@@ -155,9 +155,9 @@ describe('executeWorkflow updates phase per step', () => {
   it('final phase reflects the last executed step before terminal', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = shellWorkflow([
-      { command: 'true', name: 'alpha' },
-      { command: 'true', name: 'beta' },
-      { command: 'true', name: 'gamma' },
+      { command: 'exit 0', name: 'alpha' },
+      { command: 'exit 0', name: 'beta' },
+      { command: 'exit 0', name: 'gamma' },
     ])
 
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
@@ -178,9 +178,9 @@ describe('executeWorkflow updates phase per step', () => {
 describe('parallel workflows get independent runs', () => {
   it('two concurrent executeWorkflow calls create two runs', async () => {
     const registry = new ExecutionRunRegistry()
-    const wfA = shellWorkflow([{ command: 'true', name: 'a' }])
+    const wfA = shellWorkflow([{ command: 'exit 0', name: 'a' }])
     wfA.name = 'wf-a'
-    const wfB = shellWorkflow([{ command: 'true', name: 'b' }])
+    const wfB = shellWorkflow([{ command: 'exit 0', name: 'b' }])
     wfB.name = 'wf-b'
 
     await Promise.all([

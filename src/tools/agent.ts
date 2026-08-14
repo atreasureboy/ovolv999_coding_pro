@@ -23,7 +23,7 @@ import { Renderer, type RendererInterface } from '../ui/renderer.js'
 import { tmuxLayout } from '../ui/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { runCommandSync } from '../core/commandRunner.js'
 import { str } from '../core/strings.js'
 import type { PermissionManager } from '../core/permissionSystem.js'
@@ -230,7 +230,7 @@ function commitPendingChangesInWorktree(wtPath: string, message: string): void {
       execSync('git diff --cached --quiet', { cwd: wtPath, stdio: 'pipe' })
     } catch {
       // Non-zero exit means there IS something staged — commit it.
-      execSync(`git commit -m ${JSON.stringify(message)} --no-verify`, {
+      execFileSync('git', ['commit', '-m', message, '--no-verify'], {
         cwd: wtPath,
         stdio: 'pipe',
       })
@@ -289,7 +289,7 @@ function attemptMerge(
   branch: string,
 ): { ok: true } | { ok: false; conflicts: string[]; message: string } {
   try {
-    execSync(`git merge ${JSON.stringify(branch)} --no-edit`, {
+    execFileSync('git', ['merge', branch, '--no-edit'], {
       cwd: repoCwd,
       stdio: 'pipe',
     })

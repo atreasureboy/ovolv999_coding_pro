@@ -510,8 +510,9 @@ describe('RUNTIME-FIX priority-3: enforceAggregateToolResultBudget catches many-
    */
   it('enforceAggregateToolResultBudget source uses continue-not-break on small items (regression guard)', async () => {
     const fs = await import('fs')
+    const { fileURLToPath } = await import('url')
     const src = fs.readFileSync(
-      new URL('../src/core/context/toolResultBudget.ts', import.meta.url).pathname,
+      fileURLToPath(new URL('../src/core/context/toolResultBudget.ts', import.meta.url)),
       'utf8',
     )
     expect(src).toMatch(/if \(item\.size <= itemTarget\) continue/)

@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir, homedir } from 'os'
-import { join } from 'path'
+import { join, resolve, isAbsolute } from 'path'
 
 import {
   expandHome,
@@ -70,18 +70,19 @@ describe('CLI3 #1: expandHome / normalizeCwd', () => {
 
   it('normalizeCwd returns an absolute path after ~ expansion', () => {
     const abs = normalizeCwd('~/foo/bar')
-    expect(abs.startsWith('/')).toBe(true)
+    expect(isAbsolute(abs)).toBe(true)
     expect(abs).toBe(join(homedir(), 'foo', 'bar'))
   })
 
   it('normalizeCwd resolves relative paths against the current cwd', () => {
     const abs = normalizeCwd('relative/dir')
-    expect(abs.startsWith('/')).toBe(true)
-    expect(abs).toContain('relative/dir')
+    expect(isAbsolute(abs)).toBe(true)
+    expect(abs).toContain(join('relative', 'dir'))
   })
 
   it('normalizeCwd leaves an absolute path unchanged', () => {
-    expect(normalizeCwd('/etc/ovogo')).toBe('/etc/ovogo')
+    const absInput = process.platform === 'win32' ? 'C:\\etc\\ovogo' : '/etc/ovogo'
+    expect(normalizeCwd(absInput)).toBe(resolve(absInput))
   })
 })
 
@@ -154,7 +155,8 @@ describe('CLI3 #2: resolveResumePath structural validation', () => {
   })
 
   it('rejects system roots before structural checks', () => {
-    expect(() => resolveResumePath(cwd, '/etc')).toThrow(/system directory/)
+    // resolve('/') is '/' on POSIX and the current drive root (C:\) on win32.
+    expect(() => resolveResumePath(cwd, resolve('/'))).toThrow(/system directory/)
   })
 
   it('rejects nonexistent explicit paths', () => {

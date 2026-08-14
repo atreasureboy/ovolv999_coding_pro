@@ -248,6 +248,15 @@ const DANGEROUS_SESSION_ROOTS: ReadonlySet<string> = new Set([
   '/dev',
   '/run',
   '/srv',
+  // Windows system locations (resolve() keeps drive-relative forms like
+  // "/etc" from matching the POSIX entries above, so list them explicitly).
+  ...([] as string[]).concat(
+    process.env.SystemRoot ?? [],
+    process.env.ProgramFiles ?? [],
+    process.env['ProgramFiles(x86)'] ?? [],
+    join(homedir(), '..'),
+  ).map((p) => resolve(p)),
+  resolve('/'),
 ])
 
 /**

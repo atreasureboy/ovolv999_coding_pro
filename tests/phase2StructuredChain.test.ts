@@ -78,7 +78,7 @@ describe('§三: ToolExecutor preserves structured fields (no premature toLegacy
     const executor = makeExecutor(cm)
     const result = await executor.execute(
       'test-1', 'Bash',
-      { command: 'echo to-stdout ; echo to-stderr 1>&2 ; exit 42' },
+      { command: 'node -e "console.log(\'to-stdout\');console.error(\'to-stderr\');process.exit(42)"' },
       makeToolContext(tmpDir), false, 1,
     ) as AnyToolResult
 
@@ -112,7 +112,7 @@ describe('§三: ToolExecutor preserves structured fields (no premature toLegacy
     const executor = makeExecutor(cm)
     const result = await executor.execute(
       'test-3', 'Bash',
-      { command: 'false' },
+      { command: 'exit 1' },
       makeToolContext(tmpDir), false, 1,
     )
 
@@ -157,10 +157,10 @@ describe('§四: WorkingState is mutated by real tool results via ToolScheduler'
     const executor = makeExecutor(cm)
     await executor.execute(
       'bash-ok', 'Bash',
-      { command: 'true' },
+      { command: 'exit 0' },
       makeToolContext(tmpDir), false, 1,
     )
-    expect(cm.getWorkingState().verification.passed).toContain('true')
+    expect(cm.getWorkingState().verification.passed).toContain('exit 0')
   })
 
   it('Bash non-zero → verification.failed + unresolved updated', async () => {
@@ -168,11 +168,11 @@ describe('§四: WorkingState is mutated by real tool results via ToolScheduler'
     const executor = makeExecutor(cm)
     await executor.execute(
       'bash-fail', 'Bash',
-      { command: 'false' },
+      { command: 'exit 1' },
       makeToolContext(tmpDir), false, 1,
     )
     const ws = cm.getWorkingState()
-    expect(ws.verification.failed).toContain('false')
+    expect(ws.verification.failed).toContain('exit 1')
     expect(ws.unresolved.some(u => u.includes('Bash failed'))).toBe(true)
   })
 
@@ -180,15 +180,19 @@ describe('§四: WorkingState is mutated by real tool results via ToolScheduler'
     const marker = join(tmpDir, 'marker')
     const cm = makeContextManager()
     const executor = makeExecutor(cm)
-    // First: file doesn't exist → test exits 1
-    await executor.execute('bash-1', 'Bash', { command: `test -f ${marker}` }, makeToolContext(tmpDir), false, 1)
+    // Cross-platform file-exists check via a helper script (no `test -f`).
+    const checkScript = join(tmpDir, 'check-exists.mjs')
+    writeFileSync(checkScript, `import { existsSync } from 'fs'\nprocess.exit(existsSync(${JSON.stringify(marker)}) ? 0 : 1)\n`)
+    const testCmd = `node ${JSON.stringify(checkScript)}`
+    // First: file doesn't exist → script exits 1
+    await executor.execute('bash-1', 'Bash', { command: testCmd }, makeToolContext(tmpDir), false, 1)
     expect(cm.getWorkingState().unresolved.length).toBeGreaterThan(0)
     // Create the file
     writeFileSync(marker, 'exists')
     // Second: same command now passes
-    await executor.execute('bash-2', 'Bash', { command: `test -f ${marker}` }, makeToolContext(tmpDir), false, 1)
+    await executor.execute('bash-2', 'Bash', { command: testCmd }, makeToolContext(tmpDir), false, 1)
     // The unresolved entry for this command should be resolved.
-    expect(cm.getWorkingState().unresolved.some(u => u.includes('test -f'))).toBe(false)
+    expect(cm.getWorkingState().unresolved.some(u => u.includes('check-exists'))).toBe(false)
   })
 })
 
@@ -204,7 +208,7 @@ describe('§四: renderWorkingStateBlock empty guard', () => {
   it('non-empty WorkingState renders content', async () => {
     const cm = makeContextManager()
     const executor = makeExecutor(cm)
-    await executor.execute('r', 'Bash', { command: 'true' }, makeToolContext(tmpDir), false, 1)
+    await executor.execute('r', 'Bash', { command: 'exit 0' }, makeToolContext(tmpDir), false, 1)
     const block = cm.renderWorkingStateBlock()
     expect(block).not.toBe('')
     expect(block).toMatch(/verification/)

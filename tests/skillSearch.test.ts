@@ -15,12 +15,17 @@ import { join } from 'path'
 let testDir: string
 let projectDir: string
 let origHome: string | undefined
+let origUserProfile: string | undefined
 
 beforeAll(() => {
   testDir = mkdtempSync(join(tmpdir(), 'ovolv999-skills-'))
   projectDir = mkdtempSync(join(tmpdir(), 'ovolv999-proj-'))
   origHome = process.env.HOME
+  origUserProfile = process.env.USERPROFILE
+  // os.homedir() reads HOME on POSIX but USERPROFILE on win32 — set both
+  // so the isolated testDir is used on every platform.
   process.env.HOME = testDir
+  process.env.USERPROFILE = testDir
 
   // Create a skill in the project
   const skillsDir = join(projectDir, '.ovogo', 'skills')
@@ -37,6 +42,7 @@ beforeAll(() => {
 
 afterAll(() => {
   if (origHome !== undefined) process.env.HOME = origHome
+  if (origUserProfile !== undefined) process.env.USERPROFILE = origUserProfile
   rmSync(testDir, { recursive: true, force: true })
   rmSync(projectDir, { recursive: true, force: true })
 })

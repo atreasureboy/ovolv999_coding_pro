@@ -55,6 +55,10 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
 
   // ── Slash command context ─────────────────────────────────────────────────
   let history: OpenAIMessage[] = opts.resumedHistory ? [...opts.resumedHistory] : []
+  // Rebindable save target: /resume swaps this so subsequent autosaves and
+  // the exit-cleanup save land in the RESUMED session directory, not the
+  // original one (matches the non-Ink REPL behaviour in bin/ovogogogo.ts).
+  let currentSessionDir = opts.sessionDir
 
   const slashCtx: SlashCommandContext = {
     engine,
@@ -101,7 +105,9 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       const sessionPath = resolveSessionPath(opts.cwd, name)
       if (!sessionPath) return null
       try {
-        return loadSessionFile(sessionPath)
+        const loaded = loadSessionFile(sessionPath)
+        if (loaded.length > 0) currentSessionDir = sessionPath
+        return loaded
       } catch (error) {
         store.addError(formatSessionLoadDiagnostic(error, sessionPath))
         sessionLoadDiagnosticRendered = true
@@ -133,9 +139,9 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       store.setCost(ct.getTotalCost(), ct.getTotalAPICalls())
       // Autosave session after each completed turn — with the turn's outcome
       // so the envelope carries the persisted verdict (v0.4.1 WS7).
-      if (opts.sessionDir && history.length > 0) {
+      if (currentSessionDir && history.length > 0) {
         try {
-          saveSession(opts.sessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
+          saveSession(currentSessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
         } catch (err: unknown) {
           store.addWarn(`Session save warning: ${(err as Error).message}`)
         }
@@ -317,9 +323,9 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       // verdict so /resume shows the real status. A failed save is warned to
       // stderr exactly once per process (never swallowed silently — the user
       // must learn their work did not persist).
-      if (opts.sessionDir && history.length > 0) {
+      if (currentSessionDir && history.length > 0) {
         try {
-          saveSession(opts.sessionDir, history, lastOutcome ? summarizeOutcome(lastOutcome) : undefined)
+          saveSession(currentSessionDir, history, lastOutcome ? summarizeOutcome(lastOutcome) : undefined)
         } catch (err: unknown) {
           warnOnce('session:save:inkRepl', `Failed to persist session: ${(err as Error).message}`)
         }

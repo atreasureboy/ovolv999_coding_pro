@@ -103,10 +103,11 @@ export class WebSocketACPTransport implements ACPTransport {
   private onData(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk])
     while (this.buffer.length >= 2) {
+      const first = this.buffer[0]
       const second = this.buffer[1]
-      const op = second & 0x0f
+      const op = first & 0x0f
       const masked = (second & 0x80) !== 0
-      let payloadLen = this.buffer[0] & 0x7f
+      let payloadLen = second & 0x7f
       let offset = 2
       if (payloadLen === 126) {
         if (this.buffer.length < 4) return

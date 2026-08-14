@@ -1034,7 +1034,11 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
   // round-trip — a regression would lose `+x` and break CI scripts
   // restored via undo.
 
-  it('restoreVersion: preserves 0755 (executable) across restore', () => {
+  // Windows filesystems do not honor POSIX chmod mode bits — these
+  // round-trips are POSIX-only contracts.
+  const itPosix = process.platform === 'win32' ? it.skip : it
+
+  itPosix('restoreVersion: preserves 0755 (executable) across restore', () => {
     const dir = freshDir('fh-restore-mode-0755')
     const history = new FileHistory(dir)
     const fp = join(dir, 'script.sh')
@@ -1056,7 +1060,7 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
     expect(readFileSync(fp, 'utf8')).toBe('#!/bin/sh\necho live\n')
   })
 
-  it('restoreVersion: preserves 0644 (regular file) mode', () => {
+  itPosix('restoreVersion: preserves 0644 (regular file) mode', () => {
     const dir = freshDir('fh-restore-mode-0644')
     const history = new FileHistory(dir)
     const fp = join(dir, 'notes.txt')
@@ -1071,7 +1075,7 @@ describe('FileHistory: version cap + SHA-256 path (defect #7)', () => {
     expect(readFileSync(fp, 'utf8')).toBe('first')
   })
 
-  it('restoreVersion: REWIND applies the BACKUP mode — true rewind semantics', () => {
+  itPosix('restoreVersion: REWIND applies the BACKUP mode — true rewind semantics', () => {
     // The backup represents the file's FULL state at trackEdit time:
     // content AND mode (trackEdit chmod's the backup to match the
     // live mode at backup time). When the user restores a snapshot

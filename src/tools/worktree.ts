@@ -175,8 +175,9 @@ export class WorktreeManager {
     const info = this.active.get(name)
     if (!info) return ''
     try {
-      return execSync(
-        `git diff --stat ${info.baseBranch}..${info.branch}`,
+      return execFileSync(
+        'git',
+        ['diff', '--stat', `${info.baseBranch}..${info.branch}`],
         { cwd: this.cwd, encoding: 'utf8', stdio: 'pipe' },
       ).trim()
     } catch {

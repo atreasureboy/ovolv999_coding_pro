@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, basename } from 'path'
 import {
   AmbiguousSessionError,
   CorruptSessionError,
@@ -535,7 +535,8 @@ describe('resolveSessionPath', () => {
     // on process.cwd() it would point somewhere else and fail.
     const cwd = freshDir('resolve-relative')
     const real = createSessionDir(cwd, FIXED_DATE)
-    const target = join(cwd, 'some', 'sub', real.split('/').pop()!)
+    const name = basename(real)
+    const target = join(cwd, 'some', 'sub', name)
     mkdirSync(target, { recursive: true })
 
     // Chdir to a place that definitely does NOT contain the session, then
@@ -543,7 +544,7 @@ describe('resolveSessionPath', () => {
     const originalCwd = process.cwd()
     process.chdir(tmpdir())
     try {
-      expect(resolveSessionPath(cwd, `some/sub/${real.split('/').pop()}`)).toBe(target)
+      expect(resolveSessionPath(cwd, join('some', 'sub', name))).toBe(target)
     } finally {
       process.chdir(originalCwd)
     }

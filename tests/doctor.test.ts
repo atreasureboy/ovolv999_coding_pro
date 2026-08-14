@@ -140,7 +140,7 @@ describe('runDoctorChecks', () => {
   it('passed is false when errors exist', () => {
     const origKey = process.env.OPENAI_API_KEY
     delete process.env.OPENAI_API_KEY
-    const keysToDelete = ['ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'XAI_API_KEY']
+    const keysToDelete = ['ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'XAI_API_KEY', 'DEEPSEEK_API_KEY', 'GROQ_API_KEY']
     const origValues: Record<string, string | undefined> = {}
     for (const k of keysToDelete) {
       origValues[k] = process.env[k]

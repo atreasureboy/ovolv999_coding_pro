@@ -50,9 +50,9 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
   it('creates one workflow run + N step runs with correct parent links', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = workflow('analyze', [
-      shellStep('lint', 'true'),
-      shellStep('test', 'true'),
-      shellStep('build', 'true'),
+      shellStep('lint', 'exit 0'),
+      shellStep('test', 'exit 0'),
+      shellStep('build', 'exit 0'),
     ])
 
     await executeWorkflow(wf, ctx({ runRegistry: registry, parentRunId: 'turn-1' }))
@@ -82,7 +82,7 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
 
   it('shell step runs declare directory R/W resource claims on cwd', async () => {
     const registry = new ExecutionRunRegistry()
-    const wf = workflow('claim', [shellStep('s', 'true')])
+    const wf = workflow('claim', [shellStep('s', 'exit 0')])
 
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
 
@@ -94,8 +94,8 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
   it('shell step run lands in succeeded/failed matching step result', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = workflow('mixed', [
-      shellStep('ok', 'true'),
-      shellStep('nope', 'false'),
+      shellStep('ok', 'exit 0'),
+      shellStep('nope', 'exit 1'),
     ])
 
     const result = await executeWorkflow(wf, ctx({ runRegistry: registry }))
@@ -112,8 +112,8 @@ describe('P1-9: each workflow step creates a child ExecutionRun', () => {
   it('skipped step (condition not met) does NOT create a step run', async () => {
     const registry = new ExecutionRunRegistry()
     const wf = workflow('cond', [
-      shellStep('fails', 'false'),                                // failure
-      { name: 'on-success', type: 'shell', command: 'true', if: 'success' as const }, // skipped
+      shellStep('fails', 'exit 1'),                                // failure
+      { name: 'on-success', type: 'shell', command: 'exit 0', if: 'success' as const }, // skipped
     ])
 
     await executeWorkflow(wf, ctx({ runRegistry: registry }))
@@ -160,7 +160,7 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
 
   it('returns failed with stderr and exitCode for non-zero exit', async () => {
     const r = await runShellAsync({
-      command: 'echo oops 1>&2 ; exit 7',
+      command: 'node -e "console.error(\'oops\');process.exit(7)"',
       cwd: tmpRoot,
       timeoutMs: 5000,
     })
@@ -186,7 +186,7 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
     const controller = new AbortController()
     const promise = runShellAsync({
       // sleep 5s in the shell so we have time to abort.
-      command: 'sleep 5',
+      command: 'node -e "setTimeout(()=>{},5000)"',
       cwd: tmpRoot,
       timeoutMs: 10_000,
       signal: controller.signal,
@@ -200,7 +200,7 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
 
   it('timeout settles as timed_out with retryable=true', async () => {
     const r = await runShellAsync({
-      command: 'sleep 5',
+      command: 'node -e "setTimeout(()=>{},5000)"',
       cwd: tmpRoot,
       timeoutMs: 200,
     })
@@ -210,7 +210,7 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
 
   it('returns a structured result shape (status + summary)', async () => {
     const r = await runShellAsync({
-      command: 'true',
+      command: 'exit 0',
       cwd: tmpRoot,
       timeoutMs: 1000,
     })
@@ -222,7 +222,7 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
   it('streams large stdout into an ArtifactRef and replaces inline with preview', async () => {
     // Emit ~16 KiB of output (> DEFAULT_LARGE_OUTPUT_BYTES = 8 KiB).
     const r = await runShellAsync({
-      command: 'yes hello | head -c 16384',
+      command: 'node -e "process.stdout.write(\'hello\'.repeat(3277))"',
       cwd: tmpRoot,
       timeoutMs: 5000,
     })
@@ -241,8 +241,8 @@ describe('P1-10: runShellAsync honors abort and timeout', () => {
     // Two concurrent runs must overlap in time, not serialize like execSync.
     const start = Date.now()
     await Promise.all([
-      runShellAsync({ command: 'sleep 0.3', cwd: tmpRoot, timeoutMs: 5000 }),
-      runShellAsync({ command: 'sleep 0.3', cwd: tmpRoot, timeoutMs: 5000 }),
+      runShellAsync({ command: 'node -e "setTimeout(()=>{},300)"', cwd: tmpRoot, timeoutMs: 5000 }),
+      runShellAsync({ command: 'node -e "setTimeout(()=>{},300)"', cwd: tmpRoot, timeoutMs: 5000 }),
     ])
     const elapsed = Date.now() - start
     // If they serialized, total would be ~600ms+; concurrent is ~300ms.
@@ -257,8 +257,8 @@ describe('P1-10: executeWorkflow wires abort signal through to shell steps', () 
     const controller = new AbortController()
     controller.abort()
     const wf = workflow('aborted', [
-      shellStep('first', 'true'),
-      shellStep('second', 'true'),
+      shellStep('first', 'exit 0'),
+      shellStep('second', 'exit 0'),
     ])
 
     const result = await executeWorkflow(wf, ctx({
@@ -290,7 +290,7 @@ describe('P1-10: executeWorkflow wires abort signal through to shell steps', () 
 describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
   it('clean success → status=succeeded', async () => {
     const result = await executeWorkflow(
-      workflow('clean', [shellStep('a', 'true'), shellStep('b', 'true')]),
+      workflow('clean', [shellStep('a', 'exit 0'), shellStep('b', 'exit 0')]),
       ctx(),
     )
     expect(result.status).toBe('succeeded')
@@ -299,7 +299,7 @@ describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
 
   it('hard failure → status=failed', async () => {
     const result = await executeWorkflow(
-      workflow('hard', [shellStep('boom', 'false')]),
+      workflow('hard', [shellStep('boom', 'exit 1')]),
       ctx(),
     )
     expect(result.status).toBe('failed')
@@ -309,8 +309,8 @@ describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
   it('continueOnError completion → status=succeeded_with_warnings (NOT equivalent to succeeded)', async () => {
     const result = await executeWorkflow(
       workflow('soft', [
-        shellStep('flaky', 'false', { continueOnError: true }),
-        shellStep('recovery', 'true'),
+        shellStep('flaky', 'exit 1', { continueOnError: true }),
+        shellStep('recovery', 'exit 0'),
       ]),
       ctx(),
     )
@@ -324,8 +324,8 @@ describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
   it('mixed hard + soft failure → status=failed (hard dominates)', async () => {
     const result = await executeWorkflow(
       workflow('mixed', [
-        shellStep('soft', 'false', { continueOnError: true }),
-        shellStep('hard', 'false'), // no continueOnError → breaks loop
+        shellStep('soft', 'exit 1', { continueOnError: true }),
+        shellStep('hard', 'exit 1'), // no continueOnError → breaks loop
       ]),
       ctx(),
     )
@@ -337,7 +337,7 @@ describe('P1-11: WorkflowRunResult.status distinguishes outcomes', () => {
     const controller = new AbortController()
     controller.abort()
     const result = await executeWorkflow(
-      workflow('cancelled', [shellStep('a', 'true')]),
+      workflow('cancelled', [shellStep('a', 'exit 0')]),
       ctx({ signal: controller.signal }),
     )
     expect(result.status).toBe('cancelled')

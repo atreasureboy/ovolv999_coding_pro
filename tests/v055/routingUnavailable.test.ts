@@ -162,6 +162,16 @@ describe('v0.5.5 §6: all-profiles-open terminates Run', () => {
     } as unknown as EngineConfig
     const engine = new ExecutionEngine(cfg, fakeRenderer())
     try {
+      // Open both circuits on the Engine's own router so this run takes
+      // the routing-unavailable path (sets the flag, then the Run finally
+      // must reset it). Without this the run would attempt a REAL network
+      // call — slow/timeout on networked dev machines and the assertion
+      // below would be vacuous (the flag was never set).
+      const engineRouter = (engine as unknown as { modelRouter: ModelRouter }).modelRouter
+      for (let i = 0; i < 5; i++) {
+        engineRouter.recordCall('profile-a', false, 100, null)
+        engineRouter.recordCall('profile-b', false, 100, null)
+      }
       await engine.runTurn('first', [])
       const sharedState = (engine as unknown as { coordinator: { deps: { sharedState: { routingUnavailable: boolean } } } }).coordinator.deps.sharedState
       expect(sharedState.routingUnavailable).toBe(false)

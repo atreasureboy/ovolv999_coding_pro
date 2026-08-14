@@ -317,7 +317,11 @@ describe('statSafely — atomicWrite companion', () => {
 
 // ─── 5. atomicWrite mode preservation ──────────────────────────────────────
 
-describe('atomicWrite — mode preservation (defect #5)', () => {
+// POSIX-only suites: chmod mode preservation and symlink() creation are
+// unsupported on Windows filesystems (EPERM without developer mode).
+const describePosix = process.platform === 'win32' ? describe.skip : describe
+
+describePosix('atomicWrite — mode preservation (defect #5)', () => {
   it('preserves 0755 (executable) mode on an existing file', async () => {
     const dir = newDir('mode-0755')
     const fp = join(dir, 'script.sh')
@@ -888,7 +892,7 @@ describe('FileEditTool — formatter uses execFileSync, not execSync+shell', () 
 
 // ─── 12. atomicWrite — symlink behavior (write-through) ─────────────────────
 
-describe('atomicWrite — symlink write-through', () => {
+describePosix('atomicWrite — symlink write-through', () => {
   /**
    * When target IS a symlink, atomicWrite must FOLLOW it (write-through
    * semantics) — the same as `fs.writeFile` and normal editors. The
@@ -1112,7 +1116,7 @@ describe('atomicWrite — tmp cleanup on failure', () => {
 
 // ─── 14. FileEdit / FileWrite — symlink-at-write-path interaction ───────────
 
-describe('FileEdit / FileWrite — symlink-at-write-path interaction', () => {
+describePosix('FileEdit / FileWrite — symlink-at-write-path interaction', () => {
   /**
    * If file_path IS a symlink, Edit/Write follow it through atomicWrite:
    * the pointee is updated and the symlink itself is preserved. This

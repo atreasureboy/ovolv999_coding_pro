@@ -25,8 +25,9 @@ describe('CommandRunner (Phase 2)', () => {
       executable: 'node', args: ['-e', 'setInterval(()=>0, 1000)'], cwd: process.cwd(), timeoutMs: 500,
     })
     expect(r.timedOut).toBe(true)
-    // Killed by signal → exitCode null
-    expect(r.exitCode).toBeNull()
+    // POSIX: killed by signal → exitCode null. Windows: taskkill /F
+    // terminates the tree and close reports exit code 1.
+    expect(r.exitCode).toBe(process.platform === 'win32' ? 1 : null)
   })
 
   it('aborts via AbortSignal and flags cancelled', async () => {

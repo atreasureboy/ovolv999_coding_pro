@@ -15,6 +15,8 @@
    @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return */
 
 import { getCommand, registerCommand } from './index.js'
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
 import type { SlashCommandContext, SlashCommandResult } from './index.js'
 import { listCommands } from './index.js'
 import { getCurrentMode, setCurrentMode, cycleMode, getAllModes, type Mode } from '../core/modes.js'
@@ -29,7 +31,7 @@ import {
   resolveModelTier,
   type ConfiguredModelTierProfile,
 } from '../core/model/modelTier.js'
-import { existsSync, writeFileSync, readFileSync } from 'fs'
+import { existsSync, writeFileSync, readFileSync, readSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { homedir } from 'os'
@@ -45,6 +47,48 @@ import type { DocSectionType } from '../core/magicDocs.js'
 
 const text = (value: string): SlashCommandResult => ({ type: 'text', value })
 const exit = (): SlashCommandResult => ({ type: 'exit' })
+
+/** Synchronously read one line from stdin without echoing (TTY raw mode). */
+function readHiddenLine(): string {
+  const stdin = process.stdin
+  const wasRaw = typeof stdin.setRawMode === 'function' ? (stdin.isRaw ?? false) : false
+  if (typeof stdin.setRawMode === 'function') {
+    stdin.setRawMode(true)
+    stdin.resume()
+  }
+  let value = ''
+  const buf = Buffer.alloc(1)
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let bytesRead: number
+    try {
+      bytesRead = readSync(stdin.fd, buf, 0, 1, null)
+    } catch {
+      break
+    }
+    if (bytesRead === 0) break
+    const ch = buf[0]
+    if (ch === 0x0d || ch === 0x0a) break
+    if (ch === 0x03) {
+      if (typeof stdin.setRawMode === 'function') stdin.setRawMode(wasRaw)
+      process.stdout.write('\n')
+      throw new Error('interrupted')
+    }
+    if (ch === 0x08 || ch === 0x7f) {
+      if (value.length > 0) {
+        value = value.slice(0, -1)
+        process.stdout.write('\b \b')
+      }
+      continue
+    }
+    if (ch < 0x20) continue
+    value += buf.toString('utf8')
+    if (typeof stdin.setRawMode === 'function') process.stdout.write('*')
+  }
+  if (typeof stdin.setRawMode === 'function') stdin.setRawMode(wasRaw)
+  process.stdout.write('\n')
+  return value
+}
 
 /** Module-level singleton — overridable via {@link setWorkerManager} for tests. */
 let workerManager: ClaudeCodeWorkerManager = new ClaudeCodeWorkerManager()
@@ -2977,12 +3021,17 @@ registerCommand({
       if (!key) return text('Usage: /vault set <key>')
       const pass = getPassphraseFromEnv()
       process.stdout.write(`Enter value for ${key}: `)
+      let value: string
       try {
-        const value = require('readline-sync').question('', { hideEchoBack: true }) as string
+        value = readHiddenLine()
+      } catch {
+        return text('Failed to read value from stdin')
+      }
+      try {
         setSecret(key, value, pass ?? undefined)
         return text(`Stored: ${key}`)
-      } catch {
-        return text('Failed to read value (readline-sync not available)')
+      } catch (e) {
+        return text(`Failed to store ${key}: ${(e as Error).message}`)
       }
     }
 
@@ -2990,22 +3039,34 @@ registerCommand({
       const key = parts[1]
       if (!key) return text('Usage: /vault get <key>')
       const pass = getPassphraseFromEnv()
-      const value = getSecret(key, pass ?? undefined)
-      return text(value ? value : `Not found: ${key}`)
+      try {
+        const value = getSecret(key, pass ?? undefined)
+        return text(value ? value : `Not found: ${key}`)
+      } catch (e) {
+        return text(`Failed to read vault: ${(e as Error).message}`)
+      }
     }
 
     if (sub === 'delete') {
       const key = parts[1]
       if (!key) return text('Usage: /vault delete <key>')
       const pass = getPassphraseFromEnv()
-      const deleted = deleteSecret(key, pass ?? undefined)
-      return text(deleted ? `Deleted: ${key}` : `Not found: ${key}`)
+      try {
+        const deleted = deleteSecret(key, pass ?? undefined)
+        return text(deleted ? `Deleted: ${key}` : `Not found: ${key}`)
+      } catch (e) {
+        return text(`Failed to read vault: ${(e as Error).message}`)
+      }
     }
 
     if (sub === 'list') {
       const pass = getPassphraseFromEnv()
-      const keys = listSecrets(pass ?? undefined)
-      return text(keys.length > 0 ? keys.join('\n') : 'No secrets stored')
+      try {
+        const keys = listSecrets(pass ?? undefined)
+        return text(keys.length > 0 ? keys.join('\n') : 'No secrets stored')
+      } catch (e) {
+        return text(`Failed to read vault: ${(e as Error).message}`)
+      }
     }
 
     return text('Usage: /vault [status | set <key> | get <key> | delete <key> | list]')

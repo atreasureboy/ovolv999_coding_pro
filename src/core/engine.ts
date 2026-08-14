@@ -39,6 +39,7 @@ import type {
   Tool,
 } from './types.js'
 import { createTools } from '../tools/index.js'
+import { tmuxLayout } from '../ui/tmuxLayout.js'
 import type { RendererInterface } from '../ui/renderer.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { ModuleManager } from './moduleRuntime/moduleManager.js'
@@ -856,12 +857,6 @@ export class ExecutionEngine {
     // best-effort and skips killing when a user is attached (so we
     // don't yank the monitor out from under someone watching it).
     try {
-      // Lazy require to avoid importing tmux at module load on hosts
-      // that never enter the multi-pane path.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { tmuxLayout } = require('../../ui/tmuxLayout.js') as {
-        tmuxLayout: { destroy: () => void }
-      }
       tmuxLayout.destroy()
     } catch {
       // tmuxLayout is best-effort; never throw out of dispose

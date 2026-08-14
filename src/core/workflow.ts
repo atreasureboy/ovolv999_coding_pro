@@ -756,11 +756,14 @@ export async function runShellAsync(opts: {
     let stderrBytes = 0
     const STREAM_CAP = 1024 * 1024 // 1 MiB per stream
 
+    // detached:true enables process-group kill on POSIX, but on Windows it
+    // DETACHES the stdio pipes too — stdout/stderr data is silently lost.
+    // Only detach off-Windows; killTree handles win32 via taskkill.
     const child = spawn(command, {
       cwd,
       env: process.env,
       shell: true,
-      detached: true,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -774,11 +777,15 @@ export async function runShellAsync(opts: {
       if (pid === undefined) return
       try {
         if (process.platform === 'win32') {
-          // best-effort: avoid importing execSync here — the workflow
-          // module is forbidden from using execSync per P1-10, and the
-          // Windows process-kill path is best handled by the runtime
-          // child.kill() which traverses the job object when shell:true.
-          child.kill(sig)
+          // child.kill() only reaches the cmd wrapper — the actual command
+          // survives. taskkill /T walks the tree. Fire-and-forget async:
+          // the execSync ban (P1-10) applies, and we never block settle().
+          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          }).on('error', () => {
+            try { child.kill(sig) } catch { /* ESRCH if already gone */ }
+          })
         } else {
           // Negative pid = process group (shell:true spawns a subshell
           // that owns the actual command; killing the group reaches
@@ -831,12 +838,12 @@ export async function runShellAsync(opts: {
       if (settled) return
       aborted = true
       killTree('SIGTERM')
+      if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
       killTimer = setTimeout(() => {
         killTimer = null
         killTree('SIGKILL')
       }, 2000)
       if (typeof killTimer.unref === 'function') killTimer.unref()
-      clearTimers()
     }
     const abortListener: (() => void) | null = onAbort
     signal?.addEventListener('abort', abortListener, { once: true })

@@ -20,14 +20,19 @@ import {
 describe('sessionStore', () => {
   let tmpHome: string
   let oldHome: string | undefined
+  let oldUserProfile: string | undefined
 
   beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), 'ovolv999-session-'))
     oldHome = process.env.HOME
+    oldUserProfile = process.env.USERPROFILE
+    // os.homedir() reads HOME on POSIX but USERPROFILE on win32 — set both.
     process.env.HOME = tmpHome
+    process.env.USERPROFILE = tmpHome
   })
   afterEach(() => {
     process.env.HOME = oldHome
+    if (oldUserProfile !== undefined) process.env.USERPROFILE = oldUserProfile
     rmSync(tmpHome, { recursive: true, force: true })
   })
 

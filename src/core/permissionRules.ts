@@ -193,7 +193,10 @@ function matchesTool(ruleTool: string, toolName: string): boolean {
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
-  return globMatchFn(pattern, value)
+  // Normalize Windows path separators so glob patterns (which use '/')
+  // still match tool arguments containing backslash paths.
+  const normalizedValue = value.replace(/\\/g, '/')
+  return globMatchFn(pattern, normalizedValue)
 }
 
 // ── Rule Management ─────────────────────────────────────────────────────────
