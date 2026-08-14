@@ -1,7 +1,8 @@
 import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { Renderer } from '../src/ui/renderer.js'
-import { stripAnsi } from '../src/utils/ansi.js'
+
+const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
 
 describe('terminal presentation', () => {
   it('renders a compact product header and structured metadata', () => {

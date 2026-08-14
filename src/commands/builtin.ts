@@ -731,24 +731,67 @@ registerCommand({
   },
 })
 
-// ── /rewind — versioned file restore ───────────────────────────────────────
+// ── /rewind — versioned file restore + conversation checkpoints ────────────
 //
-// Round 27: real restore, not just a listing (the previous version's own
-// audit note admitted restore was never wired). Forms:
+// Round 27/28: real restore (the previous version's own audit note
+// admitted restore was never wired). Forms:
 //   /rewind                      → list edited files + version counts
 //   /rewind <file>               → list that file's versions
 //   /rewind <file> <n>           → restore file to version n
 //   /rewind <file> original      → restore file to its pre-first-edit state
 //   /rewind all                  → restore EVERY edited file to original
+//   /rewind turn                 → list conversation checkpoints
+//   /rewind turn <n>             → restore BOTH conversation + files to
+//                                  the end of turn n (CC /rewind parity)
 // Version 0 = the file as it was before this session's first edit; higher
 // versions are progressively LATER snapshots (restoreVersion rewinds).
 
 registerCommand({
   name: 'rewind',
-  description: 'Rewind files to earlier versions. Usage: /rewind [<file>|all] [<version>|original]',
-  usage: '/rewind [<file>] [<n>|original] | /rewind all',
+  description: 'Rewind files/conversation to earlier states. Usage: /rewind [<file>|all|turn] [<n>|original]',
+  usage: '/rewind [<file> [<n>|original]] | /rewind all | /rewind turn [<n>]',
   handler: (args, ctx) => {
     const fh = ctx.engine.getFileHistory()
+
+    // ── Conversation checkpoints (Round 28) ──
+    if (args.trim() === 'turn' || args.trim().startsWith('turn ')) {
+      const turnArg = args.trim().split(/\s+/)[1]
+      if (!ctx.sessionDir) {
+        return text('Conversation checkpoints need a session directory (not available in this context).')
+      }
+      const { listCheckpoints, rewindToCheckpoint } =
+        require('../core/conversationCheckpoints.js') as typeof import('../core/conversationCheckpoints.js')
+      const checkpoints = listCheckpoints(ctx.sessionDir)
+      if (!turnArg) {
+        if (checkpoints.length === 0) {
+          return text('No checkpoints recorded yet — one is saved after every completed turn.')
+        }
+        const lines = ['Conversation checkpoints (end-of-turn anchors):', '']
+        for (const cp of checkpoints.slice(-20)) {
+          const when = cp.at ? new Date(cp.at).toLocaleTimeString() : '?'
+          const nFiles = Object.keys(cp.files).length
+          const filesHint = nFiles > 0 ? `, ${nFiles} file(s)` : ''
+          lines.push(`  turn ${cp.turn}: ${cp.historyLength} msgs${filesHint} @ ${when} — ${cp.prompt || '(no prompt)'}`)
+        }
+        lines.push('', 'Restore BOTH conversation and files: /rewind turn <n>')
+        return text(lines.join('\n'))
+      }
+      const n = parseInt(turnArg, 10)
+      if (Number.isNaN(n)) {
+        return text(`Invalid turn "${turnArg}" — use a number, e.g. /rewind turn 3.`)
+      }
+      const r = rewindToCheckpoint(ctx.sessionDir, n, ctx.history, fh)
+      if (!r.ok) {
+        return text(r.message ?? `No checkpoint for turn ${n}.`)
+      }
+      ctx.setHistory(ctx.history.slice(0, r.historyLength))
+      let out = `Rewound to end of turn ${n}: conversation truncated to ${r.historyLength} messages.`
+      if (r.restoredFiles.length > 0) out += `\nRestored ${r.restoredFiles.length} file(s) to their turn-${n} state.`
+      if (r.failedFiles.length > 0) out += `\nFailed to restore: ${r.failedFiles.join(', ')}`
+      out += '\nLater checkpoints are now stale — future turns append fresh ones.'
+      return text(out)
+    }
+
     if (!fh) {
       return text('File history not available (no session directory configured).')
     }
@@ -765,7 +808,7 @@ registerCommand({
         const versions = fh.getVersions(f.path)
         lines.push(`  ${f.path}  (${versions.length} version${versions.length === 1 ? '' : 's'})`)
       }
-      lines.push('', 'Usage: /rewind <file> to list versions, /rewind <file> <n> to restore, /rewind all to restore everything to pre-session state.')
+      lines.push('', 'Usage: /rewind <file> to list versions, /rewind <file> <n> to restore, /rewind all for everything, /rewind turn for conversation checkpoints.')
       return text(lines.join('\n'))
     }
 

@@ -32,7 +32,8 @@ import { Writable, PassThrough } from 'node:stream'
 import { Renderer } from '../src/ui/renderer.js'
 import { PipeRenderer } from '../src/ui/pipeRenderer.js'
 import { InputHandler } from '../src/ui/input.js'
-import { stripAnsi } from '../src/utils/ansi.js'
+
+const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
 
 function captureRenderer(width = 80): { renderer: Renderer; output: () => string } {
   let captured = ''

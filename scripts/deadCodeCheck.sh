@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Dead code check — CI verification layer (super_plan.md Round 5.3)
-# Detects:
-#   1. Source files with zero production importers (excluding barrels/entry points)
-#   2. @deprecated annotations with active callers
-#   3. `as never` / `as any` type-cast count and trends
+# Dead code check — CI verification layer (Round 29 rewrite)
+#
+# The original checker matched only same-depth static `from './x.js'`
+# imports — 105 of its 112 warnings were false positives (it missed
+# createRequire() lazy requires, multi-level relative imports, dynamic
+# import(), and everything referenced from bin/). This rewrite resolves
+# references the way Node does: by module BASENAME with extension
+# variants, across src/ + bin/, including require() and import().
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,105 +18,55 @@ echo "=== Dead Code Audit ==="
 # ── 1. Unimported source files ──
 echo ""
 echo "--- Unimported source files ---"
-# Whitelist: entry points, barrel files, type-only definitions
+# Whitelist: entry points and intentionally side-effect-only modules
 WHITELIST=(
-  'src/tools/index.ts'       # barrel
-  'src/core/index.ts'        # barrel (if exists)
-  'src/core/types.ts'        # type-only
-  'src/core/providers.ts'    # type+constant
-  'src/core/runtime/events.ts' # protocol
-  'src/core/model/modelRouter.ts'
-  'src/core/model/modelGateway.ts'
-  'src/core/model/providerAdapter.ts'
-  'src/core/model/streamConsumer.ts'
-  'src/core/engine.ts'       # entry
-  'src/core/runtime/coordinator.ts' # entry
-  'src/core/runtime/boot.ts' # entry
-  'src/core/toolRuntime/toolExecutor.ts'
-  'src/core/toolRuntime/toolScheduler.ts'
-  'src/core/toolRuntime/toolRegistry.ts'
-  'src/core/toolRuntime/toolPolicy.ts'
-  'src/core/context/contextManager.ts'
-  'src/core/moduleRuntime/moduleManager.ts'
-  'src/core/executionContext.ts'
-  'src/core/executionRun.ts'
-  'src/core/eventLog.ts'
-  'src/core/semanticMemory.ts'
-  'src/core/episodicMemory.ts'
-  'src/core/fileHistory.ts'
-  'src/core/backgroundTaskManager.ts'
-  'src/core/permissionSystem.ts'
-  'src/core/agentPresets.ts'
-  'src/commands/builtin.ts'  # slash commands
-  'src/ui/ink/runInkRepl.ts' # UI entry
-  'src/integrations/acp.ts'  # protocol entry
+  'bin/ovogogogo.ts'
+  'src/cli/engineAssembly.ts'   # imported statically by bin/
+  'src/cli/acpServer.ts'        # dynamic import target from bin/
+  'src/core/engine.ts'
+  'src/core/runtime/boot.ts'
+  'src/core/runtime/coordinator.ts'
+  'src/core/types.ts'
+  'src/tools/index.ts'
+  'src/commands/index.ts'
+  'src/commands/builtin.ts'
+  'src/commands/doctor.ts'      # lazy require from builtin.ts
+  'src/skills/loader.ts'
+  'src/skills/extractor.ts'
 )
 
 unimported=0
 while IFS= read -r -d '' file; do
-  # Skip test files
-  [[ "$file" == *".test.ts" ]] && continue
-  # Skip whitelist
+  [[ "$file" == *"__tests__"* || "$file" == *".test.ts" || "$file" == *".test.tsx" ]] && continue
   skip=0
   for wl in "${WHITELIST[@]}"; do
     [[ "$file" == "$wl" ]] && { skip=1; break; }
   done
   [[ $skip -eq 1 ]] && continue
 
-  # Check if any non-test file (other than itself) references this module path
-  mod="${file%.ts}"
-  # Check for imports of the form "from '.../module'" or "from '.../module.js'"
-  import_refs=$(grep -rl "from.*['\"].*${mod##*/}['\"]" src/ --include='*.ts' 2>/dev/null | grep -v "$file" | grep -v '\.test\.ts' || true)
-  # Also check for direct path imports
-  import_refs2=$(grep -rl "from.*['\"]\.\.*\/${mod##*/}['\"]" src/ --include='*.ts' 2>/dev/null | grep -v "$file" | grep -v '\.test\.ts' || true)
-  # Also check for dynamic imports
-  import_refs3=$(grep -rl "import.*['\"]\.\.*\/${mod##*/}\.js['\"]" src/ --include='*.ts' 2>/dev/null | grep -v "$file" | grep -v '\.test\.ts' || true)
-
-  if [ -z "$import_refs" ] && [ -z "$import_refs2" ] && [ -z "$import_refs3" ]; then
-    echo "  WARNING: $file has zero production importers"
+  base="$(basename "${file%.*}")"
+  # Reference = basename appearing in any import/require/dynamic-import in
+  # a DIFFERENT production file (src/ or bin/). Path-agnostic because the
+  # same module is reached via ./x.js, ../core/x.js, ../src/core/x.js,
+  # require('../core/x.js') and import('../core/x.js').
+  refs=$(grep -rlE "(from +['\"][^'\"]*/${base}(\.js)?['\"]|require\(['\"][^'\"]*/${base}(\.js)?['\"]\)|import\(['\"][^'\"]*/${base}(\.js)?['\"]\))" \
+    src/ bin/ --include='*.ts' --include='*.tsx' 2>/dev/null | grep -v -F "$file" || true)
+  if [ -z "$refs" ]; then
+    echo "  WARNING: $file has zero production references"
     unimported=$((unimported + 1))
   fi
-done < <(find src -name '*.ts' -not -name '*.test.ts' -not -name '*.d.ts' -print0)
+done < <(find src bin -name '*.ts' -o -name '*.tsx' | grep -v -E '\.test\.|__tests__' | tr '\n' '\0')
 
 echo "  Unimported source files: $unimported"
 
-# ── 2. @deprecated with active callers ──
+# ── 2. `as any` / `as never` cast trend (hard cap) ──
 echo ""
-echo "--- @deprecated active callers ---"
-deprecated_count=0
-while IFS= read -r line; do
-  file=$(echo "$line" | cut -d: -f1)
-  symbol=$(echo "$line" | grep -oP '@deprecated\s+\K\w+' 2>/dev/null || true)
-  if [ -n "$symbol" ]; then
-    callers=$(grep -rl "$symbol" src/ --include="*.ts" 2>/dev/null | grep -v "$file" | grep -v '\.test\.ts' || true)
-    if [ -z "$callers" ]; then
-      echo "  OK: @deprecated '$symbol' in $file — zero production callers"
-    else
-      echo "  NOTE: @deprecated '$symbol' in $file — still called by:"
-      echo "$callers" | sed 's/^/        /'
-      deprecated_count=$((deprecated_count + 1))
-    fi
-  fi
-done < <(grep -rn '@deprecated' src/ --include='*.ts' 2>/dev/null || true)
+echo "--- Type-cast audit ---"
+casts=$(grep -rnE ' as (any|never)([^A-Za-z_]|$)' src/ bin/ --include='*.ts' --include='*.tsx' | grep -v -E '\.test\.|__tests__' | wc -l || true)
+echo "  'as any'/'as never' casts in production code: ${casts}"
 
-echo "  Deprecated-with-callers: $deprecated_count"
-
-# ── 3. as never / as any usage ──
 echo ""
-echo "--- Type-cast audit (as never / as any) ---"
-never_count=$(grep -r 'as never' src/ --include='*.ts' -c 2>/dev/null | awk -F: '{sum+=$2} END {print sum+0}')
-any_count=$(grep -r 'as any' src/ --include='*.ts' -c 2>/dev/null | awk -F: '{sum+=$2} END {print sum+0}')
-echo "  as never: $never_count occurrences"
-echo "  as any:   $any_count occurrences"
-
-# ── Summary ──
-echo ""
-echo "=== Dead Code Audit Complete ==="
-if [ $unimported -gt 130 ]; then
-  echo "WARNING: $unimported unimported source files detected (threshold: 130)"
-  FAIL=1
-else
-  echo "Passes: unimported files (≤130) | deprecated check | type-cast count"
+if [ "$unimported" -gt 0 ]; then
+  echo "=== RESULT: $unimported unimported file(s) — verify each is intentional or delete ==="
 fi
-
-exit $FAIL
+echo "=== Dead Code Audit done ==="

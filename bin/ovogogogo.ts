@@ -86,6 +86,7 @@ import {
   summarizeOutcome,
   type OutcomeSummary,
 } from '../src/core/sessionManager.js'
+import { appendCheckpoint } from '../src/core/conversationCheckpoints.js'
 import type { TurnOutcome } from '../src/core/runtime/turnOutcome.js'
 import { warnOnce } from '../src/utils/warnOnce.js'
 import { formatErrorCardText } from '../src/utils/apiError.js'
@@ -1071,6 +1072,10 @@ async function runRepl(
         if (sessionDir) {
           try {
             saveSession(sessionDir, history, lastOutcomeSummary)
+            // Round 28 (conversation rewind): anchor this turn — /rewind
+            // turn N can then restore BOTH the conversation prefix and
+            // the file state as of this moment.
+            appendCheckpoint(sessionDir, history, engine.getFileHistory(), currentPrompt)
           } catch (err: unknown) {
             renderer.warn(`Failed to persist session: ${(err as Error).message}`)
           }
