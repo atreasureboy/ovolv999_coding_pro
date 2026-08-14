@@ -197,6 +197,8 @@ export class Renderer implements RendererInterface {
   private startupMeta = new Map<string, string>()
 
   private stream: NodeJS.WritableStream | null = null
+  private ttyStream: NodeJS.WriteStream | null = null
+  private resizeHandler: (() => void) | null = null
 
   constructor(opts?: { stream?: NodeJS.WritableStream }) {
     const s = opts?.stream ?? process.stdout
@@ -205,9 +207,15 @@ export class Renderer implements RendererInterface {
     this.tty = (s as NodeJS.WriteStream).isTTY === true
     this.width = this.tty ? ((s as NodeJS.WriteStream).columns ?? 100) : 100
     if (this.tty) {
-      (s as NodeJS.WriteStream).on?.('resize', () => {
+      // Track the handler + emitter so destroy() can detach it. The
+      // emitter is process-lifetime (stdout) and agent.ts creates one
+      // Renderer per delegation — without removal, listeners accumulate
+      // across a long session until MaxListenersExceededWarning.
+      this.ttyStream = s as NodeJS.WriteStream
+      this.resizeHandler = () => {
         this.width = (s as NodeJS.WriteStream).columns ?? 100
-      })
+      }
+      this.ttyStream.on?.('resize', this.resizeHandler)
     }
   }
 
@@ -226,6 +234,11 @@ export class Renderer implements RendererInterface {
     // child renderers at four exit points (success/error/abort/worktree)
     // and a spinner may be active at any of them.
     this.stopSpinner()
+    if (this.ttyStream && this.resizeHandler) {
+      try { this.ttyStream.removeListener?.('resize', this.resizeHandler) } catch { /* best-effort */ }
+      this.ttyStream = null
+      this.resizeHandler = null
+    }
     if (this.stream && typeof (this.stream as { end?: () => void }).end === 'function') {
       (this.stream as { end: () => void }).end()
     }

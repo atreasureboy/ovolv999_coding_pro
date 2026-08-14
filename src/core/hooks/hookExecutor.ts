@@ -104,6 +104,14 @@ export async function executeHookCommand(
       cwd: options.cwd,
     }
 
+    const finalize = (result: HookExecResult): void => {
+      if (resolved) return
+      resolved = true
+      resolve(result)
+    }
+
+    let timeoutHandle: NodeJS.Timeout | null = null
+
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(cmd.command, [], {
@@ -127,13 +135,45 @@ export async function executeHookCommand(
       return
     }
 
-    const finalize = (result: HookExecResult): void => {
-      if (resolved) return
-      resolved = true
-      resolve(result)
+    // The 'error' event (e.g. ENOENT) is emitted asynchronously — it MUST
+    // be attached immediately after spawn so no early-return path (the
+    // pre-aborted branch below) can leave it listener-less. An unhandled
+    // 'error' on a ChildProcess crashes the process.
+    const onAbort = (): void => {
+      if (child.pid != null) killTree(child.pid)
+      const rawPreview = stdout.length > 500 ? stdout.slice(0, 500) + '…' : stdout
+      finalize({
+        hookName,
+        command: cmd.command,
+        ok: false,
+        exitCode: null,
+        signal: 'SIGKILL',
+        durationMs: Date.now() - startedAt,
+        timedOut: false,
+        cancelled: true,
+        output: null,
+        rawStdoutPreview: rawPreview,
+        error: 'aborted',
+      })
     }
 
-    let timeoutHandle: NodeJS.Timeout | null = null
+    child.on('error', (err) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (options.signal) options.signal.removeEventListener('abort', onAbort)
+      finalize({
+        hookName,
+        command: cmd.command,
+        ok: false,
+        exitCode: null,
+        signal: null,
+        durationMs: Date.now() - startedAt,
+        timedOut: false,
+        cancelled: false,
+        output: null,
+        error: `spawn error: ${err.message}`,
+      })
+    })
+
     if (timeoutMs > 0) {
       timeoutHandle = setTimeout(() => {
         if (child.pid != null) killTree(child.pid)
@@ -154,25 +194,12 @@ export async function executeHookCommand(
       }, timeoutMs)
     }
 
-    const onAbort = (): void => {
-      if (child.pid != null) killTree(child.pid)
-      const rawPreview = stdout.length > 500 ? stdout.slice(0, 500) + '…' : stdout
-      finalize({
-        hookName,
-        command: cmd.command,
-        ok: false,
-        exitCode: null,
-        signal: 'SIGKILL',
-        durationMs: Date.now() - startedAt,
-        timedOut: false,
-        cancelled: true,
-        output: null,
-        rawStdoutPreview: rawPreview,
-        error: 'aborted',
-      })
-    }
     if (options.signal) {
       if (options.signal.aborted) {
+        // Pre-abort discovered after spawn: kill the child, clear the
+        // armed timeout (previously leaked for the full timeoutMs), then
+        // bail.
+        if (timeoutHandle) clearTimeout(timeoutHandle)
         onAbort()
         return
       }
@@ -190,23 +217,6 @@ export async function executeHookCommand(
       if (stderr.length < HOOK_OUTPUT_MAX_BYTES) {
         stderr += chunk
       }
-    })
-
-    child.on('error', (err) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle)
-      if (options.signal) options.signal.removeEventListener('abort', onAbort)
-      finalize({
-        hookName,
-        command: cmd.command,
-        ok: false,
-        exitCode: null,
-        signal: null,
-        durationMs: Date.now() - startedAt,
-        timedOut: false,
-        cancelled: false,
-        output: null,
-        error: `spawn error: ${err.message}`,
-      })
     })
 
     child.on('close', (code, signal) => {

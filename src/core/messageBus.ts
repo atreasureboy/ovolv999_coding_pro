@@ -158,6 +158,9 @@ export class MessageBus extends EventEmitter {
           this.off(`message:${agentId}`, handler)
           resolve(null)
         }, timeout)
+        // Bounded long-poll must not keep the process alive on its own —
+        // if nothing else is pending the caller is gone anyway.
+        if (typeof timer.unref === 'function') timer.unref()
 
         const handler = (msg: AgentMessage): void => {
           clearTimeout(timer)

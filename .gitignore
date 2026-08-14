@@ -34,7 +34,11 @@ resume.cfg
 .codex
 .loop/
 .opencode/
-.ovogo/settings.json
+# Runtime dirs — transcripts/logs frequently embed command output and
+# secrets; only settings.json was ignored before, leaving .ovogo/ and
+# .bg_logs/ artifacts one `git add .` away from being committed.
+.ovogo/
+.bg_logs/
 
 # Scan findings (contain target data)
 .ovogo/findings/

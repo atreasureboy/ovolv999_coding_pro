@@ -305,8 +305,20 @@ export class BashTool implements Tool {
 
     // ── Background mode (fire-and-forget with auto log redirect) ─────────────
     if (run_in_background) {
+      // Security: background execution MUST NOT be a sandbox escape hatch.
+      // The same wrapCommand() policy that guards the foreground path is
+      // applied here — otherwise `run_in_background: true` silently strips
+      // bubblewrap/Seatbelt containment from any command (H1).
+      const bubbleMode = context.permissionMode === 'bubble'
+      const wrapBackground = (cmd: string): string => {
+        if (IS_WIN_CMD) return cmd
+        return bubbleMode
+          ? sandboxWrap(cmd, context.cwd, { enabled: true, level: 'strict', readOnlyPaths: [], writablePaths: [], deniedPaths: [], allowNetwork: false })
+          : sandboxWrap(cmd, context.cwd)
+      }
+
       if (context.backgroundTaskManager) {
-        const id = context.backgroundTaskManager.createTask(command, {
+        const id = context.backgroundTaskManager.createTask(wrapBackground(command), {
           description,
           cwd: context.cwd,
           sessionDir: context.sessionDir,
@@ -335,7 +347,10 @@ export class BashTool implements Tool {
 
       // Append redirect if the caller didn't already redirect
       const alreadyRedirected = command.includes('>') || command.includes('2>&1') || command.includes('/dev/null')
-      const actualCommand = alreadyRedirected ? command : `${command} >> "${logFile}" 2>&1`
+      const redirectedCommand = alreadyRedirected ? command : `${command} >> "${logFile}" 2>&1`
+      // Security (H1): wrap the final command so the detached child is
+      // sandboxed exactly like the foreground path.
+      const actualCommand = wrapBackground(redirectedCommand)
 
       // Use appropriate shell flags: bash uses -c, cmd.exe uses /c
       const shellArgs = IS_WIN_CMD ? ['/c', actualCommand] : ['-c', actualCommand]
@@ -521,8 +536,8 @@ export class BashTool implements Tool {
       //   (a) sandbox.json has enabled:true, OR
       //   (b) permissionMode === 'bubble' (Round 3 mode → real execution)
       // wrapCommand() is a no-op when neither is true.
-      // Only the foreground execution path is wrapped — background
-      // detached tasks keep their raw redirection semantics.
+      // Background execution is wrapped too (see wrapBackground above) —
+      // only follow_mode's raw tmux spectator plumbing stays unwrapped.
       const bubbleMode = context.permissionMode === 'bubble'
       if (!IS_WIN_CMD) {
         actualCommand = bubbleMode

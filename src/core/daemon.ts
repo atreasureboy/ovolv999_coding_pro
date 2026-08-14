@@ -88,6 +88,7 @@ export type { WorkerEntry }
 
 export class Daemon {
   private server: Server | null = null
+  private connections = new Set<Socket>()
   private startTime: number = 0
   private workers = new Map<string, WorkerEntry>()
   private status: DaemonStatus = 'stopped'
@@ -139,6 +140,13 @@ export class Daemon {
   async stop(): Promise<void> {
     this.status = 'stopped'
     if (this.server) {
+      // server.close() only waits for idle connections to drain — a
+      // lingering client socket would hang stop() forever. Destroy all
+      // tracked connections first so close() fires immediately.
+      for (const socket of this.connections) {
+        try { socket.destroy() } catch { /* already gone */ }
+      }
+      this.connections.clear()
       await new Promise<void>((resolve) => {
         this.server!.close(() => resolve())
       })
@@ -225,6 +233,8 @@ export class Daemon {
 
   private handleConnection(socket: Socket): void {
     let buffer = ''
+    this.connections.add(socket)
+    socket.once('close', () => this.connections.delete(socket))
     socket.on('error', () => {})
     socket.on('data', (data: Buffer) => {
       buffer += data.toString()

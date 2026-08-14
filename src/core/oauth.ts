@@ -11,7 +11,7 @@ import { randomBytes, createHash } from 'crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { execSync } from 'child_process'
+import { spawn } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -207,7 +207,9 @@ export class OAuthCallbackServer {
       })
 
       this.server.on('error', reject)
-      this.server.listen(this.port, () => resolve())
+      // Security (H3): bind loopback only — a callback server on 0.0.0.0
+      // lets any LAN host poke the pending OAuth flow.
+      this.server.listen(this.port, '127.0.0.1', () => resolve())
 
       this.codePromise = new Promise((resolve2, reject2) => {
         this.codeResolve = resolve2
@@ -224,8 +226,16 @@ export class OAuthCallbackServer {
     const error = url.searchParams.get('error')
 
     if (error) {
+      // Security (H3): the error param is attacker-controllable query
+      // input — escape it before reflecting into HTML.
+      const escaped = error
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
       res.writeHead(400, { 'Content-Type': 'text/html' })
-      res.end(`<h1>Authorization Failed</h1><p>${error}</p>`)
+      res.end(`<h1>Authorization Failed</h1><p>${escaped}</p>`)
       this.codeReject?.(new Error(`OAuth error: ${error}`))
       return
     }
@@ -286,8 +296,20 @@ export async function authorize(
   try {
     if (options.openBrowser !== false) {
       try {
-        const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
-        execSync(`${openCmd} "${authUrl}"`, { stdio: 'pipe', timeout: 5000 })
+        // Security (H5): NEVER interpolate authUrl into a shell string —
+        // a malicious MCP server can advertise an authorizationEndpoint
+        // containing `"$(cmd)` and escape the quotes into RCE. Arg-array
+        // spawn (no shell) makes the URL inert. The authorization URL is
+        // fully server-controlled data, not user input.
+        const child = process.platform === 'win32'
+          ? spawn('cmd', ['/c', 'start', '', authUrl], { stdio: 'ignore', detached: true })
+          : spawn(
+              process.platform === 'darwin' ? 'open' : 'xdg-open',
+              [authUrl],
+              { stdio: 'ignore', detached: true },
+            )
+        child.on('error', () => {})
+        child.unref()
       } catch { /* ignore browser open errors */ }
     }
 
@@ -308,14 +330,21 @@ export async function authorize(
 // ── Token Storage ───────────────────────────────────────────────────────────
 
 function getTokenPath(serverName: string): string {
-  return join(homedir(), '.ovolv999', 'oauth-tokens', `${serverName}.json`)
+  // Security (M1): serverName is config/server-derived data — sanitize it
+  // before interpolating into the token path so `../` cannot traverse
+  // outside the oauth-tokens directory.
+  const safe = serverName.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return join(homedir(), '.ovolv999', 'oauth-tokens', `${safe}.json`)
 }
 
 export function saveToken(serverName: string, token: OAuthToken): void {
   const path = getTokenPath(serverName)
   const dir = join(path, '..')
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(token, null, 2))
+  // Security (M1): tokens are plaintext JSON — restrict to owner-only
+  // (matches mcpOAuth.ts). Without this the default umask (0644) exposes
+  // refresh tokens to every local user.
+  writeFileSync(path, JSON.stringify(token, null, 2), { mode: 0o600 })
 }
 
 export function loadToken(serverName: string): OAuthToken | null {

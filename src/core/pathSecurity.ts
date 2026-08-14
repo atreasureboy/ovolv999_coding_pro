@@ -110,12 +110,25 @@ export function expandPath(path: string): string {
  * the tool layer.
  */
 const LOOP_DRIVER_OWNED_FILES = new Set([
-  'DONE.flag',
+  'done.flag',
   'loop.lock',
   'checkpoint.json',
   'checkpoint.previous.json',
 ])
 
+// macOS (default APFS/HFS+) and Windows filesystems match paths
+// case-insensitively — a model writing `.LOOP/DONE.flag` would bypass a
+// case-sensitive guard. Compare in lowercase there.
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin'
+
 export function isLoopDriverOwnedPath(path: string): boolean {
-  return basename(dirname(path)) === '.loop' && LOOP_DRIVER_OWNED_FILES.has(basename(path))
+  const dir = basename(dirname(path))
+  // Filename matching is always case-folded: a lowercase spelling on a
+  // case-SENSITIVE fs is a different file, but blocking it too is safe
+  // (over-block, never under-block). The directory name stays exact on
+  // case-sensitive filesystems where `.LOOP` is genuinely distinct.
+  return (
+    (CASE_INSENSITIVE_FS ? dir.toLowerCase() : dir) === '.loop' &&
+    LOOP_DRIVER_OWNED_FILES.has(basename(path).toLowerCase())
+  )
 }

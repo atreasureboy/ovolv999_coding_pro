@@ -8,7 +8,7 @@
  *   - macOS: Keychain (via `security` command)
  *   - Linux: secret-tool (libsecret) or encrypted file
  *   - Windows: Credential Manager (cmdkey)
- *   - Fallback: XOR-encrypted JSON file
+ *   - Fallback: AES-256-GCM encrypted JSON file (scrypt-derived key)
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
@@ -76,21 +76,25 @@ export function getVaultFilePath(): string {
 
 // ── File-based Encryption ───────────────────────────────────────────────────
 
-const SALT = randomBytes(16)
+// Fresh salt per encrypt() call — reusing one process-wide salt lets an
+// attacker precompute a single scrypt rainbow table for every secret the
+// process ever writes. The salt travels in the payload prefix, so
+// decrypt() remains compatible with existing vaults.
 const KEY_LENGTH = 32
 
-function deriveKey(passphrase: string): Buffer {
-  return scryptSync(passphrase, SALT, KEY_LENGTH)
+function deriveKey(passphrase: string, salt: Buffer): Buffer {
+  return scryptSync(passphrase, salt, KEY_LENGTH)
 }
 
 export function encrypt(data: string, passphrase: string): string {
-  const key = deriveKey(passphrase)
+  const salt = randomBytes(16)
+  const key = deriveKey(passphrase, salt)
   const iv = randomBytes(16)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()])
   const authTag = cipher.getAuthTag()
   // Format: salt:iv:authTag:encrypted (all hex)
-  return [SALT.toString('hex'), iv.toString('hex'), authTag.toString('hex'), encrypted.toString('hex')].join(':')
+  return [salt.toString('hex'), iv.toString('hex'), authTag.toString('hex'), encrypted.toString('hex')].join(':')
 }
 
 export function decrypt(encoded: string, passphrase: string): string {

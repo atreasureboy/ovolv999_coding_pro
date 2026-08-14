@@ -70,6 +70,8 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
   timer: ReturnType<typeof setTimeout>
+  /** Turn-abort detach — removed when the request settles normally. */
+  detachAbort?: () => void
 }
 
 const PROTOCOL_VERSION = '2024-11-05'
@@ -83,6 +85,7 @@ export class McpStdioClient {
   private stdoutBuf = ''
   private stderrBuf = ''
   private closed = false
+  private closePromise: Promise<void> | null = null
 
   constructor(private readonly server: McpServerConfig) {}
 
@@ -161,12 +164,17 @@ export class McpStdioClient {
   async callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
   ): Promise<{ content: string; isError: boolean }> {
-    const result = (await this.request({
-      jsonrpc: '2.0',
-      method: 'tools/call',
-      params: { name, arguments: args },
-    })) as { content?: unknown; isError?: boolean } | null
+    const result = (await this.request(
+      {
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name, arguments: args },
+      },
+      DEFAULT_TIMEOUT_MS,
+      options?.signal,
+    )) as { content?: unknown; isError?: boolean } | null
 
     const rawContent = result?.content
     const contentArr: unknown[] = Array.isArray(rawContent) ? rawContent : []
@@ -242,30 +250,54 @@ export class McpStdioClient {
     }
   }
 
-  /** Tear down the connection. Idempotent. Returns a resolved promise for ergonomic chaining. */
+  /** Tear down the connection. Idempotent. Waits (bounded) for the child
+   *  to actually exit and escalates to SIGKILL — a server that traps or
+   *  ignores SIGTERM would otherwise survive as an orphan whose stdio
+   *  pipes pin the host's event loop. */
   close(): Promise<void> {
-    if (!this.closed) {
-      this.closed = true
-      this.failAll(new Error('MCP client closed'))
+    if (this.closed) return this.closePromise ?? Promise.resolve()
+    this.closed = true
+    this.failAll(new Error('MCP client closed'))
 
-      const proc = this.proc
-      this.proc = null
-      if (proc) {
+    const proc = this.proc
+    this.proc = null
+    if (proc) {
+      try {
+        proc.stdin?.end()
+      } catch {
+        // ignore
+      }
+      if (proc.exitCode === null && proc.pid !== undefined) {
         try {
-          proc.stdin?.end()
+          proc.kill('SIGTERM')
         } catch {
           // ignore
         }
-        if (proc.exitCode === null && proc.pid !== undefined) {
-          try {
-            proc.kill('SIGTERM')
-          } catch {
-            // ignore
-          }
-        }
+        // Bounded wait + SIGKILL escalation. The escalation timer is
+        // unref'd so it cannot keep the host alive by itself; the child
+        // exiting clears it.
+        this.closePromise = new Promise<void>((resolve) => {
+          const killTimer = setTimeout(() => {
+            try {
+              if (proc.exitCode === null) proc.kill('SIGKILL')
+            } catch {
+              // ignore — already gone
+            }
+            resolve()
+          }, 3000)
+          killTimer.unref?.()
+          proc.once('exit', () => {
+            clearTimeout(killTimer)
+            resolve()
+          })
+          proc.once('error', () => {
+            clearTimeout(killTimer)
+            resolve()
+          })
+        })
       }
     }
-    return Promise.resolve()
+    return this.closePromise ?? Promise.resolve()
   }
 
   // ── internals ───────────────────────────────────────────────────────────
@@ -295,6 +327,7 @@ export class McpStdioClient {
       const pending = this.pending.get(msg.id)
       if (!pending) return
       clearTimeout(pending.timer)
+      pending.detachAbort?.()
       this.pending.delete(msg.id)
       if (msg.error !== undefined) {
         const e = msg.error as Record<string, unknown>
@@ -318,7 +351,11 @@ export class McpStdioClient {
     this.send(message)
   }
 
-  private request(message: object, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<unknown> {
+  private request(
+    message: object,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.proc || this.closed) {
         reject(new Error(`MCP server "${this.server.name}": not connected`))
@@ -331,11 +368,34 @@ export class McpStdioClient {
           reject(new Error(`MCP request id=${id} timed out after ${timeoutMs}ms (${this.server.name})`))
         }
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      // Pending-request timers must not delay process exit on their own —
+      // the owning request promise keeps the relevant work alive.
+      timer.unref?.()
+      // Turn-abort: ESC/hard-abort must cancel in-flight MCP calls, not
+      // leave the stdio pipe busy until its own timeout fires.
+      const onAbort = (): void => {
+        if (!this.pending.has(id)) return
+        this.pending.delete(id)
+        clearTimeout(timer)
+        reject(new Error(`MCP request id=${id} aborted (${this.server.name})`))
+      }
+      if (signal) {
+        if (signal.aborted) {
+          clearTimeout(timer)
+          reject(new Error(`MCP request id=${id} aborted (${this.server.name})`))
+          return
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+      const detachAbort = (): void => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+      }
+      this.pending.set(id, { resolve, reject, timer, detachAbort })
       try {
         this.send({ jsonrpc: '2.0', id, ...message })
       } catch (err) {
         clearTimeout(timer)
+        detachAbort()
         this.pending.delete(id)
         reject(err instanceof Error ? err : new Error('MCP send failed'))
       }
@@ -346,6 +406,7 @@ export class McpStdioClient {
     if (this.closed && this.pending.size === 0) return
     for (const [, p] of this.pending) {
       clearTimeout(p.timer)
+      p.detachAbort?.()
       p.reject(err)
     }
     this.pending.clear()

@@ -27,7 +27,6 @@ import type { ToolDefinition } from '../types.js'
 import type { ProviderId } from '../providers.js'
 import { AnthropicAdapter } from './anthropicAdapter.js'
 
-export { AnthropicAdapter } from './anthropicAdapter.js'
 export type { ProviderId }
 
 /**

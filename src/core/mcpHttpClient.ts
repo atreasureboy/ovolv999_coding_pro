@@ -15,6 +15,8 @@ import { getValidToken } from '../integrations/mcpOAuth.js'
 export interface McpHttpClientOptions {
   /** Override the fetch implementation (for tests). */
   fetchImpl?: typeof fetch
+  /** Per-request timeout in ms (default 60s). 0 disables. */
+  timeoutMs?: number
 }
 
 interface JsonRpcRequest {
@@ -23,6 +25,8 @@ interface JsonRpcRequest {
   method: string
   params?: Record<string, unknown>
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 
 interface JsonRpcResponse<T = unknown> {
   jsonrpc: '2.0'
@@ -96,7 +100,11 @@ export class McpHttpClient {
     }
   }
 
-  private async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  private async call<T>(
+    method: string,
+    params?: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (!this.connected || !this.server.url) {
       throw new Error(`McpHttpClient "${this.server.name}" not connected`)
     }
@@ -108,10 +116,30 @@ export class McpHttpClient {
     }
     const authHeader = await this.getAuthHeader()
     const headers = { ...this.getHeaders(), ...authHeader }
+    const timeoutMs = this.opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    // Compose turn-abort + per-request timeout into one signal so ESC
+    // cancels in-flight HTTP MCP calls too.
+    let requestSignal: AbortSignal | undefined
+    if (signal && timeoutMs > 0) {
+      const composite = new AbortController()
+      const abort = (reason?: unknown): void =>
+        composite.abort(
+          reason instanceof Error ? reason : new Error(`MCP HTTP ${this.server.name} ${method} aborted`),
+        )
+      signal.addEventListener('abort', () => abort(signal.reason), { once: true })
+      const timeoutSignal = AbortSignal.timeout(timeoutMs)
+      timeoutSignal.addEventListener('abort', () => abort(timeoutSignal.reason), { once: true })
+      requestSignal = composite.signal
+    } else {
+      requestSignal = signal ?? (timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined)
+    }
     const response = await this.getFetch()(this.server.url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      // A dead/slow HTTP MCP server previously hung boot forever — every
+      // request now carries a hard deadline.
+      ...(requestSignal ? { signal: requestSignal } : {}),
     })
     if (!response.ok) {
       throw new Error(
@@ -133,10 +161,12 @@ export class McpHttpClient {
   async callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
   ): Promise<{ content: string; isError: boolean }> {
     const result = await this.call<{ content: unknown; isError?: boolean }>(
       'tools/call',
       { name, arguments: args },
+      options?.signal,
     )
     const rawContent = result?.content
     const contentArr: unknown[] = Array.isArray(rawContent) ? rawContent : []

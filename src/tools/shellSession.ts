@@ -157,6 +157,12 @@ export class ShellSessionTool implements Tool {
       // default.
       server.listen(port, '127.0.0.1', () => {
         _sessions.set(id, { id, port, server, socket: null, connectedAt: null, logFile, logStream })
+        // Lifecycle: this module keeps sessions in a module-global map with
+        // no engine dispose hook. A ref'd listener would keep the CLI's
+        // event loop alive forever after the caller forgets `action:"kill"`.
+        // unref() lets the process exit; the session keeps working as long
+        // as something else (the REPL) is alive.
+        server.unref()
         resolve({
           content: [
             `[ShellSession] Listening on 127.0.0.1:${port}  (session: ${id})`,

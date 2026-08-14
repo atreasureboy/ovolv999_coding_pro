@@ -206,8 +206,18 @@ export function generateMacOSProfile(config: SandboxConfig, cwd: string): string
 export function generateBubblewrapArgs(config: SandboxConfig, cwd: string): string[] {
   const args: string[] = ['bwrap']
 
+  // Security (M5): denied paths must actually be inaccessible. bwrap has
+  // no explicit deny flag, and merely "not binding" them is a no-op when
+  // the path sits inside a default ro-bind (e.g. denying /etc/keys while
+  // /etc is ro-bound left it fully readable). Enforcement: drop any bind
+  // that intersects a denied path, then mask each denied path with an
+  // empty tmpfs mounted AFTER the binds (later mounts win).
+  const denied = config.deniedPaths.filter((p) => typeof p === 'string' && p.length > 1)
+  const isDenied = (p: string): boolean =>
+    denied.some((d) => p === d || p.startsWith(d.endsWith('/') ? d : d + '/'))
+
   // Bind read-only system paths
-  const readOnly = [...getDefaultReadOnlyPaths(), ...config.readOnlyPaths]
+  const readOnly = [...getDefaultReadOnlyPaths(), ...config.readOnlyPaths].filter((p) => !isDenied(p))
   for (const p of readOnly) {
     if (existsSync(p)) {
       args.push('--ro-bind', p, p)
@@ -215,15 +225,18 @@ export function generateBubblewrapArgs(config: SandboxConfig, cwd: string): stri
   }
 
   // Bind writable paths
-  const writable = [cwd, ...getTempPaths(), ...config.writablePaths]
+  const writable = [cwd, ...getTempPaths(), ...config.writablePaths].filter((p) => !isDenied(p))
   for (const p of writable) {
     if (existsSync(p)) {
       args.push('--bind', p, p)
     }
   }
 
-  // Denied paths — don't bind them at all
-  // (bwrap doesn't have an explicit deny; just omit the bind)
+  // Denied paths — mask with empty tmpfs (ordered after binds so the
+  // tmpfs shadows any earlier mount covering the same subtree)
+  for (const p of denied) {
+    args.push('--tmpfs', p)
+  }
 
   // Proc + dev
   args.push('--proc', '/proc')

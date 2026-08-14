@@ -321,9 +321,21 @@ export class LspClient extends EventEmitter {
       try { this.connection.dispose() } catch { /* noop */ }
       this.connection = null
     }
-    if (this.proc) {
-      try { this.proc.kill('SIGTERM') } catch { /* ignore */ }
-      this.proc = null
+    const proc = this.proc
+    this.proc = null
+    if (proc) {
+      try { proc.kill('SIGTERM') } catch { /* ignore */ }
+      // Escalation: a busy tsserver/pyright can ignore SIGTERM; without
+      // SIGKILL follow-up it survives as an unreaped zombie and its
+      // stdio pins the host's event loop. Timer is unref'd and cleared
+      // on exit.
+      if (proc.exitCode === null && proc.pid != null) {
+        const killTimer = setTimeout(() => {
+          try { if (proc.exitCode === null) proc.kill('SIGKILL') } catch { /* ignore */ }
+        }, 5000)
+        killTimer.unref?.()
+        proc.once('exit', () => clearTimeout(killTimer))
+      }
     }
     this.emit('close')
   }
@@ -395,6 +407,8 @@ export class LspClient extends EventEmitter {
         cleanup()
         resolve(this.diagnostics.get(uri) ?? [])
       }, timeoutMs)
+      // Bounded wait must not keep the process alive by itself.
+      timer.unref?.()
 
       const handler = (publishedUri: string): void => {
         if (publishedUri === uri) {

@@ -4,8 +4,8 @@ import {
   createProviderAdapter,
   OpenAICompatibleAdapter,
   StubProviderAdapter,
-  AnthropicAdapter,
 } from '../../src/core/model/providerAdapter.js'
+import { AnthropicAdapter } from '../../src/core/model/anthropicAdapter.js'
 
 function makeClient(): OpenAI {
   return new OpenAI({ apiKey: 'test-key' })

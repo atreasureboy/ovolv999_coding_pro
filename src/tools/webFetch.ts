@@ -16,6 +16,7 @@
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import { lookup } from 'node:dns/promises'
 
 const MAX_CONTENT_LENGTH = 50_000 // characters returned to LLM
 const FETCH_TIMEOUT_MS = 30_000
@@ -23,6 +24,85 @@ const FETCH_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024 // 5 MiB
 /** If content-length header is larger than this, reject without reading. */
 const MAX_CONTENT_LENGTH_HEADER = MAX_RESPONSE_BYTES
+/** Maximum HTTP redirect hops followed manually (each hop re-validated). */
+const MAX_REDIRECTS = 5
+
+// ── SSRF guard (H2) ──────────────────────────────────────────────────────────
+//
+// The URL is LLM-controlled, so WebFetch is a classic agent-SSRF surface:
+// a prompt-injected page can steer the model toward internal endpoints
+// (cloud metadata at 169.254.169.254, RFC1918 services, ULA IPv6). Policy:
+//   - Loopback (127.0.0.1, ::1, localhost) is ALLOWED — a coding agent
+//     legitimately reads local dev servers.
+//   - Everything else private/reserved is BLOCKED, both as IP literals
+//     and via DNS resolution (every A/AAAA record is checked).
+//   - Redirects are followed MANUALLY with per-hop re-validation — a
+//     public 302 to http://169.254.169.254/ must not sail through.
+//   - OVOGO_WEBFETCH_ALLOW_PRIVATE=1 disables the guard for users who
+//     need to reach private networks on purpose.
+
+function ipv4Octets(host: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (!m) return null
+  const octets = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+  return octets.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? octets : null
+}
+
+function isBlockedAddress(host: string): boolean {
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d)
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(host)
+  if (mapped) return isBlockedAddress(mapped[1])
+  if (host.toLowerCase() === '::1') return false // loopback — allowed
+  if (/^fe[89ab][0-9a-f:]*$/i.test(host)) return true // IPv6 link-local
+  if (/^f[cd][0-9a-f:]*$/i.test(host)) return true // IPv6 unique-local fc00::/7
+  const octets = ipv4Octets(host)
+  if (!octets) return false
+  const [a, b] = octets
+  if (a === 0) return true // 0.0.0.0/8
+  if (a === 10) return true // 10.0.0.0/8
+  if (a === 192 && b === 168) return true // 192.168.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
+  if (a === 169 && b === 254) return true // link-local + cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64.0.0/10
+  return false
+}
+
+async function assertSafeFetchUrl(raw: string): Promise<void> {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error(`invalid URL: ${raw}`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('URL must be http(s)')
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+  if (host === 'localhost' || host.endsWith('.localhost')) return // loopback — allowed
+  if (host.endsWith('.internal') || host.endsWith('.local')) {
+    throw new Error(`blocked host (internal/local name): ${host}`)
+  }
+  if (host.includes(':')) {
+    // Bare IPv6 literal
+    if (isBlockedAddress(host)) throw new Error(`blocked address (private/reserved range): ${host}`)
+    return
+  }
+  if (ipv4Octets(host)) {
+    if (isBlockedAddress(host)) throw new Error(`blocked address (private/reserved range): ${host}`)
+    return
+  }
+  // DNS name — resolve and require EVERY address to be public
+  let addresses: string[] = []
+  try {
+    addresses = (await lookup(host, { all: true })).map((r) => r.address)
+  } catch {
+    // DNS failure — let fetch surface the real error
+  }
+  const blocked = addresses.find((addr) => isBlockedAddress(addr))
+  if (blocked) {
+    throw new Error(`host ${host} resolves to blocked address ${blocked}`)
+  }
+}
 
 /**
  * Marker errors thrown into AbortController#abort so the catch branch can
@@ -227,14 +307,49 @@ Large pages are truncated — use start_index to paginate.`,
     }
 
     try {
-      const response = await fetch(url, {
-        signal: fetchController.signal,
-        headers: {
-          'User-Agent': 'ovogogogo/0.1.0 (autonomous code execution engine)',
-          'Accept': 'text/html,application/xhtml+xml,text/plain,*/*',
-        },
-        redirect: 'follow',
-      })
+      // Manual redirect handling with per-hop SSRF re-validation (H2).
+      // `redirect: 'follow'` would let a public URL 302 into
+      // 169.254.169.254 / RFC1918 space unchecked.
+      const guardDisabled = process.env.OVOGO_WEBFETCH_ALLOW_PRIVATE === '1'
+      let currentUrl = url
+      let response: Response | null = null
+      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        if (!guardDisabled) {
+          try {
+            await assertSafeFetchUrl(currentUrl)
+          } catch (err) {
+            return {
+              content: `Fetch blocked (SSRF guard): ${(err as Error).message} — ${currentUrl}`,
+              isError: true,
+            }
+          }
+        }
+        response = await fetch(currentUrl, {
+          signal: fetchController.signal,
+          headers: {
+            'User-Agent': 'ovogogogo/0.1.0 (autonomous code execution engine)',
+            'Accept': 'text/html,application/xhtml+xml,text/plain,*/*',
+          },
+          redirect: 'manual',
+        })
+        const status = response.status
+        if (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) {
+          const location = response.headers.get('location')
+          if (!location) {
+            return { content: `HTTP ${status} redirect without Location header for ${currentUrl}.`, isError: true }
+          }
+          try {
+            currentUrl = new URL(location, currentUrl).href
+          } catch {
+            return { content: `Invalid redirect Location "${location}" for ${currentUrl}.`, isError: true }
+          }
+          continue
+        }
+        break
+      }
+      if (!response) {
+        return { content: `Fetch error: too many redirects (>${MAX_REDIRECTS}) for ${url}.`, isError: true }
+      }
 
       clearTimeout(timer)
 

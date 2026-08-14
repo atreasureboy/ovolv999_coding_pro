@@ -19,7 +19,11 @@ import type { McpToolInfo } from '../core/mcpClient.js'
  * is what lets one adapter serve both transports.
  */
 export interface McpCallClient {
-  callTool(name: string, args: Record<string, unknown>): Promise<{
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<{
     content: string
     isError: boolean
   }>
@@ -66,9 +70,13 @@ export class McpToolAdapter implements Tool {
     return false
   }
 
-  async execute(input: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     try {
-      const result = await this.client.callTool(this.toolInfo.name, input)
+      // Thread the turn AbortSignal into the MCP transport so ESC cancels
+      // in-flight MCP calls instead of waiting out their own timeouts.
+      const result = await this.client.callTool(this.toolInfo.name, input, {
+        signal: context.signal,
+      })
       return {
         content: result.content || `(MCP tool ${this.toolInfo.name} returned no text content)`,
         isError: result.isError === true,

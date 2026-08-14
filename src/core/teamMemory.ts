@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSy
 import { join, basename } from 'path'
 import { warnConfigOnce } from '../config/diagnostics.js'
 import { homedir } from 'os'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { scanText, formatScanResult } from '../utils/secretScanner.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -123,7 +123,10 @@ function simpleHash(s: string): string {
 
 function runGit(args: string[], cwd?: string): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const stdout = execSync(`git ${args.join(' ')}`, {
+    // Security: arg-array spawn (no shell) — config-sourced values like
+    // remoteUrl/branch previously flowed through a shell string, so any
+    // crafted config value could execute arbitrary commands.
+    const stdout = execFileSync('git', args, {
       cwd: cwd ?? getTeamMemoryDir(),
       encoding: 'utf8',
       timeout: 30000,

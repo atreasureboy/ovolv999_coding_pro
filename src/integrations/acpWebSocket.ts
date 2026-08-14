@@ -186,6 +186,16 @@ export interface AcpWebSocketServerOptions {
   host?: string
   /** Optional callback per connection — receives the raw Socket and the ACPServer transport. */
   onConnection?: (transport: WebSocketACPTransport, remoteAddress: string | undefined) => void
+  /**
+   * Security (H4): allowed browser origins for the WebSocket handshake.
+   * Requests WITHOUT an Origin header (non-browser clients) are always
+   * allowed. When an Origin IS present (any webpage can open
+   * ws://127.0.0.1:port from the user's browser), it must match an entry
+   * here. Default: loopback origins only (http://localhost and
+   * http://127.0.0.1 on any port) — cross-site WebSocket hijacking
+   * otherwise lets a malicious page drive the agent.
+   */
+  allowedOrigins?: string[]
 }
 
 export class AcpWebSocketServer {
@@ -240,7 +250,32 @@ export class AcpWebSocketServer {
     return this.transports.size
   }
 
+  private isOriginAllowed(origin: string): boolean {
+    const allowed = this.options.allowedOrigins
+    if (allowed && allowed.length > 0) {
+      return allowed.includes(origin)
+    }
+    // Default policy: loopback origins only (any port)
+    try {
+      const u = new URL(origin)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+      return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1'
+    } catch {
+      return false
+    }
+  }
+
   private handleUpgrade(req: IncomingMessage, socket: Socket): void {
+    // Security (H4): Origin check. Browsers force an Origin header on
+    // cross-site WebSocket handshakes; native clients send none. Allow
+    // origin-less requests (CLI/ACP agents), reject browser origins that
+    // are not explicitly allowed.
+    const origin = req.headers.origin
+    if (origin !== undefined && !this.isOriginAllowed(String(origin))) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.destroy()
+      return
+    }
     const key = req.headers['sec-websocket-key']
     const version = req.headers['sec-websocket-version']
     if (req.headers.upgrade?.toLowerCase() !== 'websocket') {

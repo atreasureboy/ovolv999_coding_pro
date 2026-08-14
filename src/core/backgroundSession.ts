@@ -44,6 +44,13 @@ export interface SessionMetadata {
   exitCode?: number
   /** Extra args passed to the spawned ovolv999 */
   args?: string[]
+  /**
+   * Linux-only identity anchor: the kernel process start time (field 22
+   * of /proc/<pid>/stat) captured at spawn. stopSession compares it
+   * before escalating SIGKILL so a recycled PID can never cause the
+   * escalation to murder an unrelated process.
+   */
+  pidStartTime?: string | null
 }
 
 export interface StartSessionOptions {
@@ -198,8 +205,7 @@ function resolveOvogogogoBin(): string {
   return 'ovolv999'
 }
 
-export function startBackgroundSession(options: StartSessionOptions): StartSessionResult {
-  ensureSessionsDir()
+export function startBackgroundSession(options: StartSessionOptions): StartSessionResult {  ensureSessionsDir()
   const id = generateSessionId()
   const logPath = getLogPath(id)
   const cwd = options.cwd ?? process.cwd()
@@ -269,6 +275,7 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
   // child's dup2 completes.)
 
   const pid = proc.pid ?? null
+  const pidStartTime = readPidStartTime(pid)
 
   // Unref so the parent can exit independently
   try { proc.unref() } catch { /* ignore */ }
@@ -284,6 +291,7 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
     cwd,
     model: options.model,
     pid,
+    pidStartTime,
     startedAt: new Date().toISOString(),
     status: 'running',
     logPath,
@@ -295,6 +303,24 @@ export function startBackgroundSession(options: StartSessionOptions): StartSessi
 }
 
 // ── Stop Session ────────────────────────────────────────────────────────────
+
+/**
+ * Read the kernel start time of a PID (Linux /proc only, null elsewhere).
+ * Used as a PID-identity anchor: if the process exits and the OS recycles
+ * its PID, the new occupant has a different start time.
+ */
+function readPidStartTime(pid: number | null): string | null {
+  if (process.platform !== 'linux' || pid == null || pid <= 0) return null
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    // comm (field 2) may contain spaces/parens — parse after the last ')'.
+    // Fields then run from state (3); starttime is field 22 → index 19.
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    return fields[19] ?? null
+  } catch {
+    return null
+  }
+}
 
 export function stopSession(id: string, graceMs = 5000): boolean {
   const meta = loadMetadata(id)
@@ -317,6 +343,11 @@ export function stopSession(id: string, graceMs = 5000): boolean {
   const deadline = Date.now() + graceMs
   const checkLiveness = (): void => {
     if (isPidAlive(meta.pid) && Date.now() < deadline) {
+      // PID-identity guard: if the original process exited and the OS
+      // recycled its PID within the grace window, SIGKILL would hit an
+      // innocent process. Skip escalation when the start time no longer
+      // matches (Linux only — other platforms keep best-effort behavior).
+      if (meta.pidStartTime && readPidStartTime(meta.pid) !== meta.pidStartTime) return
       // Still alive — escalate
       try { process.kill(meta.pid!, 'SIGKILL') } catch { /* ignore */ }
     }
