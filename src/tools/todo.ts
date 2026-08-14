@@ -3,40 +3,18 @@
  * Reference: src/tools/TodoWriteTool/
  *
  * Lets the LLM create and manage a checklist of subtasks.
- * Displayed in the terminal as ✓/○ items.
- * Stored in-process (per-session) — not persisted to disk.
+ * State lives in core/todoStore.ts: persisted per-session
+ * (<sessionDir>/todo.json) and re-injected into the system prompt
+ * every LLM call so the plan survives compaction and --resume.
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import type { TodoItem } from '../core/todoStore.js'
+import { ensureLoaded, updateTodos, renderTodoList } from '../core/todoStore.js'
 
-export interface TodoItem {
-  id: string
-  content: string
-  activeForm?: string
-  status: 'pending' | 'in_progress' | 'completed'
-  priority: 'high' | 'medium' | 'low'
-}
+export type { TodoItem }
 
-// Module-level store — shared across all tool invocations in a session
-let todoList: TodoItem[] = []
 let updateLock = false
-
-function renderTodoList(): string {
-  if (todoList.length === 0) return '(no tasks)'
-  return todoList
-    .map((item) => {
-      const icon =
-        item.status === 'completed' ? '✓' :
-        item.status === 'in_progress' ? '◆' : '○'
-      const pri = item.priority === 'high' ? '[H]' : item.priority === 'low' ? '[L]' : '   '
-      // Show activeForm for in_progress tasks, content otherwise
-      const text = item.status === 'in_progress' && item.activeForm
-        ? item.activeForm
-        : item.content
-      return `${icon} ${pri} ${text}`
-    })
-    .join('\n')
-}
 
 export class TodoWriteTool implements Tool {
   name = 'TodoWrite'
@@ -116,19 +94,22 @@ Operations:
     },
   }
 
-  execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     if (updateLock) {
       return Promise.resolve({ content: 'Error: todo list is locked by another update', isError: true })
     }
     updateLock = true
     try {
-      return Promise.resolve(this.updateTodos(input))
+      // Hydrate from <sessionDir>/todo.json on first use in this session
+      // (resumed sessions keep their plan).
+      ensureLoaded(context.sessionDir)
+      return Promise.resolve(this.updateTodos(input, context))
     } finally {
       updateLock = false
     }
   }
 
-  private updateTodos(input: Record<string, unknown>): ToolResult {
+  private updateTodos(input: Record<string, unknown>, context: ToolContext): ToolResult {
     const todos = input.todos as TodoItem[] | undefined
 
     if (!Array.isArray(todos)) {
@@ -145,27 +126,8 @@ Operations:
       }
     }
 
-    // Update: merge by id. If id doesn't exist, add it.
-    // If todos covers ALL existing ids, treat as replace.
-    const incomingIds = new Set(todos.map(t => t.id))
-    const allExistingCovered = todoList.every(t => incomingIds.has(t.id))
-
-    if (todoList.length === 0 || allExistingCovered) {
-      // Full replace
-      todoList = todos.map(t => ({ ...t }))
-    } else {
-      // Partial update — merge by id
-      for (const updated of todos) {
-        const existing = todoList.find(t => t.id === updated.id)
-        if (existing) {
-          existing.status = updated.status
-          existing.priority = updated.priority
-          existing.content = updated.content
-        } else {
-          todoList.push({ ...updated })
-        }
-      }
-    }
+    // Merge-by-id / full-replace semantics live in the shared store
+    updateTodos(todos, context.sessionDir)
 
     const rendered = renderTodoList()
     return {

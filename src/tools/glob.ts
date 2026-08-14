@@ -8,6 +8,7 @@ import { stat } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { GLOB_DESCRIPTION } from '../prompts/tools.js'
+import { loadGitignoreIgnores } from '../utils/gitignore.js'
 
 export interface GlobInput {
   pattern: string
@@ -67,7 +68,10 @@ export class GlobTool implements Tool {
         absolute: true,
         nodir: true,
         dot: false,
-        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+        // Round 27: derive ignores from the repo's .gitignore +
+        // .git/info/exclude instead of a fixed 3-entry list — build
+        // artifacts listed in .gitignore no longer flood results.
+        ignore: loadGitignoreIgnores(cwd),
       })
 
       if (files.length === 0) {

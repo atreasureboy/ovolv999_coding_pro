@@ -31,7 +31,8 @@ import type {
   Tool,
   ToolDefinition,
 } from '../types.js'
-import { calculateUSDCost, type TokenUsage } from '../costTracker.js'
+import { calculateUSDCost, calculateUncachedUSDCost, type TokenUsage } from '../costTracker.js'
+import { recordCacheEntry } from '../../utils/cacheStats.js'
 import type { CostTracker } from '../costTracker.js'
 import type { BackgroundTaskManager } from '../backgroundTaskManager.js'
 import type { FileHistory } from '../fileHistory.js'
@@ -71,6 +72,7 @@ import type { TaskGraph } from './taskGraph.js'
 import type { TaskGraphStore } from './taskGraphStore.js'
 import { ControlMessageLog } from './internalControlMessage.js'
 import { collectDeferredToolNames } from './deferredToolsReminder.js'
+import { renderTodoPromptBlock, ensureLoaded } from '../todoStore.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
 import type { RepoStatsService } from '../repoStats.js'
 import {
@@ -277,6 +279,10 @@ export class RuntimeCoordinator {
     const effectiveParentRunId = opts?.parentRunId ?? this.deps.parentRunId
 
     eventEmitter.emit({ type: 'RUN_STARTED', userMessage })
+
+    // Round 27 (live todos): hydrate the persisted checklist for this
+    // session BEFORE the first LLM call so resumed sessions keep steering.
+    try { ensureLoaded(config.sessionDir) } catch { /* best-effort */ }
 
     // R7: SessionStart hook (best-effort, fires once at run start).
     if (config.hookRunner?.runSessionStart) {
@@ -1038,7 +1044,15 @@ export class RuntimeCoordinator {
             // so the model sees structured progress without having
             // to parse its own prior tool outputs.
             const wsBlock = this.deps.contextManager.renderWorkingStateBlock()
-            const effectivePrompt = wsBlock ? `${systemPrompt}\n\n${wsBlock}` : systemPrompt
+            // Round 27 (live todos): re-state the checklist every LLM call
+            // — this is what makes a todo list STEER the model instead of
+            // being a one-shot tool output that compaction later eats.
+            const todoBlock = renderTodoPromptBlock()
+            const effectivePrompt = wsBlock
+              ? `${systemPrompt}\n\n${wsBlock}${todoBlock ? '\n\n' + todoBlock : ''}`
+              : todoBlock
+                ? `${systemPrompt}\n\n${todoBlock}`
+                : systemPrompt
             // v0.3.1 (runtime truth contract §七): render the typed control messages
             // for this call. We pass them as a SEPARATE array; the
             // callLLM layer prepends them to the assistant-visible
@@ -2101,9 +2115,21 @@ export class RuntimeCoordinator {
     if (!usage) return // P0-3: null usage → no zero-cost bookkeeping
     const durationMs = Date.now() - callStartMs
     this.deps.costTracker.addUsage(model, usage, durationMs)
+    // Prompt-cache observability (Round 27): /cache hit-rate + savings.
+    if ((usage.cacheReadTokens ?? 0) > 0 || (usage.cacheWriteTokens ?? 0) > 0) {
+      try {
+        const saved = Math.max(
+          0,
+          calculateUncachedUSDCost(model, usage) - calculateUSDCost(model, usage),
+        )
+        recordCacheEntry(model, (usage.cacheReadTokens ?? 0) > 0, usage, saved)
+      } catch { /* best-effort stats */ }
+    }
     this.deps.eventLog?.append('llm_api', 'coordinator', {
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
+      ...(usage.cacheReadTokens ? { cache_read_tokens: usage.cacheReadTokens } : {}),
+      ...(usage.cacheWriteTokens ? { cache_write_tokens: usage.cacheWriteTokens } : {}),
       duration_ms: durationMs,
       model,
     })

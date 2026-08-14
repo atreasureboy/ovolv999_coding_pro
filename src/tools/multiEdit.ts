@@ -118,7 +118,7 @@ export class MultiEditTool implements Tool {
 
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolResult> {
     const edits = (input as Partial<MultiEditInput>).edits
     if (!Array.isArray(edits) || edits.length === 0) {
@@ -142,6 +142,18 @@ export class MultiEditTool implements Tool {
       }
 
       // Phase 2: apply all edits sequentially
+      // Round 27: track each distinct file ONCE in FileHistory before the
+      // first mutation — previously MultiEdit bypassed trackEdit entirely
+      // (AtomicTransaction rollback only), so /rewind + /undo never saw
+      // these edits. Mirrors fileEdit.ts:253 / fileWrite.ts:139.
+      const trackedFiles = new Set<string>()
+      for (const edit of edits) {
+        const p = String(edit.file_path)
+        if (!trackedFiles.has(p)) {
+          trackedFiles.add(p)
+          try { context.fileHistory?.trackEdit(p) } catch { /* best-effort history */ }
+        }
+      }
       for (let i = 0; i < edits.length; i++) {
         const edit = edits[i]
         const result = await this.applyEdit(edit, txn, i)

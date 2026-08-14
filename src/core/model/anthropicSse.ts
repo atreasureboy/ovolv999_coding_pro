@@ -22,7 +22,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type OpenAI from 'openai'
 
 export type AnthropicEvent =
-  | { type: 'message_start'; message: { id: string; type: string; role: string; content: unknown[]; model: string; stop_reason: string | null; usage?: { input_tokens: number; output_tokens: number } } }
+  | { type: 'message_start'; message: { id: string; type: string; role: string; content: unknown[]; model: string; stop_reason: string | null; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }
   | { type: 'content_block_start'; index: number; content_block: { type: string; id?: string; name?: string; input?: unknown; text?: string } }
   | { type: 'content_block_delta'; index: number; delta: { type: 'text_delta'; text: string } | { type: 'input_json_delta'; partial_json: string } | { type: 'thinking_delta'; thinking: string } | { type: 'signature_delta'; signature: string } }
   | { type: 'content_block_stop'; index: number }
@@ -35,6 +35,9 @@ export interface AnthropicProviderOptions {
   anthropicBeta?: string[]
   cacheSystem?: boolean
   cacheTools?: boolean
+  /** Stamp a cache breakpoint on the last conversation message — caches
+   *  the growing prefix so each turn re-uses the previous context. */
+  cacheMessages?: boolean
   thinkingBudget?: number
 }
 
@@ -71,13 +74,38 @@ export function buildAnthropicRequest(input: {
     ? [{ type: 'text', text: input.systemPrompt, cache_control: { type: 'ephemeral' } } as Anthropic.TextBlockParam]
     : input.systemPrompt
 
+  // Prompt caching, breakpoint 3/3: the LAST message. Anthropic caches
+  // the longest previously-seen prefix that ends at a breakpoint —
+  // stamping the final message makes each turn reuse the entire prior
+  // conversation (system + tools carry breakpoints 1 and 2 above).
+  // Max 4 breakpoints per request; we use 3.
+  const messages: Anthropic.MessageParam[] = input.messages.map((m, idx) => {
+    const isLast = idx === input.messages.length - 1
+    if (!isLast || !input.providerOptions?.cacheMessages) {
+      return { role: m.role, content: m.content as Anthropic.MessageParam['content'] }
+    }
+    if (typeof m.content === 'string') {
+      return {
+        role: m.role,
+        content: [{
+          type: 'text',
+          text: m.content,
+          cache_control: { type: 'ephemeral' },
+        } as unknown as Anthropic.ContentBlock],
+      }
+    }
+    const blocks = [...m.content] as unknown as Anthropic.ContentBlock[]
+    if (blocks.length > 0) {
+      const last = blocks[blocks.length - 1] as { cache_control?: unknown }
+      last.cache_control = { type: 'ephemeral' }
+    }
+    return { role: m.role, content: blocks }
+  })
+
   const params: Anthropic.MessageCreateParamsNonStreaming = {
     model: input.model,
     system: systemBlocks,
-    messages: input.messages.map((m) => ({
-      role: m.role,
-      content: m.content as Anthropic.MessageParam['content'],
-    })),
+    messages,
     tools: anthropicTools,
     max_tokens: input.maxTokens,
     temperature: input.temperature,
@@ -116,6 +144,8 @@ export class AnthropicChunkTranslator {
   private readonly modelId: string
   private inputTokens = 0
   private outputTokens = 0
+  private cacheReadTokens = 0
+  private cacheWriteTokens = 0
   private finishReason: string | null = null
   private readonly created: number
 
@@ -129,6 +159,8 @@ export class AnthropicChunkTranslator {
     switch (event.type) {
       case 'message_start': {
         this.inputTokens = event.message.usage?.input_tokens ?? 0
+        this.cacheReadTokens = event.message.usage?.cache_read_input_tokens ?? 0
+        this.cacheWriteTokens = event.message.usage?.cache_creation_input_tokens ?? 0
         if (event.message.usage?.output_tokens) {
           this.outputTokens = event.message.usage.output_tokens
         }
@@ -194,19 +226,28 @@ export class AnthropicChunkTranslator {
         break
       }
       case 'message_stop': {
+        // OpenAI-style usage normalization: prompt_tokens is the TOTAL
+        // input (uncached + cache-read + cache-write) so downstream
+        // cost math can uniformly do (input − cached)×full + cached×rate.
+        // cached_tokens carries the cache-READ portion (the OpenAI
+        // convention); cache-write rides along as a non-standard extra
+        // that streamConsumer picks up defensively.
+        const totalInput = this.inputTokens + this.cacheReadTokens + this.cacheWriteTokens
         out.push(this.makeChunk({
           choices: [{
             index: 0,
             delta: {},
             finish_reason: this.mapFinishReason(this.finishReason),
           }],
-          usage: this.outputTokens > 0
+          usage: (this.outputTokens > 0
             ? {
-                prompt_tokens: this.inputTokens,
+                prompt_tokens: totalInput,
                 completion_tokens: this.outputTokens,
-                total_tokens: this.inputTokens + this.outputTokens,
+                total_tokens: totalInput + this.outputTokens,
+                ...(this.cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: this.cacheReadTokens } } : {}),
+                ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
               }
-            : undefined,
+            : undefined) as unknown as { prompt_tokens: number; completion_tokens: number; total_tokens: number } & Record<string, unknown>,
         }))
         break
       }
@@ -219,7 +260,7 @@ export class AnthropicChunkTranslator {
 
   private makeChunk(payload: {
     choices: Array<{ index: number; delta: Record<string, unknown>; finish_reason?: string }>
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } & Record<string, unknown>
   }): OpenAI.Chat.ChatCompletionChunk {
     const chunk: OpenAI.Chat.ChatCompletionChunk = {
       id: `chatcmpl-${Date.now().toString(36)}`,
@@ -234,11 +275,9 @@ export class AnthropicChunkTranslator {
       })),
     }
     if (payload.usage) {
-      chunk.usage = {
-        prompt_tokens: payload.usage.prompt_tokens,
-        completion_tokens: payload.usage.completion_tokens,
-        total_tokens: payload.usage.total_tokens,
-      }
+      // Pass through the WHOLE usage object (cache fields ride along as
+      // extra keys — streamConsumer reads them defensively).
+      chunk.usage = payload.usage as unknown as OpenAI.Chat.ChatCompletionChunk['usage']
     }
     return chunk
   }
@@ -263,6 +302,7 @@ export class AnthropicChunkTranslator {
   finalizeWithUsage(usage: { inputTokens?: number; outputTokens?: number } | undefined): OpenAI.Chat.ChatCompletionChunk {
     const inputTokens = usage?.inputTokens ?? this.inputTokens
     const outputTokens = usage?.outputTokens ?? this.outputTokens
+    const totalInput = inputTokens + this.cacheReadTokens + this.cacheWriteTokens
     const chunk = this.makeChunk({
       choices: [{
         index: 0,
@@ -270,10 +310,12 @@ export class AnthropicChunkTranslator {
         finish_reason: this.mapFinishReason(this.finishReason ?? 'end_turn'),
       }],
       usage: {
-        prompt_tokens: inputTokens,
+        prompt_tokens: totalInput,
         completion_tokens: outputTokens,
-        total_tokens: inputTokens + outputTokens,
-      },
+        total_tokens: totalInput + outputTokens,
+        ...(this.cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: this.cacheReadTokens } } : {}),
+        ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
+      } as unknown as { prompt_tokens: number; completion_tokens: number; total_tokens: number } & Record<string, unknown>,
     })
     this.chunks.push(chunk)
     return chunk

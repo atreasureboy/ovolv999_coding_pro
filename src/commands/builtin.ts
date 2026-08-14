@@ -731,20 +731,23 @@ registerCommand({
   },
 })
 
-// ── /rewind — file history ─────────────────────────────────────────────────
+// ── /rewind — versioned file restore ───────────────────────────────────────
 //
-// Audit note: the previous version advertised `/rewind [file_path] [version]`
-// and hinted that you could "restoreVersion", but the implementation only
-// returns a summary — there is no restoreVersion call wired through the
-// engine, and exposing the file-history mutation API to a slash command
-// would require a real versioned restore. Until that lands, we tell the
-// truth: this command is a *list*, not a *restore*.
+// Round 27: real restore, not just a listing (the previous version's own
+// audit note admitted restore was never wired). Forms:
+//   /rewind                      → list edited files + version counts
+//   /rewind <file>               → list that file's versions
+//   /rewind <file> <n>           → restore file to version n
+//   /rewind <file> original      → restore file to its pre-first-edit state
+//   /rewind all                  → restore EVERY edited file to original
+// Version 0 = the file as it was before this session's first edit; higher
+// versions are progressively LATER snapshots (restoreVersion rewinds).
 
 registerCommand({
   name: 'rewind',
-  description: 'List file edits in this session (read-only — restore is not supported)',
-  usage: '/rewind',
-  handler: (_args, ctx) => {
+  description: 'Rewind files to earlier versions. Usage: /rewind [<file>|all] [<version>|original]',
+  usage: '/rewind [<file>] [<n>|original] | /rewind all',
+  handler: (args, ctx) => {
     const fh = ctx.engine.getFileHistory()
     if (!fh) {
       return text('File history not available (no session directory configured).')
@@ -753,7 +756,65 @@ registerCommand({
     if (files.length === 0) {
       return text('No file edits tracked in this session.')
     }
-    return text(fh.getSummary() + '\n\nUse /undo to restore a file to its pre-edit state.')
+
+    const parts = args.trim().split(/\s+/).filter(Boolean)
+
+    if (parts.length === 0) {
+      const lines = ['Edited files this session:', '']
+      for (const f of files) {
+        const versions = fh.getVersions(f.path)
+        lines.push(`  ${f.path}  (${versions.length} version${versions.length === 1 ? '' : 's'})`)
+      }
+      lines.push('', 'Usage: /rewind <file> to list versions, /rewind <file> <n> to restore, /rewind all to restore everything to pre-session state.')
+      return text(lines.join('\n'))
+    }
+
+    if (parts[0] === 'all') {
+      let restored = 0
+      const failures: string[] = []
+      for (const f of files) {
+        if (fh.restoreOriginal(f.path)) restored++
+        else failures.push(f.path)
+      }
+      let out = `Restored ${restored}/${files.length} file(s) to pre-session state.`
+      if (failures.length > 0) out += `\nFailed: ${failures.join(', ')}`
+      out += '\nNote: conversation history is unaffected — only files.'
+      return text(out)
+    }
+
+    const target = parts[0]
+    const file = files.find(f => f.path === target || f.path.endsWith('/' + target))
+    if (!file) {
+      return text(`No edits tracked for: ${target}\nEdited files:\n${files.map(f => '  ' + f.path).join('\n')}`)
+    }
+
+    const versions = fh.getVersions(file.path)
+    if (parts.length === 1) {
+      const lines = [`Versions of ${file.path}:`, '']
+      for (const v of versions) {
+        const when = v.timestamp > 0 ? new Date(v.timestamp).toLocaleTimeString() : 'unknown time'
+        lines.push(`  ${v.version}: ${when}  (${v.size} bytes)${v.version === 0 ? '  ← pre-session original' : ''}`)
+      }
+      lines.push('', `Restore: /rewind ${target} <n>  (higher n = more recent snapshot)`)
+      return text(lines.join('\n'))
+    }
+
+    const versionArg = parts[1]
+    if (versionArg === 'original') {
+      const ok = fh.restoreOriginal(file.path)
+      return text(ok
+        ? `Restored ${file.path} to its pre-session original.`
+        : `Failed to restore ${file.path} (backup missing or unwritable).`)
+    }
+
+    const n = parseInt(versionArg, 10)
+    if (Number.isNaN(n) || n < 0 || n >= versions.length) {
+      return text(`Invalid version "${versionArg}" — valid range: 0-${versions.length - 1}.`)
+    }
+    const ok = fh.restoreVersion(file.path, n)
+    return text(ok
+      ? `Restored ${file.path} to version ${n} (${new Date(versions[n].timestamp).toLocaleTimeString()}).`
+      : `Failed to restore ${file.path} to version ${n}.`)
   },
 })
 

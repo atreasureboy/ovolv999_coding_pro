@@ -521,6 +521,9 @@ describe('CLI #9: /doctor MiniMax + /rewind honesty', () => {
       getFileHistory: () => ({
         getEditedFiles: () => [{ path: 'foo.ts' }],
         getSummary: () => 'foo.ts: 3 versions',
+        getVersions: (_p: string) => [{ version: 0, timestamp: 1, size: 10, backupPath: '/b/0' }],
+        restoreOriginal: (_p: string) => true,
+        restoreVersion: (_p: string, _n: number) => true,
       }),
       getBackgroundTaskManager: () => ({ listTasks: () => [] }),
     } as unknown as SlashCommandContext['engine']
@@ -546,19 +549,13 @@ describe('CLI #9: /doctor MiniMax + /rewind honesty', () => {
     expect(rewind).not.toBeNull()
     expect(rewind?.type).toBe('text')
     if (rewind?.type === 'text') {
-      // Must NOT advertise restoreVersion. The "not supported" message
-      // is appended AFTER the file-history summary; with our mock it
-      // falls through the "no edits" path which also says not supported.
-      // We just verify the source-of-truth claim: it must never say
-      // "restoreVersion" (the old misleading usage).
-      expect(rewind.value).not.toMatch(/restoreVersion/)
-      // And it must mention restore is unsupported OR point to /undo
-      // (which actually supports restoration).
-      const isNoEdits = /No file edits tracked/.test(rewind.value)
-      const isUnsupported = /not supported/i.test(rewind.value)
-      const pointsToUndo = /\/undo/.test(rewind.value)
-      // The rewind message must match at least one expected pattern.
-      expect([isNoEdits, isUnsupported, pointsToUndo]).toContain(true)
+      // Round 27: /rewind is a REAL restore now — the bare invocation
+      // lists edited files with version counts and documents the restore
+      // forms. (The old contract — "honestly admit restore unsupported" —
+      // was superseded by wiring restoreVersion through.)
+      expect(rewind.value).toMatch(/foo\.ts/)
+      expect(rewind.value).toMatch(/1 version/)
+      expect(rewind.value).toMatch(/\/rewind <file>/)
     }
   })
 })

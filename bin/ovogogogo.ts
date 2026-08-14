@@ -1332,9 +1332,20 @@ async function runRepl(
     }
 
     // ── Regular task ──────────────────────────────────────────
+    // Round 27 (@-mention parity): the Ink frontend expands @file.path
+    // references into inline <file_content> blocks — the classic REPL
+    // silently passed them through as literal text. Same expansion here
+    // (text-only; classic prompts don't carry images).
+    let expandedPrompt = trimmed
+    try {
+      const { expandAtMentions } = await import('../src/ui/ink/expandAtMentions.js')
+      const { text: expanded } = expandAtMentions(trimmed, cwd)
+      expandedPrompt = expanded
+    } catch { /* best-effort — raw prompt on failure */ }
+
     updateProgressLog(cwd, 'running', trimmed.slice(0, 100))
 
-    await runTask(trimmed, [...history], Date.now())
+    await runTask(expandedPrompt, [...history], Date.now())
     updateProgressLog(cwd, 'idle', 'waiting for next task')
   }
 

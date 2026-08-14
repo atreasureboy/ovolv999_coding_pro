@@ -52,7 +52,21 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   async stream(req: ProviderStreamRequest): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>> {
-    const providerOptions = (req as ProviderStreamRequest & { providerOptions?: AnthropicProviderOptions }).providerOptions
+    const callerOptions = (req as ProviderStreamRequest & { providerOptions?: AnthropicProviderOptions }).providerOptions
+    // Prompt caching ON by default (Round 27): system + tools + last
+    // message breakpoints. Anthropic bills cache reads at ~10% of the
+    // input rate — repeat context that previously cost full price every
+    // turn now hits the cache. Env kill-switch for A/B measurement:
+    //   OVOLV999_NO_PROMPT_CACHE=1
+    // Callers can still override any single flag via providerOptions.
+    const providerOptions: AnthropicProviderOptions = process.env.OVOLV999_NO_PROMPT_CACHE === '1'
+      ? { ...callerOptions }
+      : {
+          cacheSystem: true,
+          cacheTools: true,
+          cacheMessages: true,
+          ...callerOptions,
+        }
     const maxTokens = req.maxOutputTokens ?? this.defaultMaxTokens
 
     const { system, messages } = convertOpenAIMessages(req.messages, req.systemPrompt)

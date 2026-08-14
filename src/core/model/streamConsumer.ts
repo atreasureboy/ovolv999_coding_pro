@@ -37,6 +37,13 @@ export interface StreamResult {
   usage: {
     inputTokens: number
     outputTokens: number
+    /** Input tokens served from the provider prompt cache (Anthropic
+     *  cache_read_input_tokens / OpenAI prompt_tokens_details.cached_tokens).
+     *  inputTokens is the TOTAL including these. */
+    cacheReadTokens?: number
+    /** Tokens written to the provider cache this call (Anthropic
+     *  cache_creation_input_tokens; billed at a premium). */
+    cacheWriteTokens?: number
   } | null
 }
 
@@ -95,9 +102,23 @@ export class StreamConsumer {
         lastChunkTime = Date.now()
 
         if (chunk.usage) {
+          // Prompt-cache accounting (Round 27): cached_tokens (OpenAI
+          // convention, also emitted by our Anthropic translator) +
+          // cache_creation_input_tokens (Anthropic write-side, non-standard
+          // extra). Read defensively — OpenAI-compatible backends may omit
+          // the details object entirely.
+          const u = chunk.usage as unknown as {
+            prompt_tokens?: number
+            completion_tokens?: number
+            prompt_tokens_details?: { cached_tokens?: number }
+            cache_creation_input_tokens?: number
+          }
+          const details = u.prompt_tokens_details
           usage = {
-            inputTokens: chunk.usage.prompt_tokens,
-            outputTokens: chunk.usage.completion_tokens,
+            inputTokens: u.prompt_tokens ?? 0,
+            outputTokens: u.completion_tokens ?? 0,
+            ...(details?.cached_tokens ? { cacheReadTokens: details.cached_tokens } : {}),
+            ...(u.cache_creation_input_tokens ? { cacheWriteTokens: u.cache_creation_input_tokens } : {}),
           }
         }
 

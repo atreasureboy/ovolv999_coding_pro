@@ -27,6 +27,13 @@ import { getModelInfo, MODELS } from './providers.js'
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number
+  /** Cache-read rate (USD/1M). Absent → default to 10% of input (the
+   *  standard Anthropic discount; OpenAI auto-caching is ~50% so this
+   *  under-credits savings there — conservative, never over-charges). */
+  cacheReadPer1M?: number
+  /** Cache-write rate (USD/1M). Absent → default to 125% of input
+   *  (Anthropic's cache-creation premium). */
+  cacheWritePer1M?: number
 }
 
 /**
@@ -62,6 +69,9 @@ export function getModelPricing(model: string): ModelPricing | null {
 export interface TokenUsage {
   inputTokens: number
   outputTokens: number
+  /** Total input INCLUDES these (see StreamResult). */
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
 }
 
 export interface ModelUsage {
@@ -80,6 +90,25 @@ export interface ModelUsage {
  * sessions cannot pollute one another's cost summary.
  */
 export function calculateUSDCost(model: string, usage: TokenUsage): number {
+  const pricing = getModelPricing(model)
+  if (!pricing) return 0
+  // inputTokens is the TOTAL (uncached + cache-read + cache-write). Split
+  // it so each bucket bills exactly once: cached reads at the cache-read
+  // rate, cache writes at the creation premium, the remainder at full.
+  const cacheRead = usage.cacheReadTokens ?? 0
+  const cacheWrite = usage.cacheWriteTokens ?? 0
+  const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
+  return (
+    (uncached / 1_000_000) * pricing.inputPer1M +
+    (cacheRead / 1_000_000) * (pricing.cacheReadPer1M ?? pricing.inputPer1M * 0.1) +
+    (cacheWrite / 1_000_000) * (pricing.cacheWritePer1M ?? pricing.inputPer1M * 1.25) +
+    (usage.outputTokens / 1_000_000) * pricing.outputPer1M
+  )
+}
+
+/** What this call WOULD have cost without prompt caching (full input rate
+ *  on every token) — the delta vs calculateUSDCost is the cache savings. */
+export function calculateUncachedUSDCost(model: string, usage: TokenUsage): number {
   const pricing = getModelPricing(model)
   if (!pricing) return 0
   return (
@@ -131,6 +160,9 @@ export class CostTracker {
   private totalCostUSD = 0
   private totalInputTokens = 0
   private totalOutputTokens = 0
+  private totalCacheReadTokens = 0
+  private totalCacheWriteTokens = 0
+  private totalCacheSavedUSD = 0
   private totalAPICalls = 0
   private totalAPIDurationMs = 0
   private modelUsage = new Map<string, ModelUsage>()
@@ -142,15 +174,16 @@ export class CostTracker {
     const pricing = getModelPricing(model)
     let cost = 0
     if (pricing) {
-      cost =
-        (usage.inputTokens / 1_000_000) * pricing.inputPer1M +
-        (usage.outputTokens / 1_000_000) * pricing.outputPer1M
+      cost = calculateUSDCost(model, usage)
+      this.totalCacheSavedUSD += Math.max(0, calculateUncachedUSDCost(model, usage) - cost)
     } else {
       this._hasUnknownModel = true
     }
     this.totalCostUSD += cost
     this.totalInputTokens += usage.inputTokens
     this.totalOutputTokens += usage.outputTokens
+    this.totalCacheReadTokens += usage.cacheReadTokens ?? 0
+    this.totalCacheWriteTokens += usage.cacheWriteTokens ?? 0
     this.totalAPICalls++
     if (durationMs !== undefined) this.totalAPIDurationMs += durationMs
 
@@ -199,10 +232,23 @@ export class CostTracker {
     this.totalCostUSD = 0
     this.totalInputTokens = 0
     this.totalOutputTokens = 0
+    this.totalCacheReadTokens = 0
+    this.totalCacheWriteTokens = 0
+    this.totalCacheSavedUSD = 0
     this.totalAPICalls = 0
     this.totalAPIDurationMs = 0
     this.modelUsage.clear()
     this._hasUnknownModel = false
+  }
+
+  /** Tokens served from the provider prompt cache this session. */
+  getTotalCacheReadTokens(): number {
+    return this.totalCacheReadTokens
+  }
+
+  /** Estimated USD saved by prompt caching this session. */
+  getCacheSavedUSD(): number {
+    return this.totalCacheSavedUSD
   }
 
   /**
@@ -219,8 +265,13 @@ export class CostTracker {
     const lines: string[] = [
       `Total cost:           ${costDisplay}`,
       `Total tokens:         ${formatNumber(this.totalInputTokens)} input, ${formatNumber(this.totalOutputTokens)} output`,
-      `Total API calls:      ${this.totalAPICalls}`,
     ]
+    if (this.totalCacheReadTokens > 0 || this.totalCacheWriteTokens > 0) {
+      lines.push(
+        `Prompt cache:         ${formatNumber(this.totalCacheReadTokens)} read, ${formatNumber(this.totalCacheWriteTokens)} written (saved ~${formatCost(this.totalCacheSavedUSD)})`,
+      )
+    }
+    lines.push(`Total API calls:      ${this.totalAPICalls}`)
 
     if (this.totalAPIDurationMs > 0) {
       lines.push(`Total API duration:   ${formatDuration(this.totalAPIDurationMs)}`)
