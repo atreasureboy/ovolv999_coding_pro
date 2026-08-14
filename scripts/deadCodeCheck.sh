@@ -49,7 +49,7 @@ while IFS= read -r -d '' file; do
   # a DIFFERENT production file (src/ or bin/). Path-agnostic because the
   # same module is reached via ./x.js, ../core/x.js, ../src/core/x.js,
   # require('../core/x.js') and import('../core/x.js').
-  refs=$(grep -rlE "(from +['\"][^'\"]*/${base}(\.js)?['\"]|require\(['\"][^'\"]*/${base}(\.js)?['\"]\)|import\(['\"][^'\"]*/${base}(\.js)?['\"]\))" \
+  refs=$(grep -rlE "(from +['\"][^'\"]*/${base}(\.js)?['\"]|require\(['\"][^'\"]*/${base}(\.js)?['\"]\)|import\(['\"][^'\"]*/${base}(\.js)?['\"]\)|^import +['\"][^'\"]*/${base}(\.js)?['\"])" \
     src/ bin/ --include='*.ts' --include='*.tsx' 2>/dev/null | grep -v -F "$file" || true)
   if [ -z "$refs" ]; then
     echo "  WARNING: $file has zero production references"

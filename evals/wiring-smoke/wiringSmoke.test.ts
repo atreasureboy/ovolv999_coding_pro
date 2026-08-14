@@ -129,8 +129,10 @@ describe('wiring-smoke (eval:wiring)', () => {
   })
 
   it('B5: /progress command is registered', () => {
+    // Round 29: builtin.ts is a thin barrel; the command registrations
+    // live in the cmd/ groups. /progress resolves to the registry entry.
     const src = fs.readFileSync(
-      path.resolve(__dirname, '../../src/commands/builtin.ts'),
+      path.resolve(__dirname, '../../src/commands/cmd/group01.ts'),
       'utf8',
     )
     expect(src).toMatch(/name: 'progress'/)

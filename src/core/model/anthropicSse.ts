@@ -239,7 +239,7 @@ export class AnthropicChunkTranslator {
             delta: {},
             finish_reason: this.mapFinishReason(this.finishReason),
           }],
-          usage: (this.outputTokens > 0
+          usage: this.outputTokens > 0
             ? {
                 prompt_tokens: totalInput,
                 completion_tokens: this.outputTokens,
@@ -247,7 +247,7 @@ export class AnthropicChunkTranslator {
                 ...(this.cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: this.cacheReadTokens } } : {}),
                 ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
               }
-            : undefined) as unknown as { prompt_tokens: number; completion_tokens: number; total_tokens: number } & Record<string, unknown>,
+            : undefined,
         }))
         break
       }
@@ -277,7 +277,7 @@ export class AnthropicChunkTranslator {
     if (payload.usage) {
       // Pass through the WHOLE usage object (cache fields ride along as
       // extra keys — streamConsumer reads them defensively).
-      chunk.usage = payload.usage as unknown as OpenAI.Chat.ChatCompletionChunk['usage']
+      chunk.usage = payload.usage
     }
     return chunk
   }
@@ -315,7 +315,7 @@ export class AnthropicChunkTranslator {
         total_tokens: totalInput + outputTokens,
         ...(this.cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: this.cacheReadTokens } } : {}),
         ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
-      } as unknown as { prompt_tokens: number; completion_tokens: number; total_tokens: number } & Record<string, unknown>,
+      },
     })
     this.chunks.push(chunk)
     return chunk
