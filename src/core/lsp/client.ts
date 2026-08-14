@@ -19,7 +19,7 @@
  *   - pathToFileUri / fileUriToPath
  */
 
-import { spawn, execSync, type ChildProcess } from 'node:child_process'
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 import { resolve } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -548,7 +548,8 @@ export function detectServer(languageId: LanguageId = 'typescript'): ServerSpec 
 
   for (const spec of specs) {
     try {
-      execSync(`which ${spec.command} 2>/dev/null`, { stdio: 'pipe', timeout: 2000 })
+      // arg-array: spec.command comes from config — no shell interpolation
+      execFileSync('which', [spec.command], { stdio: 'pipe', timeout: 2000 })
       return spec
     } catch { /* not found */ }
   }

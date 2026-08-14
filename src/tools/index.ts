@@ -3,7 +3,7 @@
  */
 
 import type { Tool, EngineConfig, AgentChildEngineFactory, ToolMetadata } from '../core/types.js'
-import type { RendererInterface } from '../ui/renderer.js'
+import type { RendererInterface } from '../core/types.js'
 import type { ExecutionRunRegistry } from '../core/executionRun.js'
 import type { RunScopedEvidenceResolver } from './taskGraphResolver.js'
 import { BashTool } from './bash.js'
@@ -97,6 +97,15 @@ export interface AgentWiring {
   parentConfig?: EngineConfig
   parentRenderer?: RendererInterface
   /**
+   * Round 26 (tools→ui decoupling): file-renderer factory injected by the
+   * composition root. AgentTool previously imported the concrete UI
+   * `Renderer` class directly (`Renderer.forFile`), making the whole UI
+   * module graph a hard runtime dependency of headless engine boots.
+   * When omitted, pane slots degrade to the parent renderer (no
+   * behavioral change for embeddings that opt out of the UI).
+   */
+  createFileRenderer?: (path: string) => RendererInterface
+  /**
    * Optional ExecutionRun registry (runtime architecture contract §三). When supplied,
    * AgentTool and ClaudeCodeTool create child runs for every
    * delegation so observers can track them uniformly. When omitted,
@@ -124,6 +133,7 @@ export function createTools(
         factory: agentWiring.factory,
         parentConfig: agentWiring.parentConfig,
         parentRenderer: agentWiring.parentRenderer,
+        createFileRenderer: agentWiring.createFileRenderer,
         runRegistry: agentWiring.runRegistry,
         parentRunId: agentWiring.parentRunId,
       })

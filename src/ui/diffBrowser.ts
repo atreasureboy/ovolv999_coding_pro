@@ -12,7 +12,7 @@
  *   formatDiffStat(diff)        // histogram
  */
 
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -197,8 +197,8 @@ function inferStatus(file: DiffFile): FileStatus {
  */
 export function getGitDiff(cwd: string, staged = false): string {
   try {
-    const cmd = staged ? 'git diff --cached' : 'git diff'
-    return execSync(cmd, {
+    const args = staged ? ['diff', '--cached'] : ['diff']
+    return execFileSync('git', args, {
       cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -212,7 +212,7 @@ export function getGitDiff(cwd: string, staged = false): string {
  */
 export function getFullDiff(cwd: string): string {
   try {
-    return execSync('git diff HEAD', {
+    return execFileSync('git', ['diff', 'HEAD'], {
       cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -226,7 +226,9 @@ export function getFullDiff(cwd: string): string {
  */
 export function getFileDiff(cwd: string, filePath: string): string {
   try {
-    return execSync(`git diff -- "${filePath}"`, {
+    // arg-array (no shell): a file path containing `$()` / backticks must
+    // never expand inside a shell string
+    return execFileSync('git', ['diff', '--', filePath], {
       cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 10 * 1024 * 1024,
     })

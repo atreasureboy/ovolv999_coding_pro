@@ -31,12 +31,13 @@ import { Renderer } from '../ui/renderer.js'
 import type { UIStore } from '../ui/ink/store.js'
 import type { InkRenderer } from '../ui/ink/inkRenderer.js'
 import type { SharedPrompt } from '../ui/input.js'
-import type { EngineConfig, OpenAIMessage, AgentChildEngineFactory } from '../core/types.js'
+import type { EngineConfig, OpenAIMessage, AgentChildEngineFactory, RendererInterface } from '../core/types.js'
 import { loadSettings } from '../config/settings.js'
 import type { OvogoSettings } from '../config/settings.js'
 import { loadProjectConfig } from '../config/projectConfig.js'
 import type { ProjectConfig } from '../config/projectConfig.js'
-import { HookRunner, NoopHookRunner } from '../config/hooks.js'
+import { DefaultHookRunner } from '../core/hooks/defaultRunner.js'
+import type { IHookRunner } from '../core/types.js'
 import type { Skill } from '../skills/loader.js'
 import { formatSkillIndex } from '../skills/loader.js'
 import { loadOvogoMd } from '../config/ovogomd.js'
@@ -56,7 +57,7 @@ import { McpModule } from '../modules/mcp.js'
 import { detectProjectContext, formatProjectContext } from '../config/projectContext.js'
 import { createLoadSkillTool } from '../tools/loadSkill.js'
 import { createTerminalAskUserHandler } from '../tools/askUser.js'
-import { tmuxLayout } from '../ui/tmuxLayout.js'
+import { tmuxLayout } from '../core/tmuxLayout.js'
 import { PermissionManager, resolvePermissionMode } from '../core/permissionSystem.js'
 import { createSessionDir } from '../core/sessionManager.js'
 
@@ -104,7 +105,7 @@ export interface AssembledEngine {
   inkRenderer?: InkRenderer
   sessionDir: string
   resumedHistory: OpenAIMessage[]
-  hookRunner: HookRunner | NoopHookRunner
+  hookRunner: IHookRunner
   settings: OvogoSettings
   projectConfig: ProjectConfig | null
   semanticMemory: SemanticMemory
@@ -137,15 +138,22 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   if (projectConfig && !quiet) {
     renderer.info(`config      project settings loaded`)
   }
-  const hookRunner = settings.hooks
-    ? new HookRunner(settings.hooks, { sink: { warn: (m) => renderer.warn(m) } })
-    : new NoopHookRunner()
+  // Hook consolidation (Round 26): ONE runner — DefaultHookRunner, the
+  // Claude-Code-compatible JSON protocol implementation. Before this,
+  // the REPL path wired the legacy flat-schema HookRunner which did NOT
+  // implement runPreToolUse/runSessionStart/runStop/runPreCompact — so
+  // CC-schema hooks and hook permission decisions silently never fired
+  // on the main path (they only worked via the ACP server). settings.hooks
+  // is now normalized to the CC schema, so both config styles work.
+  const hookRunner = new DefaultHookRunner({
+    cwd,
+    ...(settings.hooks ? { configOverride: settings.hooks } : {}),
+  }) as IHookRunner
 
-  const hookTypes = ['PreToolCall', 'PostToolCall', 'UserPromptSubmit', 'OnError', 'OnComplete', 'OnContextOverflow'] as const
-  const hasHooks = hookTypes.some(t => (settings.hooks?.[t]?.length ?? 0) > 0)
-  if (hasHooks && !quiet) {
-    const count = hookTypes.reduce((sum, t) => sum + (settings.hooks?.[t]?.length ?? 0), 0)
-    renderer.info(`hooks       ${count} loaded`)
+  if (!quiet && settings.hooks) {
+    const hookCount = (Object.values(settings.hooks) as unknown as Array<{ length?: number } | undefined>)
+      .reduce((sum, matchers) => sum + (matchers?.length ?? 0), 0)
+    if (hookCount > 0) renderer.info(`hooks       ${hookCount} loaded`)
   }
 
   // Show loaded skills (project/global only, not builtins)
@@ -290,6 +298,12 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   const agentFactory: AgentChildEngineFactory = (childConfig, childRenderer) =>
     new ExecutionEngine(childConfig, childRenderer)
 
+  // Round 26 (tools→ui decoupling): file-renderer factory for sub-agent
+  // tmux pane logs, injected here at the composition root so the tools
+  // layer never imports the concrete UI Renderer class.
+  const createFileRenderer = (path: string): RendererInterface =>
+    Renderer.forFile(path)
+
   // ── Ink UI mode: create UIStore early so config callbacks can use it ──────
   let uiStore: UIStore | undefined
   let inkRendererInstance: InkRenderer | undefined
@@ -336,6 +350,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
         ? ['memory', 'critic', 'workspace', 'mcp']
         : ['memory', 'critic', 'workspace']),
     agentFactory,
+    createFileRenderer,
     askUserQuestion: createTerminalAskUserHandler({
       // The handler reads `activePrompt` lazily (it can be null before
       // the REPL has wired up its readline) and falls back to
@@ -415,7 +430,37 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
            }
            return { approved: result.approved, feedback: result.feedback }
         }
-      : undefined,
+      : (opts.getActivePrompt?.()?.isTTY ?? false)
+        // Round 26 re-audit (D6): the classic --classic REPL is
+        // interactive — ask via the shared readline instead of hitting
+        // the fail-closed no-handler path. Truly headless runs (pipe
+        // mode, sub-agents) still fail closed as intended.
+        ? async (toolName, input, riskLevel) => {
+            if (resolvedPermissionMode === 'dontAsk') {
+              return { approved: true, feedback: 'auto-approved (dontAsk mode)' }
+            }
+            const activePrompt = opts.getActivePrompt()
+            if (!activePrompt) {
+              return { approved: false, feedback: 'no prompt available (non-interactive)' }
+            }
+            const preview = toolName === 'Bash' && typeof input.command === 'string'
+              ? input.command
+              : JSON.stringify(input).slice(0, 100)
+            interactionStream.write(`\n\x1b[93mpermission needed (${riskLevel}): ${toolName}\x1b[0m\n`)
+            interactionStream.write(`  ${preview}\n`)
+            interactionStream.write('\x1b[93mApprove? (y/n):\x1b[0m ')
+            const { text: answer, eof } = await activePrompt.readLine('')
+            if (eof) {
+              interactionStream.write('\n')
+              return { approved: false, feedback: 'EOF at approval prompt' }
+            }
+            const approved = answer.trim().toLowerCase().startsWith('y')
+            if (approved) {
+              permissionManager.addRule({ toolName, ruleContent: '*', behavior: 'allow', source: 'user' })
+            }
+            return { approved, feedback: approved ? undefined : 'denied at classic-REPL approval prompt' }
+          }
+        : undefined,
   }
 
   // Plan-mode config: read-only analysis, no reflection (plans aren't completed work).

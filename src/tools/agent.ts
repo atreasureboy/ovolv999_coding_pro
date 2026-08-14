@@ -19,8 +19,8 @@
 import type { Tool, ToolContext, ToolDefinition, ToolResult, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
 import type { AgentConfig } from '../core/agentPresets.js'
 import { resolveAgentConfig, validateAgentConfig, PRESET_NAMES } from '../core/agentPresets.js'
-import { Renderer, type RendererInterface } from '../ui/renderer.js'
-import { tmuxLayout } from '../ui/tmuxLayout.js'
+import type { RendererInterface } from '../core/types.js'
+import { tmuxLayout } from '../core/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
@@ -339,6 +339,8 @@ export interface AgentToolWiring {
   factory?: AgentChildEngineFactory
   parentConfig?: EngineConfig
   parentRenderer?: RendererInterface
+  /** Round 26: injected file-renderer factory (see AgentWiring). */
+  createFileRenderer?: (path: string) => RendererInterface
   /**
    * Optional ExecutionRun registry (runtime architecture contract §三 Phase 2). When
    * supplied, every Agent invocation creates a child ExecutionRun,
@@ -400,6 +402,7 @@ export class AgentTool implements Tool, WorkerAdapter {
   private readonly factory: AgentChildEngineFactory | undefined
   private readonly parentConfig: EngineConfig | undefined
   private readonly parentRenderer: RendererInterface | undefined
+  private readonly createFileRenderer: ((path: string) => RendererInterface) | undefined
   private readonly runRegistry: ExecutionRunRegistry | undefined
   private readonly parentRunId: string | undefined
 
@@ -407,6 +410,7 @@ export class AgentTool implements Tool, WorkerAdapter {
     this.factory = wiring?.factory
     this.parentConfig = wiring?.parentConfig
     this.parentRenderer = wiring?.parentRenderer
+    this.createFileRenderer = wiring?.createFileRenderer
     this.runRegistry = wiring?.runRegistry
     this.parentRunId = wiring?.parentRunId
     this.onSteeredHook = wiring?.onSteered
@@ -888,8 +892,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
 
     const paneLabel = `[${agentDisplayLabel}] ${description}`
     const paneSlot = tmuxLayout.acquireSlot(paneLabel)
-    const childRenderer: RendererInterface = paneSlot
-      ? Renderer.forFile(paneSlot.logFile)
+    const childRenderer: RendererInterface = paneSlot && this.createFileRenderer
+      ? this.createFileRenderer(paneSlot.logFile)
       : parentRenderer
 
     // ── P0-3 (runtime invariants §四): Worktree isolation MUST be fail-closed ──
@@ -930,7 +934,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           retryable: true,
         })
         mainRenderer.agentDone(description, false)
-        if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+        if (paneSlot && this.createFileRenderer) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+        else if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot) }
         return {
           content: `[${agentLabel}] "${description}" blocked: unable to create isolated worktree — ${(err as Error).message}`,
           isError: true,
@@ -1087,7 +1092,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           // background tasks (its BackgroundTaskManager, transient
           // caches) running indefinitely.
           mainRenderer.agentDone(description, false)
-          if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+          if (paneSlot && this.createFileRenderer) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+        else if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot) }
           transitionRun('cancelled', { phase: 'pre-aborted', error: 'parent task aborted before spawn' })
           return { content: `[${agentLabel}] Cancelled (parent task aborted)`, isError: true }
         }
@@ -1247,7 +1253,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       }
 
       mainRenderer.agentDone(description, !isError)
-      if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+      if (paneSlot && this.createFileRenderer) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+        else if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot) }
 
       transitionRun(finalStatus, {
         phase: 'finalized',
@@ -1463,7 +1470,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       } as ToolResult & { status: RunStatus; summary?: string; conflicts?: string[]; retryable?: boolean }
     } catch (err: unknown) {
       mainRenderer.agentDone(description, false)
-      if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+      if (paneSlot && this.createFileRenderer) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
+        else if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot) }
       transitionRun('failed', { phase: 'thrown', error: (err as Error).message })
       let preservedWorktree: { branch: string; path: string } | undefined
       if (wtInfo) {

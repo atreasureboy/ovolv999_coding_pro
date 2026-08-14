@@ -23,7 +23,7 @@ import { classifyCommandRisk } from '../riskClassifier.js'
 import { gateByPermissionMode } from './permissionModeGate.js'
 import { evaluateDefaultGlobRule, sessionApprovalCache, extractPrimaryArg } from '../permissionRules.js'
 import type { EventLog } from '../eventLog.js'
-import type { RendererInterface } from '../../ui/renderer.js'
+import type { RendererInterface } from '../types.js'
 import type { ToolPolicy } from './toolPolicy.js'
 import type { ToolRegistry } from './toolRegistry.js'
 import type { ContextManager } from '../context/contextManager.js'
@@ -86,7 +86,7 @@ export class ToolExecutor {
     planMode: boolean,
     turnNumber: number,
   ): Promise<ToolResult> {
-    const { toolRegistry, toolPolicy, permissionManager, renderer, eventEmitter, eventLog } = this.deps
+    const { toolRegistry, toolPolicy, permissionManager, eventEmitter, eventLog } = this.deps
 
     // v0.5.6 §7 — single finalizer. Every tool path (unknown,
     // policy deny, permission deny, hook deny, execute throw,
@@ -246,7 +246,20 @@ export class ToolExecutor {
             return finalize(result)
           }
         } else {
-          renderer.warn(`Permission check: ${toolName} requires attention; continuing in single-user mode.`)
+          // Round 26 (L4): FAIL CLOSED. Previously this warned and ran the
+          // tool anyway ("single-user mode") — any headless embedding
+          // (pipe mode, ACP without a prompt handler) silently executed
+          // approval-requiring actions. Matching Claude Code's
+          // non-interactive contract: no prompt ⇒ denial with guidance.
+          const result: ToolResult = {
+            content:
+              `Permission denied for ${toolName}: this action requires approval, but no ` +
+              `permission prompt is available (non-interactive mode). Allow it via a ` +
+              `permissions rule in .ovogo/settings.json, or run with a higher ` +
+              `permission mode if you accept the risk.`,
+            isError: true,
+          }
+          return finalize(result)
         }
       }
     } // end of permission check branch

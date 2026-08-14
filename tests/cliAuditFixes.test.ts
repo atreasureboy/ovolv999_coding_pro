@@ -440,7 +440,7 @@ describe('CLI #8: tmux session name and attached-client safety', () => {
     // method) — the prior bug was that destroy() unconditionally called
     // kill-session even when the user was attached to the monitor.
     const src = readFileSync(
-      join(__dirname, '../src/ui/tmuxLayout.ts'),
+      join(__dirname, '../src/core/tmuxLayout.ts'),
       'utf8',
     )
     expect(src).toMatch(/if \(attached > 0\)/)
@@ -452,7 +452,7 @@ describe('CLI #8: tmux session name and attached-client safety', () => {
     // sessions during stale cleanup. The OLD code would kill any
     // session older than 1h regardless of attachment.
     const src = readFileSync(
-      join(__dirname, '../src/ui/tmuxLayout.ts'),
+      join(__dirname, '../src/core/tmuxLayout.ts'),
       'utf8',
     )
     // Verify the contract strings exist in the file

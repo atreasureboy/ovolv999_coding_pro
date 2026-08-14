@@ -12,8 +12,54 @@ import type { PermissionManager, PermissionMode } from './permissionSystem.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import type { McpServerConfig } from './mcpClient.js'
 import type { TaskKind } from './runtime/taskIntent.js'
+
+// ── RendererInterface ───────────────────────────────────────
+// The structural contract every frontend renderer (Renderer, PipeRenderer,
+// InkRenderer) satisfies. Extracted from Renderer so call sites hold the
+// interface, not the concrete class — eliminating `as unknown as Renderer`
+// duck-type casts at the InkRenderer boundary and `as { agentStart... }`
+// casts in AgentTool. InkRenderer omits closePrompt (no caller — the Ink
+// prompt is component-driven); the interface marks it optional so the
+// concrete Renderer can still declare it. streamReasoning is optional on
+// Renderer itself (declared as a `?` method), preserved here the same way.
+//
+// Round 26: the interface moved from ui/renderer.ts into core so the
+// core/tools layers stop importing the UI layer (even type-only) — 14
+// upward import edges eliminated. ui/renderer.ts re-exports it for
+// existing callers.
+
+export interface RendererInterface {
+  destroy(): void
+  banner(version: string, model: string): void
+  humanPrompt(text: string): void
+  beginAssistantText(): void
+  streamToken(token: string): void
+  streamReasoning?(token: string): void
+  endAssistantText(): void
+  toolStart(name: string, input: Record<string, unknown>, callId?: string): void
+  toolResult(name: string, result: string, isError: boolean, callId?: string): void
+  startSpinner(verb?: string): void
+  stopSpinner(): void
+  info(msg: string): void
+  success(msg: string): void
+  error(msg: string): void
+  warn(msg: string): void
+  agentStart(desc: string, type?: string): void
+  agentDone(desc: string, ok: boolean): void
+  agentSummary(type: string, desc: string, summary: string): void
+  agentHeartbeat(type: string, desc: string, sec: number): void
+  compactStart(tokens: number): void
+  compactDone(orig: number, sum: number): void
+  contextWarning(tokens: number, max: number, pct: number): void
+  planModeStart(): void
+  planConfirmPrompt(): void
+  writeInterruptPrompt(): void
+  interruptInjected(msg: string): void
+  writePrompt(): void
+  newline(): void
+  closePrompt?(text?: string, replaceReadline?: boolean): void
+}
 import type { RunEventEmitter } from './runtime/events.js'
-import type { RendererInterface } from '../ui/renderer.js'
 
 // OpenAI-compatible tool call format
 export interface ToolCall {
@@ -565,6 +611,13 @@ export interface EngineConfig {
    * the AgentTool's action returns "not initialized" at runtime.
    */
   agentFactory?: AgentChildEngineFactory
+  /**
+   * Round 26 (tools→ui decoupling): file-renderer factory for sub-agent
+   * tmux pane logs. The engine layer cannot import the concrete UI
+   * Renderer class, so the composition root injects it. When omitted,
+   * pane slots degrade to the parent renderer.
+   */
+  createFileRenderer?: (path: string) => RendererInterface
   /**
    * Internal — AgentTool threads its current call-chain depth through the
    * config so the MAX_CALL_DEPTH check stays global across nested spawns

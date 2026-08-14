@@ -67,6 +67,10 @@ export class DefaultHookRunner implements IHookRunner {
   private readonly cwd: string
   private readonly sessionId: string
   private config: HookConfig | null
+  /** Round 26 re-audit (D7): SessionStart must fire ONCE per session (CC
+   *  semantics) — the coordinator invokes run* at every turn, so an
+   *  un-gated hook would execute per user message. */
+  private sessionStartFired = false
 
   constructor(options: DefaultHookRunnerOptions = {}) {
     this.cwd = options.cwd ?? process.cwd()
@@ -202,6 +206,8 @@ export class DefaultHookRunner implements IHookRunner {
   }
 
   async runSessionStart(source: 'startup' | 'resume' | 'clear' | 'compact'): Promise<void> {
+    if (this.sessionStartFired && source === 'startup') return
+    this.sessionStartFired = true
     await this.dispatchSessionEvent('SessionStart', { source })
   }
 

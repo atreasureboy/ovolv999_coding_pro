@@ -156,17 +156,31 @@ function keychainGet(key: string): string | null {
 
 function keychainSet(key: string, value: string): boolean {
   try {
+    // The interactive stdin protocol is line-based — a value containing
+    // a newline would inject a second `security -i` command. Reject.
+    if (/[\r\n]/.test(value)) return false
     try { execFileSync('security', ['delete-generic-password', '-s', SERVICE_NAME, '-a', key], { stdio: 'pipe', timeout: 5000 }) } catch { /* ignore */ }
-    execFileSync('security', [
-      'add-generic-password', '-s', SERVICE_NAME, '-a', key, '-w', value, '-U',
-    ], {
-      stdio: 'pipe',
+    // Security (M6): the secret must NOT travel as a command-line
+    // argument — argv is world-readable via `ps` for the process
+    // lifetime. `security -i` reads subcommands from stdin; in
+    // interactive mode `add-generic-password -w` (no value, LAST on the
+    // line) prompts for the password on the next stdin line.
+    const script =
+      `add-generic-password -U -s ${shellQuote(SERVICE_NAME)} -a ${shellQuote(key)} -w\n` +
+      `${value}\n`
+    execFileSync('security', ['-i'], {
+      input: script,
+      stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 5000,
     })
     return true
   } catch {
     return false
   }
+}
+
+function shellQuote(s: string): string {
+  return `"${s.replace(/(["\\])/g, '\\$1')}"`
 }
 
 function keychainDelete(key: string): boolean {

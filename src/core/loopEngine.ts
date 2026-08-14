@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto'
 import { runCommandSync } from './commandRunner.js'
 import { LoopLeaseManager, CheckpointManager, hashContract, type HeartbeatInfo, type LoopCheckpoint } from './loopSupervisor.js'
 import type { ExecutionEngine } from './engine.js'
-import type { RendererInterface } from '../ui/renderer.js'
+import type { RendererInterface } from './types.js'
 import { isTerminalRunStatus } from './executionRun.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 

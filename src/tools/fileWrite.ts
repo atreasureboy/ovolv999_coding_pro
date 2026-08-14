@@ -10,7 +10,7 @@ import type { ResourceClaim } from '../core/executionRun.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite } from '../core/atomicWrite.js'
-import { isLoopDriverOwnedPath } from '../core/pathSecurity.js'
+import { isLoopDriverOwnedPath, containsNullByte } from '../core/pathSecurity.js'
 
 export interface WriteFileInput {
   file_path: string
@@ -62,6 +62,12 @@ export class FileWriteTool implements Tool {
     }
     if (typeof content !== 'string') {
       return { content: 'Error: content must be a string', isError: true }
+    }
+
+    // Security (M2): NUL bytes let hostile paths truncate inside C-backed
+    // syscalls — reject outright (see pathSecurity.containsNullByte).
+    if (containsNullByte(file_path)) {
+      return { content: 'Error: file_path contains a NUL byte — rejected', isError: true }
     }
 
     // ADR-007: .loop/ supervisor control files are driver-owned (see

@@ -19,7 +19,7 @@
 import type OpenAI from 'openai'
 import type { OpenAIMessage, ToolDefinition } from '../types.js'
 import type { TokenUsage } from '../costTracker.js'
-import type { RendererInterface } from '../../ui/renderer.js'
+import type { RendererInterface } from '../types.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
 import type { ProviderAdapter } from './providerAdapter.js'
 import type { EventLog } from '../eventLog.js'

@@ -12,7 +12,7 @@
  */
 
 import type { ExecutionEngine } from '../core/engine.js'
-import type { RendererInterface } from '../ui/renderer.js'
+import type { RendererInterface } from '../core/types.js'
 import type { OpenAIMessage } from '../core/types.js'
 import type { PermissionMode, PermissionRule } from '../core/permissionSystem.js'
 

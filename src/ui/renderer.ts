@@ -139,46 +139,12 @@ function wrapDisplayText(text: string, width: number): string[] {
 }
 
 // ── RendererInterface ───────────────────────────────────────
-// The structural contract every frontend renderer (Renderer, PipeRenderer,
-// InkRenderer) satisfies. Extracted from Renderer so call sites hold the
-// interface, not the concrete class — eliminating `as unknown as Renderer`
-// duck-type casts at the InkRenderer boundary and `as { agentStart... }`
-// casts in AgentTool. InkRenderer omits closePrompt (no caller — the Ink
-// prompt is component-driven); the interface marks it optional so the
-// concrete Renderer can still declare it. streamReasoning is optional on
-// Renderer itself (declared as a `?` method), preserved here the same way.
+// Round 26: the interface contract moved to core/types.ts so the
+// core/tools layers no longer import the UI layer. Re-exported here for
+// the many existing ui-layer and test import sites.
 
-export interface RendererInterface {
-  destroy(): void
-  banner(version: string, model: string): void
-  humanPrompt(text: string): void
-  beginAssistantText(): void
-  streamToken(token: string): void
-  streamReasoning?(token: string): void
-  endAssistantText(): void
-  toolStart(name: string, input: Record<string, unknown>, callId?: string): void
-  toolResult(name: string, result: string, isError: boolean, callId?: string): void
-  startSpinner(verb?: string): void
-  stopSpinner(): void
-  info(msg: string): void
-  success(msg: string): void
-  error(msg: string): void
-  warn(msg: string): void
-  agentStart(desc: string, type?: string): void
-  agentDone(desc: string, ok: boolean): void
-  agentSummary(type: string, desc: string, summary: string): void
-  agentHeartbeat(type: string, desc: string, sec: number): void
-  compactStart(tokens: number): void
-  compactDone(orig: number, sum: number): void
-  contextWarning(tokens: number, max: number, pct: number): void
-  planModeStart(): void
-  planConfirmPrompt(): void
-  writeInterruptPrompt(): void
-  interruptInjected(msg: string): void
-  writePrompt(): void
-  newline(): void
-  closePrompt?(text?: string, replaceReadline?: boolean): void
-}
+export type { RendererInterface } from '../core/types.js'
+import type { RendererInterface } from '../core/types.js'
 
 // ── Renderer ────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir, platform, freemem, totalmem } from 'os'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -49,7 +49,8 @@ export interface SystemHealthReport {
 
 function commandExists(cmd: string): boolean {
   try {
-    execSync(`which ${cmd} 2>/dev/null || where ${cmd} 2>nul`, {
+    const probe = platform() === 'win32' ? 'where' : 'which'
+    execFileSync(probe, [cmd], {
       encoding: 'utf8',
       timeout: 2000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -62,7 +63,7 @@ function commandExists(cmd: string): boolean {
 
 function commandVersion(cmd: string, versionFlag = '--version'): string | null {
   try {
-    const out = execSync(`${cmd} ${versionFlag} 2>&1`, {
+    const out = execFileSync(cmd, [versionFlag], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -76,13 +77,20 @@ function commandVersion(cmd: string, versionFlag = '--version'): string | null {
 function getDiskFreeMB(path: string): number {
   try {
     if (platform() === 'win32') {
-      const out = execSync(`dir "${path}" 2>nul | find "bytes free"`, { encoding: 'utf8', timeout: 5000 })
+      const out = execFileSync('cmd.exe', ['/c', 'dir', path], { encoding: 'utf8', timeout: 5000 })
       const match = out.match(/([\d,]+)\s+bytes free/i)
       if (match) return parseInt(match[1].replace(/,/g, ''), 10) / (1024 * 1024)
     } else {
-      const out = execSync(`df -m "${path}" 2>/dev/null | tail -1`, { encoding: 'utf8', timeout: 5000 })
-      const parts = out.trim().split(/\s+/)
-      if (parts.length >= 4) return parseInt(parts[3], 10)
+      // `df -m <path>` prints a header row + one data row — take the LAST
+      // line (the old shell pipeline piped through tail -1).
+      const out = execFileSync('df', ['-m', path], { encoding: 'utf8', timeout: 5000 })
+      const rows = out.trim().split('\n')
+      const last = rows[rows.length - 1] ?? ''
+      const parts = last.trim().split(/\s+/)
+      if (parts.length >= 4 && Number.isFinite(parseInt(parts[3], 10))) {
+        return parseInt(parts[3], 10)
+      }
+      return -1
     }
   } catch { /* ignore */ }
   return -1
@@ -262,7 +270,7 @@ function checkMultipleInstalls(): SystemCheck {
   const locations: string[] = []
 
   try {
-    const npmGlobal = execSync('npm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim()
+    const npmGlobal = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', timeout: 5000 }).trim()
     if (npmGlobal) locations.push(npmGlobal)
   } catch { /* ignore */ }
 

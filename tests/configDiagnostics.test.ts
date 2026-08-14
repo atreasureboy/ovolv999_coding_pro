@@ -190,12 +190,15 @@ describe('settings.ts — corrupt or invalid config is visible', () => {
     expect(stderrSpy.mock.calls[0][0]).toContain('mcp.servers[1]')
   })
 
-  it('invalid hook entries are dropped with a warning', () => {
+  it('invalid hook entries are dropped with a warning; valid entries normalized to CC schema', () => {
     writeProjectSettings(JSON.stringify({
       hooks: { PreToolCall: [{ matcher: 'Bash', command: 'echo hi' }, { matcher: 'x' }] },
     }))
     const s = loadProjectSettings(workDir)
-    expect(s.hooks?.PreToolCall).toHaveLength(1)
+    // Legacy event name + flat entry → canonical CC schema survives
+    expect(s.hooks?.PreToolUse).toHaveLength(1)
+    expect(s.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toBe('echo hi')
+    expect(s.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash')
     expect(stderrSpy).toHaveBeenCalledTimes(1)
   })
 

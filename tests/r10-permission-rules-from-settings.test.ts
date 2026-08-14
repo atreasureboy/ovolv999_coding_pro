@@ -119,11 +119,13 @@ describe('R10.2: user rules from settings.json reach ToolExecutor', () => {
     })
 
     const exec = makeExecutor(pm, cm)
-    // No requestPermission wired in this exec → falls through to run anyway
-    // (the executor's 'ask' branch defaults to "continue in single-user mode" when no UI)
+    // Round 26 (L4): 'ask' with no requestPermission handler now FAILS
+    // CLOSED (Claude Code non-interactive contract) — previously it
+    // warned and ran anyway ("single-user mode" fail-open).
     const result = await exec.execute('c3', 'Bash', { command: 'npm test' }, makeToolContext(tmpDir), false, 1)
-    // result may be error (no package.json) but NOT a denial
-    expect(result.content).not.toMatch(/Permission denied/)
+    expect(result.isError).toBe(true)
+    expect(result.content).toMatch(/Permission denied for Bash/)
+    expect(result.content).toMatch(/non-interactive/)
   })
 
   it('settings.json permissions.rules are actually parsed (no schema validation gap)', async () => {

@@ -150,12 +150,18 @@ function getTempPaths(): string[] {
  * Generate a macOS Seatbelt (.sb) profile for the given config + cwd.
  */
 export function generateMacOSProfile(config: SandboxConfig, cwd: string): string {
+  // Round 26 (L7): standard Seatbelt profile shape. The previous header
+  // used nonstandard directives (`(allow default-services)`,
+  // `(deny default-disallowed)`) which recent sandbox-exec versions
+  // reject at compile time — turning the macOS sandbox into a silent
+  // no-op or error. `(deny default)` + the system profile import is the
+  // portable base used by mainstream macOS sandbox tooling.
   const lines: string[] = [
     ';;; ovolv999 sandbox profile (auto-generated)',
     `;;; level: ${config.level}`,
     '(version 1)',
-    '(allow default-services)',
-    '(deny default-disallowed)',
+    '(deny default)',
+    '(import "/System/Library/Sandbox/Profiles/system.sb")',
   ]
 
   // File system
@@ -180,6 +186,10 @@ export function generateMacOSProfile(config: SandboxConfig, cwd: string): string
     lines.push('(allow process-exec (subpath "/bin"))')
     lines.push('(allow process-exec (subpath "/usr/local/bin"))')
     lines.push(`(allow process-exec (subpath "${cwd}"))`)
+    // Round 26 re-audit (D10): under (deny default), fork(2) alone is
+    // denied — shells running pipelines / make / node fork paths die
+    // without this even though exec is allowed.
+    lines.push('(allow process-fork)')
   } else {
     lines.push('(allow process-exec)')
     lines.push('(allow process-fork)')

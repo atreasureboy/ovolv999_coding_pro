@@ -5,6 +5,7 @@
 
 import { readFile, stat } from 'fs/promises'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
+import { containsNullByte } from '../core/pathSecurity.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { READ_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { markFileRead, hasFileChanged, hasFileBeenRead } from '../core/fileState.js'
@@ -65,6 +66,10 @@ export class FileReadTool implements Tool {
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }
+    }
+
+    if (containsNullByte(file_path)) {
+      return { content: 'Error: file_path contains a NUL byte — rejected', isError: true }
     }
 
     try {

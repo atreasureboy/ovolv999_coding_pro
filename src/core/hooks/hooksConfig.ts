@@ -28,7 +28,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import type { HookEvent } from './hookProtocol.js'
+import { type HookEvent, HOOK_EVENTS } from './hookProtocol.js'
 
 export interface HookCommandConfig {
   type: 'command'
@@ -55,6 +55,99 @@ export interface HookConfig {
   PostCompact?: HookMatcherConfig[]
 }
 
+/**
+ * Legacy (pre-unification) event names accepted as aliases. The engine
+ * once shipped a parallel flat-schema hook system (config/hooks.ts) with
+ * its own event names; those names still parse so existing user settings
+ * keep firing after the consolidation.
+ */
+export const LEGACY_HOOK_EVENT_ALIASES: Readonly<Record<string, HookEvent>> = {
+  PreToolCall: 'PreToolUse',
+  PostToolCall: 'PostToolUse',
+  OnComplete: 'Stop',
+  OnContextOverflow: 'PreCompact',
+}
+
+function isValidLegacyEntry(value: unknown): value is { command: string; matcher?: string; timeout?: number } {
+  if (!value || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  if (typeof obj.command !== 'string' || obj.command.length === 0) return false
+  if (obj.matcher !== undefined && typeof obj.matcher !== 'string') return false
+  if (obj.timeout !== undefined && (typeof obj.timeout !== 'number' || obj.timeout <= 0)) return false
+  return true
+}
+
+/**
+ * Unified hook-section normalizer — the ONE parser for the "hooks" block
+ * of settings.json. Accepts both schemas per event:
+ *
+ *   CC (canonical):   [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "...", "timeout": 60 }] }]
+ *   Legacy (flat):    [{ "matcher": "Bash", "command": "..." }]
+ *
+ * Legacy event names (PreToolCall etc.) are mapped onto the canonical
+ * Claude-Code-compatible events via LEGACY_HOOK_EVENT_ALIASES. Returns
+ * null when nothing valid survives. `onIssue` (optional) receives a
+ * diagnostic per dropped entry so settings loaders can surface warnings.
+ */
+export function normalizeHooksSection(
+  hooksObj: unknown,
+  onIssue?: (field: string, message: string) => void,
+): HookConfig | null {
+  if (!hooksObj || typeof hooksObj !== 'object') return null
+  const result: HookConfig = {}
+  const root = hooksObj as Record<string, unknown>
+  for (const rawEvent of Object.keys(root)) {
+    if (rawEvent === '__proto__' || rawEvent === 'constructor' || rawEvent === 'prototype') {
+      onIssue?.(`hooks.${rawEvent}`, `suspicious key "hooks.${rawEvent}" dropped`)
+      continue
+    }
+    const list = root[rawEvent]
+    if (list === undefined) continue
+    // Round 26 re-audit (D4): validate the event AFTER alias mapping — a
+    // typo'd or unmapped key previously sat dead in the config with zero
+    // feedback. Legacy `OnError` reports explicitly: the CC protocol has
+    // no equivalent; PostToolUse is the migration path.
+    const mapped = Object.hasOwn(LEGACY_HOOK_EVENT_ALIASES, rawEvent)
+      ? LEGACY_HOOK_EVENT_ALIASES[rawEvent]
+      : rawEvent
+    const event = mapped as HookEvent
+    if (!HOOK_EVENTS.includes(event)) {
+      onIssue?.(
+        `hooks.${rawEvent}`,
+        `unknown hook event "${rawEvent}" dropped${rawEvent === 'OnError' ? ' — no CC equivalent exists; use PostToolUse' : ''}`,
+      )
+      continue
+    }
+    if (!Array.isArray(list)) {
+      onIssue?.(`hooks.${rawEvent}`, `"hooks.${rawEvent}" must be an array — dropped`)
+      continue
+    }
+    const matchers: HookMatcherConfig[] = []
+    list.forEach((raw, i) => {
+      if (isValidMatcher(raw)) {
+        matchers.push(raw)
+        return
+      }
+      if (isValidLegacyEntry(raw)) {
+        // Wrap flat entries into the canonical matcher shape
+        matchers.push({
+          matcher: raw.matcher,
+          hooks: [{ type: 'command', command: raw.command, ...(raw.timeout !== undefined ? { timeout: raw.timeout } : {}) }],
+        })
+        return
+      }
+      onIssue?.(
+        `hooks.${rawEvent}[${i}]`,
+        'invalid hook entry dropped (needs "command", or CC-schema { matcher, hooks: [{ type: "command", command }] })',
+      )
+    })
+    if (matchers.length > 0) {
+      (result as Record<string, unknown>)[event] = matchers
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null
+}
+
 function isValidCommand(value: unknown): value is HookCommandConfig {
   if (!value || typeof value !== 'object') return false
   const obj = value as Record<string, unknown>
@@ -77,17 +170,7 @@ function parseHookConfig(value: unknown): HookConfig | null {
   const root = value as Record<string, unknown>
   const hooks = root.hooks
   if (!hooks || typeof hooks !== 'object') return null
-  const result: HookConfig = {}
-  const hooksObj = hooks as Record<string, unknown>
-  for (const event of Object.keys(hooksObj)) {
-    const list = hooksObj[event]
-    if (!Array.isArray(list)) continue
-    const filtered = list.filter(isValidMatcher)
-    if (filtered.length > 0) {
-      (result as Record<string, unknown>)[event] = filtered
-    }
-  }
-  return result
+  return normalizeHooksSection(hooks)
 }
 
 function readJsonConfig(path: string): HookConfig | null {
@@ -129,14 +212,19 @@ export function loadHookConfig(cwd: string): HookConfig | null {
 }
 
 /**
- * Test hook against an optional matcher string. A hook with no matcher
- * applies to every event payload; otherwise the matcher is a glob/regex
- * against tool_name (for Pre/Post tool events) or any string field
- * (other events). Returns true when the hook should run.
+ * Test hook against an optional matcher string. Supported syntax (union of
+ * the CC glob forms and the legacy flat-schema forms — Round 26 re-audit
+ * D2: the legacy comma list / trailing-`*` prefix must keep matching or
+ * migrated settings silently stop firing):
+ *   - absent / "*"          → match everything
+ *   - "Bash"                → exact match
+ *   - "Write,Edit" / "a|b"  → alternation list (legacy comma + CC pipe)
+ *   - "Bash*"               → prefix wildcard
+ *   - "/regex/"             → regex form
  */
 export function matcherMatches(matcher: string | undefined, candidate: string): boolean {
   if (!matcher) return true
-  if (matcher === '*' || matcher === candidate) return true
+  if (matcher === '*') return true
   if (matcher.startsWith('/') && matcher.endsWith('/')) {
     try {
       const re = new RegExp(matcher.slice(1, -1))
@@ -145,7 +233,16 @@ export function matcherMatches(matcher: string | undefined, candidate: string): 
       return false
     }
   }
-  return false
+  if (matcher.includes(',')) {
+    return matcher.split(',').some((part) => matcherMatches(part.trim() || '*', candidate))
+  }
+  if (matcher.includes('|')) {
+    return matcher.split('|').some((part) => matcherMatches(part.trim() || '*', candidate))
+  }
+  if (matcher.endsWith('*')) {
+    return candidate.startsWith(matcher.slice(0, -1))
+  }
+  return matcher === candidate
 }
 
 /**

@@ -78,6 +78,34 @@ export async function executeHookCommand(
   const startedAt = Date.now()
   const inputJson = JSON.stringify(input)
 
+  // Round 26 re-audit (D3): back-compat env contract from the legacy
+  // flat-schema runner — hooks written against $OVOGO_TOOL_NAME /
+  // $OVOGO_PROMPT / $OVOGO_TOOL_RESULT keep working alongside the CC
+  // stdin-JSON protocol.
+  const legacyEnv: Record<string, string> = {}
+  const MAX_ENV_VALUE_LEN = 4096
+  const s = (v: unknown): string | undefined =>
+    typeof v === 'string' ? v.slice(0, MAX_ENV_VALUE_LEN) : undefined
+  if ('tool_name' in input && typeof input.tool_name === 'string') {
+    legacyEnv.OVOGO_TOOL_NAME = input.tool_name
+  }
+  if ('tool_input' in input) {
+    const ti = s(JSON.stringify(input.tool_input ?? {}))
+    if (ti) legacyEnv.OVOGO_TOOL_INPUT = ti
+  }
+  if ('tool_result' in input && input.tool_result && typeof input.tool_result === 'object') {
+    const tr = input.tool_result as { content?: unknown; is_error?: unknown }
+    const content = s(typeof tr.content === 'string' ? tr.content : '')
+    if (content) legacyEnv.OVOGO_TOOL_RESULT = content
+    legacyEnv.OVOGO_TOOL_IS_ERROR = String(tr.is_error === true)
+  }
+  if ('prompt' in input) {
+    const p = s(input.prompt)
+    if (p) legacyEnv.OVOGO_PROMPT = p
+  }
+  legacyEnv.OVOGO_HOOK_EVENT = input.hook_event_name
+  legacyEnv.OVOGO_SESSION_ID = input.session_id
+
   if (options.signal?.aborted) {
     return {
       hookName,
@@ -100,7 +128,7 @@ export async function executeHookCommand(
 
     const spawnOpts: SpawnOptions = {
       shell: true,
-      env: { ...process.env, ...options.env },
+      env: { ...process.env, ...legacyEnv, ...options.env },
       cwd: options.cwd,
     }
 
@@ -219,6 +247,13 @@ export async function executeHookCommand(
       }
     })
 
+    // EPIPE guard: a hook that exits without draining stdin (echo,
+    // printf, …) makes the write below fail ASYNCHRONOUSLY — the
+    // try/catch cannot see it, and an unhandled stream 'error' would
+    // crash the whole CLI via the process-level crash handler. Swallow:
+    // the hook's exit path already carries the outcome.
+    child.stdin?.on('error', () => { /* best-effort: hook did not read stdin */ })
+
     child.on('close', (code, signal) => {
       if (timeoutHandle) clearTimeout(timeoutHandle)
       if (options.signal) options.signal.removeEventListener('abort', onAbort)
@@ -245,6 +280,7 @@ export async function executeHookCommand(
       child.stdin?.end()
     } catch (err) {
       if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (options.signal) options.signal.removeEventListener('abort', onAbort)
       finalize({
         hookName,
         command: cmd.command,

@@ -15,7 +15,7 @@ import type { ResourceClaim } from '../core/executionRun.js'
 import { EDIT_FILE_DESCRIPTION } from '../prompts/tools.js'
 import { hasFileBeenRead, hasFileChanged, markFileRead } from '../core/fileState.js'
 import { atomicWrite, statSafely } from '../core/atomicWrite.js'
-import { isLoopDriverOwnedPath } from '../core/pathSecurity.js'
+import { isLoopDriverOwnedPath, containsNullByte } from '../core/pathSecurity.js'
 
 export interface EditFileInput {
   file_path: string
@@ -94,6 +94,12 @@ export class FileEditTool implements Tool {
     }
     if (old_string === new_string) {
       return { content: 'Error: old_string and new_string are identical — no change needed', isError: true }
+    }
+
+    // Security (M2): NUL bytes let hostile paths truncate inside C-backed
+    // syscalls — reject outright (see pathSecurity.containsNullByte).
+    if (containsNullByte(file_path)) {
+      return { content: 'Error: file_path contains a NUL byte — rejected', isError: true }
     }
 
     // ADR-007: .loop/ supervisor control files are driver-owned (see

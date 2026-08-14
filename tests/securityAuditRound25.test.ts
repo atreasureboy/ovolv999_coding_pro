@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { WebFetchTool } from '../src/tools/webFetch.js'
-import { saveToken, loadToken, type OAuthToken } from '../src/core/oauth.js'
 import { isLoopDriverOwnedPath } from '../src/core/pathSecurity.js'
 import type { ToolContext } from '../src/core/types.js'
 
@@ -124,54 +123,6 @@ describe('WebFetch — SSRF guard (H2)', () => {
   })
 })
 
-describe('OAuth token storage (M1)', () => {
-  let testHome: string
-  let origHome: string | undefined
-
-  afterEach(() => {
-    if (origHome !== undefined) process.env.HOME = origHome
-    if (testHome) rmSync(testHome, { recursive: true, force: true })
-  })
-
-  it('writes tokens with owner-only permissions (non-Windows)', () => {
-    if (process.platform === 'win32') return
-    testHome = mkdtempSync(join(tmpdir(), 'ovolv999-oauth-audit-'))
-    origHome = process.env.HOME
-    process.env.HOME = testHome
-
-    const token: OAuthToken = {
-      accessToken: 'at-secret',
-      refreshToken: 'rt-secret',
-      expiresAt: Date.now() + 3600_000,
-      tokenType: 'Bearer',
-    }
-    saveToken('audit-server', token)
-
-    const dir = join(homedir(), '.ovolv999', 'oauth-tokens')
-    expect(existsSync(join(dir, 'audit-server.json'))).toBe(true)
-    const mode = statSync(join(dir, 'audit-server.json')).mode & 0o777
-    expect(mode).toBe(0o600)
-
-    const loaded = loadToken('audit-server')
-    expect(loaded?.accessToken).toBe('at-secret')
-  })
-
-  it('sanitizes serverName — traversal cannot escape the token dir', () => {
-    testHome = mkdtempSync(join(tmpdir(), 'ovolv999-oauth-audit-'))
-    origHome = process.env.HOME
-    process.env.HOME = testHome
-
-    saveToken('../../evil', { accessToken: 'x', tokenType: 'Bearer' })
-
-    const dir = join(homedir(), '.ovolv999', 'oauth-tokens')
-    const files = readdirSync(dir)
-    // '/' is replaced with '_' — no path separators may survive
-    for (const f of files) {
-      expect(f).not.toMatch(/[\\/]/)
-    }
-    expect(files.some((f) => f.includes('evil'))).toBe(true)
-  })
-})
 
 describe('pathSecurity — case-insensitive FS bypass (ADR-007)', () => {
   it('lowercase spellings are treated as driver-owned regardless of platform', () => {

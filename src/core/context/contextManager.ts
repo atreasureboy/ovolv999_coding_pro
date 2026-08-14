@@ -18,7 +18,7 @@
 import type OpenAI from 'openai'
 import type { OpenAIMessage, ToolDefinition, IHookRunner } from '../types.js'
 import type { EventLog } from '../eventLog.js'
-import type { RendererInterface } from '../../ui/renderer.js'
+import type { RendererInterface } from '../types.js'
 import {
   maybeCompactWithInvariants,
   microCompact,

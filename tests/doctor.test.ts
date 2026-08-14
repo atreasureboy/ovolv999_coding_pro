@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { runDoctorChecks, formatDoctorReport, type DoctorReport } from '../src/utils/doctor.js'
+import { runDoctorChecks, formatDoctorReport, type DoctorReport } from '../src/commands/doctor.js'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

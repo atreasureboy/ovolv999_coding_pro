@@ -808,7 +808,6 @@ async function runRepl(
   renderer: Renderer,
   cwd: string,
   skills: Map<string, Skill>,
-  hookRunner: { runUserPromptSubmit: (p: string) => void },
   sessionDir?: string,
   resumedHistory?: OpenAIMessage[],
   loopMaxIters = 12,
@@ -1194,7 +1193,6 @@ async function runRepl(
         renderer.warn('Usage: /plan <task description>')
         continue
       }
-      hookRunner.runUserPromptSubmit(trimmed)
       await runPlanMode(planTask, engine, planConfig, renderer, input, history, cwd)
       continue
     }
@@ -1322,7 +1320,6 @@ async function runRepl(
         }
         if (pendingPrompt) {
           renderer.humanPrompt(pendingPrompt.slice(0, 80) + (pendingPrompt.length > 80 ? ' ...' : ''))
-          hookRunner.runUserPromptSubmit(pendingPrompt)
           updateProgressLog(cwd, 'running', pendingPrompt.slice(0, 100))
           await runTask(pendingPrompt, [...history], Date.now())
           updateProgressLog(cwd, 'idle', 'waiting for next task')
@@ -1335,7 +1332,6 @@ async function runRepl(
     }
 
     // ── Regular task ──────────────────────────────────────────
-    hookRunner.runUserPromptSubmit(trimmed)
     updateProgressLog(cwd, 'running', trimmed.slice(0, 100))
 
     await runTask(trimmed, [...history], Date.now())
@@ -1550,12 +1546,16 @@ async function handleDaemonSubcommand(args: string[], opts: DaemonSubOptions): P
     return
   }
   if (sub === 'ps' || sub === 'list') {
-    const { listSessions } = await import('../src/core/daemon/sessionStore.js')
+    // Round 26 daemon consolidation: the HTTP daemon trio
+    // (daemonServer/daemonClient/sessionStore) was production-dead — the
+    // server was never started, so `daemon ps` always listed an empty
+    // JSONL store and `daemon attach` always failed on a missing
+    // OVOGO_DAEMON_PORT. These subcommands now alias the REAL session
+    // system (core/backgroundSession.ts) used by the top-level
+    // ps/attach/logs/stop/rm commands.
+    const { listSessions, formatSessionList } = await import('../src/core/backgroundSession.js')
     const sessions = listSessions()
-    process.stdout.write('ID                                    STARTED          STATUS  GOAL\n')
-    for (const s of sessions) {
-      process.stdout.write(`${s.sessionId}  ${new Date(s.startedAt).toISOString().slice(0, 16)}  ${s.status.padEnd(7)}  ${s.goal.slice(0, 60)}\n`)
-    }
+    process.stdout.write(formatSessionList(sessions) + '\n')
     return
   }
   if (sub === 'attach') {
@@ -1564,15 +1564,18 @@ async function handleDaemonSubcommand(args: string[], opts: DaemonSubOptions): P
       process.stderr.write('Usage: ovolv999 daemon attach <sessionId>\n')
       process.exit(1)
     }
-    const { DaemonClient } = await import('../src/core/daemon/daemonClient.js')
-    const port = parseInt(process.env.OVOGO_DAEMON_PORT ?? '0', 10)
-    if (!port) {
-      process.stderr.write('Error: OVOGO_DAEMON_PORT not set — is the daemon running?\n')
+    const { attachToSession, formatSessionDetail } = await import('../src/core/backgroundSession.js')
+    const handle = attachToSession(sessionId)
+    if (!handle) {
+      process.stderr.write(`Error: no session with id "${sessionId}"\n`)
       process.exit(1)
     }
-    const client = new DaemonClient({ port })
-    const result = await client.send({ id: 1, op: 'attach', sessionId })
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+    process.stdout.write(formatSessionDetail(handle.metadata) + '\n\n--- streaming logs (Ctrl-C to detach) ---\n')
+    for await (const line of handle.stream) {
+      process.stdout.write(line + '\n')
+    }
+    process.stdout.write('\n[session ended]\n')
+    process.exit(0)
     return
   }
   if (sub === 'kill' || sub === 'rm') {
@@ -1581,8 +1584,11 @@ async function handleDaemonSubcommand(args: string[], opts: DaemonSubOptions): P
       process.stderr.write('Usage: ovolv999 daemon kill <sessionId>\n')
       process.exit(1)
     }
-    const { deleteSession } = await import('../src/core/daemon/sessionStore.js')
-    const ok = deleteSession(sessionId)
+    const { stopSession, removeSession } = await import('../src/core/backgroundSession.js')
+    // Stop any live process first (plain removeSession would orphan it),
+    // then delete the metadata.
+    stopSession(sessionId)
+    const ok = removeSession(sessionId, true)
     process.stdout.write(ok ? `deleted ${sessionId}\n` : `not found: ${sessionId}\n`)
     return
   }
@@ -1595,8 +1601,8 @@ Subcommands:
   attach <sessionId>     Attach to a running session
   kill <sessionId>       Delete a persisted session (alias: rm)
 
-Daemon config: ~/.ovolv999/daemon.sock
-Sessions dir:  ~/.ovolv999/sessions/
+Daemon config: ~/.ovolv999/daemon.sock (start/stop)
+Sessions:      background sessions (ps/attach/logs/stop/rm — same data as top-level commands)
 `)
     return
   }
@@ -2128,7 +2134,6 @@ async function main(): Promise<void> {
     inkRenderer: inkRendererInstance,
     sessionDir,
     resumedHistory,
-    hookRunner,
     maxContextTokens: maxCtxTokens,
     model: effectiveModel,
   } = assembled
@@ -2194,7 +2199,6 @@ async function main(): Promise<void> {
   if (!process.stdin.isTTY) {
     const piped = await readStdin()
     if (piped) {
-      hookRunner.runUserPromptSubmit(piped)
       // Update saveOnExit to capture the post-turn history snapshot
       saveOnExit = (): void => {
         if (!sessionDir) return
@@ -2224,7 +2228,6 @@ async function main(): Promise<void> {
 
   // Single task from args?
   if (task) {
-    hookRunner.runUserPromptSubmit(task)
     await runSingleTask(engine, renderer, task, cwd, resumedHistory, sessionDir, resumedHistory)
     return
   }
@@ -2249,7 +2252,7 @@ async function main(): Promise<void> {
     return
   }
 
-  await runRepl(engine, planConfig, renderer, cwd, skills, hookRunner, sessionDir, resumedHistory, loopMaxIters)
+  await runRepl(engine, planConfig, renderer, cwd, skills, sessionDir, resumedHistory, loopMaxIters)
 }
 
 /**

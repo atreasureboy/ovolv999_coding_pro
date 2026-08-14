@@ -75,9 +75,15 @@ describe('sandbox', () => {
   })
 
   describe('generateMacOSProfile', () => {
-    it('includes version header', () => {
+    it('includes version header + standard deny-default base', () => {
       const profile = generateMacOSProfile(DEFAULT_CONFIG, '/tmp/project')
       expect(profile).toContain('(version 1)')
+      // Round 26 (L7): the nonstandard (allow default-services) /
+      // (deny default-disallowed) directives are gone — modern
+      // sandbox-exec rejects them, breaking the whole sandbox.
+      expect(profile).toContain('(deny default)')
+      expect(profile).not.toContain('default-services')
+      expect(profile).not.toContain('default-disallowed')
     })
 
     it('includes writable paths', () => {

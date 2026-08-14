@@ -119,9 +119,12 @@ export function buildSshArgs(profile: SshProfile, remoteCommand?: string): strin
   if (profile.identityFile) args.push('-i', profile.identityFile)
   if (profile.proxyJump) args.push('-J', profile.proxyJump)
 
-  // BatchMode for non-interactive, StrictHostKeyChecking accept-new
+  // BatchMode for non-interactive. StrictHostKeyChecking defaults to
+  // accept-new (TOFU); set OVOLV999_SSH_STRICT_HOST_KEY=1 to require a
+  // pre-known host key (fails on first connect to any new host) for
+  // environments where first-connection MITM is in scope.
   args.push('-o', 'BatchMode=yes')
-  args.push('-o', 'StrictHostKeyChecking=accept-new')
+  args.push('-o', `StrictHostKeyChecking=${process.env.OVOLV999_SSH_STRICT_HOST_KEY === '1' ? 'yes' : 'accept-new'}`)
   args.push('-o', `ConnectTimeout=${Math.floor((profile.timeoutMs ?? 10000) / 1000)}`)
 
   // Target

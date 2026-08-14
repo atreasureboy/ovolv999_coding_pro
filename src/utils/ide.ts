@@ -7,7 +7,8 @@
 
 import { existsSync, readFileSync } from 'fs'
 import { join, resolve, isAbsolute } from 'path'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
+import { platform } from 'os'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -167,7 +168,8 @@ function findIdeExecutable(type: IDEType): string | undefined {
 
   for (const cmd of cmds) {
     try {
-      const path = execSync(`which ${cmd} 2>/dev/null || where ${cmd} 2>nul`, {
+      const probe = platform() === 'win32' ? 'where' : 'which'
+      const path = execFileSync(probe, [cmd], {
         encoding: 'utf8',
         timeout: 2000,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -199,28 +201,32 @@ export function openInIDE(
     ? `:${options.line}${options.column ? `:${options.column}` : ''}`
     : ''
 
-  const cmds: Record<string, string> = {
-    vscode: `code "${absPath}${position}"`,
-    cursor: `cursor "${absPath}${position}"`,
-    windsurf: `windsurf "${absPath}${position}"`,
-    intellij: `idea "${absPath}${position ? `:${options.line}` : ''}"`,
-    webstorm: `webstorm "${absPath}${position ? `:${options.line}` : ''}"`,
-    pycharm: `pycharm "${absPath}${position ? `:${options.line}` : ''}"`,
-    goland: `goland "${absPath}${position ? `:${options.line}` : ''}"`,
-    sublime: `subl "${absPath}${position}"`,
-    neovim: `nvim "${absPath}${position ? ` +${options.line}` : ''}"`,
-    vim: `vim "${absPath}${position ? ` +${options.line}` : ''}"`,
-    emacs: `emacs "${absPath}${position ? ` +${options.line}:${options.column ?? 1}` : ''}"`,
-    zed: `zeditor "${absPath}${position}"`,
+  // Security: arg-array spawn (no shell) — the file path is untrusted
+  // input; interpolated shell strings would let a crafted filename
+  // (`$(...)`, backticks, quotes) execute arbitrary commands.
+  const cmds: Record<string, string[]> = {
+    vscode: ['code', absPath + position],
+    cursor: ['cursor', absPath + position],
+    windsurf: ['windsurf', absPath + position],
+    intellij: ['idea', absPath + (position ? `:${options.line}` : '')],
+    webstorm: ['webstorm', absPath + (position ? `:${options.line}` : '')],
+    pycharm: ['pycharm', absPath + (position ? `:${options.line}` : '')],
+    goland: ['goland', absPath + (position ? `:${options.line}` : '')],
+    sublime: ['subl', absPath + position],
+    neovim: ['nvim', ...(options.line ? [`+${options.line}`] : []), absPath],
+    vim: ['vim', ...(options.line ? [`+${options.line}`] : []), absPath],
+    emacs: ['emacs', ...(options.line ? [`+${options.line}:${options.column ?? 1}`] : []), absPath],
+    zed: ['zeditor', absPath + position],
   }
 
-  const cmd = cmds[ide]
-  if (!cmd) {
+  const argv = cmds[ide]
+  if (!argv) {
     return { success: false, message: `Opening files in ${ide} not supported` }
   }
+  const cmd = argv.join(' ')
 
   try {
-    execSync(cmd, { stdio: 'pipe', timeout: 5000 })
+    execFileSync(argv[0], argv.slice(1), { stdio: 'pipe', timeout: 5000 })
     return { success: true, message: `Opened in ${ide}`, command: cmd }
   } catch (err) {
     return {
@@ -245,19 +251,21 @@ export function openDiffInIDE(
   const oldAbs = isAbsolute(oldPath) ? oldPath : resolve(cwd, oldPath)
   const newAbs = isAbsolute(newPath) ? newPath : resolve(cwd, newPath)
 
-  const cmds: Record<string, string> = {
-    vscode: `code --diff "${oldAbs}" "${newAbs}"`,
-    cursor: `cursor --diff "${oldAbs}" "${newAbs}"`,
-    windsurf: `windsurf --diff "${oldAbs}" "${newAbs}"`,
+  // Security: arg-array spawn — same rationale as openInIDE.
+  const cmds: Record<string, string[]> = {
+    vscode: ['code', '--diff', oldAbs, newAbs],
+    cursor: ['cursor', '--diff', oldAbs, newAbs],
+    windsurf: ['windsurf', '--diff', oldAbs, newAbs],
   }
 
-  const cmd = cmds[ide]
-  if (!cmd) {
+  const argv = cmds[ide]
+  if (!argv) {
     return { success: false, message: `Diff view not supported in ${ide}` }
   }
+  const cmd = argv.join(' ')
 
   try {
-    execSync(cmd, { stdio: 'pipe', timeout: 5000 })
+    execFileSync(argv[0], argv.slice(1), { stdio: 'pipe', timeout: 5000 })
     return { success: true, message: `Opened diff in ${ide}`, command: cmd }
   } catch (err) {
     return {

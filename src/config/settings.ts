@@ -5,25 +5,30 @@
  *   ~/.ovogo/settings.json   (global user defaults)
  *   .ovogo/settings.json     (project-specific, relative to cwd)
  *
- * Example settings.json:
+ * Example settings.json (Claude-Code-compatible hook schema — legacy
+ * flat entries { matcher, command } and legacy event names PreToolCall/
+ * PostToolCall/OnComplete/OnContextOverflow are still accepted and
+ * mapped automatically):
  * {
  *   "hooks": {
- *     "PreToolCall": [
- *       { "matcher": "Bash", "command": "echo \"Running: $OVOGO_TOOL_INPUT\"" }
+ *     "PreToolUse": [
+ *       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo \"Running: $OVOGO_TOOL_INPUT\"" } ] }
  *     ],
- *     "PostToolCall": [
- *       { "matcher": "Write,Edit", "command": "npx prettier --write \"$OVOGO_TOOL_NAME\" 2>/dev/null || true" }
+ *     "PostToolUse": [
+ *       { "matcher": "Write,Edit", "hooks": [ { "type": "command", "command": "npx prettier --write \"$OVOGO_TOOL_NAME\" 2>/dev/null || true" } ] }
  *     ],
  *     "UserPromptSubmit": [
- *       { "command": "logger -t ovogogogo \"prompt: $OVOGO_PROMPT\"" }
+ *       { "hooks": [ { "type": "command", "command": "logger -t ovogogogo \"prompt: $OVOGO_PROMPT\"" } ] }
  *     ]
  *   }
  * }
  *
- * Hook env vars:
- *   PreToolCall:       OVOGO_TOOL_NAME, OVOGO_TOOL_INPUT (JSON)
- *   PostToolCall:      OVOGO_TOOL_NAME, OVOGO_TOOL_RESULT, OVOGO_TOOL_IS_ERROR
+ * Hook input contract: the full CC-style JSON payload arrives on stdin
+ * (hook_event_name, session_id, cwd, tool_name/tool_input, …). Back-compat
+ * env vars are ALSO set:
+ *   tool events:       OVOGO_TOOL_NAME, OVOGO_TOOL_INPUT, OVOGO_TOOL_RESULT, OVOGO_TOOL_IS_ERROR
  *   UserPromptSubmit:  OVOGO_PROMPT
+ *   all events:        OVOGO_HOOK_EVENT, OVOGO_SESSION_ID
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
@@ -32,6 +37,7 @@ import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
 import type { PermissionMode, PermissionProfile, PermissionRule } from '../core/permissionSystem.js'
 import type { McpServerConfig } from '../core/mcpClient.js'
+import { normalizeHooksSection, type HookConfig } from '../core/hooks/hooksConfig.js'
 import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
 import type { ConfigDiagnostic } from './diagnostics.js'
 
@@ -39,23 +45,6 @@ const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'byp
 const PERMISSION_PROFILES = new Set(['safe', 'standard', 'autonomous'])
 const PERMISSION_BEHAVIORS = new Set(['allow', 'deny', 'ask'])
 const PERMISSION_SOURCES = new Set(['builtin', 'user', 'project'])
-const HOOK_EVENTS = ['PreToolCall', 'PostToolCall', 'UserPromptSubmit', 'OnError', 'OnComplete', 'OnContextOverflow'] as const
-
-export interface HookEntry {
-  /** Comma-separated tool names to match, or "*" / omit for all. Supports trailing "*" wildcard. */
-  matcher?: string
-  /** Shell command to execute. Runs with tool env vars set. */
-  command: string
-}
-
-export interface HooksConfig {
-  PreToolCall?: HookEntry[]
-  PostToolCall?: HookEntry[]
-  UserPromptSubmit?: HookEntry[]
-  OnError?: HookEntry[]
-  OnComplete?: HookEntry[]
-  OnContextOverflow?: HookEntry[]
-}
 
 export interface PermissionsConfig {
   profile?: PermissionProfile
@@ -89,7 +78,7 @@ export interface ProviderConfig {
 }
 
 export interface OvogoSettings {
-  hooks?: HooksConfig
+  hooks?: HookConfig
   taskContext?: TaskContext
   permissions?: PermissionsConfig
   poor?: { enabled: boolean }
@@ -268,14 +257,7 @@ function normalizeModels(value: unknown, file: string | undefined, diags: Config
   return { profiles, routing }
 }
 
-function normalizeHookEntry(value: unknown): HookEntry | null {
-  if (!isObject(value)) return null
-  if (typeof value.command !== 'string' || !value.command.trim()) return null
-  const matcher = typeof value.matcher === 'string' && value.matcher.trim() ? value.matcher : undefined
-  return { matcher, command: value.command }
-}
-
-function normalizeHooks(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): HooksConfig | undefined {
+function normalizeHooks(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): HookConfig | undefined {
   if (value === undefined) return undefined
   if (!isObject(value)) {
     if (file) diags.push({
@@ -285,38 +267,19 @@ function normalizeHooks(value: unknown, file: string | undefined, diags: ConfigD
     })
     return undefined
   }
-  const out: HooksConfig = {}
-  let any = false
-  for (const event of HOOK_EVENTS) {
-    const arr = value[event]
-    if (arr === undefined) continue
-    if (!Array.isArray(arr)) {
-      if (file) diags.push({
-        file, field: `hooks.${event}`, severity: 'warning',
-        message: `"hooks.${event}" must be an array — dropped`,
-        fix: `Correct or remove "hooks.${event}" in "${file}".`,
-      })
-      continue
-    }
-    const valid: HookEntry[] = []
-    arr.forEach((raw, i) => {
-      const entry = normalizeHookEntry(raw)
-      if (entry) {
-        valid.push(entry)
-      } else if (file) {
-        diags.push({
-          file, field: `hooks.${event}[${i}]`, severity: 'warning',
-          message: 'invalid hook entry dropped (needs a non-empty "command" string)',
-          fix: `Correct or remove this entry in "${file}".`,
-        })
-      }
+  // Unified normalization lives in core/hooks/hooksConfig.ts — the SAME
+  // parser the DefaultHookRunner uses. Before the consolidation this
+  // loader only understood the legacy flat schema and silently dropped
+  // Claude-Code-schema entries (matcher + nested hooks array), so hooks
+  // fired or not depending on which entrypoint loaded them.
+  const normalized = normalizeHooksSection(value, (field, message) => {
+    if (file) diags.push({
+      file, field, severity: 'warning',
+      message,
+      fix: `Correct or remove this entry in "${file}".`,
     })
-    if (valid.length > 0) {
-      out[event] = valid
-      any = true
-    }
-  }
-  return any ? out : undefined
+  })
+  return normalized ?? undefined
 }
 
 function normalizeTaskContext(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): TaskContext | undefined {
@@ -436,15 +399,17 @@ function mergeSettings(a: OvogoSettings, b: OvogoSettings): OvogoSettings {
       }
     : undefined
 
+  // Hooks merge: concat per canonical event (both sides already
+  // normalized to the CC schema by normalizeHooksSection).
+  const mergedHooks: HookConfig = {}
+  for (const key of new Set([...Object.keys(a.hooks ?? {}), ...Object.keys(b.hooks ?? {})])) {
+    const event = key as keyof HookConfig
+    mergedHooks[event] = [...(a.hooks?.[event] ?? []), ...(b.hooks?.[event] ?? [])]
+  }
+  const hasHooks = Object.keys(mergedHooks).length > 0
+
   return {
-    hooks: {
-      PreToolCall: [...(a.hooks?.PreToolCall ?? []), ...(b.hooks?.PreToolCall ?? [])],
-      PostToolCall: [...(a.hooks?.PostToolCall ?? []), ...(b.hooks?.PostToolCall ?? [])],
-      UserPromptSubmit: [...(a.hooks?.UserPromptSubmit ?? []), ...(b.hooks?.UserPromptSubmit ?? [])],
-      OnError: [...(a.hooks?.OnError ?? []), ...(b.hooks?.OnError ?? [])],
-      OnComplete: [...(a.hooks?.OnComplete ?? []), ...(b.hooks?.OnComplete ?? [])],
-      OnContextOverflow: [...(a.hooks?.OnContextOverflow ?? []), ...(b.hooks?.OnContextOverflow ?? [])],
-    },
+    ...(hasHooks ? { hooks: mergedHooks } : {}),
     taskContext: mergedTaskContext,
     permissions: mergedPermissions,
     poor: b.poor ?? a.poor,

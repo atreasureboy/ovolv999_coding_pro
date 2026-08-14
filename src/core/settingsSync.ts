@@ -23,6 +23,7 @@ import { homedir, hostname } from 'os'
 import { execSync } from 'child_process'
 import { randomBytes, createHash, createCipheriv, createDecipheriv, scryptSync } from 'crypto'
 import { warnConfigOnce } from '../config/diagnostics.js'
+import { scanText } from '../utils/secretScanner.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -228,7 +229,23 @@ export function syncPush(options: SyncPushOptions): SyncResult {
   if (options.passphrase && !options.noEncrypt) {
     payload = encryptBundle(bundle, options.passphrase)
   } else {
-    payload = JSON.stringify(bundle, null, 2)
+    // Round 26 (L3): unencrypted bundles carry hooks (shell commands) and
+    // settings verbatim — run the secret scanner before the payload
+    // leaves the machine and refuse the push on hits. Encrypted payloads
+    // skip the scan (ciphertext is inert).
+    const plaintext = JSON.stringify(bundle, null, 2)
+    const scan = scanText(plaintext)
+    if (scan.hasSecrets) {
+      return {
+        success: false,
+        message:
+          `Bundle contains ${scan.matches.length} secret-like value(s) ` +
+          `(${scan.matches.slice(0, 3).map((h) => h.type).join(', ')}) — push refused. ` +
+          `Remove the secrets or push with a passphrase (encrypted).`,
+        warnings: scan.matches.map((h) => h.type),
+      }
+    }
+    payload = plaintext
   }
 
   switch (options.transport) {

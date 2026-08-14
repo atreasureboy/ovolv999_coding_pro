@@ -36,7 +36,7 @@ import type { CostTracker } from '../costTracker.js'
 import type { BackgroundTaskManager } from '../backgroundTaskManager.js'
 import type { FileHistory } from '../fileHistory.js'
 import type { PermissionManager } from '../permissionSystem.js'
-import type { RendererInterface } from '../../ui/renderer.js'
+import type { RendererInterface } from '../types.js'
 import type { EventLog } from '../eventLog.js'
 import {
   transitionQueryState,

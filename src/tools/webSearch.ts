@@ -221,14 +221,16 @@ async function googleSearch(
   engineId: string,
   signal: AbortSignal | undefined,
 ): Promise<SearchResult[]> {
+  // Security (M7): the API key travels in the X-Goog-Api-Key header, not
+  // the URL — query strings leak into proxy/server logs.
   const url =
-    `https://www.googleapis.com/customsearch/v1?key=${apiKey}` +
-    `&cx=${engineId}&q=${encodeURIComponent(query)}&num=${Math.min(numResults, 10)}`
+    `https://www.googleapis.com/customsearch/v1` +
+    `?cx=${encodeURIComponent(engineId)}&q=${encodeURIComponent(query)}&num=${Math.min(numResults, 10)}`
 
   try {
     const data = await fetchWithAbort<GoogleResponse>(
       url,
-      {},
+      { headers: { 'X-Goog-Api-Key': apiKey } },
       signal,
       'google',
       (r) => r.json() as Promise<GoogleResponse>,
@@ -397,9 +399,18 @@ Backends (set env vars for better results):
         return { content: error.message || 'Search timed out.', isError: true }
       }
       return {
-        content: `Search error: ${error.message ?? String(err)}`,
+        content: `Search error: ${redactSecrets(error.message ?? String(err))}`,
         isError: true,
       }
     }
   }
+}
+
+/** Scrub credential-looking substrings (query-string keys, bearer tokens)
+ *  from error text before it lands in the transcript. */
+function redactSecrets(text: string): string {
+  return text
+    .replace(/([?&](?:key|api_key|apikey|token|access_token)=)[^&\s"']+/gi, '$1[REDACTED]')
+    .replace(/\b(sk|rk)-[A-Za-z0-9_-]{8,}\b/g, '$1-[REDACTED]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._-]{8,}\b/gi, '$1[REDACTED]')
 }

@@ -7,7 +7,6 @@
  *   - SymbolIndex         (codebase-wide symbol lookup)
  *   - CodeReview          (deterministic change review)
  *   - LazyTool            (deferred instantiation)
- *   - SyntaxHighlight     (terminal/HTML highlighting)
  *   - ProjectExplorer     (structure discovery)
  *
  * All tests are pure/unit-level (no network, no LLM). Cross-platform.
@@ -25,7 +24,6 @@ import { SymbolIndex } from '../../src/core/symbolIndex.js'
 import { reviewChanges, formatReviewReport, readChangesFromDisk } from '../../src/core/codeReview.js'
 
 import { createLazyTool, type LazyTool } from '../../src/core/lazyTool.js'
-import { highlight, highlightDiff, detectLanguage } from '../../src/core/syntaxHighlight.js'
 import { exploreProject, formatProjectOverview } from '../../src/core/projectExplorer.js'
 import { analyzeFile, semanticDiff, findReferences } from '../../src/core/codeStructure.js'
 
@@ -339,29 +337,6 @@ describe('LazyTool', () => {
   })
 })
 
-// ── SyntaxHighlight ────────────────────────────────────────────────────────
-
-describe('SyntaxHighlight', () => {
-  it('detects language from extension', () => {
-    expect(detectLanguage('file.ts')).toBe('ts')
-    expect(detectLanguage('file.py')).toBe('python')
-    expect(detectLanguage('file.go')).toBe('go')
-    expect(detectLanguage('file.json')).toBe('json')
-    expect(detectLanguage('file.unknown')).toBe('text')
-  })
-
-  it('highlights TS code with ANSI codes', () => {
-    const out = highlight('const x: number = 1', { language: 'ts' })
-    expect(out).toContain('\x1b[')
-  })
-
-  it('highlightDiff marks added/removed lines', () => {
-    const out = highlightDiff('-old line\n+new line\n context\n', 'diff')
-    expect(out).toContain('\x1b[')
-    expect(out).toContain('+')
-    expect(out).toContain('-')
-  })
-})
 
 // ── ProjectExplorer ────────────────────────────────────────────────────────
 

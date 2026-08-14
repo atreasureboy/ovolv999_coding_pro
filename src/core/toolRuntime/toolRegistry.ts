@@ -17,7 +17,7 @@
  */
 
 import type { Tool } from '../types.js'
-import type { RendererInterface } from '../../ui/renderer.js'
+import type { RendererInterface } from '../types.js'
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>()

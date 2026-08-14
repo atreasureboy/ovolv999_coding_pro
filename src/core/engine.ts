@@ -39,8 +39,8 @@ import type {
   Tool,
 } from './types.js'
 import { createTools } from '../tools/index.js'
-import { tmuxLayout } from '../ui/tmuxLayout.js'
-import type { RendererInterface } from '../ui/renderer.js'
+import { tmuxLayout } from './tmuxLayout.js'
+import type { RendererInterface } from './types.js'
 import { globalModuleRegistry } from './moduleRegistry.js'
 import { ModuleManager } from './moduleRuntime/moduleManager.js'
 import { applyAgentToConfig } from './agentPresets.js'
@@ -388,6 +388,7 @@ export class ExecutionEngine {
            factory: config.agentFactory,
            parentConfig: config,
            parentRenderer: renderer,
+           createFileRenderer: config.createFileRenderer,
            runRegistry: this.runRegistry,
            taskGraph: this.taskGraph,
            taskGraphResolver,
