@@ -139,7 +139,6 @@ export function extractAnthropicBetaHeaders(providerOptions?: AnthropicProviderO
  * events through this translator so StreamConsumer doesn't change.
  */
 export class AnthropicChunkTranslator {
-  private readonly chunks: OpenAI.Chat.ChatCompletionChunk[] = []
   private readonly toolAccumulators = new Map<number, ToolAccumulator>()
   private readonly modelId: string
   private inputTokens = 0
@@ -222,39 +221,36 @@ export class AnthropicChunkTranslator {
       }
       case 'message_delta': {
         if (event.delta.stop_reason) this.finishReason = event.delta.stop_reason
-        if (event.usage?.output_tokens) this.outputTokens += event.usage.output_tokens
+        // Anthropic contract: message_delta.usage.output_tokens is the
+        // CUMULATIVE total (typically sent once, at the end) — NOT a
+        // per-event delta. Assigning (not +=) matters twice over:
+        //   1. message_start already seeded outputTokens with a small
+        //      initial count — `+=` would double-count that seed.
+        //   2. A backend that sends multiple message_delta events with
+        //      running totals would be summed instead of last-wins.
+        if (typeof event.usage?.output_tokens === 'number') {
+          this.outputTokens = event.usage.output_tokens
+        }
         break
       }
       case 'message_stop': {
-        // OpenAI-style usage normalization: prompt_tokens is the TOTAL
-        // input (uncached + cache-read + cache-write) so downstream
-        // cost math can uniformly do (input − cached)×full + cached×rate.
-        // cached_tokens carries the cache-READ portion (the OpenAI
-        // convention); cache-write rides along as a non-standard extra
-        // that streamConsumer picks up defensively.
-        const totalInput = this.inputTokens + this.cacheReadTokens + this.cacheWriteTokens
+        // Usage is emitted ONCE, by finalizeWithUsage() (the single
+        // emission point after the SDK stream ends). Emitting here too
+        // produced a duplicate usage-bearing chunk; overwrite-style
+        // consumers tolerated it, but any accumulating consumer would
+        // have double-counted the entire call.
         out.push(this.makeChunk({
           choices: [{
             index: 0,
             delta: {},
             finish_reason: this.mapFinishReason(this.finishReason),
           }],
-          usage: this.outputTokens > 0
-            ? {
-                prompt_tokens: totalInput,
-                completion_tokens: this.outputTokens,
-                total_tokens: totalInput + this.outputTokens,
-                ...(this.cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: this.cacheReadTokens } } : {}),
-                ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
-              }
-            : undefined,
         }))
         break
       }
       default:
         break
     }
-    this.chunks.push(...out)
     return out
   }
 
@@ -317,7 +313,6 @@ export class AnthropicChunkTranslator {
         ...(this.cacheWriteTokens > 0 ? { cache_creation_input_tokens: this.cacheWriteTokens } : {}),
       },
     })
-    this.chunks.push(chunk)
     return chunk
   }
 }

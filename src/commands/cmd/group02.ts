@@ -119,8 +119,11 @@ registerCommand({
       ctx.setHistory(ctx.history.slice(0, r.historyLength))
       let out = `Rewound to end of turn ${n}: conversation truncated to ${r.historyLength} messages.`
       if (r.restoredFiles.length > 0) out += `\nRestored ${r.restoredFiles.length} file(s) to their turn-${n} state.`
+      if (r.deletedFiles.length > 0) out += `\nDeleted ${r.deletedFiles.length} file(s) created after turn ${n}.`
       if (r.failedFiles.length > 0) out += `\nFailed to restore: ${r.failedFiles.join(', ')}`
-      out += '\nLater checkpoints are now stale — future turns append fresh ones.'
+      if (r.truncatedCheckpoints > 0) out += `\nDropped ${r.truncatedCheckpoints} future checkpoint(s) from the rewound branch.`
+      else if (r.message) out += '\n' + r.message
+      out += '\nFuture turns append fresh anchors from this point.'
       return text(out)
     }
 

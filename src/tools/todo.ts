@@ -129,7 +129,7 @@ Operations:
     // Merge-by-id / full-replace semantics live in the shared store
     updateTodos(todos, context.sessionDir)
 
-    const rendered = renderTodoList()
+    const rendered = renderTodoList(context.sessionDir)
     return {
       content: `Tasks updated:\n${rendered}`,
       isError: false,

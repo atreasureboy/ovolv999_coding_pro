@@ -265,7 +265,12 @@ function adaptEventRecord(e: Record<string, unknown> & { type: string }): (Recor
   switch (e.type) {
     case 'message_start': {
       const m = (e.message ?? {}) as Record<string, unknown>
-      const usage = m.usage as { input_tokens?: number; output_tokens?: number } | undefined
+      const usage = m.usage as {
+        input_tokens?: number
+        output_tokens?: number
+        cache_read_input_tokens?: number
+        cache_creation_input_tokens?: number
+      } | undefined
       return {
         type: 'message_start',
         message: {
@@ -275,7 +280,17 @@ function adaptEventRecord(e: Record<string, unknown> & { type: string }): (Recor
           content: m.content,
           model: m.model,
           stop_reason: m.stop_reason,
-          usage: usage ? { input_tokens: usage.input_tokens ?? 0, output_tokens: usage.output_tokens ?? 0 } : undefined,
+          // Round 30: cache fields MUST survive the SDK→translator hop —
+          // dropping them here made every cached turn bill full input
+          // price (the totals arrived as plain input_tokens upstream).
+          usage: usage
+            ? {
+                input_tokens: usage.input_tokens ?? 0,
+                output_tokens: usage.output_tokens ?? 0,
+                ...(usage.cache_read_input_tokens !== undefined ? { cache_read_input_tokens: usage.cache_read_input_tokens } : {}),
+                ...(usage.cache_creation_input_tokens !== undefined ? { cache_creation_input_tokens: usage.cache_creation_input_tokens } : {}),
+              }
+            : undefined,
         },
       }
     }

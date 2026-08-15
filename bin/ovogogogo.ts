@@ -1528,6 +1528,10 @@ async function runSingleTask(
   if (sessionDir && historyRef.length > 0) {
     try {
       saveSession(sessionDir, historyRef, taskOutcomeSummary)
+      // Round 30: single-shot runs get a rewind anchor too (the REPL's
+      // runTask already appends one per turn). Non-interactive turns are
+      // resumable, so they must be rewound to a consistent anchor as well.
+      appendCheckpoint(sessionDir, historyRef, engine.getFileHistory(), task.slice(0, 80))
     } catch (err: unknown) {
       warnOnce('session:save:singleTask', `Failed to persist session: ${(err as Error).message}`)
     }

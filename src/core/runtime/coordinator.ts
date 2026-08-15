@@ -1047,7 +1047,7 @@ export class RuntimeCoordinator {
             // Round 27 (live todos): re-state the checklist every LLM call
             // — this is what makes a todo list STEER the model instead of
             // being a one-shot tool output that compaction later eats.
-            const todoBlock = renderTodoPromptBlock()
+            const todoBlock = renderTodoPromptBlock(config.sessionDir)
             const effectivePrompt = wsBlock
               ? `${systemPrompt}\n\n${wsBlock}${todoBlock ? '\n\n' + todoBlock : ''}`
               : todoBlock

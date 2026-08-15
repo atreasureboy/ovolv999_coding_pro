@@ -254,16 +254,16 @@ describe('Todos — persistence + prompt injection', () => {
     // Fresh process simulation: reset + hydrate from disk
     resetTodos()
     ensureLoaded(dir)
-    expect(getTodos()).toHaveLength(2)
-    expect(getTodos()[0].content).toBe('Fix auth')
+    expect(getTodos(dir)).toHaveLength(2)
+    expect(getTodos(dir)[0].content).toBe('Fix auth')
   })
 
   it('renders the system-prompt block only when todos exist', () => {
     resetTodos()
-    expect(renderTodoPromptBlock()).toBe('')
+    expect(renderTodoPromptBlock(dir)).toBe('')
     ensureLoaded(dir)
     updateTodos([{ id: '1', content: 'Task A', status: 'pending', priority: 'high' }], dir)
-    const block = renderTodoPromptBlock()
+    const block = renderTodoPromptBlock(dir)
     expect(block).toContain('# Current task checklist')
     expect(block).toContain('Task A')
     expect(block).toContain('1 task(s) remaining')

@@ -136,7 +136,8 @@ export class FileWriteTool implements Tool {
     }
 
     // Back up the file before modifying (undo/checkpoint support)
-    context.fileHistory?.trackEdit(file_path)
+    const existedBefore = existsSync(file_path)
+    if (existedBefore) context.fileHistory?.trackEdit(file_path)
 
     try {
       // Atomic write: write to a uniquely-suffixed tmp file in the same
@@ -149,6 +150,12 @@ export class FileWriteTool implements Tool {
       //   - subsequent Write/Edit hash-checks against this baseline
       // Pass `content` (the bytes we just wrote) to populate the hash.
       markFileRead(file_path, content)
+
+      // Creation marker — only AFTER the write succeeded, and only for
+      // files that did not exist before this call (Round 30 audit D:
+      // marking a failed write would let /rewind later delete a file the
+      // user hand-created at the same path).
+      if (!existedBefore) context.fileHistory?.markCreated(file_path)
 
       // Line count: strip one trailing newline so "hello\n" = 1 line, not 2
       const lines = content.endsWith('\n') ? content.slice(0, -1).split('\n').length : content.split('\n').length

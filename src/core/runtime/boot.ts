@@ -164,6 +164,12 @@ export async function boot(params: BootParams): Promise<BootResult> {
   // ── Build tool context ──
   const toolContext: ToolContext = {
     cwd: config.cwd,
+    // Round 30 audit E: set sessionDir DIRECTLY (the WorkspaceModule patch
+    // also supplies it, but a project config with custom enabledModules
+    // that omits "workspace" would leave it undefined here while the
+    // coordinator still keys todos by config.sessionDir — a split-brain
+    // that silently broke todo persistence + prompt steering).
+    sessionDir: config.sessionDir,
     permissionMode: config.permissionMode,
     permissionManager,
     signal: turnAbortController.signal,

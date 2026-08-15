@@ -128,11 +128,25 @@ describe('AnthropicChunkTranslator (R8)', () => {
     expect(chunks[0]?.choices[0]?.finish_reason).toBe('length')
   })
 
-  it('emits usage chunk on message_stop when usage is available', () => {
+  it('usage is emitted ONCE (finalize) — message_stop carries no usage; message_delta is cumulative', () => {
     const t = new AnthropicChunkTranslator('claude-sonnet-4-6')
+    t.push({
+      type: 'message_start',
+      message: { id: 'm', type: 'message', role: 'assistant', content: [], model: 'claude-sonnet-4-6', stop_reason: null, usage: { input_tokens: 30, output_tokens: 3 } },
+    })
+    // Multiple message_delta events with RUNNING TOTALS (the Anthropic
+    // contract is cumulative) — last one must win, never summed.
+    t.push({ type: 'message_delta', delta: { stop_reason: null, stop_sequence: null }, usage: { output_tokens: 27 } })
     t.push({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 50 } })
-    const chunks = t.push({ type: 'message_stop' })
-    expect(chunks[0]?.usage?.completion_tokens).toBe(50)
+    const stopChunks = t.push({ type: 'message_stop' })
+    // message_stop chunk: finish reason only, NO usage (single-emission
+    // contract — the old duplicate usage chunk double-counted for any
+    // accumulating consumer).
+    expect(stopChunks[0]?.choices[0]?.finish_reason).toBe('stop')
+    expect(stopChunks[0]?.usage).toBeUndefined()
+    const final = t.finalizeWithUsage(undefined)
+    // 50 (cumulative final), NOT 3+27+50 — and NOT 3+50.
+    expect(final.usage?.completion_tokens).toBe(50)
   })
 
   it('captures input_tokens from message_start', () => {

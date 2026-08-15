@@ -128,6 +128,14 @@ export class FileHistory {
   private indexPath: string
   /** filePath → array of backup paths (chronological, [0] = original) */
   private edits = new Map<string, string[]>()
+  /**
+   * Paths whose trackEdit ran while the file did NOT exist — i.e. files
+   * CREATED by this session's Write tool. In-memory only: the checkpoint
+   * anchors persist the cumulative created-set per turn, which is what a
+   * cross-process rewind consults; this set serves the live session's
+   * append path.
+   */
+  private createdThisSession = new Set<string>()
   private versionCounter = 0
 
   constructor(sessionDir: string) {
@@ -524,6 +532,23 @@ export class FileHistory {
       } catch { /* backup deleted */ }
       return { version: i, timestamp, size, backupPath }
     })
+  }
+
+  /** Paths created by this session (via {@link markCreated} after a
+   *  successful Write). In-memory only — see {@link createdThisSession}
+   *  for the persistence story. */
+  getCreatedFiles(): string[] {
+    return [...this.createdThisSession]
+  }
+
+  /**
+   * Record that this session CREATED `filePath`. MUST be called only
+   * AFTER the creating write succeeded — marking pre-write would let a
+   * failed write + a user hand-created file at the same path be silently
+   * deleted by /rewind (Round 30 audit finding D).
+   */
+  markCreated(filePath: string): void {
+    this.createdThisSession.add(resolve(filePath))
   }
 
   /** Restore a file to its oldest still-tracked version. */
