@@ -1075,7 +1075,7 @@ async function runRepl(
             // Round 28 (conversation rewind): anchor this turn — /rewind
             // turn N can then restore BOTH the conversation prefix and
             // the file state as of this moment.
-            appendCheckpoint(sessionDir, history, engine.getFileHistory(), currentPrompt)
+            appendCheckpoint(sessionDir, history, engine.getFileHistory(), currentPrompt, cwd)
           } catch (err: unknown) {
             renderer.warn(`Failed to persist session: ${(err as Error).message}`)
           }
@@ -1531,7 +1531,7 @@ async function runSingleTask(
       // Round 30: single-shot runs get a rewind anchor too (the REPL's
       // runTask already appends one per turn). Non-interactive turns are
       // resumable, so they must be rewound to a consistent anchor as well.
-      appendCheckpoint(sessionDir, historyRef, engine.getFileHistory(), task.slice(0, 80))
+      appendCheckpoint(sessionDir, historyRef, engine.getFileHistory(), task.slice(0, 80), cwd)
     } catch (err: unknown) {
       warnOnce('session:save:singleTask', `Failed to persist session: ${(err as Error).message}`)
     }

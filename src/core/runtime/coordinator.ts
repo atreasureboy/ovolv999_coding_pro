@@ -282,7 +282,11 @@ export class RuntimeCoordinator {
 
     // Round 27 (live todos): hydrate the persisted checklist for this
     // session BEFORE the first LLM call so resumed sessions keep steering.
-    try { ensureLoaded(config.sessionDir) } catch { /* best-effort */ }
+    // Round 31: scope key = todoScopeId (sub-agents) ?? sessionDir (main);
+    // a scope id never hydrates from disk — sub-agent plans are ephemeral.
+    try {
+      ensureLoaded(this.todoScopeKey(config), config.todoScopeId ? undefined : config.sessionDir)
+    } catch { /* best-effort */ }
 
     // R7: SessionStart hook (best-effort, fires once at run start).
     if (config.hookRunner?.runSessionStart) {
@@ -1047,7 +1051,7 @@ export class RuntimeCoordinator {
             // Round 27 (live todos): re-state the checklist every LLM call
             // — this is what makes a todo list STEER the model instead of
             // being a one-shot tool output that compaction later eats.
-            const todoBlock = renderTodoPromptBlock(config.sessionDir)
+            const todoBlock = renderTodoPromptBlock(this.todoScopeKey(config))
             const effectivePrompt = wsBlock
               ? `${systemPrompt}\n\n${wsBlock}${todoBlock ? '\n\n' + todoBlock : ''}`
               : todoBlock
@@ -2105,6 +2109,12 @@ export class RuntimeCoordinator {
     if (attempt.success && attempt.usage) {
       this.recordUsage(attempt.usage, startedAt, attempt.model)
     }
+  }
+
+  /** Round 31: the TodoStore bucket this engine addresses — scope id for
+   *  sub-agents, sessionDir for the main agent, '' otherwise. */
+  private todoScopeKey(config: { todoScopeId?: string; sessionDir?: string }): string {
+    return config.todoScopeId ?? config.sessionDir ?? ''
   }
 
   private recordUsage(

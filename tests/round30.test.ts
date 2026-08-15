@@ -146,10 +146,10 @@ describe('TodoStore — multi-session isolation (same process)', () => {
   })
 
   it('undefined-sessionDir engines share the legacy default bucket', () => {
-    ensureLoaded(undefined)
-    updateTodos([{ id: 'x', content: 'shared', status: 'pending', priority: 'medium' }], undefined)
-    expect(getTodos(undefined).map((t) => t.content)).toEqual(['shared'])
-    expect(renderTodoPromptBlock(undefined)).toContain('shared')
+    ensureLoaded('')
+    updateTodos([{ id: 'x', content: 'shared', status: 'pending', priority: 'medium' }], '')
+    expect(getTodos('').map((t) => t.content)).toEqual(['shared'])
+    expect(renderTodoPromptBlock('')).toContain('shared')
     // And a dir-keyed session does not see it
     expect(renderTodoPromptBlock(dirA)).toBe('')
   })

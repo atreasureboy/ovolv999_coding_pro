@@ -170,6 +170,9 @@ export async function boot(params: BootParams): Promise<BootResult> {
     // coordinator still keys todos by config.sessionDir — a split-brain
     // that silently broke todo persistence + prompt steering).
     sessionDir: config.sessionDir,
+    // Round 31: same-value guarantee for the todo scope — the tool and
+    // the coordinator must address the SAME bucket.
+    todoScopeId: config.todoScopeId,
     permissionMode: config.permissionMode,
     permissionManager,
     signal: turnAbortController.signal,

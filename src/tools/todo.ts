@@ -12,6 +12,16 @@ import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/type
 import type { TodoItem } from '../core/todoStore.js'
 import { ensureLoaded, updateTodos, renderTodoList } from '../core/todoStore.js'
 
+/** Round 31: the bucket this engine's TodoWrite addresses — scope id for
+ *  sub-agents, sessionDir for the main agent, '' otherwise. Persistence
+ *  targets sessionDir only (sub-agent plans are ephemeral by design). */
+function todoScope(context: ToolContext): { key: string; persistDir?: string } {
+  return {
+    key: context.todoScopeId ?? context.sessionDir ?? '',
+    ...(context.todoScopeId ? {} : context.sessionDir ? { persistDir: context.sessionDir } : {}),
+  }
+}
+
 export type { TodoItem }
 
 let updateLock = false
@@ -102,7 +112,8 @@ Operations:
     try {
       // Hydrate from <sessionDir>/todo.json on first use in this session
       // (resumed sessions keep their plan).
-      ensureLoaded(context.sessionDir)
+      const scope = todoScope(context)
+      ensureLoaded(scope.key, scope.persistDir)
       return Promise.resolve(this.updateTodos(input, context))
     } finally {
       updateLock = false
@@ -127,9 +138,10 @@ Operations:
     }
 
     // Merge-by-id / full-replace semantics live in the shared store
-    updateTodos(todos, context.sessionDir)
+    const scope = todoScope(context)
+    updateTodos(todos, scope.key, scope.persistDir)
 
-    const rendered = renderTodoList(context.sessionDir)
+    const rendered = renderTodoList(scope.key)
     return {
       content: `Tasks updated:\n${rendered}`,
       isError: false,

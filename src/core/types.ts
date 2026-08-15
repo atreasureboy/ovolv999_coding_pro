@@ -228,6 +228,11 @@ export interface ToolContext {
   /** Session output directory — for tools that need to write artifacts
    * (e.g. generated files, logs, reports). */
   sessionDir?: string
+  /** Round 31: logical todo scope — mirrors EngineConfig.todoScopeId so
+   *  the TodoWrite tool addresses the same bucket the coordinator
+   *  renders into the system prompt (sub-agents: scope id; main agent:
+   *  sessionDir; none: legacy shared ''). */
+  todoScopeId?: string
   /** Event log for audit trail — best-effort, never throws */
   eventLog?: EventLog
   /** Typed runtime event bus — tools emit structured events for observability hooks */
@@ -618,6 +623,13 @@ export interface EngineConfig {
    * pane slots degrade to the parent renderer.
    */
   createFileRenderer?: (path: string) => RendererInterface
+  /**
+   * Round 31 (todo isolation): logical todo-scope key for THIS engine.
+   * AgentTool assigns each child engine a unique id so parallel
+   * sub-agents (which all run sessionDir=undefined) no longer share one
+   * TodoStore bucket. sessionDir continues to own disk persistence.
+   */
+  todoScopeId?: string
   /**
    * Internal — AgentTool threads its current call-chain depth through the
    * config so the MAX_CALL_DEPTH check stays global across nested spawns

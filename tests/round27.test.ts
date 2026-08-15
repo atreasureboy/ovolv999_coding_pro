@@ -243,17 +243,17 @@ describe('Todos — persistence + prompt injection', () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it('persists to <sessionDir>/todo.json and hydrates on ensureLoaded', () => {
-    ensureLoaded(dir)
+    ensureLoaded(dir, dir)
     updateTodos([
       { id: '1', content: 'Fix auth', status: 'in_progress', priority: 'high', activeForm: 'Fixing auth' },
       { id: '2', content: 'Write tests', status: 'pending', priority: 'medium' },
-    ], dir)
+    ], dir, dir)
     const persisted = join(dir, 'todo.json')
     expect(existsSync(persisted)).toBe(true)
 
     // Fresh process simulation: reset + hydrate from disk
     resetTodos()
-    ensureLoaded(dir)
+    ensureLoaded(dir, dir)
     expect(getTodos(dir)).toHaveLength(2)
     expect(getTodos(dir)[0].content).toBe('Fix auth')
   })
@@ -261,8 +261,8 @@ describe('Todos — persistence + prompt injection', () => {
   it('renders the system-prompt block only when todos exist', () => {
     resetTodos()
     expect(renderTodoPromptBlock(dir)).toBe('')
-    ensureLoaded(dir)
-    updateTodos([{ id: '1', content: 'Task A', status: 'pending', priority: 'high' }], dir)
+    ensureLoaded(dir, dir)
+    updateTodos([{ id: '1', content: 'Task A', status: 'pending', priority: 'high' }], dir, dir)
     const block = renderTodoPromptBlock(dir)
     expect(block).toContain('# Current task checklist')
     expect(block).toContain('Task A')

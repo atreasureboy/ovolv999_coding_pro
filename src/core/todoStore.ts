@@ -8,13 +8,15 @@
  * and persists to <sessionDir>/todo.json so a resumed session picks up
  * where it left off.
  *
- * Round 30 (multi-session fix): the store is KEYED BY sessionDir. A
- * single process hosts multiple engines (main agent + AgentTool
- * sub-agents, tests) — the previous single module-global array meant the
- * sub-agent's ensureLoaded clobbered the parent's checklist and every
- * engine rendered the SAME list into its system prompt. Engines without
- * a sessionDir share the '' bucket (single-engine processes behave
- * exactly as before).
+ * Round 30 (multi-session fix): store keyed per engine instead of one
+ * module-global array.
+ *
+ * Round 31 (sub-agent ↔ sub-agent fix): the KEY is now a logical scope —
+ * `todoScopeId ?? sessionDir ?? ''`. sessionDir ALONE was insufficient:
+ * AgentTool children run with sessionDir=undefined, so every parallel
+ * sub-agent shared the '' bucket and clobbered each other's checklists.
+ * Each child engine now carries a unique todoScopeId; sessionDir is used
+ * ONLY for disk persistence (main agent), never for isolation.
  *
  * CC parity: prompt injection is what makes todos STEER the model — the
  * plan survives context compaction because it is re-stated every turn.
@@ -41,12 +43,11 @@ interface SessionTodos {
 
 const sessions = new Map<string, SessionTodos>()
 
-function bucket(sessionDir: string | undefined): SessionTodos {
-  const key = sessionDir ?? ''
-  let s = sessions.get(key)
+function bucket(scopeKey: string): SessionTodos {
+  let s = sessions.get(scopeKey)
   if (!s) {
     s = { items: [], loaded: false }
-    sessions.set(key, s)
+    sessions.set(scopeKey, s)
   }
   return s
 }
@@ -55,14 +56,19 @@ function todoPath(sessionDir: string): string {
   return join(sessionDir, TODO_FILENAME)
 }
 
-/** Hydrate from <sessionDir>/todo.json if we haven't already for this dir.
- *  Best-effort: corrupt/missing files just start an empty list. */
-export function ensureLoaded(sessionDir: string | undefined): void {
-  const s = bucket(sessionDir)
-  if (!sessionDir || s.loaded) return
+/** Hydrate from <persistDir>/todo.json if we haven't already for this
+ *  scope. Best-effort: corrupt/missing files just start an empty list. */
+export function ensureLoaded(scopeKey: string, persistDir?: string): void {
+  const s = bucket(scopeKey)
+  if (s.loaded) return
+  // Round 31 audit F2: only latch `loaded` when a persistDir was actually
+  // consulted — a scope first touched without one (e.g. the coordinator's
+  // pre-LLM call) must not poison a LATER disk-bearing call (the tool's)
+  // into skipping hydration, which wiped the resumed plan on first write.
+  if (!persistDir) return
   s.loaded = true
   try {
-    const p = todoPath(sessionDir)
+    const p = todoPath(persistDir)
     if (existsSync(p)) {
       const parsed = JSON.parse(readFileSync(p, 'utf8')) as unknown
       if (Array.isArray(parsed)) {
@@ -79,23 +85,23 @@ export function ensureLoaded(sessionDir: string | undefined): void {
   } catch { /* corrupt file → fresh list */ }
 }
 
-function persist(sessionDir: string | undefined): void {
-  if (!sessionDir) return
+function persist(scopeKey: string, persistDir: string | undefined): void {
+  if (!persistDir) return
   try {
-    mkdirSync(sessionDir, { recursive: true })
-    writeFileSync(todoPath(sessionDir), JSON.stringify(bucket(sessionDir).items, null, 2) + '\n', 'utf8')
+    mkdirSync(persistDir, { recursive: true })
+    writeFileSync(todoPath(persistDir), JSON.stringify(bucket(scopeKey).items, null, 2) + '\n', 'utf8')
   } catch { /* best-effort persistence */ }
 }
 
-export function getTodos(sessionDir?: string): TodoItem[] {
-  return bucket(sessionDir).items
+export function getTodos(scopeKey: string): TodoItem[] {
+  return bucket(scopeKey).items
 }
 
 /** Merge-by-id semantics identical to the previous in-tool logic:
  *  full replace when the incoming set covers every existing id,
  *  otherwise partial update. */
-export function updateTodos(incoming: TodoItem[], sessionDir: string | undefined): TodoItem[] {
-  const s = bucket(sessionDir)
+export function updateTodos(incoming: TodoItem[], scopeKey: string, persistDir?: string): TodoItem[] {
+  const s = bucket(scopeKey)
   const incomingIds = new Set(incoming.map((t) => t.id))
   const allExistingCovered = s.items.every((t) => incomingIds.has(t.id))
   if (s.items.length === 0 || allExistingCovered) {
@@ -113,7 +119,7 @@ export function updateTodos(incoming: TodoItem[], sessionDir: string | undefined
       }
     }
   }
-  persist(sessionDir)
+  persist(scopeKey, persistDir)
   return s.items
 }
 
@@ -122,8 +128,8 @@ export function resetTodos(): void {
   sessions.clear()
 }
 
-export function renderTodoList(sessionDir?: string): string {
-  const items = bucket(sessionDir).items
+export function renderTodoList(scopeKey: string): string {
+  const items = bucket(scopeKey).items
   if (items.length === 0) return '(no tasks)'
   return items
     .map((item) => {
@@ -141,13 +147,13 @@ export function renderTodoList(sessionDir?: string): string {
 
 /** Block injected into the system prompt each LLM call. Empty (no-op)
  *  when no todos exist — zero prompt cost until the model plans. */
-export function renderTodoPromptBlock(sessionDir?: string): string {
-  const items = bucket(sessionDir).items
+export function renderTodoPromptBlock(scopeKey: string): string {
+  const items = bucket(scopeKey).items
   if (items.length === 0) return ''
   const open = items.filter((t) => t.status !== 'completed').length
   const lines = [
     '# Current task checklist (live — keep working it, update via TodoWrite)',
-    renderTodoList(sessionDir),
+    renderTodoList(scopeKey),
     '',
     `${open} task(s) remaining. Mark items completed ONLY when fully done.`,
   ]

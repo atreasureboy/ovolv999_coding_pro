@@ -123,6 +123,8 @@ registerCommand({
       if (r.failedFiles.length > 0) out += `\nFailed to restore: ${r.failedFiles.join(', ')}`
       if (r.truncatedCheckpoints > 0) out += `\nDropped ${r.truncatedCheckpoints} future checkpoint(s) from the rewound branch.`
       else if (r.message) out += '\n' + r.message
+      if (r.skippedPaths.length > 0) out += `\nSkipped (outside workspace boundary): ${r.skippedPaths.join(', ')}`
+      if (r.degradedFiles.length > 0) out += `\nDegraded restore (exact snapshot unavailable): ${r.degradedFiles.join(', ')}`
       out += '\nFuture turns append fresh anchors from this point.'
       return text(out)
     }

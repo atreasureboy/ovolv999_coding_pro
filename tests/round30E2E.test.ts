@@ -229,9 +229,14 @@ describe('Round 30 E2E — real CLI checkpoint + rewind artifacts', () => {
       expect(cps.length).toBeGreaterThanOrEqual(1)
       const anchor = cps[0]
       expect(anchor.historyLength).toBeGreaterThanOrEqual(2)
-      const createdEntry = Object.keys(anchor.files).find((p) => p.endsWith('a.txt'))
-      expect(createdEntry).toBeDefined() // created-file recorded (count 0)
+      const createdEntry = Object.entries(anchor.files).find(([p]) => p.endsWith('a.txt'))
+      expect(createdEntry).toBeDefined() // created file recorded with a v2 entry
+      const v2Entry = createdEntry![1] as { snap?: string; h?: string; absent?: boolean }
+      expect(v2Entry.snap).toBeDefined() // REAL live-content snapshot written
+      expect(v2Entry.h).toMatch(/^[0-9a-f]{64}$/) // content-hash identity
+      expect(v2Entry.absent).toBeUndefined()
       expect(anchor.createdFiles?.some((p) => p.endsWith('a.txt'))).toBe(true)
+      expect(anchor.cwd).toBe(tmpProj) // boundary root captured
 
       // Simulate turn 2 the way the engine would: edit the file again and
       // anchor via the REAL append path against the REAL session dir.
@@ -245,7 +250,7 @@ describe('Round 30 E2E — real CLI checkpoint + rewind artifacts', () => {
       const extra = join(tmpProj, 'late.txt')
       writeFileSync(extra, 'late')
       fh.markCreated(extra)
-      appendCheckpoint(sessionDir, [{ role: 'user', content: 'run1' }, { role: 'assistant', content: 'done' }, { role: 'user', content: 'run2' }, { role: 'assistant', content: 'done2' }], fh, 'run2')
+      appendCheckpoint(sessionDir, [{ role: 'user', content: 'run1' }, { role: 'assistant', content: 'done' }, { role: 'user', content: 'run2' }, { role: 'assistant', content: 'done2' }], fh, 'run2', tmpProj)
 
       // REAL rewind to turn 1 — against artifacts produced by the real CLI
       const history = [
@@ -254,11 +259,21 @@ describe('Round 30 E2E — real CLI checkpoint + rewind artifacts', () => {
         { role: 'user' as const, content: 'run2' },
         { role: 'assistant' as const, content: 'done2' },
       ]
+      // Round 31 E2E: rm a.txt AFTER the real turn-1 anchor (bash-style,
+      // untracked by FileHistory), anchor turn 3 — then rewind to turn 1
+      // and require EXACT revival from the anchor's live snapshot.
+      rmSync(join(tmpProj, 'a.txt'))
+      appendCheckpoint(sessionDir, history, fh, 'turn3-rm', tmpProj) // records absent
+      expect(existsSync(join(tmpProj, 'a.txt'))).toBe(false)
+
       const r = rewindToCheckpoint(sessionDir, 1, history, fh)
       expect(r.ok).toBe(true)
+      expect(r.skippedPaths).toEqual([]) // real cwd boundary satisfied
+      // Revived with the REAL CLI's content — not a backup approximation
+      expect(existsSync(join(tmpProj, 'a.txt'))).toBe(true)
       expect(readFileSync(join(tmpProj, 'a.txt'), 'utf8')).toBe('hello')
       expect(existsSync(extra)).toBe(false)
-      // Future anchor dropped
+      // Future anchors dropped
       expect(listCheckpoints(sessionDir).map((c) => c.turn)).toEqual([1])
     },
     TIMEOUT,

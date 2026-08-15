@@ -27,13 +27,54 @@ import { getModelInfo, MODELS } from './providers.js'
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number
-  /** Cache-read rate (USD/1M). Absent → default to 10% of input (the
-   *  standard Anthropic discount; OpenAI auto-caching is ~50% so this
-   *  under-credits savings there — conservative, never over-charges). */
+  /** Cache-read rate (USD/1M). Absent → provider-aware default below. */
   cacheReadPer1M?: number
-  /** Cache-write rate (USD/1M). Absent → default to 125% of input
-   *  (Anthropic's cache-creation premium). */
+  /** Cache-write rate (USD/1M). Absent → provider-aware default below. */
   cacheWritePer1M?: number
+}
+
+/**
+ * Round 31 (P2): default cache-rate multipliers when a registry model
+ * doesn't carry explicit cache pricing — per PROVIDER, because the old
+ * flat "read 10% / write 125%" fallback silently applied Anthropic's
+ * economics to every provider (OpenAI auto-caching bills cached reads at
+ * 50% with no write premium, Google at 25%+storage, …).
+ *
+ * Unknown providers default to 1.0/1.0 — no invented discount, i.e. the
+ * pre-cache behavior — so /cost can never UNDER-report.
+ */
+const PROVIDER_CACHE_RATES: Record<string, { read: number; write: number }> = {
+  anthropic: { read: 0.1, write: 1.25 },   // official: 10% read / 25% write premium
+  openai: { read: 0.5, write: 1.0 },       // cached input 50%, no write premium
+  'openai-compatible': { read: 0.5, write: 1.0 },
+  minimax: { read: 0.5, write: 1.0 },
+  google: { read: 0.25, write: 1.0 },      // explicit context caching
+  xai: { read: 0.5, write: 1.0 },
+  openrouter: { read: 0.5, write: 1.0 },
+  together: { read: 0.5, write: 1.0 },
+  groq: { read: 0.5, write: 1.0 },
+}
+
+function cacheRates(model: string, pricing: ModelPricing): { readPer1M: number; writePer1M: number } {
+  // Round 31 audit F3: getModelInfo is EXACT-match — dated aliases
+  // ("gpt-4o-2024-08-06") resolved pricing via longest-prefix but got
+  // provider '' here → cached reads billed at 100% (80% over-report for
+  // OpenAI aliases). Mirror getModelPricing's prefix strategy.
+  let provider = getModelInfo(model)?.provider
+  if (!provider) {
+    let bestLen = 0
+    for (const m of MODELS) {
+      if (model.startsWith(m.id) && m.id.length > bestLen) {
+        provider = m.provider
+        bestLen = m.id.length
+      }
+    }
+  }
+  const fallback = (typeof provider === 'string' ? PROVIDER_CACHE_RATES[provider] : undefined) ?? { read: 1, write: 1 }
+  return {
+    readPer1M: pricing.cacheReadPer1M ?? pricing.inputPer1M * fallback.read,
+    writePer1M: pricing.cacheWritePer1M ?? pricing.inputPer1M * fallback.write,
+  }
 }
 
 /**
@@ -94,14 +135,15 @@ export function calculateUSDCost(model: string, usage: TokenUsage): number {
   if (!pricing) return 0
   // inputTokens is the TOTAL (uncached + cache-read + cache-write). Split
   // it so each bucket bills exactly once: cached reads at the cache-read
-  // rate, cache writes at the creation premium, the remainder at full.
+  // rate, cache writes at the creation rate, the remainder at full.
+  const rates = cacheRates(model, pricing)
   const cacheRead = usage.cacheReadTokens ?? 0
   const cacheWrite = usage.cacheWriteTokens ?? 0
   const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
   return (
     (uncached / 1_000_000) * pricing.inputPer1M +
-    (cacheRead / 1_000_000) * (pricing.cacheReadPer1M ?? pricing.inputPer1M * 0.1) +
-    (cacheWrite / 1_000_000) * (pricing.cacheWritePer1M ?? pricing.inputPer1M * 1.25) +
+    (cacheRead / 1_000_000) * rates.readPer1M +
+    (cacheWrite / 1_000_000) * rates.writePer1M +
     (usage.outputTokens / 1_000_000) * pricing.outputPer1M
   )
 }

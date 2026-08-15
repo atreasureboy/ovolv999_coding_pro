@@ -23,6 +23,7 @@ import type { RendererInterface } from '../core/types.js'
 import { tmuxLayout } from '../core/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
+import { randomBytes } from 'crypto'
 import { execSync, execFileSync } from 'child_process'
 import { runCommandSync } from '../core/commandRunner.js'
 import { str } from '../core/strings.js'
@@ -966,6 +967,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       cwd: effectiveCwd,
       hookRunner: undefined,
       sessionDir: undefined,
+      // Round 31 (sub-agent ↔ sub-agent todo isolation): every child gets
+      // its own logical TodoStore scope — sessionDir stays undefined so
+      // nothing persists, and parallel siblings can't clobber each other.
+      todoScopeId: `agent-${randomBytes(8).toString('hex')}`,
       // Thread depth so the child engine's AgentTool derives the SAME
       // nextDepth = inheritedDepth + 1 = nextDepth + 1 hop later, even
       // though we don't mutate any counter on the parent side.
