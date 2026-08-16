@@ -88,6 +88,13 @@ export interface ChildEngineLike {
   }>
   abort: () => void
   /**
+   * Round 32 (runtime steer): land a mid-run steering instruction in
+   * the child's control channel. Returns false when no turn is in
+   * flight. Optional — test stubs may omit it (steer then reports
+   * undelivered instead of lying).
+   */
+  steer?: (instruction: string) => boolean
+  /**
    * Tear down engine-owned side effects (background tasks, transient
    * caches). Idempotent — safe to call multiple times. Must NOT throw.
    * AgentTool invokes this exactly once per child after the child's

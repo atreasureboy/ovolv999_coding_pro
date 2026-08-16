@@ -191,6 +191,18 @@ export interface CoordinatorDeps {
   }
 }
 
+/**
+ * Round 32: strip the AgentTool delegation wrapper for INTENT
+ * CLASSIFICATION only (the LLM still sees the full prompt). Returns the
+ * text under '[Task Instructions]' when present; otherwise the input.
+ */
+function extractTaskIntentText(userMessage: string): string {
+  const marker = '[Task Instructions]'
+  const idx = userMessage.indexOf(marker)
+  if (idx === -1) return userMessage
+  return userMessage.slice(idx + marker.length).trim()
+}
+
 export class RuntimeCoordinator {
   private readonly deps: CoordinatorDeps
   /** v0.3.2 (run-scoped runtime contract §Phase 7): per-turn model call attempts so
@@ -343,11 +355,18 @@ export class RuntimeCoordinator {
     // This is the resource-depth axis; TaskKind (below) stays the
     // completion-semantics axis — two axes, one verdict each.
     sharedState.completedSubtasks.clear()
+    // Round 32 (delegation-wrapper leakage): AgentTool children run with
+    // a boilerplate [Delegation Contract] wrapper around the actual task
+    // text. Feeding the wrapper to the intent classifiers mis-fired
+    // ("architecture" appears in the wrapper's escalation clause) and
+    // demanded 3 analysis reads from a plain write task — the child could
+    // never complete. Classify the TASK TEXT only.
+    const intentMessage = extractTaskIntentText(userMessage)
     const taskIntent = this.deps.classifyIntent
-      ? this.deps.classifyIntent(userMessage, { planMode: sharedState.planModeActive })
-      : classifyTaskIntent(userMessage, { planMode: sharedState.planModeActive })
+      ? this.deps.classifyIntent(intentMessage, { planMode: sharedState.planModeActive })
+      : classifyTaskIntent(intentMessage, { planMode: sharedState.planModeActive })
     const profileResolution = resolveExecutionProfile(
-      userMessage,
+      intentMessage,
       taskIntent,
       sharedState.executionProfileOverride,
     )
@@ -612,8 +631,8 @@ export class RuntimeCoordinator {
         explorationProfile = null
       }
     }
-    const genericAnalysisReadTarget = explorationProfile ? 0 : workspaceAnalysisReadTarget(userMessage)
-    const executionVerificationRequired = requiresExecutionVerification(userMessage)
+    const genericAnalysisReadTarget = explorationProfile ? 0 : workspaceAnalysisReadTarget(intentMessage)
+    const executionVerificationRequired = requiresExecutionVerification(intentMessage)
 
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
@@ -826,6 +845,9 @@ export class RuntimeCoordinator {
     // from RunScopedRuntimeContext when available — NOT a local instance.
     // This ensures all components share the same control-message channel.
     const controlMessageLog = runContext?.controlMessages ?? new ControlMessageLog()
+    // Round 32: keep a live reference so engine.steer() can land
+    // instructions mid-run (cleared when the run loop exits).
+    this.liveControlLog = controlMessageLog
 
     // R6: inject `<available-deferred-tools>` so the model knows it can
     // call search_extra_tools("select:<name>") to load them. Borrowed
@@ -1065,6 +1087,11 @@ export class RuntimeCoordinator {
             const controlMessages = controlMessageLog.renderForProvider()
             // usage is consumed inside callLLM via the recordUsage
             // callback (which feeds costTracker + modelRouter.recordCall).
+            // Round 32 (steer race): clear IMMEDIATELY after rendering —
+            // not after the LLM call. The old placement wiped instructions
+            // appended mid-call (engine.steer during streaming) before
+            // they could ride the next request.
+            controlMessageLog.clear()
             const { assistantText, finishReason, rawToolCalls } =
               await this.callLLM(
                 effectivePrompt,
@@ -1082,7 +1109,6 @@ export class RuntimeCoordinator {
                   })
                 },
               )
-            controlMessageLog.clear()
 
             if (assistantText) {
               lastAssistantText = assistantText
@@ -1345,6 +1371,8 @@ export class RuntimeCoordinator {
       result = { stopped: true, reason: 'error', output: errOutput || `[Error: ${errMsg}]` }
       }
     } finally {
+      // Round 32: the live steer target is only valid during the run.
+      if (this.liveControlLog === controlMessageLog) this.liveControlLog = null
       if (sharedState.currentTurnAbortController === turnAbortController) {
         sharedState.currentTurnAbortController = null
       }
@@ -2109,6 +2137,20 @@ export class RuntimeCoordinator {
     if (attempt.success && attempt.usage) {
       this.recordUsage(attempt.usage, startedAt, attempt.model)
     }
+  }
+
+  /**
+   * Round 32 (runtime steer): land a steering instruction in the control
+   * channel. The next LLM call renders it as a transient high-urgency
+   * directive; it never enters the persisted history. Holds the live
+   * turn's ControlMessageLog — replaced at each run() start.
+   */
+  private liveControlLog: ControlMessageLog | null = null
+
+  injectSteer(instruction: string): void {
+    const log = this.liveControlLog
+    if (!log) throw new Error('no run in flight')
+    log.append({ kind: 'steered_instruction', instruction, at: Date.now() })
   }
 
   /** Round 31: the TodoStore bucket this engine addresses — scope id for

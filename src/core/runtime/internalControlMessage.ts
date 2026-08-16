@@ -23,6 +23,7 @@ import type { OpenAIMessage } from '../types.js'
 
 export type InternalControlMessage =
   | { kind: 'continue_after_length'; remainingTokens: number; partialLength: number }
+  | { kind: 'steered_instruction'; instruction: string; at: number }
   | { kind: 'retry_empty_response'; retryCount: number; max: number }
   | { kind: 'budget_warning'; remainingPct: number }
   | { kind: 'stall_replan'; level: 'soft' | 'hard'; reason: string }
@@ -97,6 +98,8 @@ export function renderInternalControlMessage(msg: InternalControlMessage): OpenA
 
 export function formatControlMessage(msg: InternalControlMessage): string {
   switch (msg.kind) {
+    case 'steered_instruction':
+      return `[runtime control · steered_instruction · URGENT] The user redirected this run mid-flight: "${msg.instruction}". Adjust course NOW — this directive takes precedence over the original task plan for the remainder of the run.`
     case 'continue_after_length':
       return `[runtime control · continue_after_length] ${msg.partialLength} chars were cut. Continue without repeating. Remaining budget: ${msg.remainingTokens} tokens.`
     case 'retry_empty_response':

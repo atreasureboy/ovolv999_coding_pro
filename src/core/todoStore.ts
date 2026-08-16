@@ -123,6 +123,15 @@ export function updateTodos(incoming: TodoItem[], scopeKey: string, persistDir?:
   return s.items
 }
 
+/** Round 32 (scope lifecycle): release ONE scope's bucket. Called from
+ *  engine.dispose() — a sub-agent scope dies with its engine instead of
+ *  accumulating for the process lifetime. Main-agent (sessionDir) scopes
+ *  are also released: the persisted todo.json is the durable record and
+ *  a resumed engine re-hydrates via ensureLoaded. */
+export function releaseScope(scopeKey: string): void {
+  sessions.delete(scopeKey)
+}
+
 /** Test hook — drop every session bucket (and the disk-loaded flags). */
 export function resetTodos(): void {
   sessions.clear()

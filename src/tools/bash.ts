@@ -35,6 +35,8 @@ import { wrapCommand as sandboxWrap } from '../core/sandbox.js'
 import { BASH_DESCRIPTION } from '../prompts/tools.js'
 import { mkdirSync, accessSync, constants } from 'fs'
 import { join } from 'path'
+import { beforeBashScan, trackBashMutation } from '../core/bashMutation.js'
+import { withGitMutex } from '../core/gitMutex.js'
 
 const MAX_OUTPUT_LENGTH = 30_000
 // Per-stream live buffer — head + tail, each up to this many BYTES
@@ -425,7 +427,34 @@ export class BashTool implements Tool {
     }
 
     // ── Foreground mode with abort support ──────────────────────
-    return this.runForeground(command, timeoutMs, follow_mode, context, acceptableExitCodes)
+    // Round 32 (untracked-mutation sweep): capture the workspace
+    // inventory BEFORE the command so rm/sed -i/formatter/codegen drift
+    // can be registered with FileHistory after it settles. Only runs
+    // when a session (and thus rewind machinery) exists.
+    // Round 32 audit F6: git-mutating commands serialize against the
+    // process-global delivery mutex. Per-engine scheduler claims can't
+    // see cross-engine merges (each child is its own engine), so the
+    // mutex is the one mechanism both sides respect.
+    const gitMutating = /^\s*git\s+(commit|merge|rebase|checkout|reset|revert|cherry-pick|pull|push|worktree)\b/.test(command)
+    const run = (): Promise<ToolResult> =>
+      gitMutating
+        ? withGitMutex(() => this.runForeground(command, timeoutMs, follow_mode, context, acceptableExitCodes))
+        : this.runForeground(command, timeoutMs, follow_mode, context, acceptableExitCodes)
+
+    const preScan = beforeBashScan(context.cwd, context.sessionDir)
+    if (!preScan) {
+      return run()
+    }
+    const settleAndTrack = (): void => {
+      // Small grace: async writers (npm &c.) flush after exit; 150ms is
+      // enough for stat-visibility without perceptible latency.
+      setTimeout(() => trackBashMutation(context.cwd, preScan, context.fileHistory ?? null), 150).unref?.()
+    }
+    // Sweep runs on both success and failure — a failed command may
+    // still have mutated files before dying.
+    return run()
+      .then((res) => { settleAndTrack(); return res })
+      .catch((err: unknown) => { settleAndTrack(); throw err })
   }
 
   /**

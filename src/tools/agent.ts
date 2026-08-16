@@ -17,6 +17,7 @@
  */
 
 import type { Tool, ToolContext, ToolDefinition, ToolResult, EngineConfig, AgentChildEngineFactory } from '../core/types.js'
+import type { TurnOutcome } from '../core/runtime/turnOutcome.js'
 import type { AgentConfig } from '../core/agentPresets.js'
 import { resolveAgentConfig, validateAgentConfig, PRESET_NAMES } from '../core/agentPresets.js'
 import type { RendererInterface } from '../core/types.js'
@@ -24,6 +25,7 @@ import { tmuxLayout } from '../core/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
+import { withGitMutex } from '../core/gitMutex.js'
 import { execSync, execFileSync } from 'child_process'
 import { runCommandSync } from '../core/commandRunner.js'
 import { str } from '../core/strings.js'
@@ -367,7 +369,31 @@ export interface AgentToolWiring {
 
 export class AgentTool implements Tool, WorkerAdapter {
   name = 'Agent'
-  metadata = { concurrencySafe: true, longRunning: true, mutatesState: true }
+  metadata = {
+    concurrencySafe: true,
+    longRunning: true,
+    mutatesState: true,
+    // Round 32 (true parallelism): the scheduler only parallelizes calls
+    // that declare claims (toolScheduler.ts partition rule). Modify
+    // agents mutate their OWN per-invocation worktree (created below)
+    // — the exclusive key is the unique worktree path, so siblings never
+    // contend; delivery merges serialize via the process-global
+    // gitMutex, not via this claim. Read-only agents take a read claim
+    // on the shared cwd. Without this field every Agent call ran as its
+    // own serial batch — N sub-agents cost the full wall-clock SUM.
+    claims: (input: Record<string, unknown>): Array<{ type: 'directory'; key: string; access: 'read' | 'exclusive' }> => {
+      const mode = typeof input.task_mode === 'string' ? input.task_mode
+        : input.modifies_state === true ? 'modify' : 'read_only'
+      const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd()
+      if (mode === 'modify') {
+        // Exclusive on a UNIQUE per-invocation key — parallel modify
+        // siblings never contend (each owns its worktree); delivery
+        // serialization is the process-global gitMutex, not this claim.
+        return [{ type: 'directory', key: `wt://agent/${randomBytes(8).toString('hex')}`, access: 'exclusive' }]
+      }
+      return [{ type: 'directory', key: cwd, access: 'read' }]
+    },
+  }
   readonly workerKind = 'agent'
 
   /**
@@ -381,7 +407,7 @@ export class AgentTool implements Tool, WorkerAdapter {
    *
    * Entries are removed when the run reaches a terminal state.
    */
-  private readonly steerQueue = new Map<string, string[]>()
+  private readonly liveChildren = new Map<string, { steer: (instruction: string) => boolean }>()
   /**
    * Phase 4 (provider-runtime contract §七.2): runId → abort trigger for each running
    * in-process child engine. Populated when a child run starts so
@@ -436,31 +462,14 @@ export class AgentTool implements Tool, WorkerAdapter {
       // Only accept steer for runs we own and that are mid-flight.
       if (run.status !== 'running' && run.status !== 'waiting' && run.status !== 'preparing') return false
     }
-    if (!this.steerQueue.has(runId)) this.steerQueue.set(runId, [])
-    this.steerQueue.get(runId)!.push(instruction)
-    this.onSteeredHook?.(runId, instruction)
-    return true
-  }
-
-  /**
-   * GAP-K internal: drain queued steer instructions for a run.
-   * Called by runAgentTask between iterations. Returns the
-   * instructions concatenated (or undefined if none queued).
-   * @internal
-   */
-  _drainSteerQueue(runId: string): string | undefined {
-    const q = this.steerQueue.get(runId)
-    if (!q || q.length === 0) return undefined
-    this.steerQueue.set(runId, [])
-    return q.join('\n')
-  }
-
-  /**
-   * GAP-K internal: drop the queue for a terminal run.
-   * @internal
-   */
-  _clearSteerQueue(runId: string): void {
-    this.steerQueue.delete(runId)
+    // Round 32: REAL delivery — forward to the live child engine, which
+    // lands it in the in-flight turn's control channel. Returns false
+    // when there is no live child (undelivered, never a lying true).
+    const child = this.liveChildren.get(runId)
+    if (!child) return false
+    const delivered = child.steer(instruction)
+    if (delivered) this.onSteeredHook?.(runId, instruction)
+    return delivered
   }
 
   // ── WorkerAdapter lifecycle (runtime invariants §六 P0-8) ──────────────────
@@ -533,7 +542,7 @@ export class AgentTool implements Tool, WorkerAdapter {
     } catch {
       // Already terminal — nothing to do.
     }
-    this._clearSteerQueue(runId)
+    this.liveChildren.delete(runId)
   }
 
   /**
@@ -804,6 +813,12 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const agentDisplayLabel = `${agentLabel} · ${modelAssignment.tier}/${modelAssignment.role}/${modelAssignment.profileId}`
     mainRenderer.agentStart(description, agentDisplayLabel)
     const agentStartTime = Date.now()
+    // Round 32 audit F1: unique per-INVOCATION id. Parallel same-tick
+    // siblings with identical descriptions previously minted the same
+    // worktree name (Date.now() has zero entropy within a tick) → the
+    // second createWorktree threw 'already exists'. This id feeds BOTH
+    // the resource-claim key and the worktree name.
+    const invocationId = randomBytes(6).toString('hex')
 
     // ── ExecutionRun lifecycle (runtime architecture contract §三 Phase 2) ───────────────
     // When a registry is wired in, this Agent invocation creates a
@@ -844,10 +859,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       } catch {
         // best-effort — registry is observability, not control plane
       }
-      // GAP-K: drop the steer queue when the run reaches a terminal
-      // state so future steer() calls for this runId return false.
+      // Round 32: drop the live-child registration when the run reaches
+      // a terminal state so future steer() calls return false.
       if (runId && isTerminalRunStatus(to)) {
-        this._clearSteerQueue(runId)
+        this.liveChildren.delete(runId)
       }
     }
 
@@ -912,7 +927,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     let wtInfo: WorktreeInfo | null = null
     if (modifiesState && !agentConfig.identity.planMode) {
       const safeDesc = description.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 24) || 'task'
-      const wtName = `agent-d${nextDepth}-${agentStartTime}-${safeDesc}`
+      const wtName = `agent-d${nextDepth}-${agentStartTime}-${invocationId}-${safeDesc}`
       try {
         const mgr = getWorktreeManager(context.cwd)
         wtInfo = mgr.createWorktree(wtName)
@@ -1106,8 +1121,22 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         context.signal.addEventListener('abort', abortListener, { once: true })
       }
 
+      let result: { output: string; reason: string; completionStatus?: string }
+      let childOutcome: TurnOutcome | undefined
       transitionRun('running', { phase: 'child-turn' })
-      const { result, outcome: childOutcome } = await childEngine.runTurn(delegatedPrompt, [])
+      // Round 32: expose the live engine so steer(runId) reaches it
+      // mid-run. Optional-steer typing keeps test stubs valid; when the
+      // child can't steer, steer() reports undelivered (never lies).
+      if (runId && typeof childEngine.steer === 'function') {
+        this.liveChildren.set(runId, { steer: (i: string) => childEngine.steer!(i) })
+      }
+      try {
+        const turnResult = await childEngine.runTurn(delegatedPrompt, [])
+        result = turnResult.result
+        childOutcome = turnResult.outcome
+      } finally {
+        if (runId) this.liveChildren.delete(runId)
+      }
       const durationMs = Date.now() - agentStartTime
 
       // ── P0-5 (runtime invariants §五): three-phase outcome split ───────────────
@@ -1133,15 +1162,23 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       // let 'blocked'/'partial' child runs be treated as worker success.
       const workerFailed = result.reason === 'error'
         || (result.completionStatus !== undefined && result.completionStatus !== 'completed')
+      if (process.env.R32_DEBUG) console.error('CHILD-VERDICT', JSON.stringify({ reason: result.reason, completionStatus: result.completionStatus, completionReasons: (result as { completionReasons?: string[] }).completionReasons }))
       let verifyOutcome: { ran: boolean; passed: boolean } = { ran: false, passed: true }
       let verificationCommands: string[] = []
       let verificationOutput: string | undefined
-      let deliveryOutcome:
+      // deliveryOutcome is assigned inside the worktree delivery block
+      // (possibly within the withGitMutex closure) — definite-assignment
+      // via the initializer on the declaration below.
+      type DeliveryOutcome =
         | { status: 'delivered'; branch: string }
         | { status: 'kept_for_review'; branch: string; path: string }
         | { status: 'conflict'; branch: string; conflicts: string[]; message: string }
         | { status: 'not_required' }
-        = { status: 'not_required' }
+      let deliveryOutcome: DeliveryOutcome = { status: 'not_required' }
+      // Assignments happen inside the withGitMutex closure — the
+      // control-flow analyzer can't see them, so reads go through this
+      // alias to defeat (unsound) narrowing to the initializer.
+      const delivery = (): DeliveryOutcome => deliveryOutcome
 
       // ── Verification Gate (AgentOS "No Tuple, No Merge") ──
       // A sub-agent that finishes "successfully" (reason !== 'error')
@@ -1200,35 +1237,44 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           // Delivery: merge. Auto-commit any uncommitted sub-agent
           // edits first so they aren't silently dropped by
           // `git worktree remove --force`.
-          commitPendingChangesInWorktree(capturedPath, `agent: ${description}`)
-          // Inline the merge (rather than calling
-          // WorktreeManager.removeWorktree({merge:true})) so we can
-          // capture the conflict list and PRESERVE the branch + worktree
-          // on failure. The shared helper deletes the branch even when
-          // the merge fails, which violates runtime invariants §五 P0-5
-          // ("保留 Worktree；保留分支；不删除成果").
-          context.eventEmitter?.emit({ type: 'AGENT_MERGE_STARTED', runId: runId ?? 'unknown', branch: capturedBranch })
-          const mergeRes = attemptMerge(context.cwd, capturedBranch)
-          if (mergeRes.ok) {
-            context.eventEmitter?.emit({ type: 'AGENT_MERGE_COMPLETED', runId: runId ?? 'unknown', branch: capturedBranch })
-            // Merge succeeded — now safe to remove worktree + branch.
-            try {
-              mgr.removeWorktree(capturedName, { merge: false, deleteBranch: true })
-            } catch {
-              // best-effort cleanup; merge already happened so the
-              // changes are on the base — leaking the dir is benign.
+          //
+          // Round 32 (parallel-safe delivery): the merge + worktree
+          // removal mutate the SHARED parent tree. Sibling agents can
+          // now finalize concurrently (parallel Agent dispatch), and
+          // each engine owns a separate ResourceScheduler — so exclusivity
+          // comes from the process-global gitMutex, FIFO. Verify already
+          // ran OUTSIDE the mutex (per-worktree, no shared state) so the
+          // critical section stays as short as possible.
+          worktreeSection = await withGitMutex(async () => {
+            commitPendingChangesInWorktree(capturedPath, `agent: ${description}`)
+            // Inline the merge (rather than calling
+            // WorktreeManager.removeWorktree({merge:true})) so we can
+            // capture the conflict list and PRESERVE the branch + worktree
+            // on failure. The shared helper deletes the branch even when
+            // the merge fails, which violates runtime invariants §五 P0-5
+            // ("保留 Worktree；保留分支；不删除成果").
+            context.eventEmitter?.emit({ type: 'AGENT_MERGE_STARTED', runId: runId ?? 'unknown', branch: capturedBranch })
+            const mergeRes = attemptMerge(context.cwd, capturedBranch)
+            if (mergeRes.ok) {
+              context.eventEmitter?.emit({ type: 'AGENT_MERGE_COMPLETED', runId: runId ?? 'unknown', branch: capturedBranch })
+              // Merge succeeded — now safe to remove worktree + branch.
+              try {
+                mgr.removeWorktree(capturedName, { merge: false, deleteBranch: true })
+              } catch {
+                // best-effort cleanup; merge already happened so the
+                // changes are on the base — leaking the dir is benign.
+              }
+              deliveryOutcome = { status: 'delivered', branch: capturedBranch }
+              return `\n\n---\n[Worktree] merged ${capturedBranch} → ${capturedBase}`
             }
-            worktreeSection = `\n\n---\n[Worktree] merged ${capturedBranch} → ${capturedBase}`
-            deliveryOutcome = { status: 'delivered', branch: capturedBranch }
-          } else {
             // P0-5: merge conflict. PRESERVE the worktree + branch so
             // a parent agent (or human) can resolve. Surface the
             // conflict list. Run → 'blocked' (retryable). We do NOT
             // call removeWorktree — that would wipe the work.
-            worktreeSection = `\n\n---\n[Worktree] delivery blocked: ${mergeRes.message}\n[Conflicts] ${mergeRes.conflicts.length ? mergeRes.conflicts.join(', ') : '(unavailable)'}\n[Branch preserved] ${capturedBranch} at ${capturedPath}`
             deliveryOutcome = { status: 'conflict', branch: capturedBranch, conflicts: mergeRes.conflicts, message: mergeRes.message }
             context.eventEmitter?.emit({ type: 'AGENT_WORKTREE_PRESERVED', runId: runId ?? 'unknown', branch: capturedBranch, reason: `merge_conflict: ${mergeRes.message}` })
-          }
+            return `\n\n---\n[Worktree] delivery blocked: ${mergeRes.message}\n[Conflicts] ${mergeRes.conflicts.length ? mergeRes.conflicts.join(', ') : '(unavailable)'}\n[Branch preserved] ${capturedBranch} at ${capturedPath}`
+          })
         }
         // wtInfo is consumed — null it so the catch/finally paths
         // below don't double-finalize. NOTE: in the keep-for-review
@@ -1244,14 +1290,14 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
       // (worker+verify both passed) which lied to the orchestrator.
       // ──────────────────────────────────────────────────────────
       const isError: boolean =
-        workerFailed || verificationFailed || deliveryOutcome.status === 'conflict'
+        workerFailed || verificationFailed || delivery().status === 'conflict'
 
       let finalStatus: RunStatus
       if (workerFailed) {
         finalStatus = 'failed'
       } else if (verificationFailed) {
         finalStatus = 'verification_failed'
-      } else if (deliveryOutcome.status === 'conflict') {
+      } else if (delivery().status === 'conflict') {
         finalStatus = 'blocked'
       } else {
         finalStatus = 'succeeded'
@@ -1267,8 +1313,8 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           ? (result.reason || 'run failed')
           : verificationFailed
             ? 'verification gate failed'
-            : deliveryOutcome.status === 'conflict'
-              ? `delivery blocked: ${deliveryOutcome.message}`
+            : delivery().status === 'conflict'
+              ? `delivery blocked: ${(delivery() as { message?: string }).message}`
               : undefined,
         verification: verificationFailed ? {
           passed: false,
@@ -1277,7 +1323,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           completedAt: new Date().toISOString(),
         } : undefined,
         delivery: deliveryOutcome,
-        retryable: deliveryOutcome.status === 'conflict',
+        retryable: delivery().status === 'conflict',
       })
 
       // v0.3.4 (durable supervisor contract §Phase 2): emit structured agent completion events
@@ -1329,10 +1375,11 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         } catch { /* best-effort */ }
       }
 
+      const deliveryNow = delivery()
       const worktreeOutcomeLegacy =
-        deliveryOutcome.status === 'delivered' ? { branch: deliveryOutcome.branch, merged: true }
-        : deliveryOutcome.status === 'kept_for_review' ? { branch: deliveryOutcome.branch, merged: false }
-        : deliveryOutcome.status === 'conflict' ? { branch: deliveryOutcome.branch, merged: false }
+        deliveryNow.status === 'delivered' ? { branch: deliveryNow.branch, merged: true }
+        : deliveryNow.status === 'kept_for_review' ? { branch: deliveryNow.branch, merged: false }
+        : deliveryNow.status === 'conflict' ? { branch: deliveryNow.branch, merged: false }
         : undefined
 
       context.eventLog?.append('invoke_completed', agentLabel, {
@@ -1370,25 +1417,28 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         },
         blockers: childOutcome?.completion.reasons ?? [],
         requiredNextActions: childOutcome?.completion.requiredNextActions ?? [],
-        modelAttempts: childOutcome?.modelAttempts?.map((attempt) => ({
+        modelAttempts: childOutcome?.modelAttempts?.map((attempt: { provider: string; model: string; status: string; startedAt: number; endedAt: number; estimatedCost?: number; usage?: unknown }) => ({
           provider: attempt.provider,
           model: attempt.model,
           status: attempt.status,
           latencyMs: Math.max(0, attempt.endedAt - attempt.startedAt),
           estimatedCost: attempt.estimatedCost ?? 0,
-          usage: attempt.usage,
+          usage: attempt.usage as { inputTokens: number; outputTokens: number } | undefined,
         })) ?? [],
         estimatedCost: childOutcome?.modelAttempts?.reduce(
-          (total, attempt) => total + (attempt.estimatedCost ?? 0),
+          (total: number, attempt: { estimatedCost?: number }) => total + (attempt.estimatedCost ?? 0),
           0,
         ) ?? 0,
-        worktree: deliveryOutcome.status === 'not_required'
-          ? undefined
-          : {
-              branch: deliveryOutcome.branch,
-              path: deliveryOutcome.status === 'kept_for_review' ? deliveryOutcome.path : undefined,
-              delivery: deliveryOutcome.status,
-            },
+        worktree: (() => {
+          const d = delivery()
+          return d.status === 'not_required'
+            ? undefined
+            : {
+                branch: (d as { branch?: string }).branch,
+                path: d.status === 'kept_for_review' ? d.path : undefined,
+                delivery: d.status,
+              }
+        })(),
         model: {
           profileId: modelAssignment.profileId,
           role: modelAssignment.role,
@@ -1448,10 +1498,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
           status: finalStatus,
           runId: workerResult.runId,
           workerResult,
-          summary: deliveryOutcome.status === 'conflict'
-            ? `delivery blocked: ${deliveryOutcome.message}`
+          summary: delivery().status === 'conflict'
+            ? `delivery blocked: ${(delivery() as { message?: string }).message}`
             : undefined,
-          retryable: deliveryOutcome.status === 'conflict' || undefined,
+          retryable: delivery().status === 'conflict' || undefined,
         } as ToolResult & { status: RunStatus; summary?: string; retryable?: boolean }
       }
 
@@ -1465,13 +1515,15 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         status: finalStatus,
         runId: workerResult.runId,
         workerResult,
-        summary: deliveryOutcome.status === 'conflict'
-          ? `delivery blocked: ${deliveryOutcome.message}`
-          : undefined,
-        conflicts: deliveryOutcome.status === 'conflict'
-          ? deliveryOutcome.conflicts
-          : undefined,
-        retryable: deliveryOutcome.status === 'conflict' || undefined,
+        summary: (() => {
+          const d = delivery()
+          return d.status === 'conflict' ? `delivery blocked: ${d.message}` : undefined
+        })(),
+        conflicts: (() => {
+          const d = delivery()
+          return d.status === 'conflict' ? d.conflicts : undefined
+        })(),
+        retryable: delivery().status === 'conflict' || undefined,
       } as ToolResult & { status: RunStatus; summary?: string; conflicts?: string[]; retryable?: boolean }
     } catch (err: unknown) {
       mainRenderer.agentDone(description, false)

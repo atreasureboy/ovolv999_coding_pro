@@ -4,6 +4,7 @@
  */
 
 import { readFile, stat } from 'fs/promises'
+import { isAbsolute, resolve } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { containsNullByte } from '../core/pathSecurity.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -61,8 +62,12 @@ export class FileReadTool implements Tool {
     },
   }
 
-  async execute(input: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
-    const { file_path, offset, limit } = input as Partial<ReadFileInput>
+  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    const { file_path: rawPath, offset, limit } = input as Partial<ReadFileInput>
+
+    // Round 32 (F20): relative paths resolve against the context cwd —
+    // parity with Write/Edit (worktree-resident children).
+    const file_path = rawPath && !isAbsolute(rawPath) ? resolve(context.cwd, rawPath) : rawPath
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }

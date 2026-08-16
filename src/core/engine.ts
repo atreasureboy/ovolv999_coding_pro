@@ -47,6 +47,7 @@ import { applyAgentToConfig } from './agentPresets.js'
 import { CostTracker } from './costTracker.js'
 import { BackgroundTaskManager } from './backgroundTaskManager.js'
 import { FileHistory } from './fileHistory.js'
+import { releaseScope } from './todoStore.js'
 import { PermissionManager } from './permissionSystem.js'
 import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
@@ -828,6 +829,10 @@ export class ExecutionEngine {
    * disposeAsync().
    */
   dispose(): void {
+    // Round 32 (todo scope lifecycle): this engine's TodoStore bucket
+    // dies with the engine — sub-agent scopes must not accumulate for
+    // the process lifetime. Main-agent plans survive via todo.json.
+    try { releaseScope(this.config.todoScopeId ?? this.config.sessionDir ?? '') } catch { /* best-effort */ }
     // R7: SessionEnd hook fires once at engine dispose (best-effort).
     // R18: runSessionEnd is async — `void` discards the promise, so a
     // surrounding sync try/catch only catches synchronous throws, not
@@ -887,6 +892,23 @@ export class ExecutionEngine {
   softAbort(): void {
     this.sharedState.softAbortRequested = true
     this.sharedState.softAbortOwner = this.sharedState.currentTurnAbortController
+  }
+
+  /**
+   * Round 32 (runtime steer): inject a mid-run steering instruction into
+   * the in-flight turn's control-message channel. The coordinator renders
+   * it into the very next LLM call as a transient (non-history) message —
+   * REAL runtime redirection, not queue-and-forget. Returns false when no
+   * turn is in flight (nothing to steer).
+   */
+  steer(instruction: string): boolean {
+    if (!this._turnInFlight) return false
+    try {
+      this.coordinator.injectSteer(instruction)
+      return true
+    } catch {
+      return false
+    }
   }
 
   async runTurn(

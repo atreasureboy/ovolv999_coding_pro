@@ -325,8 +325,8 @@ describe('L.8: AgentTool.steer() is robust to terminal / unknown runs', () => {
     registry.transition(run.runId, 'failed', { error: 'crashed' })
 
     expect(await t.steer(run.runId, 'recover')).toBe(false)
-    // Queue stays empty.
-    expect(t._drainSteerQueue(run.runId)).toBeUndefined()
+    // No live child ever registered for a terminal run.
+    expect((t as unknown as { liveChildren: Map<string, unknown> }).liveChildren.has(run.runId)).toBe(false)
   })
 })
 

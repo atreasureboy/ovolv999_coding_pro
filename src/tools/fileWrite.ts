@@ -5,6 +5,7 @@
 
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
+import { isAbsolute, resolve } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { WRITE_FILE_DESCRIPTION } from '../prompts/tools.js'
@@ -55,11 +56,17 @@ export class FileWriteTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { file_path, content } = input as Partial<WriteFileInput>
+    const { file_path: rawPath, content } = input as Partial<WriteFileInput>
 
-    if (!file_path || typeof file_path !== 'string') {
+    if (!rawPath || typeof rawPath !== 'string') {
       return { content: 'Error: file_path is required', isError: true }
     }
+    // Round 32 (parallel-worktree hazard): relative paths previously
+    // resolved against the PROCESS cwd — with parallel child engines in
+    // different worktrees, every child's existsSync/atomicWrite consulted
+    // the parent process directory instead of its own worktree. Resolve
+    // against the tool context cwd once, up front.
+    const file_path = isAbsolute(rawPath) ? rawPath : resolve(context.cwd, rawPath)
     if (typeof content !== 'string') {
       return { content: 'Error: content must be a string', isError: true }
     }

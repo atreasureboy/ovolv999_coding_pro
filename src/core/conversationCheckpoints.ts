@@ -28,7 +28,7 @@
  * Storage: <sessionDir>/checkpoints.jsonl + <sessionDir>/cp-snapshots/.
  */
 
-import { existsSync, readFileSync, appendFileSync, writeFileSync, renameSync, unlinkSync, statSync, openSync, readSync, closeSync, mkdirSync, copyFileSync, chmodSync, readdirSync, realpathSync } from 'fs'
+import { existsSync, readFileSync, appendFileSync, writeFileSync, renameSync, unlinkSync, statSync, openSync, readSync, closeSync, mkdirSync, copyFileSync, chmodSync, readdirSync, realpathSync, rmdirSync } from 'fs'
 import { join, dirname, resolve as resolvePath } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import type { FileHistory } from './fileHistory.js'
@@ -156,22 +156,44 @@ function readLastCheckpoint(sessionDir: string): ConversationCheckpoint | null {
   }
 }
 
+/** Normalize separators for cross-platform prefix comparison. Windows-
+ *  style inputs (detected by drive-letter or backslash) normalize even
+ *  when the HOST is POSIX — anchors may carry Windows paths on a POSIX
+ *  machine (session synced across OSes) and vice versa. */
+function toPosix(p: string): string {
+  return p.replaceAll('\\', '/')
+}
+
 /** True when `path` sits inside `root`. Resolves the existing parent
  *  chain through realpathSync (a symlinked subdirectory cannot smuggle
  *  a destructive op outside the workspace), falling back to lexical
- *  resolution for not-yet-existing parents. */
+ *  resolution for not-yet-existing parents. Windows-safe: separator
+ *  normalization + case-insensitive compare for drive-letter paths. */
 export function isInsideWorkspace(path: string, root: string | undefined): boolean {
   if (!root) return true // legacy anchor without cwd — caller decides policy
+  // Normalize the INPUT first — POSIX dirname/resolve on a Windows path
+  // ('C:\proj\f.ts') collapses to '.'/<cwd> before we ever normalize.
+  const pathN = toPosix(path)
+  const rootN = toPosix(root)
   const canonical = (p: string): string => {
+    // Windows-style (drive-letter) paths on a POSIX host: realpath/
+    // resolve would cwd-prefix them into garbage — normalize lexically.
+    if (/^[a-zA-Z]:\//.test(p)) return p
     try {
-      return realpathSync(p)
+      return toPosix(realpathSync(p))
     } catch {
-      return resolvePath(p)
+      return toPosix(resolvePath(p))
     }
   }
-  const parent = canonical(dirname(path))
-  const rootCanonical = canonical(root)
-  return parent === rootCanonical || parent.startsWith(rootCanonical + '/')
+  const parent = canonical(dirname(pathN))
+  const rootCanonical = canonical(rootN)
+  // Case-insensitive compare when either side looks like a Windows
+  // drive path (C:/...) — NTFS is case-insensitive; POSIX stays exact.
+  const windowsish = /^[a-zA-Z]:\//.test(rootCanonical) || /^[a-zA-Z]:\//.test(parent)
+  const pNorm = windowsish ? parent.toLowerCase() : parent
+  const rNorm = windowsish ? rootCanonical.toLowerCase() : rootCanonical
+  if (pNorm === rNorm) return true
+  return pNorm.startsWith(rNorm + '/')
 }
 
 function sha256File(path: string): string {
@@ -239,28 +261,45 @@ export function appendCheckpoint(
           continue
         }
 
-        // Snapshot reuse fast path: unchanged since the last anchor
-        // (mtime+size match and the previous entry has a snapshot).
+        // Snapshot reuse — CONTENT-ADDRESSSED + verified (Round 32):
+        // the previous anchor's identity is reused only when the LIVE
+        // content hashes to the same digest. mtime+size alone had a
+        // stale window (two same-size writes with identical coarse
+        // mtimes on HFS+/FAT/network FS); hashing kills it. When the
+        // hash differs we still avoid a second copy: the snapshot file
+        // name IS the digest, so identical content across files/turns
+        // dedupes for free.
+        const liveHash = (() => {
+          try {
+            return sha256File(path)
+          } catch {
+            return null
+          }
+        })()
         const prev = lastEntries[path]
         if (
-          isV2Entry(prev) && prev.snap && prev.h && prev.st &&
-          prev.st[0] === stat.mtimeMs && prev.st[1] === stat.size
+          liveHash &&
+          isV2Entry(prev) && prev.snap && prev.h &&
+          prev.st && prev.st[0] === stat.mtimeMs && prev.st[1] === stat.size &&
+          prev.h === liveHash
         ) {
           files[path] = { tip, snap: prev.snap, h: prev.h, st: prev.st, md: stat.mode }
           continue
         }
 
-        const snapName = `t${(last?.turn ?? 0) + 1}-${randomBytes(6).toString('hex')}`
+        const snapName = `sha256-${liveHash ?? randomBytes(8).toString('hex')}`
         const snapPath = join(snapDir, snapName)
         try {
           if (!ensureSnapDir()) {
             files[path] = { tip, big: true, st: [stat.mtimeMs, stat.size] }
             continue
           }
-          copyFileSync(path, snapPath)
-          try { chmodSync(snapPath, stat.mode) } catch { /* best-effort */ }
-          const h = sha256File(snapPath)
-          files[path] = { tip, snap: snapName, h, st: [stat.mtimeMs, stat.size], md: stat.mode }
+          if (!existsSync(snapPath)) {
+            // Content-addressed: same digest anywhere → same file.
+            copyFileSync(path, snapPath)
+            try { chmodSync(snapPath, stat.mode) } catch { /* best-effort */ }
+          }
+          files[path] = { tip, snap: snapName, h: liveHash ?? sha256File(snapPath), st: [stat.mtimeMs, stat.size], md: stat.mode }
         } catch {
           files[path] = { tip, big: true, st: [stat.mtimeMs, stat.size] }
         }
@@ -359,6 +398,163 @@ function gcSnapshots(sessionDir: string, anchors: ConversationCheckpoint[]): voi
   } catch { /* dir missing — nothing to collect */ }
 }
 
+// ── Transactional rewind (Round 32): preflight / stage / commit ─────────────
+//
+// The single-shot rewind mixed read/decide/mutate: a failure halfway left
+// SOME files restored and others not. The transactional shape:
+//   preflight — pure: compute every planned mutation (delete/restore/skip)
+//               with boundary checks; returns a plan, touches nothing.
+//   stage     — copy each restore payload into <sessionDir>/rewind-stage/
+//               (verifying readability). Nothing live is touched.
+//   commit    — apply the plan: staged renames + deletes + anchor
+//               truncation, honoring per-file rollback of staged artifacts.
+// rewindToCheckpoint() now runs all three; partial failures are reported
+// per-file instead of leaving an undefined mix.
+
+export interface RewindPlanItem {
+  path: string
+  action: 'restore-snapshot' | 'restore-version' | 'delete' | 'skip-boundary' | 'noop'
+  /** snapshot file name (restore-snapshot) */
+  snap?: string
+  /** FileHistory version index (restore-version) */
+  version?: number
+  mode?: number
+  reason?: string
+}
+
+export interface RewindPlan {
+  turn: number
+  historyLength: number
+  items: RewindPlanItem[]
+  createdAfter: string[]
+  futureCheckpoints: ConversationCheckpoint[]
+  root: string | undefined
+  message?: string
+}
+
+/** Phase 1 — pure planning. No filesystem mutation. */
+export function planRewind(
+  sessionDir: string,
+  turn: number,
+  history: OpenAIMessage[],
+  fileHistory: FileHistory | null,
+): RewindPlan | { error: string } {
+  const checkpoints = listCheckpoints(sessionDir)
+  const cpIndex = checkpoints.findIndex((c) => c.turn === turn)
+  if (cpIndex === -1) {
+    return {
+      error: checkpoints.length === 0
+        ? 'No checkpoints recorded this session.'
+        : `No checkpoint for turn ${turn}. Recorded turns: ${checkpoints.map((c) => c.turn).join(', ')}.`,
+    }
+  }
+  const cp = checkpoints[cpIndex]
+  const futureCheckpoints = checkpoints.slice(cpIndex + 1)
+  const cpCreated = new Set(cp.createdFiles ?? [])
+  const posixSession = toPosix(sessionDir)
+  const root = cp.cwd ?? (posixSession.includes('/sessions/')
+    ? posixSession.slice(0, posixSession.lastIndexOf('/sessions/'))
+    : undefined)
+
+  const items: RewindPlanItem[] = []
+  for (const [path, rawEntry] of Object.entries(cp.files ?? {})) {
+    if (!isInsideWorkspace(path, root)) {
+      items.push({ path, action: 'skip-boundary', reason: 'outside workspace root' })
+      continue
+    }
+    if (!isV2Entry(rawEntry)) {
+      const countAtTurn = typeof rawEntry === 'number' ? rawEntry : 0
+      const versions = fileHistory?.getVersions(path) ?? []
+      if (versions.length === countAtTurn && existsSync(path)) {
+        items.push({ path, action: 'noop' })
+        continue
+      }
+      const target = Math.min(countAtTurn, versions.length - 1)
+      if (target < 0) {
+        items.push({ path, action: 'noop' })
+        continue
+      }
+      items.push({ path, action: 'restore-version', version: target })
+      continue
+    }
+    const entry = rawEntry
+    if (entry.absent) {
+      if (existsSync(path)) items.push({ path, action: 'delete', reason: 'absent at anchor' })
+      else items.push({ path, action: 'noop' })
+      continue
+    }
+    if (entry.snap && entry.h) {
+      let liveHash: string | null = null
+      try {
+        const st = statSync(path)
+        if (st.size <= MAX_SNAPSHOT_BYTES) liveHash = sha256File(path)
+      } catch { /* missing */ }
+      if (liveHash === entry.h) {
+        items.push({ path, action: 'noop' })
+        continue
+      }
+      // Fallback plan (Round 32 audit F11): when the snapshot vanished
+      // (GC race / corruption), the tip-identity version restore still
+      // recovers content — 'recoverable content must be recovered'
+      // (Round 31 F7 policy). Fallback executes only if staging fails.
+      const versionsFb = fileHistory?.getVersions(path) ?? []
+      const tipIdxFb = entry.tip ? versionsFb.findIndex((v) => v.backupPath === entry.tip) : -1
+      const fbTarget = tipIdxFb >= 0
+        ? tipIdxFb
+        : (!entry.tip && versionsFb.length > 0 ? 0 : -1)
+      items.push({
+        path,
+        action: 'restore-snapshot',
+        snap: entry.snap,
+        mode: entry.md,
+        ...(fbTarget >= 0 ? { version: fbTarget } : {}),
+      })
+      continue
+    }
+    // tip-identity fallback
+    const versions = fileHistory?.getVersions(path) ?? []
+    const tipIdx = entry.tip ? versions.findIndex((v) => v.backupPath === entry.tip) : -1
+    if (tipIdx === versions.length - 1 && existsSync(path)) {
+      items.push({ path, action: 'noop' })
+      continue
+    }
+    let target: number
+    if (entry.tip && tipIdx >= 0) {
+      target = tipIdx
+    } else if (!entry.tip && versions.length > 0) {
+      target = 0
+    } else {
+      if (versions.length > 0) target = 0
+      else {
+        items.push({ path, action: 'noop', reason: 'no snapshot, no versions' })
+        continue
+      }
+    }
+    items.push({ path, action: 'restore-version', version: target })
+  }
+
+  const createdAfter: string[] = []
+  for (const future of futureCheckpoints) {
+    for (const path of future.createdFiles ?? []) {
+      if (cpCreated.has(path)) continue
+      if (!isInsideWorkspace(path, root)) {
+        items.push({ path, action: 'skip-boundary', reason: 'outside workspace root' })
+        continue
+      }
+      if (!createdAfter.includes(path)) createdAfter.push(path)
+    }
+  }
+
+  return {
+    turn,
+    historyLength: Math.min(cp.historyLength, history.length),
+    items,
+    createdAfter,
+    futureCheckpoints,
+    root,
+  }
+}
+
 export interface RewindResult {
   ok: boolean
   historyLength: number
@@ -393,19 +589,20 @@ function restoreSnapshot(sessionDir: string, snapName: string, path: string, mod
   }
 }
 
-/** Rewind BOTH conversation + files to the end of `turn`. The caller
- *  owns the history mutation (returns the target length) because the
- *  slash-command context is the only place with setHistory. On success
- *  the JSONL is truncated past `turn`; snapshot storage is GC'd. */
+
+/** Phase 2+3 — stage & commit. Runs preflight, materializes restore
+ *  payloads into <sessionDir>/rewind-stage/, then applies. Per-file
+ *  failures are reported; staged artifacts are cleaned whether commit
+ *  succeeds or not. The caller owns the history mutation (setHistory).
+ */
 export function rewindToCheckpoint(
   sessionDir: string,
   turn: number,
   history: OpenAIMessage[],
   fileHistory: FileHistory | null,
 ): RewindResult {
-  const checkpoints = listCheckpoints(sessionDir)
-  const cpIndex = checkpoints.findIndex((c) => c.turn === turn)
-  if (cpIndex === -1) {
+  const planned = planRewind(sessionDir, turn, history, fileHistory)
+  if ('error' in planned) {
     return {
       ok: false,
       historyLength: history.length,
@@ -415,18 +612,9 @@ export function rewindToCheckpoint(
       skippedPaths: [],
       degradedFiles: [],
       truncatedCheckpoints: 0,
-      message: checkpoints.length === 0
-        ? 'No checkpoints recorded this session.'
-        : `No checkpoint for turn ${turn}. Recorded turns: ${checkpoints.map((c) => c.turn).join(', ')}.`,
+      message: planned.error,
     }
   }
-  const cp = checkpoints[cpIndex]
-  const futureCheckpoints = checkpoints.slice(cpIndex + 1)
-  const cpCreated = new Set(cp.createdFiles ?? [])
-
-  // Workspace boundary: anchor's own cwd, else derive from the session
-  // layout (<projectRoot>/sessions/<id>) as a best-effort fallback.
-  const root = cp.cwd ?? (sessionDir.includes('/sessions/') ? sessionDir.slice(0, sessionDir.lastIndexOf('/sessions/')) : undefined)
 
   const restoredFiles: string[] = []
   const failedFiles: string[] = []
@@ -434,96 +622,105 @@ export function rewindToCheckpoint(
   const skippedPaths: string[] = []
   const degradedFiles: string[] = []
 
-  // ── Per-file state restore (v2 snapshot identity; legacy counts best-effort)
-  for (const [path, rawEntry] of Object.entries(cp.files ?? {})) {
-    if (!isInsideWorkspace(path, root)) {
-      skippedPaths.push(path)
-      continue
-    }
-
-    if (!isV2Entry(rawEntry)) {
-      // Legacy numeric anchor: pre-v2 count semantics.
-      const countAtTurn = typeof rawEntry === 'number' ? rawEntry : 0
-      const versions = fileHistory?.getVersions(path) ?? []
-      if (versions.length === countAtTurn && existsSync(path)) continue
-      const target = Math.min(countAtTurn, versions.length - 1)
-      if (target < 0) continue
-      if (fileHistory?.restoreVersion(path, target)) restoredFiles.push(path)
-      else failedFiles.push(path)
-      continue
-    }
-    const entry = rawEntry
-
-    if (entry.absent) {
-      // Anchor-time truth: the file did not exist. A later recreation
-      // (bash script re-generating it, etc.) is rewound away.
-      if (existsSync(path)) {
-        try {
-          unlinkSync(path)
-          deletedFiles.push(path)
-        } catch {
-          failedFiles.push(path)
-        }
-      }
-      continue
-    }
-
-    if (entry.snap && entry.h) {
-      // Exact-content restore: compare live hash, act only on drift.
-      // This is the version-cap-proof and untracked-mutation-proof path.
-      let liveHash: string | null = null
+  // ── STAGE: copy every restore payload into rewind-stage/ first.
+  // A snapshot that vanished (GC race) or an unreadable version backup
+  // fails HERE, before anything live is touched.
+  const stageDir = join(sessionDir, 'rewind-stage')
+  const staged = new Map<string, string>() // planPath → staged file
+  let stagingOk = true
+  try {
+    mkdirSync(stageDir, { recursive: true })
+    for (const item of planned.items) {
+      if (item.action !== 'restore-snapshot' && item.action !== 'restore-version') continue
+      const stagedPath = join(stageDir, randomBytes(8).toString('hex'))
       try {
-        const s = statSync(path)
-        if (s.size <= MAX_SNAPSHOT_BYTES) liveHash = sha256File(path)
-      } catch { /* missing file */ }
-      if (liveHash === entry.h) continue
-      if (restoreSnapshot(sessionDir, entry.snap, path, entry.md)) {
-        restoredFiles.push(path)
-        continue
+        if (item.action === 'restore-snapshot' && item.snap) {
+          try {
+            copyFileSync(join(snapshotsDir(sessionDir), item.snap), stagedPath)
+          } catch {
+            // F11 fallback: snapshot vanished — stage the planned
+            // version payload instead (recoverable content recovered).
+            if (item.version !== undefined) {
+              const versions = fileHistory?.getVersions(item.path) ?? []
+              copyFileSync(versions[item.version]?.backupPath ?? '', stagedPath)
+              degradedFiles.push(item.path)
+            } else {
+              throw new Error('snapshot missing and no version fallback')
+            }
+          }
+        } else if (item.action === 'restore-version' && item.version !== undefined) {
+          const versions = fileHistory?.getVersions(item.path) ?? []
+          copyFileSync(versions[item.version]?.backupPath ?? '', stagedPath)
+        }
+        staged.set(item.path, stagedPath)
+      } catch {
+        // Truly unstageable — report, never silently skip.
+        failedFiles.push(item.path)
+        if (item.action === 'restore-version') degradedFiles.push(item.path)
       }
-      // Round 31 audit F7: snapshot missing (GC'd / write failed) —
-      // fall through to the tip-based restore below instead of hard-
-      // failing; recoverable content must be recovered.
-      degradedFiles.push(path)
     }
+  } catch {
+    stagingOk = false
+  }
 
-    // No snapshot (big file, snapshot write failed, or pre-snap anchor):
-    // degrade to tip-identity version restore. `tip` is a stable
-    // backup-path identity — unlike a count it cannot saturate at the
-    // 50-version retention cap.
-    const versions = fileHistory?.getVersions(path) ?? []
-    const tipIdx = entry.tip ? versions.findIndex((v) => v.backupPath === entry.tip) : -1
-    if (tipIdx === versions.length - 1 && existsSync(path)) continue // unchanged
-    let target: number
-    if (entry.tip && tipIdx >= 0) {
-      target = tipIdx
-    } else if (!entry.tip && versions.length > 0) {
-      target = 0 // no versions at anchor → pre-first-edit content
-    } else {
-      // tip evicted by retention, or file missing with nothing to
-      // restore from — honest degradation, never a silent skip.
-      degradedFiles.push(path)
-      if (versions.length > 0) target = 0
-      else {
-        if (!existsSync(path)) failedFiles.push(path)
-        continue
-      }
-    }
-    if (fileHistory?.restoreVersion(path, target)) {
-      restoredFiles.push(path)
-    } else {
-      failedFiles.push(path)
+  if (!stagingOk) {
+    // F12: staging infrastructure failed BEFORE any live file was
+    // touched — report an aborted rewind honestly instead of the old
+    // silent ok:true that still truncated anchors.
+    return {
+      ok: false,
+      historyLength: history.length,
+      restoredFiles: [],
+      failedFiles: [...new Set(failedFiles)],
+      deletedFiles: [],
+      skippedPaths,
+      degradedFiles,
+      truncatedCheckpoints: 0,
+      message: 'Rewind aborted during staging (session dir unwritable) — no files or checkpoints were touched.',
     }
   }
 
-  // ── Created-after-anchor files: delete (they did not exist at turn N).
-  for (const future of futureCheckpoints) {
-    for (const path of future.createdFiles ?? []) {
-      if (cpCreated.has(path)) continue
-      if (!isInsideWorkspace(path, root)) {
-        skippedPaths.push(path)
+  // ── COMMIT: apply staged payloads, deletes, then anchor truncation.
+  {
+    for (const item of planned.items) {
+      if (staged.has(item.path)) continue // already resolved during staging (failed)
+      if (item.action === 'skip-boundary') {
+        skippedPaths.push(item.path)
         continue
       }
+      if (item.action === 'delete' || item.reason === 'absent at anchor') {
+        try {
+          if (item.action === 'delete' && existsSync(item.path)) {
+            unlinkSync(item.path)
+            deletedFiles.push(item.path)
+          }
+        } catch {
+          failedFiles.push(item.path)
+        }
+        continue
+      }
+      if (item.action === 'noop') {
+        if (item.reason) degradedFiles.push(item.path)
+        continue
+      }
+    }
+    for (const [path, stagedPath] of staged) {
+      try {
+        const mode = planned.items.find((i) => i.path === path)?.mode
+        const tmp = `${path}.rewind-tmp.${process.pid}.${randomBytes(4).toString('hex')}`
+        copyFileSync(stagedPath, tmp)
+        if (mode !== undefined) {
+          try { chmodSync(tmp, mode) } catch { /* best-effort */ }
+        }
+        renameSync(tmp, path)
+        restoredFiles.push(path)
+      } catch {
+        failedFiles.push(path)
+      }
+    }
+
+    // Created-after-anchor deletions (planned, boundary-checked).
+    for (const path of planned.createdAfter) {
       try {
         if (existsSync(path)) {
           unlinkSync(path)
@@ -533,19 +730,31 @@ export function rewindToCheckpoint(
     }
   }
 
+  // Staging cleanup — staged payloads are transient by contract.
+  // rmdirSync: unlink(2) cannot remove a DIRECTORY (F13 — the empty
+  // rewind-stage/ dir used to leak after every rewind).
+  try {
+    for (const stagedPath of staged.values()) {
+      try { unlinkSync(stagedPath) } catch { /* best-effort */ }
+    }
+    try { rmdirSync(stageDir) } catch { /* non-empty or missing */ }
+  } catch { /* best-effort */ }
+
   // ── Truncate the future branch (report failure honestly)
-  let truncated = futureCheckpoints.length
-  if (futureCheckpoints.length > 0) {
-    rewriteAnchors(sessionDir, checkpoints.slice(0, cpIndex + 1))
-    // Detect failure: anchors still present past cpIndex?
-    const after = listCheckpoints(sessionDir)
-    if (after.some((c) => c.turn > turn)) truncated = 0
+  let truncated = planned.futureCheckpoints.length
+  if (planned.futureCheckpoints.length > 0) {
+    const checkpoints = listCheckpoints(sessionDir)
+    const cpIndex = checkpoints.findIndex((c) => c.turn === turn)
+    if (cpIndex >= 0) {
+      rewriteAnchors(sessionDir, checkpoints.slice(0, cpIndex + 1))
+      const after = listCheckpoints(sessionDir)
+      if (after.some((c) => c.turn > turn)) truncated = 0
+    }
   }
 
-  const targetLength = Math.min(cp.historyLength, history.length)
   const result: RewindResult = {
     ok: true,
-    historyLength: targetLength,
+    historyLength: planned.historyLength,
     restoredFiles,
     failedFiles,
     deletedFiles,
@@ -553,7 +762,7 @@ export function rewindToCheckpoint(
     degradedFiles,
     truncatedCheckpoints: truncated,
   }
-  if (truncated === 0 && futureCheckpoints.length > 0) {
+  if (truncated === 0 && planned.futureCheckpoints.length > 0) {
     result.message =
       'WARNING: failed to drop the stale future checkpoints (write error) — ' +
       'rewind again or restart the session before appending new turns.'

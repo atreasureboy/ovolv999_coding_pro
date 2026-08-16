@@ -167,8 +167,12 @@ describe('GAP-K: AgentTool.steer()', () => {
     expect(typeof t.steer).toBe('function')
   })
 
-  it('queues the instruction for an active run and returns true', async () => {
+  it('Round 32: delivers to the live child engine (real runtime injection)', async () => {
     const registry = new ExecutionRunRegistry()
+    const steeredInto: string[] = []
+    // A live child exposing the Round-32 steer surface — steer() forwards
+    // to it instead of queueing. The engine contract: true when a turn
+    // is in flight.
     const t = new AgentTool({ factory: (() => ({})) as never, parentConfig: {} as never, parentRenderer: null as unknown as RendererInterface, runRegistry: registry })
     const run = registry.create({
       kind: 'agent', goal: 'g', workspace: { cwd: '/r' },
@@ -176,10 +180,20 @@ describe('GAP-K: AgentTool.steer()', () => {
     registry.transition(run.runId, 'preparing')
     registry.transition(run.runId, 'running')
 
+    // No live child registered → UNDELIVERED (the pre-Round-32 code
+    // returned true here while never delivering anything).
+    expect(await t.steer(run.runId, 'rethink approach')).toBe(false)
+
+    // Register a live child (as runAgentTask does for the run duration)
+    ;(t as unknown as { liveChildren: Map<string, { steer: (i: string) => boolean }> })
+      .liveChildren.set(run.runId, { steer: (i: string) => { steeredInto.push(i); return true } })
     expect(await t.steer(run.runId, 'rethink approach')).toBe(true)
-    expect(t._drainSteerQueue(run.runId)).toBe('rethink approach')
-    // Drain twice → second drain returns undefined (queue emptied)
-    expect(t._drainSteerQueue(run.runId)).toBeUndefined()
+    expect(steeredInto).toEqual(['rethink approach'])
+
+    // A child without an in-flight turn reports undelivered — never a lying true.
+    ;(t as unknown as { liveChildren: Map<string, { steer: (i: string) => boolean }> })
+      .liveChildren.set(run.runId, { steer: () => false })
+    expect(await t.steer(run.runId, 'again')).toBe(false)
   })
 
   it('returns false for a terminal run', async () => {
@@ -195,7 +209,7 @@ describe('GAP-K: AgentTool.steer()', () => {
     expect(await t.steer(run.runId, 'x')).toBe(false)
   })
 
-  it('invokes the onSteered hook on queue', async () => {
+  it('invokes the onSteered hook on real delivery', async () => {
     const registry = new ExecutionRunRegistry()
     const steered: string[] = []
     const t = new AgentTool({
@@ -210,6 +224,8 @@ describe('GAP-K: AgentTool.steer()', () => {
     })
     registry.transition(run.runId, 'preparing')
     registry.transition(run.runId, 'running')
+    ;(t as unknown as { liveChildren: Map<string, { steer: (i: string) => boolean }> })
+      .liveChildren.set(run.runId, { steer: () => true })
     await t.steer(run.runId, 'go faster')
     expect(steered).toEqual(['go faster'])
   })

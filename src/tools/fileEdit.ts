@@ -8,6 +8,7 @@
 
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
+import { isAbsolute, resolve } from 'path'
 import { dirname } from 'path'
 import { execFileSync } from 'child_process'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
@@ -81,7 +82,12 @@ export class FileEditTool implements Tool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { file_path, old_string, new_string, replace_all } = input as Partial<EditFileInput>
+    const { file_path: rawPath, old_string, new_string, replace_all } = input as Partial<EditFileInput>
+
+    // Round 32 (F20): resolve relative paths against the tool-context cwd
+    // — parity with Write; a child agent's relative Edit must land in ITS
+    // worktree, not the parent process directory.
+    const file_path = rawPath && !isAbsolute(rawPath) ? resolve(context.cwd, rawPath) : rawPath
 
     if (!file_path || typeof file_path !== 'string') {
       return { content: 'Error: file_path is required', isError: true }
