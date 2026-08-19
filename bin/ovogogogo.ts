@@ -58,6 +58,7 @@ import { fileURLToPath, pathToFileURL } from 'url'
 }
 import { ExecutionEngine } from '../src/core/engine.js'
 import { assembleEngine } from '../src/cli/engineAssembly.js'
+import { ObservabilityServer } from '../src/server/httpServer.js'
 import type { AssemblySession } from '../src/cli/engineAssembly.js'
 import { isExecutionProfile, type ExecutionProfile } from '../src/core/effort.js'
 import { Renderer } from '../src/ui/renderer.js'
@@ -174,6 +175,9 @@ interface Args {
   /** v0.5: ACP WebSocket transport. When set, runs as a WS server (no REPL). */
   acpWsPort?: number
   acpWsBind?: string
+  serveEnabled?: boolean
+  servePort?: number
+  serveBind?: string
 }
 
 /**
@@ -401,6 +405,9 @@ export function parseArgs(argv: string[]): Args {
   let bg = false
   let acpWsPort: number | undefined
   let acpWsBind: string | undefined
+  let serveEnabled = false
+  let servePort: number | undefined
+  let serveBind: string | undefined
   let init = false
   let maxStdinBytes: number | undefined
   let noContext = false
@@ -470,6 +477,25 @@ export function parseArgs(argv: string[]): Args {
         case '--acp-ws-bind':
           acpWsBind = requireValue(arg, args[++i])
           break
+        case '--serve':
+          {
+            // Optional port — a pure numeric token is consumed; omitted
+            // falls back to the server's default range (7717+).
+            serveEnabled = true
+            const raw = args[i + 1]
+            if (raw !== undefined && /^\d+$/.test(raw)) {
+              const n = parseInt(raw, 10)
+              if (n <= 0 || n > 65535) {
+                throw new ArgError(`Error: --serve requires a port number 1-65535 (got "${raw}")`)
+              }
+              servePort = n
+              i++
+            }
+          }
+          break
+        case '--serve-bind':
+          serveBind = requireValue(arg, args[++i])
+          break
         case '--init': init = true; break
         case '--no-context': noContext = true; break
         case '--max-stdin':
@@ -524,7 +550,7 @@ export function parseArgs(argv: string[]): Args {
     }
     throw err
   }
-  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind }
+  return { task, model, maxIter, cwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind, serveEnabled, servePort, serveBind }
 }
 
 interface ResolvedApiEnvironment {
@@ -645,6 +671,8 @@ OPTIONS
   -m, --model <model>       LLM model  (env: OVOGO_MODEL, default: ${defaultModel})
   --max-iter <n>            Think-Act-Observe max cycles  (env: OVOGO_MAX_ITER, default: 200)
   --profile <name>          Execution profile: fast | standard | deep | autonomous  (default: auto per task)
+  --serve [port]            Start the local observability server (default port 7717, binds 127.0.0.1)
+  --serve-bind <host>       Bind address for --serve (default: 127.0.0.1)
   --cwd <path>              Working directory  (env: OVOGO_CWD, default: cwd, supports ~/)
   --loop                    Activate loop mode (reads .loop/ configuration)
   --loop-init <goal>        Create a safe .loop/ workspace without overwriting existing files
@@ -1780,7 +1808,7 @@ async function main(): Promise<void> {
   const { initChildLogCapture } = await import('../src/core/backgroundSession.js')
   initChildLogCapture()
 
-  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind } = parseArgs(process.argv)
+  const { task, model, maxIter, cwd: rawCwd, help, version, loop, loopMaxIters, loopInitGoal, loopRestart, continueSession, resumeSession, ink, pipe, pipeFormat, bg, init, maxStdinBytes, noContext, baseURL: baseURLFlag, llmOnly, profile, acpWsPort, acpWsBind, serveEnabled, servePort, serveBind } = parseArgs(process.argv)
 
   const cwd = resolve(rawCwd)
   const apiEnvironment = resolveApiEnvironment()
@@ -2158,6 +2186,20 @@ async function main(): Promise<void> {
     model: effectiveModel,
   } = assembled
 
+  // Round 38 (--serve): local observability server — /health /sessions
+  // /session/<name> /events (SSE of every RunEvent). Zero-dep, binds
+  // 127.0.0.1 by default; walks the port range on EADDRINUSE. Attached
+  // to the live engine so model switches / tool calls / routing decisions
+  // stream out in real time.
+  let obsServer: ObservabilityServer | null = null
+  if (serveEnabled) {
+    obsServer = new ObservabilityServer({ cwd, port: servePort, host: serveBind })
+    await obsServer.start()
+    obsServer.attachEngine(engine)
+    const url = obsServer.url ?? '(unknown)'
+    process.stderr.write(`[serve] observability server on ${url} — /health · /sessions · /events (SSE)\n`)
+  }
+
   // Cleanup on any exit path — must be IDEMPOTENT (signal handlers may fire
   // alongside the natural `exit` event). Order matters: save session first
   // (sync fs), then dispose engine (kills any background tasks spawned
@@ -2173,6 +2215,7 @@ async function main(): Promise<void> {
   const cleanup = (): void => {
     if (cleanedUp) return
     cleanedUp = true
+    try { void obsServer?.stop() } catch { /* best-effort */ }
     try { saveOnExit?.() } catch { /* best-effort */ }
     // Idempotent: engine.dispose + tmux teardown (+ scratch dir removal
     // for headless runs) — see engineAssembly.ts.

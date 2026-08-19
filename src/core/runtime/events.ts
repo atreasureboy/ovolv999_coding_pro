@@ -108,6 +108,21 @@ type HandlerMap = {
 
 export class RunEventEmitter {
   private readonly handlers: Partial<HandlerMap> = {}
+  /**
+   * Round 38 (observability server): wildcard subscribers receive EVERY
+   * event regardless of type (SSE bridge, tracing taps). Kept separate
+   * from the per-type map so emit() stays O(1) for typed subscribers.
+   */
+  private readonly anyHandlers: Array<(event: RunEvent) => void> = []
+
+  /** Subscribe to ALL events. Returns an unsubscribe function. */
+  onAny(handler: (event: RunEvent) => void): () => void {
+    this.anyHandlers.push(handler)
+    return () => {
+      const idx = this.anyHandlers.indexOf(handler)
+      if (idx >= 0) this.anyHandlers.splice(idx, 1)
+    }
+  }
 
   /** Subscribe to a specific event type. Returns an unsubscribe function. */
   on<T extends RunEventType>(
@@ -134,6 +149,13 @@ export class RunEventEmitter {
 
   /** Emit an event to all subscribers of that type. */
   emit(event: RunEvent): void {
+    for (const handler of this.anyHandlers) {
+      try {
+        handler(event)
+      } catch {
+        // subscriber failures must never break the runtime loop
+      }
+    }
     const list = this.handlers[event.type] as Array<(event: RunEvent) => void> | undefined
     if (!list) return
     for (const handler of list) {
@@ -147,6 +169,7 @@ export class RunEventEmitter {
 
   /** Remove all subscribers. */
   clear(): void {
+    this.anyHandlers.length = 0
     for (const key of Object.keys(this.handlers)) {
       delete this.handlers[key as RunEventType]
     }

@@ -337,6 +337,58 @@ registerCommand({
   },
 })
 
+// ── /serve — start/stop the local observability server ─────────────────────
+
+registerCommand({
+  name: 'serve',
+  description: 'Start/stop the local observability HTTP+SSE server (/health /sessions /events)',
+  usage: '/serve [port] | /serve stop | /serve status',
+  handler: async (args, ctx) => {
+    const { getSharedObservabilityServer } =
+      require('../../server/httpServer.js') as typeof import('../../server/httpServer.js')
+    const parts = args.trim().split(/\s+/).filter(Boolean)
+    const action = parts[0] ?? ''
+    const portArg = /^\d+$/.test(action) ? parseInt(action, 10) : undefined
+    const server = getSharedObservabilityServer(ctx.cwd, portArg)
+
+    const runningText = (): string => {
+      const a = server.address
+      return `Observability server running at http://${a?.host}:${a?.port}\n` +
+        'Endpoints: /health · /sessions · /session/<name> · /events (SSE)\n/serve stop to stop.'
+    }
+
+    if (action === 'stop') {
+      if (!server.listening) return text('Observability server is not running.')
+      await server.stop()
+      return text('Observability server stopped.')
+    }
+
+    if (action === 'status') {
+      return server.listening ? text(runningText()) : text('Observability server is not running. Use /serve [port] to start.')
+    }
+
+    if (action !== '' && !/^\d+$/.test(action)) {
+      return text('Usage: /serve [port] | /serve stop | /serve status')
+    }
+
+    if (server.listening) {
+      return text(runningText() + '\n/serve stop first to change the port.')
+    }
+
+    try {
+      server.attachEngine(ctx.engine)
+      const bound = await server.start()
+      return text(
+        `Observability server on http://${bound.host}:${bound.port}\n` +
+        'Endpoints: /health (engine status) · /sessions (session list) · /session/<name> · /events (live SSE stream)\n' +
+        '/serve stop to stop.',
+      )
+    } catch (err) {
+      return text(`Failed to start observability server: ${(err as Error).message}`)
+    }
+  },
+})
+
 // ── /fork — branch the current session into a new resumable session ─────────
 
 registerCommand({
