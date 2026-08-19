@@ -39,6 +39,82 @@ interface ServerState {
   initializedFor: Set<string>
 }
 
+/**
+ * Round 40 (opencode read→LSP warmup): shared server-state registry keyed
+ * by cwd::name. Previously each createLspTool() instance held its own
+ * closure-scoped map, so a warmup spawned by FileRead could never share
+ * the live client with the LSP tool. Module-level so both paths converge
+ * on one LspClient per (cwd, server).
+ */
+const sharedServerStates = new Map<string, ServerState>()
+
+/** One warmup attempt per (cwd, server) — never retry a failed spawn. */
+const warmAttempted = new Set<string>()
+
+let cachedSettingsServers: Record<string, LspServerConfig> | null = null
+function settingsServersCached(): Record<string, LspServerConfig> {
+  if (!cachedSettingsServers) cachedSettingsServers = loadLspServersFromSettings()
+  return cachedSettingsServers
+}
+
+/** Reset caches (tests). */
+export function _resetLspToolCaches(): void {
+  cachedSettingsServers = null
+  warmAttempted.clear()
+}
+
+/**
+ * Get-or-start the shared LSP server for (cwd, name). Same contract as
+ * the tool's internal path: resolves a ServerState or an { error }.
+ */
+async function getOrInitSharedServer(
+  name: string,
+  config: LspServerConfig,
+  cwd: string,
+): Promise<ServerState | { error: string }> {
+  const key = `${cwd}::${name}`
+  const existing = sharedServerStates.get(key)
+  if (existing && existing.initializedFor.has(cwd)) return existing
+  const client = new LspClient({
+    command: config.command,
+    args: config.args,
+    cwd: config.cwd ?? cwd,
+    env: config.env,
+  })
+  try {
+    const started = await client.start(pathToFileUri(cwd))
+    if (!started) {
+      return { error: `LSP server '${name}' failed to start (binary not found or spawn error)` }
+    }
+    const state: ServerState = existing ?? { client, initializedFor: new Set() }
+    state.initializedFor.add(cwd)
+    sharedServerStates.set(key, state)
+    return state
+  } catch (err) {
+    return { error: `LSP server '${name}' failed to start: ${(err as Error).message}` }
+  }
+}
+
+/**
+ * Fire-and-forget warmup for the LSP server matching `filePath`'s
+ * extension (opencode's read→warmup pattern): by the time the model calls
+ * the LSP tool, the server is already initialized and the first
+ * definition/references call doesn't eat the multi-second cold start.
+ * At most ONE attempt per (cwd, server); failures are swallowed — warmup
+ * must never affect the Read result.
+ */
+export function warmLspForFile(filePath: string, cwd: string): boolean {
+  const entry = findServerFor(filePath, settingsServersCached())
+  if (!entry) return false
+  const attemptKey = `${cwd}::${entry.name}`
+  if (warmAttempted.has(attemptKey)) return true
+  warmAttempted.add(attemptKey)
+  void getOrInitSharedServer(entry.name, entry.config, cwd).catch(() => {
+    /* best-effort — the LSP tool surfaces real errors on demand */
+  })
+  return true
+}
+
 export function loadLspServersFromSettings(): Record<string, LspServerConfig> {
   const settingsPath = join(homedir(), '.ovogo', 'settings.json')
   if (!existsSync(settingsPath)) return {}
@@ -64,33 +140,14 @@ export function findServerFor(uri: string, servers: Record<string, LspServerConf
 }
 
 export function createLspTool(options: LspToolOptions): Tool {
-  const serverStates = new Map<string, ServerState>()
-
+  // Round 40: delegates to the module-level shared registry so warmups
+  // started by FileRead reuse the SAME LspClient the tool queries later.
   async function getOrInitServer(
     name: string,
     config: LspServerConfig,
     cwd: string,
   ): Promise<ServerState | { error: string }> {
-    const existing = serverStates.get(name)
-    if (existing && existing.initializedFor.has(cwd)) return existing
-    const client = new LspClient({
-      command: config.command,
-      args: config.args,
-      cwd: config.cwd ?? cwd,
-      env: config.env,
-    })
-    try {
-      const started = await client.start(pathToFileUri(cwd))
-      if (!started) {
-        return { error: `LSP server '${name}' failed to start (binary not found or spawn error)` }
-      }
-      const state: ServerState = existing ?? { client, initializedFor: new Set() }
-      state.initializedFor.add(cwd)
-      serverStates.set(name, state)
-      return state
-    } catch (err) {
-      return { error: `LSP server '${name}' failed to start: ${(err as Error).message}` }
-    }
+    return getOrInitSharedServer(name, config, cwd)
   }
 
   return {

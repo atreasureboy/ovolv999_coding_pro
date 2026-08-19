@@ -119,6 +119,16 @@ function suggestSimilarPath(target: string): string | undefined {
   }
 }
 
+/** Async, best-effort LSP warmup — see the call site for the contract. */
+async function warmLsp(filePath: string, cwd: string): Promise<void> {
+  try {
+    const { warmLspForFile } = await import('./lspTool.js')
+    warmLspForFile(filePath, cwd)
+  } catch {
+    /* best-effort */
+  }
+}
+
 export class FileReadTool implements Tool {
   name = 'Read'
   metadata = {
@@ -262,6 +272,12 @@ export class FileReadTool implements Tool {
           : `File: ${file_path}\n`
 
       markFileRead(file_path, raw)
+
+      // Round 40 (opencode read→LSP warmup): fire-and-forget background
+      // warmup of the matching language server. Dynamic import keeps the
+      // eager tool path light (LSP machinery stays lazy); one attempt per
+      // (cwd, server); failures never touch the Read result.
+      void warmLsp(file_path, context.cwd)
 
       return { content: header + numbered, isError: false }
     } catch (err: unknown) {
