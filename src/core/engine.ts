@@ -53,6 +53,7 @@ import { ModelGateway } from './model/modelGateway.js'
 import { createProviderAdapter } from './model/providerAdapter.js'
 import { ModelRouter, routerFromSingleModel, type ModelProfile, type RoutingConfig, type BudgetAllocation } from './model/modelRouter.js'
 import { validateProfiles, BindingRegistry } from './model/modelRuntimeManager.js'
+import { getProviderBaseURL, getProviderAPIKeyEnv, type ProviderId } from './providers.js'
 import { resolveModelTier } from './model/modelTier.js'
 import { ProgressMonitor } from './runtime/progressMonitor.js'
 import type { TaskGraph } from './runtime/taskGraph.js'
@@ -120,22 +121,33 @@ function buildRouter(config: EngineConfig): ModelRouter {
         },
         roles: Array.isArray(p.roles) ? p.roles.filter((r): r is string => typeof r === 'string') : ['main'],
         available: p.available !== false,
+        // Round 35 (cross-provider switching): carry the transport facts so
+        // the engine can rebind when a different-provider profile is chosen.
+        ...(typeof p.apiKeyEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(p.apiKeyEnv)
+          ? { apiKeyEnv: p.apiKeyEnv } : {}),
+        ...(typeof p.baseURL === 'string' && p.baseURL.trim()
+          ? { baseURL: p.baseURL.trim() } : {}),
       })
     }
     if (profiles.length > 0) {
       const activeProvider = config.provider ?? 'openai'
+      // Round 35: top-tier profiles of ALL providers join the router — a
+      // cross-provider target is reachable via /model and usable as a
+      // routing/fallback destination (the engine rebinds its transport on
+      // switch). Validation stays scoped to the boot provider's profiles.
       const mainProfiles = profiles.filter((profile) =>
-        profile.provider === activeProvider
-        && profile.tier === 'top'
-        && profile.available,
+        profile.tier === 'top' && profile.available,
       )
-      if (mainProfiles.length === 0) {
+      if (mainProfiles.filter((profile) => profile.provider === activeProvider).length === 0) {
         throw new Error(
           `No available top model profile is configured for provider ${activeProvider}. `
           + 'Set models.profiles[].tier to "top" for the main agent.',
         )
       }
-      validateProfiles({ activeProvider, profiles: mainProfiles })
+      validateProfiles({
+        activeProvider,
+        profiles: mainProfiles.filter((profile) => profile.provider === activeProvider),
+      })
       const r = config.models?.routing ?? {}
       const routing: RoutingConfig = {
         enabled: r.enabled !== false,
@@ -936,6 +948,21 @@ export class ExecutionEngine {
   }
 
   /**
+   * Expose the live SDK client so lightweight one-shot helpers (e.g. the
+   * /title generator) reuse the ACTIVE transport instead of constructing a
+   * second client that would silently miss /model + cross-provider
+   * switches. Read-only callers must not mutate client state.
+   */
+  getClient(): OpenAI {
+    return this.client
+  }
+
+  /** Active provider id after any cross-provider rebind. */
+  getProvider(): string {
+    return this.config.provider ?? 'openai'
+  }
+
+  /**
    * P0-1 (transactional model switch): update the model atomically.
    *
    * Previously this method only mutated `config.model`, leaving every
@@ -1009,12 +1036,14 @@ export class ExecutionEngine {
     }
 
     /**
-     * v0.3.1 (runtime truth contract §三.1.2 + §三.1.4): a model whose profile declares
-     * a different provider than the active engine transport is
-     * rejected. We don't have multi-adapter switching; the engine
-     * comment at line 639-642 documents this. With no profile match
-     * (the user typed a bare model string), accept it through and
-     * let /models + audit surface the mismatch.
+     * Round 35 (borrowed from opencode's per-provider adapter model): when
+     * the chosen profile targets a DIFFERENT provider than the engine's
+     * boot transport, rebind the transport at runtime instead of rejecting
+     * the switch. Unknown bare model strings pass through as before (let
+     * /models + audit surface the mismatch).
+     *
+     * Rebind is transactional: a failed adapter/client construction
+     * restores the previous adapter and leaves config untouched.
      */
     private validateModelProviderMatch(modelOrProfile: string, _path: 'manual' | 'auto'): void {
       const router = this.modelRouter
@@ -1024,13 +1053,61 @@ export class ExecutionEngine {
       if (!profile) return
       const activeProvider = this.config.provider ?? 'openai'
       if (profile.provider && profile.provider !== activeProvider) {
+        this.rebindTransport(profile)
+      }
+    }
+
+    /**
+     * Swap the engine's model transport to `profile`'s provider:
+     *   resolve apiKey (profile.apiKeyEnv → provider registry default)
+     *   → resolve baseURL (profile.baseURL → provider registry default)
+     *   → build a fresh SDK client + ProviderAdapter
+     *   → swap gateway adapter, ContextManager client, engine client+config.
+     *
+     * Throws with an actionable message when the key is missing — the
+     * switch is refused BEFORE any state changes, so the engine stays on
+     * the old transport. Known limitation: modules that captured the boot
+     * client (e.g. CriticModule) keep using it until restart; the main
+     * turn path, compaction, and reactive recovery all follow the new
+     * transport.
+     */
+    private rebindTransport(profile: ModelProfile): void {
+      const provider = profile.provider as ProviderId
+      const apiKeyEnv = profile.apiKeyEnv ?? getProviderAPIKeyEnv(provider) ?? undefined
+      const apiKey = apiKeyEnv ? process.env[apiKeyEnv] : undefined
+      if (!apiKeyEnv || !apiKey) {
         throw new Error(
-          `Cross-provider model switch rejected: profile "${profile.id}" ` +
-          `targets provider "${profile.provider}" but engine transport is ` +
-          `"${activeProvider}". Update config.models.profiles to match the ` +
-          `single configured provider, or restart with a different ` +
-          `--provider flag.`,
+          `Cross-provider switch to profile "${profile.id}" (${provider}) needs an API key: ` +
+          `set the ${apiKeyEnv ?? `${provider.toUpperCase()}_API_KEY`} environment variable ` +
+          `(or configure "apiKeyEnv" in models.profiles for this profile).`,
         )
+      }
+      const baseURL = profile.baseURL ?? getProviderBaseURL(provider) ?? undefined
+
+      const prevClient = this.client
+      const prevProvider = this.config.provider
+      const prevBaseURL = this.config.baseURL
+      const prevApiKey = this.config.apiKey
+
+      let previousAdapter: ReturnType<ModelGateway['swapAdapter']> | null = null
+      try {
+        const client = new OpenAI({ apiKey, baseURL, maxRetries: 5, timeout: 120_000 })
+        const adapter = createProviderAdapter({ provider, client })
+        // Construction succeeded → commit. swapAdapter returns the old
+        // adapter first so a later failure can still roll back.
+        previousAdapter = this.modelGateway.swapAdapter(adapter)
+        this.client = client
+        this.config.provider = provider
+        this.config.baseURL = baseURL
+        this.config.apiKey = apiKey
+        this.contextManager.onTransportChanged(client)
+      } catch (err) {
+        if (previousAdapter) this.modelGateway.restoreAdapter(previousAdapter)
+        this.client = prevClient
+        this.config.provider = prevProvider
+        this.config.baseURL = prevBaseURL
+        this.config.apiKey = prevApiKey
+        throw err instanceof Error ? err : new Error(`Cross-provider rebind failed: ${String(err)}`)
       }
     }
 

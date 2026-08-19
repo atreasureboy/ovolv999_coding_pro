@@ -158,6 +158,16 @@ export class ContextManager {
     this.resolvedContextWindow = null
   }
 
+  /**
+   * Round 35 (cross-provider switching): swap the model client used for
+   * compaction / reactive summarization without rebuilding the manager.
+   * Same deps-replacement contract as onModelChanged — the constructor's
+   * "deps is a snapshot" invariant stays intact.
+   */
+  onTransportChanged(client: OpenAI): void {
+    this.deps = { ...this.deps, client }
+  }
+
   // ── WorkingState (P1-6, P1-7 / runtime invariants §十) ────────────────────────
   //
   // The WorkingState is the structured long-term memory. It is:

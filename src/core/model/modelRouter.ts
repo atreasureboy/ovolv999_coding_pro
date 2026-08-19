@@ -113,6 +113,15 @@ export interface ModelProfile {
   /** Roles this profile can serve: 'main' | 'cheap' | 'long-context' | 'worker'. */
   roles: string[]
   available: boolean
+  /**
+   * Round 35 (cross-provider switching): env var holding this profile's
+   * API key. Required for profiles whose provider differs from the
+   * engine's boot provider — the engine rebinds its transport from this
+   * when switching to the profile. Same shape as providers.ts registry.
+   */
+  apiKeyEnv?: string
+  /** Endpoint override for this profile (defaults from the provider registry). */
+  baseURL?: string
 }
 
 export interface RoutingInput {

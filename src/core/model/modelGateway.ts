@@ -21,7 +21,7 @@ import type { OpenAIMessage, ToolDefinition } from '../types.js'
 import type { TokenUsage } from '../costTracker.js'
 import type { RendererInterface } from '../types.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
-import type { ProviderAdapter } from './providerAdapter.js'
+import type { ProviderAdapter, ProviderId } from './providerAdapter.js'
 import type { EventLog } from '../eventLog.js'
 
 export interface ModelGatewayDeps {
@@ -82,7 +82,10 @@ export class ModelGatewayError extends Error {
 }
 
 export class ModelGateway {
-  private readonly adapter: ProviderAdapter
+  // Mutable: Round 35 cross-provider switching swaps the adapter in place
+  // (transactionally from Engine.rebindTransport) so the gateway follows
+  // the active provider without rebuilding the whole engine.
+  private adapter: ProviderAdapter
   private readonly renderer: RendererInterface
   private readonly streamConsumer: StreamConsumer
 
@@ -94,6 +97,27 @@ export class ModelGateway {
 
   get streamUsageSupported(): boolean {
     return this.adapter.streamUsageSupported
+  }
+
+  /** Active transport id (for diagnostics after a cross-provider switch). */
+  get providerId(): ProviderId {
+    return this.adapter.providerId
+  }
+
+  /**
+   * Swap the active transport adapter. Returns the PREVIOUS adapter so the
+   * caller can roll back on a failed cross-provider switch. The new
+   * adapter arrives with a fresh usage-streaming probe latch.
+   */
+  swapAdapter(adapter: ProviderAdapter): ProviderAdapter {
+    const prev = this.adapter
+    this.adapter = adapter
+    return prev
+  }
+
+  /** Restore a previously swapped adapter (rollback path). */
+  restoreAdapter(adapter: ProviderAdapter): void {
+    this.adapter = adapter
   }
 
   markStreamUsageUnsupported(): void {

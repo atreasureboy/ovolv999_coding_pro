@@ -19,6 +19,7 @@
 import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { warnConfigOnce } from './diagnostics.js'
+import { parseJsonc } from '../utils/jsonc.js'
 
 import { type PermissionMode } from '../core/permissionSystem.js'
 
@@ -97,10 +98,10 @@ export function loadProjectConfig(cwd: string): ProjectConfig | null {
       const configPath = join(dir, filename)
       if (existsSync(configPath)) {
         try {
-          let content = readFileSync(configPath, 'utf-8')
-          // Strip JSONC comments (// ...) — simple line-level stripping
-          content = content.replace(/^\s*\/\/.*$/gm, '')
-          return normalizeProjectConfig(JSON.parse(content), configPath)
+          const content = readFileSync(configPath, 'utf-8')
+          // JSONC (comments + trailing commas) — string-aware, unlike the
+          // previous regex strip which corrupted "https://..." values.
+          return normalizeProjectConfig(parseJsonc(content), configPath)
         } catch (err) {
           // Corrupt project config: warn once and continue — never fatal
           // (background/CI children re-enter with the same cwd).

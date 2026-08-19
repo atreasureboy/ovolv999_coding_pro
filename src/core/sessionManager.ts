@@ -66,6 +66,43 @@ export interface SessionEnvelope {
    * for those, NEVER a guess.
    */
   lastOutcome?: OutcomeSummary
+  /**
+   * Round 35 (opencode-style session title): persisted display title set
+   * by /title (user text or model-generated). Absent until first set;
+   * listings fall back to the first-user-message heuristic.
+   */
+  title?: string
+}
+
+/** Upper bound for a persisted session title (display-only field). */
+export const MAX_SESSION_TITLE_LENGTH = 120
+
+/**
+ * Validate a caller-supplied session title. Empty/overlong titles are a
+ * caller bug (the display layer already trims), so they throw rather than
+ * silently persist a broken field.
+ */
+export function assertValidTitle(title: string): void {
+  if (typeof title !== 'string' || title.trim().length === 0) {
+    throw new TypeError('session title must be a non-empty string')
+  }
+  if (title.length > MAX_SESSION_TITLE_LENGTH) {
+    throw new TypeError(`session title exceeds ${MAX_SESSION_TITLE_LENGTH} characters`)
+  }
+}
+
+/**
+ * Persist (or replace) the title on an EXISTING session without touching
+ * its messages or lastOutcome. Returns true when written, false when the
+ * session has no history yet (nothing to attach a title to).
+ */
+export function setSessionTitle(sessionDir: string, title: string): boolean {
+  assertNonEmpty(sessionDir, 'sessionDir')
+  assertValidTitle(title)
+  const envelope = loadSessionEnvelope(sessionDir)
+  if (!envelope) return false
+  saveSession(sessionDir, envelope.messages, envelope.lastOutcome, title.trim())
+  return true
 }
 
 /**
@@ -257,6 +294,7 @@ type EnvelopeRecord = {
   updatedAt: unknown
   messages: unknown
   lastOutcome?: unknown
+  title?: unknown
 }
 
 /**
@@ -400,6 +438,16 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     )
   }
 
+  // Gate (6): title is optional; when present it must be a non-empty
+  // string within the display-length bound. Anything else is dropped by
+  // treating the field as absent (a bad title is cosmetic, not truth —
+  // refusing the whole session over it would be disproportionate).
+  const title = typeof env.title === 'string'
+    && env.title.trim().length > 0
+    && env.title.length <= MAX_SESSION_TITLE_LENGTH
+    ? env.title
+    : undefined
+
   // Same-version short-circuit — no transform needed. Gates above
   // validated version, schema, updatedAt, and every messages entry
   // (via isValidMessageShape, which narrows to OpenAIMessage). We
@@ -412,6 +460,7 @@ function migrateToCurrent(parsed: unknown, sessionDir: string): SessionEnvelope 
     updatedAt,
     messages: messages as OpenAIMessage[],
     lastOutcome: env.lastOutcome,
+    ...(title ? { title } : {}),
   }
   if (version === CURRENT_SESSION_VERSION) {
     return currentEnv
@@ -532,10 +581,18 @@ export function createSessionDir(cwd: string, now: Date = new Date()): string {
  * history.json. Catching it at save time keeps the on-disk state always
  * self-consistent.
  */
-export function saveSession(sessionDir: string, history: OpenAIMessage[], outcome?: OutcomeSummary): void {
+export function saveSession(
+  sessionDir: string,
+  history: OpenAIMessage[],
+  outcome?: OutcomeSummary,
+  title?: string,
+): void {
   assertNonEmpty(sessionDir, 'sessionDir')
   if (!Array.isArray(history)) {
     throw new TypeError('history must be an array of OpenAIMessage')
+  }
+  if (title !== undefined) {
+    assertValidTitle(title)
   }
   // Validate every entry BEFORE touching the filesystem so a bad message
   // can never produce a half-written / orphan-tmp state. The error path
@@ -577,6 +634,7 @@ export function saveSession(sessionDir: string, history: OpenAIMessage[], outcom
     // before any turn completed are byte-identical in shape to the v1
     // ones (minus the version bump).
     ...(outcome ? { lastOutcome: outcome } : {}),
+    ...(title ? { title } : {}),
   }
 
   let tmpFd: number | null = null
@@ -916,9 +974,15 @@ export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
 
       const envelope = loadSessionEnvelope(s.dir)
       if (envelope) {
-        const firstUserMsg = envelope.messages.find((m) => m.role === 'user')
-        if (firstUserMsg && typeof firstUserMsg.content === 'string') {
-          title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
+        // Round 35: a persisted title (set via /title) wins; otherwise
+        // fall back to the first-user-message heuristic.
+        if (envelope.title) {
+          title = envelope.title
+        } else {
+          const firstUserMsg = envelope.messages.find((m) => m.role === 'user')
+          if (firstUserMsg && typeof firstUserMsg.content === 'string') {
+            title = firstUserMsg.content.trim().slice(0, 60).replaceAll('\n', ' ')
+          }
         }
 
         if (envelope.lastOutcome) {

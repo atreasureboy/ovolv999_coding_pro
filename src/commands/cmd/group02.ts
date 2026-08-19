@@ -293,6 +293,50 @@ registerCommand({
   },
 })
 
+// ── /title — name this session (persisted, shown in /sessions) ─────────────
+
+registerCommand({
+  name: 'title',
+  description: 'Set this session\'s title (no args = generate from the conversation)',
+  usage: '/title [text]',
+  handler: async (args, ctx) => {
+    if (!ctx.sessionDir) {
+      return text('Titles need a session directory (not available in pipe/scratch mode).')
+    }
+    const sm = require('../../core/sessionManager.js') as typeof import('../../core/sessionManager.js')
+    const { buildTitlePrompt, cleanGeneratedTitle, deriveFallbackTitle } =
+      require('../../core/sessionTitle.js') as typeof import('../../core/sessionTitle.js')
+
+    const manual = args.trim()
+    if (manual) {
+      sm.setSessionTitle(ctx.sessionDir, manual)
+      return text(`Session title set: "${manual}"`)
+    }
+
+    const fallback = deriveFallbackTitle(ctx.history)
+    let generated = ''
+    try {
+      const client = ctx.engine.getClient()
+      const completion = await client.chat.completions.create({
+        model: ctx.engine.getModel(),
+        messages: [{ role: 'user', content: buildTitlePrompt(ctx.history) }],
+        max_tokens: 40,
+        temperature: 0,
+      })
+      generated = cleanGeneratedTitle(completion.choices[0]?.message?.content ?? '')
+    } catch {
+      /* model path failed — fall back to the heuristic below */
+    }
+
+    const title = generated || fallback
+    if (!title) {
+      return text('Nothing to title yet — send a message first, or set one explicitly: /title <text>')
+    }
+    sm.setSessionTitle(ctx.sessionDir, title)
+    return text(`Session title ${generated ? 'generated' : 'derived'}: "${title}"`)
+  },
+})
+
 // ── /fork — branch the current session into a new resumable session ─────────
 
 registerCommand({

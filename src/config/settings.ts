@@ -40,6 +40,7 @@ import type { McpServerConfig } from '../core/mcpClient.js'
 import { normalizeHooksSection, type HookConfig } from '../core/hooks/hooksConfig.js'
 import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
 import type { ConfigDiagnostic } from './diagnostics.js'
+import { parseJsonc } from '../utils/jsonc.js'
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'])
 const PERMISSION_PROFILES = new Set(['safe', 'standard', 'autonomous'])
@@ -98,7 +99,8 @@ function tryParse(path: string): OvogoSettings {
   if (!content.trim()) return {}
   let parsed: unknown
   try {
-    parsed = JSON.parse(content)
+    // JSONC (comments + trailing commas) — plain JSON is the fast path.
+    parsed = parseJsonc(content)
   } catch (err: unknown) {
     const parseError = err as Error
     const loc = parseJsonSyntaxError(parseError, content)
