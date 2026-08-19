@@ -29,6 +29,7 @@
 
 import { spawn, execFileSync } from 'child_process'
 import type { ChildProcess } from 'child_process'
+import { randomBytes } from 'crypto'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { wrapCommand as sandboxWrap } from '../core/sandbox.js'
@@ -644,13 +645,22 @@ export class BashTool implements Tool {
         const dir = context.sessionDir ? join(context.sessionDir, 'bash-output') : null
         let ws: WriteStream | null = null
         let p: string | null = null
+        let closed = false
         return {
           record(chunk: string) {
-            if (!dir) return
+            // Round 41 audit fix: never REOPEN after close. Late data from
+            // a dying child (post-abort) used to create a second log file
+            // nobody would ever close — leaking the fd and splitting the
+            // "full output" across two files while the marker pointed at
+            // only the first.
+            if (!dir || closed) return
             try {
               if (!ws) {
                 mkdirSync(dir, { recursive: true })
-                p = join(dir, `${Date.now()}_${process.pid}_${streamName}.log`)
+                // Random suffix: two parallel Bash calls in the same
+                // millisecond share Date.now() AND the host pid — without
+                // it they interleave into one file.
+                p = join(dir, `${Date.now()}_${process.pid}_${randomBytes(4).toString('hex')}_${streamName}.log`)
                 ws = createWriteStream(p, { flags: 'a' })
                 ws.on('error', () => { /* best-effort logging */ })
               }
@@ -658,6 +668,7 @@ export class BashTool implements Tool {
             } catch { /* best-effort */ }
           },
           close() {
+            closed = true
             try { ws?.end() } catch { /* best-effort */ }
             ws = null
           },

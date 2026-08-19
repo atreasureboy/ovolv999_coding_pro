@@ -51,21 +51,39 @@ const sharedServerStates = new Map<string, ServerState>()
 /** One warmup attempt per (cwd, server) — never retry a failed spawn. */
 const warmAttempted = new Set<string>()
 
-let cachedSettingsServers: Record<string, LspServerConfig> | null = null
+/**
+ * Round 41 audit fix: in-flight get-or-start dedupe. The check-then-await-
+ * then-set window (LSP initialize takes seconds) let a Read-triggered
+ * warmup and a concurrent lsp tool call BOTH spawn the server — the loser
+ * was overwritten in the map and its process orphaned. One promise per key.
+ */
+const inflight = new Map<string, Promise<ServerState | { error: string }>>()
+
+let cachedSettingsServers: { value: Record<string, LspServerConfig>; at: number } | null = null
+const SETTINGS_TTL_MS = 10_000
+
 function settingsServersCached(): Record<string, LspServerConfig> {
-  if (!cachedSettingsServers) cachedSettingsServers = loadLspServersFromSettings()
-  return cachedSettingsServers
+  if (!cachedSettingsServers || Date.now() - cachedSettingsServers.at > SETTINGS_TTL_MS) {
+    cachedSettingsServers = { value: loadLspServersFromSettings(), at: Date.now() }
+  }
+  return cachedSettingsServers.value
 }
 
 /** Reset caches (tests). */
 export function _resetLspToolCaches(): void {
   cachedSettingsServers = null
   warmAttempted.clear()
+  inflight.clear()
 }
 
 /**
  * Get-or-start the shared LSP server for (cwd, name). Same contract as
  * the tool's internal path: resolves a ServerState or an { error }.
+ *
+ * Round 41 audit fix: a client whose server process DIED used to stay in
+ * the registry forever — every later lsp call hit a dead connection with
+ * no recovery until host restart. Dead entries are evicted (and their
+ * warmup marker cleared) so the next call spawns a replacement.
  */
 async function getOrInitSharedServer(
   name: string,
@@ -74,25 +92,39 @@ async function getOrInitSharedServer(
 ): Promise<ServerState | { error: string }> {
   const key = `${cwd}::${name}`
   const existing = sharedServerStates.get(key)
-  if (existing && existing.initializedFor.has(cwd)) return existing
-  const client = new LspClient({
-    command: config.command,
-    args: config.args,
-    cwd: config.cwd ?? cwd,
-    env: config.env,
-  })
-  try {
-    const started = await client.start(pathToFileUri(cwd))
-    if (!started) {
-      return { error: `LSP server '${name}' failed to start (binary not found or spawn error)` }
-    }
-    const state: ServerState = existing ?? { client, initializedFor: new Set() }
-    state.initializedFor.add(cwd)
-    sharedServerStates.set(key, state)
-    return state
-  } catch (err) {
-    return { error: `LSP server '${name}' failed to start: ${(err as Error).message}` }
+  if (existing && existing.initializedFor.has(cwd)) {
+    if (existing.client.isOpen) return existing
+    // Server died — evict so the spawn below replaces it.
+    sharedServerStates.delete(key)
+    warmAttempted.delete(key)
   }
+  const pendingStart = inflight.get(key)
+  if (pendingStart) return pendingStart
+
+  const start = (async (): Promise<ServerState | { error: string }> => {
+    const client = new LspClient({
+      command: config.command,
+      args: config.args,
+      cwd: config.cwd ?? cwd,
+      env: config.env,
+    })
+    try {
+      const started = await client.start(pathToFileUri(cwd))
+      if (!started) {
+        return { error: `LSP server '${name}' failed to start (binary not found or spawn error)` }
+      }
+      const state: ServerState = existing ?? { client, initializedFor: new Set() }
+      state.initializedFor.add(cwd)
+      sharedServerStates.set(key, state)
+      return state
+    } catch (err) {
+      return { error: `LSP server '${name}' failed to start: ${(err as Error).message}` }
+    } finally {
+      inflight.delete(key)
+    }
+  })()
+  inflight.set(key, start)
+  return start
 }
 
 /**

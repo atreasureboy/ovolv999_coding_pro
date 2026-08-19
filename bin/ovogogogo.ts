@@ -58,7 +58,7 @@ import { fileURLToPath, pathToFileURL } from 'url'
 }
 import { ExecutionEngine } from '../src/core/engine.js'
 import { assembleEngine } from '../src/cli/engineAssembly.js'
-import { ObservabilityServer } from '../src/server/httpServer.js'
+import { ObservabilityServer, getSharedObservabilityServer } from '../src/server/httpServer.js'
 import type { AssemblySession } from '../src/cli/engineAssembly.js'
 import { isExecutionProfile, type ExecutionProfile } from '../src/core/effort.js'
 import { Renderer } from '../src/ui/renderer.js'
@@ -1926,6 +1926,12 @@ async function main(): Promise<void> {
   //   0 completed · 1 partial/blocked/exhausted/cancelled/failed · 2 API throw
   // No project session dir is written and no durable session state remains
   // (assembleEngine gives this path a scratch dir it removes on dispose).
+  if (serveEnabled && (pipe || acpWsPort !== undefined || llmOnly || bg)) {
+    // Round 41: these modes exit before the observability server starts —
+    // say so instead of silently dropping --serve.
+    process.stderr.write('[serve] --serve is ignored in --pipe / --acp-ws / --llm-only / --bg modes\n')
+  }
+
   if (acpWsPort !== undefined) {
     if (help) {
       const { getAcpWsHelp } = await import('../src/cli/acpServer.js')
@@ -2193,7 +2199,10 @@ async function main(): Promise<void> {
   // stream out in real time.
   let obsServer: ObservabilityServer | null = null
   if (serveEnabled) {
-    obsServer = new ObservabilityServer({ cwd, port: servePort, host: serveBind })
+    // Round 41 audit fix: use the SHARED instance — a private `new` here
+    // made --serve and /serve operate two invisible servers (status lied,
+    // stop couldn't stop, a second server started on a walked port).
+    obsServer = getSharedObservabilityServer(cwd, servePort, serveBind)
     await obsServer.start()
     obsServer.attachEngine(engine)
     const url = obsServer.url ?? '(unknown)'

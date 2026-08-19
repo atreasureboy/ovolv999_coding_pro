@@ -52,7 +52,10 @@ export interface ParsedPatch {
  * Error with a model-actionable message (line number where possible).
  */
 export function parseApplyPatch(patch: string): ParsedPatch {
-  const lines = patch.split('\n')
+  // Round 41 audit fix: strip CR left by CRLF documents — directive lines
+  // like "*** Update File: x\r" matched nothing and the whole patch was
+  // rejected with a misleading error on the FIRST directive.
+  const lines = patch.split('\n').map((l) => l.replace(/\r$/, ''))
   let i = 0
   // Skip leading blank lines before the Begin marker.
   while (i < lines.length && !(lines[i] ?? '').trim()) i++
@@ -113,7 +116,11 @@ export function parseApplyPatch(patch: string): ParsedPatch {
     }
 
     if (current.type === 'update') {
-      if (line.startsWith('@@')) {
+      // Round 41 audit fix: only a BARE '@@' is a hunk separator. A
+      // context line that literally starts with '@@' (diff-like files,
+      // '@@interface' markers) previously got eaten as a separator and
+      // silently vanished from the result.
+      if (line === '@@') {
         current.hunks.push({ find: [], replace: [] })
         continue
       }
@@ -231,9 +238,23 @@ export class ApplyPatchTool implements Tool {
     claims: (input: Record<string, unknown>): ResourceClaim[] => {
       const p = input.patch
       if (typeof p !== 'string' || !p) return []
-      return patchTouchPaths(p)
-        .filter((f) => typeof f === 'string' && f.length > 0)
-        .map((key) => ({ type: 'file' as const, key, access: 'write' as const }))
+      // Round 41 audit fix: patch paths are usually RELATIVE while
+      // Edit/Write claim the model-supplied ABSOLUTE path — exact key
+      // comparison saw no conflict and both tools raced the same file.
+      // Claim BOTH forms (raw + resolved against the host cwd) so the
+      // scheduler serializes against either spelling.
+      const raw = patchTouchPaths(p)
+      const keys = new Set<string>()
+      for (const k of raw) {
+        if (typeof k !== 'string' || k.length === 0) continue
+        keys.add(k)
+        try {
+          keys.add(resolve(k))
+        } catch {
+          /* unresolvable path — the raw key still covers it */
+        }
+      }
+      return [...keys].map((key) => ({ type: 'file' as const, key, access: 'write' as const }))
     },
   }
 
@@ -299,6 +320,9 @@ export class ApplyPatchTool implements Tool {
           const content = op.lines.join('\n') + (op.lines.length > 0 ? '\n' : '')
           await atomicWrite(path, content)
           markFileRead(path, content)
+          // Round 41 audit fix: register created files so /rewind turn
+          // cleanup can remove them (same contract as Write's markCreated).
+          context.fileHistory?.markCreated(path)
           results.push(`+ ${op.path} (${op.lines.length} line${op.lines.length === 1 ? '' : 's'})`)
         } else if (op.type === 'delete') {
           if (!existsSync(path)) {

@@ -120,7 +120,20 @@ function buildRouter(config: EngineConfig): ModelRouter {
           cost: num(cap.cost, 0.5),
         },
         roles: Array.isArray(p.roles) ? p.roles.filter((r): r is string => typeof r === 'string') : ['main'],
-        available: p.available !== false,
+        // Round 41 audit fix: a cross-provider profile whose API key is
+        // not in the environment is NOT routable — auto-routing used to
+        // select it mid-turn and rebindTransport threw "needs an API key"
+        // from inside the router sink. Gate availability at build time
+        // (re-checked per turn is unnecessary: keys appearing mid-session
+        // still work via explicit /model).
+        available: (() => {
+          if (p.available === false) return false
+          if (typeof p.provider !== 'string' || !p.provider) return true
+          if (p.provider === (config.provider ?? 'openai')) return true
+          const envNames = [p.apiKeyEnv, getProviderAPIKeyEnv(p.provider as ProviderId)]
+            .filter((n): n is string => typeof n === 'string' && n.length > 0)
+          return envNames.some((n) => Boolean(process.env[n]))
+        })(),
         // Round 35 (cross-provider switching): carry the transport facts so
         // the engine can rebind when a different-provider profile is chosen.
         ...(typeof p.apiKeyEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(p.apiKeyEnv)
@@ -131,13 +144,15 @@ function buildRouter(config: EngineConfig): ModelRouter {
     }
     if (profiles.length > 0) {
       const activeProvider = config.provider ?? 'openai'
-      // Round 35: top-tier profiles of ALL providers join the router — a
-      // cross-provider target is reachable via /model and usable as a
+      // Round 35/41: top-tier profiles of ALL providers join the router —
+      // a cross-provider target is reachable via /model and usable as a
       // routing/fallback destination (the engine rebinds its transport on
-      // switch). Validation stays scoped to the boot provider's profiles.
-      const mainProfiles = profiles.filter((profile) =>
-        profile.tier === 'top' && profile.available,
-      )
+      // switch). ROUTING skips unavailable profiles (route() checks
+      // p.available — e.g. a cross-provider profile whose API key is not
+      // in the environment), but they STAY in the router so a manual
+      // /model attempt reaches rebindTransport and gets the actionable
+      // "set <ENV>" error instead of a silent wrong-endpoint switch.
+      const mainProfiles = profiles.filter((profile) => profile.tier === 'top')
       if (mainProfiles.filter((profile) => profile.provider === activeProvider).length === 0) {
         throw new Error(
           `No available top model profile is configured for provider ${activeProvider}. `
@@ -322,17 +337,22 @@ export class ExecutionEngine {
     // transport) — the BindingRegistry is a read-only view, not a
     // second router or adapter.
     const providerAdapter = createProviderAdapter({ provider: this.config.provider, client: this.client })
+    // Round 41 audit fix: bindings used to report the BOOT provider/baseURL
+    // for EVERY profile — /models + /route displayed wrong transports for
+    // cross-provider profiles from construction time. Report each profile's
+    // own declared transport (falling back to the boot one).
     this.bindingRegistry = new BindingRegistry(
       this.modelRouter.listProfiles().map((profile) => ({
         profileId: profile.id,
-        provider: this.config.provider ?? 'openai',
+        provider: profile.provider ?? this.config.provider ?? 'openai',
         model: profile.model,
-        baseURL: this.config.baseURL,
-        apiKeyRef: this.config.provider === 'openai'
-          ? 'OPENAI_API_KEY'
-          : this.config.provider === 'minimax'
-            ? 'ANTHROPIC_AUTH_TOKEN'
-            : undefined,
+        baseURL: profile.baseURL ?? this.config.baseURL,
+        apiKeyRef: profile.apiKeyEnv
+          ?? (this.config.provider === 'openai'
+            ? 'OPENAI_API_KEY'
+            : this.config.provider === 'minimax'
+              ? 'ANTHROPIC_AUTH_TOKEN'
+              : undefined),
         adapter: providerAdapter,
         capabilities: profile.capabilities,
         roles: profile.roles,
@@ -1052,7 +1072,13 @@ export class ExecutionEngine {
       )
       if (!profile) return
       const activeProvider = this.config.provider ?? 'openai'
-      if (profile.provider && profile.provider !== activeProvider) {
+      // Round 41 audit fix: a same-provider profile pointing at a DIFFERENT
+      // endpoint (proxies, private gateways) also needs a transport rebind
+      // — the old provider-only check silently sent the model name to the
+      // boot endpoint and failed with confusing 401/404s.
+      const providerDiffers = profile.provider && profile.provider !== activeProvider
+      const endpointDiffers = profile.baseURL && profile.baseURL !== this.config.baseURL
+      if (providerDiffers || endpointDiffers) {
         this.rebindTransport(profile)
       }
     }
@@ -1101,12 +1127,24 @@ export class ExecutionEngine {
         this.config.baseURL = baseURL
         this.config.apiKey = apiKey
         this.contextManager.onTransportChanged(client)
+        // Round 41 audit fix: broadcast the transport switch — /trace,
+        // EventLog, and hooks were blind to cross-provider rebinding.
+        this.eventEmitter.emit({
+          type: 'PROVIDER_CHANGED',
+          from: prevProvider ?? 'openai',
+          to: provider,
+        })
+        // Modules that captured the boot client (critic) must follow the
+        // new transport or fail silently on every later call.
+        this.moduleManager.notifyTransportChanged(client)
       } catch (err) {
         if (previousAdapter) this.modelGateway.restoreAdapter(previousAdapter)
         this.client = prevClient
         this.config.provider = prevProvider
         this.config.baseURL = prevBaseURL
         this.config.apiKey = prevApiKey
+        // Roll modules back to the surviving transport too.
+        try { this.moduleManager.notifyTransportChanged(prevClient) } catch { /* best-effort */ }
         throw err instanceof Error ? err : new Error(`Cross-provider rebind failed: ${String(err)}`)
       }
     }

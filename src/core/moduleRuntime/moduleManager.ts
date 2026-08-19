@@ -266,6 +266,23 @@ export class ModuleManager {
     }
   }
 
+  /**
+   * Round 41: propagate a transport swap (cross-provider rebind) to every
+   * module that captured the boot SDK client. Same best-effort contract
+   * as notifyModelChanged — one throwing hook never wedges the engine.
+   */
+  notifyTransportChanged(client: unknown): void {
+    for (const module of this.activeModules) {
+      if (!module.onTransportChanged) continue
+      try {
+        module.onTransportChanged(client)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.renderer.warn(`[module:${module.name}] onTransportChanged failed: ${msg}`)
+      }
+    }
+  }
+
   async runComplete(params: {
     cwd: string
     sessionDir?: string

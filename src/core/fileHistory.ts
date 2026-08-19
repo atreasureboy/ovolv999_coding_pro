@@ -642,11 +642,29 @@ export class FileHistory {
     if (!versions || version < 0 || version >= versions.length) return false
     const backupPath = versions[version]
     if (!backupPath) return false
-    // A rewind jumps to an arbitrary version — the redo stack captured
-    // intermediate futures that no longer follow from the current
-    // timeline, so it must be invalidated.
+
+    // Round 41 audit fix: the state being replaced is captured on the REDO
+    // stack (the old code CLEARED redo, so the pre-rewind state was
+    // unreachable forever). Versions themselves are NOT truncated —
+    // /rewind <file> <n> is a version BROWSER (users restore 0 → 1 → 2 in
+    // any order); after a rewind, /redo steps back to the pre-rewind state
+    // instead of /undo jumping forward with no way back.
     this.clearRedoStack(absPath)
-    return this.applyBackup(absPath, backupPath)
+    const redoBackup = this.writeStateSnapshot(absPath, 'r')
+    if (redoBackup === null) return false
+    const stack = this.redoEntries.get(absPath) ?? []
+    stack.push(redoBackup)
+    this.redoEntries.set(absPath, stack)
+
+    if (!this.applyBackup(absPath, backupPath)) {
+      stack.pop()
+      if (stack.length === 0) this.redoEntries.delete(absPath)
+      this.unlinkBackupQuietly(redoBackup)
+      this.saveRedoIndexToDisk()
+      return false
+    }
+    this.saveRedoIndexToDisk()
+    return true
   }
 
   /**
@@ -793,6 +811,11 @@ export class FileHistory {
 
     versions.pop()
     if (versions.length === 0) this.edits.delete(absPath)
+    // Round 41 audit fix: a consumed version backup must leave the disk
+    // tree too — otherwise a later index rebuild (the exact scenario
+    // rebuildIndexFromTree exists for) resurrected it as an undead step
+    // and /undo appeared to repeat the same state.
+    this.unlinkBackupQuietly(backupPath)
     this.saveIndexToDisk()
     this.saveRedoIndexToDisk()
     return true

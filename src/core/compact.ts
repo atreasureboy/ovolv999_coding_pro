@@ -262,13 +262,17 @@ export function extendTailToTokenBudget(
   splitPoint: number,
   budget: number = TAIL_PRESERVE_TOKEN_BUDGET,
 ): number {
+  // Round 41 perf fix: incrementally accumulate the ADDED segment's
+  // tokens per step instead of re-estimating the whole tail — the old
+  // full re-slice made tiny-message sessions pay O(n·k) char scans.
+  let tailTokens = estimateTokens(messages.slice(splitPoint))
   let split = splitPoint
   let guard = 0
-  while (split > 1 && guard++ < messages.length) {
-    if (estimateTokens(messages.slice(split)) >= budget) break
+  while (split > 1 && tailTokens < budget && guard++ < messages.length) {
     let prev = split - 1
     while (prev >= 1 && !isSafeSplitBoundary(messages, prev)) prev--
     if (prev < 1) break
+    tailTokens += estimateTokens(messages.slice(prev, split))
     split = prev
   }
   return split

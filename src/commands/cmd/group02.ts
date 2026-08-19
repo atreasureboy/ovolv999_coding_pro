@@ -268,9 +268,16 @@ registerCommand({
 
     const target = args.trim()
     if (target) {
-      const ok = fh.redoEdit(target)
+      // Round 41 audit fix: same suffix-match resolution as /undo —
+      // passing the raw text hit redoEdit's process.cwd()-based resolve
+      // and silently missed relative paths / bare filenames.
+      const file = fh.getEditedFiles().find((f) => f.path === target || f.path.endsWith('/' + target))
+      if (!file) {
+        return text(`No edits tracked for: ${target}`)
+      }
+      const ok = fh.redoEdit(file.path)
       return ok
-        ? text(`✓ Redid ${target}. /undo steps back again.`)
+        ? text(`✓ Redid ${file.path}. /undo steps back again.`)
         : text(`No redo steps available for ${target} (only /undo creates redo steps).`)
     }
 
@@ -309,8 +316,13 @@ registerCommand({
 
     const manual = args.trim()
     if (manual) {
-      sm.setSessionTitle(ctx.sessionDir, manual)
-      return text(`Session title set: "${manual}"`)
+      // Round 41 audit fix: truncate instead of throwing on overlong input,
+      // and report honestly when there is no history to attach a title to.
+      const capped = manual.slice(0, sm.MAX_SESSION_TITLE_LENGTH)
+      if (!sm.setSessionTitle(ctx.sessionDir, capped)) {
+        return text('No session history yet — send a message first, then /title.')
+      }
+      return text(`Session title set: "${capped}"`)
     }
 
     const fallback = deriveFallbackTitle(ctx.history)
@@ -328,11 +340,14 @@ registerCommand({
       /* model path failed — fall back to the heuristic below */
     }
 
-    const title = generated || fallback
-    if (!title) {
+    const raw = generated || fallback
+    if (!raw) {
       return text('Nothing to title yet — send a message first, or set one explicitly: /title <text>')
     }
-    sm.setSessionTitle(ctx.sessionDir, title)
+    const title = raw.slice(0, sm.MAX_SESSION_TITLE_LENGTH)
+    if (!sm.setSessionTitle(ctx.sessionDir, title)) {
+      return text('No session history yet — send a message first, then /title.')
+    }
     return text(`Session title ${generated ? 'generated' : 'derived'}: "${title}"`)
   },
 })
@@ -422,7 +437,13 @@ registerCommand({
     try {
       // Persist live in-memory history first so the fork reflects the
       // conversation as it stands, not whatever was last flushed to disk.
-      saveSession(ctx.sessionDir, ctx.history)
+      // Round 41 audit fix: carry the persisted lastOutcome through — the
+      // old two-arg call rebuilt the envelope without it and silently
+      // degraded /sessions status to 'unknown'. (Title preservation is
+      // handled inside saveSession.)
+      const sm = require('../../core/sessionManager.js') as typeof import('../../core/sessionManager.js')
+      const envelope = sm.loadSessionEnvelope(ctx.sessionDir)
+      sm.saveSession(ctx.sessionDir, ctx.history, envelope?.lastOutcome)
       const result = forkSession(ctx.cwd, ctx.sessionDir, atMessage)
       const name = result.forkDir.split('/').pop() ?? result.forkDir
       const lines = [

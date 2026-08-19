@@ -43,6 +43,16 @@ export class CriticModule implements AgentModule {
     this.model = model
   }
 
+  /**
+   * Round 41 audit fix: after a cross-provider rebind the captured boot
+   * client pointed at the OLD endpoint while `model` already named the
+   * new provider's — every critic call 404'd and was silently swallowed.
+   * Follow the new transport.
+   */
+  onTransportChanged(client: unknown): void {
+    this.client = client as CriticModule['client']
+  }
+
   async onIteration(ctx: ModuleIterationContext): Promise<ModuleIterationResult | void> {
     if (this.config.planMode) return
     if (this.config.poor?.enabled) return

@@ -86,8 +86,11 @@ export function filterToolsForSubAgent(
 
   // Apply allowlist (if set)
   if (allowlist) {
-    const allowed = new Set(allowlist)
-    result = result.filter(name => allowed.has(name) || name.startsWith('mcp__'))
+    // Round 41 audit fix: case-insensitive match — frontmatter entries
+    // like `tools: read, bash` previously matched nothing and the
+    // sub-agent silently booted with ZERO tools.
+    const allowed = new Set(allowlist.map((n) => n.toLowerCase()))
+    result = result.filter(name => allowed.has(name.toLowerCase()) || name.startsWith('mcp__'))
   }
 
   // Apply global disallow set (sub-agents never get these)
@@ -95,8 +98,8 @@ export function filterToolsForSubAgent(
 
   // Apply per-agent denylist (if set)
   if (denylist) {
-    const denied = new Set(denylist)
-    result = result.filter(name => !denied.has(name))
+    const denied = new Set(denylist.map((n) => n.toLowerCase()))
+    result = result.filter(name => !denied.has(name.toLowerCase()))
   }
 
   return result

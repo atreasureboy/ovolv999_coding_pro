@@ -188,8 +188,18 @@ function loadAgentsFromDir(dir: string): CustomAgentDef[] {
  * first, project agents after (project wins on name collisions).
  * Definitions with parse errors are excluded — an invalid agent must
  * never silently spawn as an empty-prompt sub-agent.
+ *
+ * Round 41 perf fix: results are cached per (cwd) with a short TTL —
+ * AgentTool's constructor calls this for EVERY engine construction
+ * (each sub-agent factory call), which made each nested Agent tool
+ * re-scan both directories synchronously.
  */
+const agentCache = new Map<string, { at: number; defs: CustomAgentDef[] }>()
+const AGENT_CACHE_TTL_MS = 5_000
+
 export function loadCustomAgents(cwd: string): CustomAgentDef[] {
+  const hit = agentCache.get(cwd)
+  if (hit && Date.now() - hit.at < AGENT_CACHE_TTL_MS) return hit.defs
   const globalDefs = loadAgentsFromDir(join(homedir(), '.ovogo', 'agents'))
   const projectDefs = loadAgentsFromDir(join(cwd, '.agents'))
   const byName = new Map<string, CustomAgentDef>()
@@ -197,7 +207,9 @@ export function loadCustomAgents(cwd: string): CustomAgentDef[] {
     if (def.errors.length > 0) continue
     byName.set(def.name, def)
   }
-  return [...byName.values()]
+  const defs = [...byName.values()]
+  agentCache.set(cwd, { at: Date.now(), defs })
+  return defs
 }
 
 /** Names of all loadable custom agents (see loadCustomAgents). */

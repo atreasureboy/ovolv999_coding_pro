@@ -161,18 +161,30 @@ export class McpStdioClient {
     this.proc.on('error', (err) => this.failAll(err))
 
     // Initialize handshake
-    await this.request(
-      {
-        jsonrpc: '2.0',
-        method: 'initialize',
-        params: {
-          protocolVersion: PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: 'ovolv999', version: '0.1.0' },
+    // Round 41 audit fix: a failed handshake (timeout, error response,
+    // unresponsive server) used to leave the spawned server process alive
+    // with no owner — McpModule.boot discards the rejected client, so the
+    // orphan lived for the whole host session. Tear it down on failure;
+    // proc is nulled so a retry spawns fresh instead of silently skipping
+    // the handshake (the old `if (this.proc) return` guard made a second
+    // connect() fake success on an un-initialized connection).
+    try {
+      await this.request(
+        {
+          jsonrpc: '2.0',
+          method: 'initialize',
+          params: {
+            protocolVersion: PROTOCOL_VERSION,
+            capabilities: {},
+            clientInfo: { name: 'ovolv999', version: '0.1.0' },
+          },
         },
-      },
-      INITIALIZE_TIMEOUT_MS,
-    )
+        INITIALIZE_TIMEOUT_MS,
+      )
+    } catch (err) {
+      await this.close().catch(() => { /* best-effort teardown */ })
+      throw err
+    }
 
     // Notify initialized (no id, no response expected)
     this.notify({ jsonrpc: '2.0', method: 'notifications/initialized' })

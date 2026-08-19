@@ -26,6 +26,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
+import { homedir } from 'os'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -302,7 +303,10 @@ function loadPluginsFromDir(
  * Enable a plugin by updating its manifest.
  */
 export function enablePlugin(cwd: string, pluginId: string): { success: boolean; error?: string } {
-  const registry = loadPlugins(cwd)
+  // Round 41 audit fix: pass homeDir so @global plugins (listed with
+  // home by /plugins) are actually operable — the registry used to load
+  // project-only and "not found" every global entry.
+  const registry = loadPlugins(cwd, homedir())
   const plugin = registry.plugins.get(pluginId)
   if (!plugin) {
     return { success: false, error: `Plugin "${pluginId}" not found` }
@@ -328,7 +332,7 @@ export function enablePlugin(cwd: string, pluginId: string): { success: boolean;
  * Disable a plugin by updating its manifest.
  */
 export function disablePlugin(cwd: string, pluginId: string): { success: boolean; error?: string } {
-  const registry = loadPlugins(cwd)
+  const registry = loadPlugins(cwd, homedir())
   const plugin = registry.plugins.get(pluginId)
   if (!plugin) {
     return { success: false, error: `Plugin "${pluginId}" not found` }

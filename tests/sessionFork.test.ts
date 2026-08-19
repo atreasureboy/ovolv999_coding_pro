@@ -91,16 +91,17 @@ describe('computeForkCutPoint', () => {
     expect(computeForkCutPoint(CONVERSATION, 999)).toBe(CONVERSATION.length)
   })
 
-  it('consumes an orphan tool block sitting exactly at the boundary', () => {
+  it('excludes an orphan tool block from the fork (Round 41 trim)', () => {
     const msgs: OpenAIMessage[] = [
       msg('user', 'q'),
       msg('assistant', 'a'),
       toolResult('orphan', 'stale'), // no matching assistant — legacy data
       msg('user', 'next'),
     ]
-    // cut=2 lands ON the orphan tool row — it must be consumed so the
-    // fork never starts with a dangling tool result.
-    expect(computeForkCutPoint(msgs, 2)).toBe(3)
+    // cut=2 lands ON the orphan tool row. Round 41: the consistency trim
+    // now EXCLUDES the orphan from the prefix (the old grow-only walk
+    // pulled it INTO the fork — an API-rejecting orphan tool result).
+    expect(computeForkCutPoint(msgs, 2)).toBe(2)
   })
 })
 

@@ -13,12 +13,28 @@
 /**
  * Strip JSONC extensions from `text`, returning valid JSON.
  * Throws SyntaxError when a string literal or block comment is unterminated.
+ *
+ * Round 41 audit fix: trailing-comma removal is STRING-AWARE — the old
+ * post-hoc regex `,/s*[}\]]` ran over the whole document and silently
+ * rewrote `, }` / `,]` sequences INSIDE string values (regex payloads,
+ * shell commands). The scanner now buffers each top-level comma and only
+ * emits it when the next significant character proves it isn't trailing.
  */
 export function stripJsonc(text: string): string {
   let out = ''
   let i = 0
   let inString = false
+  /** A comma outside a string, awaiting its verdict (trailing or not). */
+  let pendingComma = false
   const n = text.length
+
+  /** Emit a buffered comma iff it turned out NOT to be trailing. */
+  const flushComma = (): void => {
+    if (pendingComma) {
+      out += ','
+      pendingComma = false
+    }
+  }
 
   while (i < n) {
     const ch = text[i]
@@ -38,6 +54,7 @@ export function stripJsonc(text: string): string {
       continue
     }
     if (ch === '"') {
+      flushComma()
       inString = true
       out += ch
       i++
@@ -61,15 +78,35 @@ export function stripJsonc(text: string): string {
       i = end + 2
       continue
     }
+    if (ch === ',') {
+      // Hold the comma: emit only if a significant (non-ws) char follows.
+      // A '}' / ']' next means it was trailing → dropped.
+      pendingComma = true
+      i++
+      continue
+    }
+    if (ch === '}' || ch === ']') {
+      // Dangling comma before this closer was trailing — drop it.
+      pendingComma = false
+      out += ch
+      i++
+      continue
+    }
+    if (/\s/.test(ch)) {
+      // Whitespace (and comment-derived newlines) passes through
+      // unchanged while the comma verdict stays pending.
+      out += ch
+      i++
+      continue
+    }
+    flushComma()
     out += ch
     i++
   }
   if (inString) {
     throw new SyntaxError('Unterminated string literal in JSONC input')
   }
-  // Trailing commas: valid JSONC, invalid JSON. Remove commas whose next
-  // non-whitespace character closes an object/array.
-  return out.replace(/,(\s*[}\]])/g, '$1')
+  return out
 }
 
 /**

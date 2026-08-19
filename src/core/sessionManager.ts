@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync, statSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync, statSync, rmSync } from 'fs'
 import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
@@ -77,17 +77,28 @@ export interface SessionEnvelope {
 /** Upper bound for a persisted session title (display-only field). */
 export const MAX_SESSION_TITLE_LENGTH = 120
 
-/**
- * Validate a caller-supplied session title. Empty/overlong titles are a
- * caller bug (the display layer already trims), so they throw rather than
- * silently persist a broken field.
- */
+/** Validate a caller-supplied session title. */
 export function assertValidTitle(title: string): void {
   if (typeof title !== 'string' || title.trim().length === 0) {
     throw new TypeError('session title must be a non-empty string')
   }
-  if (title.length > MAX_SESSION_TITLE_LENGTH) {
+  if (title.trim().length > MAX_SESSION_TITLE_LENGTH) {
     throw new TypeError(`session title exceeds ${MAX_SESSION_TITLE_LENGTH} characters`)
+  }
+}
+
+/**
+ * Best-effort: the title currently persisted in `sessionDir`'s envelope.
+ * Used by saveSession to keep a previously-set title across saves that
+ * don't mention it. Corrupt/missing history → undefined (nothing to
+ * preserve; the incoming save replaces the file anyway).
+ */
+function preservedTitle(explicit: string | undefined, sessionDir: string): string | undefined {
+  if (explicit !== undefined) return explicit
+  try {
+    return loadSessionEnvelope(sessionDir)?.title
+  } catch {
+    return undefined
   }
 }
 
@@ -634,7 +645,12 @@ export function saveSession(
     // before any turn completed are byte-identical in shape to the v1
     // ones (minus the version bump).
     ...(outcome ? { lastOutcome: outcome } : {}),
-    ...(title ? { title } : {}),
+    // Round 41 audit fix: title is set-and-forget display metadata —
+    // a save that doesn't mention it must NOT erase a title persisted by
+    // /title. When `title` is undefined, carry the existing envelope's
+    // title forward (best-effort; a corrupt history has no title to
+    // save anyway since this save will replace it).
+    ...((title ?? preservedTitle(title, sessionDir)) ? { title: title ?? preservedTitle(title, sessionDir) } : {}),
   }
 
   let tmpFd: number | null = null
@@ -1032,38 +1048,28 @@ export interface ForkResult {
 
 /**
  * Compute a safe fork cut point: the prefix [0, cut) must be a
- * self-consistent conversation — no orphan `tool` rows at the boundary and
- * no assistant `tool_calls` left without their matching tool results.
+ * self-consistent conversation — no orphan `tool` rows (a tool result
+ * whose issuing assistant is outside the prefix), and no assistant
+ * `tool_calls` left without their matching tool results inside the prefix.
  *
- * Adjustment rules (cut only ever GROWS, never shrinks):
- *   1. If messages[cut] is a `tool` row, the cut sits inside a tool-call
- *      group — advance past the contiguous tool rows.
- *   2. If the prefix contains assistant tool_calls whose results were NOT
- *      included, advance to include their contiguous tool responses.
- * The loop terminates because cut is monotonically increasing and bounded
- * by messages.length.
+ * Round 41 audit fix: the previous grow-only strategy could not trim
+ * DANGLING tool_calls (an aborted turn saved an assistant whose results
+ * never arrived). Growing to include them is impossible — the results
+ * don't exist — so the fork shipped the dangling group verbatim and the
+ * resumed fork died on its first API call. The algorithm now ends with a
+ * backward walk that drops trailing messages until the prefix is fully
+ * consistent (both directions checked).
  */
 export function computeForkCutPoint(messages: OpenAIMessage[], requested?: number): number {
   const n = messages.length
   let cut = requested === undefined ? n : Math.max(0, Math.min(Math.trunc(requested), n))
 
+  // Grow past tool rows / toward pending tool results (monotonic, bounded).
   for (;;) {
     while (cut < n && messages[cut]?.role === 'tool') cut++
 
-    // Collect tool_call ids that are issued but not answered within [0, cut).
-    const pending = new Set<string>()
-    for (let i = 0; i < cut; i++) {
-      const m = messages[i]
-      if (!m) continue
-      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
-          if (tc.id) pending.add(tc.id)
-        }
-      } else if (m.role === 'tool' && m.tool_call_id) {
-        pending.delete(m.tool_call_id)
-      }
-    }
-    if (pending.size === 0) return cut
+    const pending = unansweredToolCalls(messages, cut)
+    if (pending.size === 0) break
 
     // Include the contiguous tool responses that satisfy the pending ids.
     let j = cut
@@ -1080,9 +1086,56 @@ export function computeForkCutPoint(messages: OpenAIMessage[], requested?: numbe
         break
       }
     }
-    if (j === cut) return cut // no progress possible — accept the boundary
+    if (j === cut) break // no progress — dangling, handled by the trim below
     cut = j
   }
+
+  // Trim: while the prefix is still inconsistent (dangling tool_calls that
+  // were never answered ANYWHERE, or orphan tool rows), drop trailing
+  // messages. Recomputed per step; cut strictly decreases → terminates.
+  while (cut > 0 && !isPrefixConsistent(messages, cut)) {
+    cut--
+  }
+  return cut
+}
+
+/** tool_call ids issued inside [0, cut) but not answered inside it. */
+function unansweredToolCalls(messages: OpenAIMessage[], cut: number): Set<string> {
+  const pending = new Set<string>()
+  for (let i = 0; i < cut; i++) {
+    const m = messages[i]
+    if (!m) continue
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        if (tc.id) pending.add(tc.id)
+      }
+    } else if (m.role === 'tool' && m.tool_call_id) {
+      pending.delete(m.tool_call_id)
+    }
+  }
+  return pending
+}
+
+/**
+ * Full prefix consistency (both directions):
+ *  - no tool row whose issuing assistant lies OUTSIDE the prefix (orphan),
+ *  - no assistant tool_call unanswered INSIDE the prefix (dangling).
+ */
+function isPrefixConsistent(messages: OpenAIMessage[], cut: number): boolean {
+  const issued = new Set<string>()
+  for (let i = 0; i < cut; i++) {
+    const m = messages[i]
+    if (!m) continue
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      for (const tc of m.tool_calls) {
+        if (tc.id) issued.add(tc.id)
+      }
+    } else if (m.role === 'tool') {
+      if (!m.tool_call_id || !issued.has(m.tool_call_id)) return false // orphan
+      issued.delete(m.tool_call_id)
+    }
+  }
+  return issued.size === 0
 }
 
 /**
@@ -1145,8 +1198,20 @@ export function forkSession(cwd: string, sourceDir: string, atMessage?: number):
   const forkDir = createForkSessionDir(cwd)
   // Clone each message (saveSession re-validates shapes and rejects orphan
   // tool rows, so a bad prefix can never be persisted as a silent fork).
+  // Round 41 audit fix: when the save fails (disk full, permissions), the
+  // freshly-created fork directory is removed — otherwise an empty ghost
+  // session haunts /sessions and /resume prefix matching forever.
   const prefix = envelope.messages.slice(0, cut).map((m) => ({ ...m }))
-  saveSession(forkDir, prefix)
+  try {
+    saveSession(forkDir, prefix)
+  } catch (err) {
+    try {
+      rmSync(forkDir, { recursive: true, force: true })
+    } catch {
+      /* best-effort cleanup — the save error is the important one */
+    }
+    throw err
+  }
 
   return {
     forkDir,

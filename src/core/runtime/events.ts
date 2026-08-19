@@ -47,6 +47,9 @@ export type RunEvent =
   | { type: 'AGENT_WORKTREE_PRESERVED'; runId: string; branch: string; reason: string }
   | { type: 'RUN_FAILED'; error: string; output: string }
   | { type: 'MODEL_CHANGED'; from: string; to: string }
+  // Round 41 audit fix: transport-level switches were invisible to
+  // /trace, EventLog, and hooks — only the model name event existed.
+  | { type: 'PROVIDER_CHANGED'; from: string; to: string }
   // v0.3.1 (runtime truth contract §三.1.1 / §八) — explicit routing events so
   // /trace + /why + EventStore can replay them faithfully instead of
   // reconstructing intent from generic MODEL_CHANGED.
@@ -149,7 +152,9 @@ export class RunEventEmitter {
 
   /** Emit an event to all subscribers of that type. */
   emit(event: RunEvent): void {
-    for (const handler of this.anyHandlers) {
+    // Round 41 audit fix: iterate a COPY — a handler unsubscribing another
+    // handler of the same event used to skip it via live-array mutation.
+    for (const handler of [...this.anyHandlers]) {
       try {
         handler(event)
       } catch {
@@ -158,7 +163,7 @@ export class RunEventEmitter {
     }
     const list = this.handlers[event.type] as Array<(event: RunEvent) => void> | undefined
     if (!list) return
-    for (const handler of list) {
+    for (const handler of [...list]) {
       try {
         handler(event)
       } catch {

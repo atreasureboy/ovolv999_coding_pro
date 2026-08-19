@@ -63,23 +63,27 @@ function isCommand(value: unknown): value is Command {
 /** Collect Tool instances from any accepted export shape. */
 function extractTools(mod: Record<string, unknown>): Tool[] {
   const out: Tool[] = []
-  const push = (value: unknown): void => {
+  const push = (value: unknown, allowFactory: boolean): void => {
     if (isTool(value)) {
       out.push(value)
-    } else if (typeof value === 'function') {
+    } else if (allowFactory && typeof value === 'function') {
+      // Round 41 audit fix: ONLY the default export may be a factory —
+      // invoking arbitrary named function exports meant a plugin's
+      // utility functions ran as side effects at boot. Named exports
+      // must be Tool objects (arrays traverse, functions are ignored).
       try {
         const produced = (value as () => unknown)()
-        if (Array.isArray(produced)) produced.forEach(push)
-        else push(produced)
+        if (Array.isArray(produced)) produced.forEach((v) => push(v, false))
+        else push(produced, false)
       } catch {
         /* factory threw — skip, reported by caller */
       }
     } else if (Array.isArray(value)) {
-      value.forEach(push)
+      value.forEach((v) => push(v, false))
     }
   }
-  if (mod.default !== undefined) push(mod.default)
-  if (mod.tools !== undefined) push(mod.tools)
+  if (mod.default !== undefined) push(mod.default, true)
+  if (mod.tools !== undefined) push(mod.tools, false)
   for (const [key, value] of Object.entries(mod)) {
     if (key === 'default' || key === 'tools' || key === '__esModule') continue
     if (isTool(value)) out.push(value)

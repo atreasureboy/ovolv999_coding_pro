@@ -158,10 +158,16 @@ describe('ApplyPatchTool.execute', () => {
     expect(readFileSync(join(cwd, 'f.txt'), 'utf8')).toBe('one\n')
   })
 
-  it('claims write access on every touched path', () => {
+  it('claims write access on every touched path (raw + resolved)', () => {
     const patch = '*** Begin Patch\n*** Add File: a.txt\n+x\n*** Delete File: b.txt\n*** End Patch'
     const claims = tool.metadata?.claims?.({ patch }) ?? []
-    expect(claims.map((c) => c.key).sort()).toEqual(['a.txt', 'b.txt'])
+    const keys = claims.map((c) => c.key).sort()
+    // Round 41: both spellings claimed — the resolved form serializes
+    // against Edit/Write's absolute-path claims.
+    expect(keys).toContain('a.txt')
+    expect(keys).toContain('b.txt')
+    expect(keys.some((k) => k.endsWith('/a.txt') && k !== 'a.txt')).toBe(true)
+    expect(keys.some((k) => k.endsWith('/b.txt') && k !== 'b.txt')).toBe(true)
   })
 
   it('rejects malformed patch input with an actionable error', async () => {

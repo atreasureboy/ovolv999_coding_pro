@@ -259,9 +259,17 @@ export class FileReadTool implements Tool {
       const slice = lines.slice(startLine - 1, endLine)
       const numbered = slice
         .map((line, i) => {
-          const shown = line.length > MAX_LINE_CHARS
-            ? `${line.slice(0, MAX_LINE_CHARS)} … [line truncated — ${line.length.toLocaleString()} chars total]`
-            : line
+          let shown: string
+          if (line.length > MAX_LINE_CHARS) {
+            // Round 41 audit fix: never split a surrogate pair at the cut
+            // — a lone high surrogate rendered as a replacement char.
+            let cut = MAX_LINE_CHARS
+            const boundary = line.charCodeAt(cut - 1)
+            if (boundary >= 0xD800 && boundary <= 0xDBFF) cut--
+            shown = `${line.slice(0, cut)} … [line truncated — ${line.length.toLocaleString()} chars total]`
+          } else {
+            shown = line
+          }
           return `${startLine + i}\t${shown}`
         })
         .join('\n')

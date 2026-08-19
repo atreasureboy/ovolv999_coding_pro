@@ -108,7 +108,17 @@ export class ObservabilityServer {
     } else {
       let bound = false
       for (let offset = 0; offset <= 10 && !bound; offset++) {
-        bound = await this.listenOnce(server, wanted + offset)
+        const result = await this.listenOnce(server, wanted + offset)
+        if (result.ok) {
+          bound = true
+        } else if (!result.retryable) {
+          // Round 41 audit fix: hard bind errors (EACCES on privileged
+          // ports, EINVAL on a bad host) must NOT be retried as if they
+          // were port collisions — rethrow with the real code visible.
+          throw new Error(
+            `ObservabilityServer: cannot bind ${this.host}:${wanted + offset} — ${result.code ?? 'unknown error'}`,
+          )
+        }
       }
       if (!bound) {
         throw new Error(`ObservabilityServer: no free port in ${wanted}-${wanted + 10} on ${this.host}`)
@@ -126,18 +136,20 @@ export class ObservabilityServer {
     return { port: this.port, host: this.host }
   }
 
-  private listenOnce(server: Server, port: number): Promise<boolean> {
+  private listenOnce(server: Server, port: number): Promise<{ ok: boolean; retryable: boolean; code?: string }> {
     return new Promise((resolve) => {
       const onError = (err: NodeJS.ErrnoException): void => {
         server.removeListener('error', onError)
-        resolve(err.code === 'EADDRINUSE' ? false : false)
+        // Only EADDRINUSE is worth walking the range for; everything
+        // else (EACCES / EINVAL / EADDRNOTAVAIL …) is fatal.
+        resolve({ ok: false, retryable: err.code === 'EADDRINUSE', code: err.code })
       }
       server.once('error', onError)
       server.listen(port, this.host, () => {
         server.removeListener('error', onError)
         const addr = server.address()
         this.port = typeof addr === 'object' && addr !== null ? addr.port : port
-        resolve(true)
+        resolve({ ok: true, retryable: false })
       })
     })
   }
@@ -238,6 +250,11 @@ export class ObservabilityServer {
     res.write('retry: 3000\n\n')
     this.send(res, 'hello', { ok: true, listening: this.listening })
     this.sseClients.add(res)
+    // Round 41: an async socket error on a vanished client must never
+    // surface as an uncaughtException.
+    res.on('error', () => {
+      this.sseClients.delete(res)
+    })
     req.on('close', () => {
       this.sseClients.delete(res)
     })
@@ -270,9 +287,16 @@ let shared: ObservabilityServer | null = null
  * and the current instance isn't listening on it, the instance is
  * REBUILT (a stopped server keeps its old options; the new port must win).
  */
-export function getSharedObservabilityServer(cwd: string, port?: number): ObservabilityServer {
+export function getSharedObservabilityServer(cwd: string, port?: number, host?: string): ObservabilityServer {
   if (!shared || (port !== undefined && !shared.listening)) {
-    shared = new ObservabilityServer({ cwd, ...(port !== undefined ? { port } : {}) })
+    // Round 41 audit fix: stop the old instance before replacing it —
+    // its engine-event subscription otherwise leaked forever.
+    shared?.stop().catch(() => { /* best-effort */ })
+    shared = new ObservabilityServer({
+      cwd,
+      ...(port !== undefined ? { port } : {}),
+      ...(host !== undefined ? { host } : {}),
+    })
   }
   return shared
 }

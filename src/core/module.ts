@@ -162,6 +162,14 @@ export interface AgentModule {
    * every call can omit it.
    */
   onModelChanged?(model: string): void
+
+  /**
+   * Round 41: propagate a transport swap (cross-provider rebind) to
+   * modules that captured the boot SDK client — without it they keep
+   * calling the OLD endpoint with the NEW model name and fail silently
+   * on every subsequent LLM call.
+   */
+  onTransportChanged?(client: unknown): void
 }
 
 /**

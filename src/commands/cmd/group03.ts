@@ -233,7 +233,11 @@ registerCommand({
   aliases: ['v'],
   handler: () => {
     try {
-      const pkg = require('../../package.json') as { version: string }
+      // Round 41 audit fix: the Round-29-split path '../../package.json'
+      // resolves to src/package.json (missing) in dev — the fallback then
+      // reported a stale hardcoded version. '../../../package.json' is
+      // correct for BOTH src/ and dist/ layouts.
+      const pkg = require('../../../package.json') as { version: string }
       return text(`ovolv999 v${pkg.version}`)
     } catch {
       return text('ovolv999 v0.6.0')

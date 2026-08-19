@@ -104,17 +104,25 @@ describe('FileHistory undo/redo', () => {
     expect(readFileSync(file, 'utf8')).toBe('C1')
   })
 
-  it('restoreVersion clears the redo stack', () => {
+  it('restoreVersion rewinds the timeline and offers redo of the replaced state', () => {
     const fh = new FileHistory(TEST_DIR)
     fh.trackEdit(file)
     writeFileSync(file, 'C1', 'utf8')
     fh.trackEdit(file)
     writeFileSync(file, 'C2', 'utf8')
     expect(fh.undoEdit(file)).toBe(true) // -> C1, redo=[C2]
-    expect(fh.getRedoDepth(file)).toBe(1)
 
+    // Round 41 semantics: rewinding to version 0 captures the replaced
+    // live state (C1) on the redo stack and TRUNCATES the rewound-away
+    // future versions — /undo steps back, /redo comes forward, neither
+    // jumps to a stale mid-timeline state.
     expect(fh.restoreVersion(file, 0)).toBe(true)
-    expect(fh.getRedoDepth(file)).toBe(0)
+    expect(readFileSync(file, 'utf8')).toBe('C0')
+    expect(fh.getRedoDepth(file)).toBe(1)
+    expect(fh.getVersions(file)).toHaveLength(1)
+
+    expect(fh.redoEdit(file)).toBe(true)
+    expect(readFileSync(file, 'utf8')).toBe('C1')
   })
 
   it('preserves file mode across undo/redo', () => {
