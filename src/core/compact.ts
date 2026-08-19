@@ -244,6 +244,36 @@ export function getCompressionStrategy(pct: number): CompressionStrategy {
 // Keep this many recent messages verbatim after compaction
 const KEEP_RECENT_MESSAGES = 8
 
+/**
+ * Round 39 (opencode tail-budget): the verbatim tail is anchored at a
+ * TOKEN budget in addition to the message-count floor. With only the
+ * count anchor, 8 tiny messages preserved almost nothing of recent
+ * context (aggressive over-summarization), while 8 huge tool dumps
+ * blew past any reasonable budget. The extension walks the split point
+ * BACKWARD to the previous safe boundary until the tail reaches the
+ * budget — more verbatim recent context, less summarized away. Pure
+ * addition: correctness invariants (safe boundaries) are preserved at
+ * every step, and the caller's older-messages guards still apply.
+ */
+export const TAIL_PRESERVE_TOKEN_BUDGET = 8_000
+
+export function extendTailToTokenBudget(
+  messages: OpenAIMessage[],
+  splitPoint: number,
+  budget: number = TAIL_PRESERVE_TOKEN_BUDGET,
+): number {
+  let split = splitPoint
+  let guard = 0
+  while (split > 1 && guard++ < messages.length) {
+    if (estimateTokens(messages.slice(split)) >= budget) break
+    let prev = split - 1
+    while (prev >= 1 && !isSafeSplitBoundary(messages, prev)) prev--
+    if (prev < 1) break
+    split = prev
+  }
+  return split
+}
+
 // Reserve tokens for the summary output itself
 const SUMMARY_OUTPUT_RESERVE = 4_000
 
@@ -572,31 +602,39 @@ export interface CompactResult {
  */
 export function computeSafeSplitPoint(messages: OpenAIMessage[]): number {
   const initial = messages.length - KEEP_RECENT_MESSAGES
+  return computeSafeSplitPointFrom(messages, initial)
+}
 
-  // `idx` is safe iff messages[idx] is a valid leading message and any
-  // tool_calls it names are matched by tool results inside [idx+1..).
-  const isSafe = (idx: number): boolean => {
-    if (idx < 0 || idx >= messages.length) return false
-    const m = messages[idx]
-    if (!m) return false
-    if (m.role === 'tool') return false
-    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-      const ids = new Set(m.tool_calls.map((tc) => tc.id))
-      for (let j = idx + 1; j < messages.length; j++) {
-        const n = messages[j]
-        if (!n) break
-        if (n.role === 'tool' && n.tool_call_id && ids.has(n.tool_call_id)) {
-          ids.delete(n.tool_call_id)
-        } else if (n.role !== 'tool') {
-          // Encountered a non-tool message before satisfying all ids →
-          // some tool_calls are unmatched.
-          break
-        }
+/**
+ * `idx` is safe iff messages[idx] is a valid leading message and any
+ * tool_calls it names are matched by tool results inside [idx+1..).
+ * Exported for the tail-budget extension below (Round 39).
+ */
+export function isSafeSplitBoundary(messages: OpenAIMessage[], idx: number): boolean {
+  if (idx < 0 || idx >= messages.length) return false
+  const m = messages[idx]
+  if (!m) return false
+  if (m.role === 'tool') return false
+  if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+    const ids = new Set(m.tool_calls.map((tc) => tc.id))
+    for (let j = idx + 1; j < messages.length; j++) {
+      const n = messages[j]
+      if (!n) break
+      if (n.role === 'tool' && n.tool_call_id && ids.has(n.tool_call_id)) {
+        ids.delete(n.tool_call_id)
+      } else if (n.role !== 'tool') {
+        // Encountered a non-tool message before satisfying all ids →
+        // some tool_calls are unmatched.
+        break
       }
-      return ids.size === 0
     }
-    return true
+    return ids.size === 0
   }
+  return true
+}
+
+function computeSafeSplitPointFrom(messages: OpenAIMessage[], initial: number): number {
+  const isSafe = (idx: number): boolean => isSafeSplitBoundary(messages, idx)
 
   if (initial <= 0) return Math.max(0, initial)
 
@@ -665,7 +703,9 @@ export async function maybeCompact(
   // guarantees both invariants for messages.slice(splitPoint). The legacy
   // code only filtered the orphan-tool case; orphan assistant-tool_calls
   // could slip through and break the next LLM call.
-  const splitPoint = computeSafeSplitPoint(messages)
+  // Round 39: the tail is then extended backward to a TOKEN budget —
+  // see extendTailToTokenBudget.
+  const splitPoint = extendTailToTokenBudget(messages, computeSafeSplitPoint(messages))
   const recentMessages = messages.slice(splitPoint)
   const olderMessages = messages.slice(0, splitPoint)
 
