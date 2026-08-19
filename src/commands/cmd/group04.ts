@@ -28,7 +28,7 @@ registerCommand({
       return text('No conversation to scan.')
     }
     const { maskSecrets, formatScanSummary } =
-      require('../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
+      require('../../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
     const allText = ctx.history.map(m => {
       if (typeof m.content === 'string') return m.content
       return JSON.stringify(m.tool_calls ?? '')
@@ -49,9 +49,9 @@ registerCommand({
       return text('No conversation to share.')
     }
     const { maskSecrets } =
-      require('../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
+      require('../../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
     const { exportSessionToFile, defaultFilename } =
-      require('../utils/sessionExport.js') as typeof import('../../utils/sessionExport.js')
+      require('../../utils/sessionExport.js') as typeof import('../../utils/sessionExport.js')
 
     const format = args.trim() || 'markdown'
     const maskedHistory = ctx.history.map(msg => {
@@ -82,7 +82,7 @@ registerCommand({
   name: 'notify',
   description: 'Test desktop notification. Usage: /notify [title] [body]',
   handler: (args) => {
-    const { notify } = require('../utils/notifier.js') as typeof import('../../utils/notifier.js')
+    const { notify } = require('../../utils/notifier.js') as typeof import('../../utils/notifier.js')
     const parts = args.trim().split(/\s+/)
     const title = parts[0] ?? 'ovolv999'
     const body = parts.slice(1).join(' ') || 'Notification test'
@@ -173,7 +173,7 @@ registerCommand({
     const {
       loadSchedules, addTask, removeTask, enableTask, disableTask,
       createTask, formatTaskList, parseCron, parseEveryDuration,
-    } = require('../core/cron.js') as typeof import('../../core/cron.js')
+    } = require('../../core/cron.js') as typeof import('../../core/cron.js')
 
     if (subcommand === 'list' || !subcommand) {
       const store = loadSchedules(ctx.cwd)
@@ -238,7 +238,7 @@ registerCommand({
   description: 'Show comprehensive session statistics (messages, tokens, tools, files)',
   handler: (_args, ctx) => {
     const { analyzeSession, formatSessionStats } =
-      require('../core/sessionStats.js') as typeof import('../../core/sessionStats.js')
+      require('../../core/sessionStats.js') as typeof import('../../core/sessionStats.js')
     const stats = analyzeSession(ctx.history)
     return text(formatSessionStats(stats))
   },
@@ -250,7 +250,7 @@ registerCommand({
   description: 'Browse changes as a structured file list. Usage: /diff-browser [n]',
   handler: (args, ctx) => {
     const { getGitDiff, parseGitDiff, formatFileList, formatFileDetail } =
-      require('../ui/diffBrowser.js') as typeof import('../../ui/diffBrowser.js')
+      require('../../ui/diffBrowser.js') as typeof import('../../ui/diffBrowser.js')
 
     const n = parseInt(args.trim(), 10)
     const diffOutput = getGitDiff(ctx.cwd)
@@ -274,7 +274,7 @@ registerCommand({
       loadKnowledge, addEntry, removeEntry, searchKnowledge,
       formatKnowledgeList, formatSearchResults, formatStats,
       extractKnowledgeFromText,
-    } = require('../core/knowledgeBase.js') as typeof import('../../core/knowledgeBase.js')
+    } = require('../../core/knowledgeBase.js') as typeof import('../../core/knowledgeBase.js')
 
     if (sub === 'list' || !sub) {
       const store = loadKnowledge(ctx.cwd)
@@ -332,7 +332,7 @@ registerCommand({
   description: 'Generate a comprehensive project overview (structure, deps, tests, stats)',
   handler: (_args, ctx) => {
     const { analyzeProject, formatOverview } =
-      require('../core/onboarding.js') as typeof import('../../core/onboarding.js')
+      require('../../core/onboarding.js') as typeof import('../../core/onboarding.js')
     const overview = analyzeProject(ctx.cwd)
     return text(formatOverview(overview))
   },
@@ -346,7 +346,7 @@ registerCommand({
     const {
       getProjectHistoryPath, loadHistory, searchHistory,
       getHistoryStats, formatHistoryResults, formatHistoryStats, clearHistory,
-    } = require('../core/commandHistory.js') as typeof import('../../core/commandHistory.js')
+    } = require('../../core/commandHistory.js') as typeof import('../../core/commandHistory.js')
 
     const path = getProjectHistoryPath(ctx.cwd)
     const parts = args.trim().split(/\s+/)
@@ -389,7 +389,7 @@ registerCommand({
       getBookmarksByFile, searchBookmarks, getRecentBookmarks,
       formatBookmarkList, formatBookmarkDetail, formatBookmarkStats,
       loadBookmarks,
-    } = require('../core/bookmarks.js') as typeof import('../../core/bookmarks.js')
+    } = require('../../core/bookmarks.js') as typeof import('../../core/bookmarks.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -471,7 +471,7 @@ registerCommand({
       checkBudget, checkAllBudgets, resetUsage, getBudgetSnapshot,
       formatBudgetUsage, formatBudgetSummary, formatBudgetSnapshot,
       applyPreset, BUDGET_PRESETS,
-    } = require('../core/budget.js') as typeof import('../../core/budget.js')
+    } = require('../../core/budget.js') as typeof import('../../core/budget.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -568,7 +568,7 @@ registerCommand({
       startTimer, stopTimer, pauseTimer, resumeTimer, removeTimer,
       getAllTimers, getRunningTimers, getTimerStats,
       formatTimer, formatTimerList, formatTimerStats,
-    } = require('../core/taskTimer.js') as typeof import('../../core/taskTimer.js')
+    } = require('../../core/taskTimer.js') as typeof import('../../core/taskTimer.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'

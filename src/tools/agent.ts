@@ -20,6 +20,7 @@ import type { Tool, ToolContext, ToolDefinition, ToolResult, EngineConfig, Agent
 import type { TurnOutcome } from '../core/runtime/turnOutcome.js'
 import type { AgentConfig } from '../core/agentPresets.js'
 import { resolveAgentConfig, validateAgentConfig, PRESET_NAMES } from '../core/agentPresets.js'
+import { customAgentNames } from '../core/customAgents.js'
 import type { RendererInterface } from '../core/types.js'
 import { tmuxLayout } from '../core/tmuxLayout.js'
 import { appendFileSync, existsSync, readFileSync } from 'fs'
@@ -441,6 +442,29 @@ export class AgentTool implements Tool, WorkerAdapter {
     this.runRegistry = wiring?.runRegistry
     this.parentRunId = wiring?.parentRunId
     this.onSteeredHook = wiring?.onSteered
+
+    // Field initializers run before the constructor body, so `definition`
+    // is already built here. Extend its subagent_type enum with custom
+    // agents discovered on disk (.agents/*.md|.json) so the model can
+    // dispatch them by name. Best-effort: discovery failures leave the
+    // built-in enum untouched.
+    const cwd = wiring?.parentConfig?.cwd
+    if (cwd) {
+      try {
+        const extra = customAgentNames(cwd).filter((n) => !PRESET_NAMES.includes(n))
+        if (extra.length > 0) {
+          const fn = this.definition.function
+          const params = fn.parameters as { properties?: Record<string, { enum?: string[]; description?: string }> }
+          const prop = params.properties?.subagent_type
+          if (prop?.enum) {
+            prop.enum = [...prop.enum, ...extra]
+            prop.description = `Preset or custom agent name (default: general-purpose). Custom agents: ${extra.join(', ')}`
+          }
+        }
+      } catch {
+        /* best-effort — built-in presets stay available */
+      }
+    }
   }
 
   /**
@@ -707,7 +731,7 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
     const agentConfig = resolveAgentConfig({
       preset: customConfig ? undefined : presetName,
       config: customConfig,
-    })
+    }, this.parentConfig?.cwd ?? context.cwd)
     const agentLabel = customConfig ? 'custom' : (presetName ?? 'general-purpose')
     const requestedRole = typeof input.model_role === 'string'
       && ['architect', 'builder', 'reviewer', 'utility', 'worker', 'planner'].includes(input.model_role)

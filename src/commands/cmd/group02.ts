@@ -92,7 +92,7 @@ registerCommand({
         return text('Conversation checkpoints need a session directory (not available in this context).')
       }
       const { listCheckpoints, rewindToCheckpoint } =
-        require('../core/conversationCheckpoints.js') as typeof import('../../core/conversationCheckpoints.js')
+        require('../../core/conversationCheckpoints.js') as typeof import('../../core/conversationCheckpoints.js')
       const checkpoints = listCheckpoints(ctx.sessionDir)
       if (!turnArg) {
         if (checkpoints.length === 0) {
@@ -238,12 +238,109 @@ registerCommand({
       return text(`No versions available for ${file.path}`)
     }
 
-    // Restore to version 0 (original pre-edit state)
-    const ok = fh.restoreOriginal(file.path)
+    // Single-step undo: restore the most recent backup and record the
+    // replaced state on the redo stack (pairs with /redo). Use
+    // `/rewind <file> original` to jump straight to the pre-session state.
+    const ok = fh.undoEdit(file.path)
     if (ok) {
-      return text(`✓ Restored ${file.path} to original (pre-edit) state.\n  ${versions.length} version(s) were tracked.`)
+      const remaining = fh.getVersions(file.path).length
+      const redoDepth = fh.getRedoDepth(file.path)
+      return text(
+        `✓ Undid last edit of ${file.path} (${remaining} version(s) still tracked).\n` +
+        `  /redo to step forward again (${redoDepth} redo step(s) available).`,
+      )
     }
-    return text(`✗ Failed to restore ${file.path}. The backup may be missing.`)
+    return text(`✗ Failed to undo ${file.path}. The backup may be missing.`)
+  },
+})
+
+// ── /redo — re-apply the most recently undone edit ──────────────────────────
+
+registerCommand({
+  name: 'redo',
+  description: 'Redo the last undone file edit (step forward after /undo)',
+  usage: '/redo [file path]',
+  handler: (args, ctx) => {
+    const fh = ctx.engine.getFileHistory()
+    if (!fh) {
+      return text('File history not available (no session directory configured).')
+    }
+
+    const target = args.trim()
+    if (target) {
+      const ok = fh.redoEdit(target)
+      return ok
+        ? text(`✓ Redid ${target}. /undo steps back again.`)
+        : text(`No redo steps available for ${target} (only /undo creates redo steps).`)
+    }
+
+    // No argument: pick the file with the deepest redo stack, breaking
+    // ties deterministically by path so repeated /redo calls walk one
+    // file's timeline before moving to the next.
+    const edited = fh.getEditedFiles()
+    const candidates = edited
+      .map((f) => ({ path: f.path, depth: fh.getRedoDepth(f.path) }))
+      .filter((c) => c.depth > 0)
+      .sort((a, b) => b.depth - a.depth || a.path.localeCompare(b.path))
+    if (candidates.length === 0) {
+      return text('Nothing to redo — use /undo first to create redo steps.')
+    }
+    const best = candidates[0]
+    const ok = fh.redoEdit(best.path)
+    return ok
+      ? text(`✓ Redid ${best.path}. /undo steps back again.`)
+      : text(`Failed to redo ${best.path}.`)
+  },
+})
+
+// ── /fork — branch the current session into a new resumable session ─────────
+
+registerCommand({
+  name: 'fork',
+  description: 'Fork the current session into a new independent session (optionally at a message index)',
+  usage: '/fork [at <messageIndex>]',
+  handler: (args, ctx) => {
+    if (!ctx.sessionDir) {
+      return text('Fork needs a session directory (not available in pipe/scratch mode).')
+    }
+    if (ctx.history.length === 0) {
+      return text('Nothing to fork — the current session has no messages.')
+    }
+
+    const { forkSession, saveSession } =
+      require('../../core/sessionManager.js') as typeof import('../../core/sessionManager.js')
+
+    let atMessage: number | undefined
+    const parts = args.trim().split(/\s+/).filter(Boolean)
+    if (parts.length > 0) {
+      if (parts[0] !== 'at' || parts.length < 2) {
+        return text('Usage: /fork [at <messageIndex>]')
+      }
+      const n = parseInt(parts[1], 10)
+      if (Number.isNaN(n) || n < 0) {
+        return text(`Invalid message index "${parts[1]}" — use a non-negative number.`)
+      }
+      atMessage = n
+    }
+
+    try {
+      // Persist live in-memory history first so the fork reflects the
+      // conversation as it stands, not whatever was last flushed to disk.
+      saveSession(ctx.sessionDir, ctx.history)
+      const result = forkSession(ctx.cwd, ctx.sessionDir, atMessage)
+      const name = result.forkDir.split('/').pop() ?? result.forkDir
+      const lines = [
+        `Forked session into ${name} (${result.messages} message${result.messages === 1 ? '' : 's'}).`,
+      ]
+      if (result.adjusted) {
+        lines.push('The cut point was moved to a safe boundary (tool calls and their results stay together).')
+      }
+      lines.push('', `Continue the branch later with: /resume ${name}`)
+      lines.push('The current session is unaffected.')
+      return text(lines.join('\n'))
+    } catch (err) {
+      return text(`Fork failed: ${(err as Error).message}`)
+    }
   },
 })
 
@@ -632,7 +729,7 @@ registerCommand({
     try {
       // Scan for secrets before writing
       const { maskSecrets, formatScanSummary } =
-        require('../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
+        require('../../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
       const scan = maskSecrets(content)
       const finalContent = scan.masked
       writeFileSync(exportPath, finalContent, 'utf8')

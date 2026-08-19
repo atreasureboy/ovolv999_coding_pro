@@ -20,6 +20,7 @@
  */
 
 import type { EngineConfig } from './types.js'
+import { getCustomAgent, customAgentToConfig, customAgentNames } from './customAgents.js'
 
 /** Module enablement configuration */
 export interface ModuleConfig {
@@ -160,21 +161,34 @@ export const PRESET_NAMES = Object.keys(AGENT_PRESETS)
 /**
  * Resolve agent configuration from either a preset name or a custom config.
  * Falls back to 'general-purpose' preset if nothing specified.
+ *
+ * Resolution order for `preset`:
+ *   1. Built-in presets (AGENT_PRESETS) — built-ins always win so a core
+ *      preset can never be silently shadowed.
+ *   2. Custom agents from disk (.agents/*.md|.json, ~/.ovogo/agents/) —
+ *      requires `cwd`; skipped when absent.
  */
 export function resolveAgentConfig(input: {
   preset?: string
   config?: AgentConfig
-}): AgentConfig {
+}, cwd?: string): AgentConfig {
   if (input.config) return input.config
   const preset = input.preset ?? 'general-purpose'
-  if (!AGENT_PRESETS[preset]) {
-    // Reject unknown presets instead of silently falling back — prevents
-    // typos like "expoler" from spawning a full general-purpose agent
-    throw new Error(`Unknown agent preset: "${preset}". Valid presets: ${PRESET_NAMES.join(' | ')}`)
+  const builtin = AGENT_PRESETS[preset]
+  if (builtin) {
+    // Return a shallow clone so callers can safely mutate (e.g. maxIterations override)
+    return { ...builtin, identity: { ...builtin.identity } }
   }
-  const found = AGENT_PRESETS[preset]
-  // Return a shallow clone so callers can safely mutate (e.g. maxIterations override)
-  return { ...found, identity: { ...found.identity } }
+  if (cwd) {
+    const def = getCustomAgent(cwd, preset)
+    if (def) return customAgentToConfig(def)
+  }
+  // Reject unknown presets instead of silently falling back — prevents
+  // typos like "expoler" from spawning a full general-purpose agent
+  const valid = cwd
+    ? [...PRESET_NAMES, ...customAgentNames(cwd)].join(' | ')
+    : PRESET_NAMES.join(' | ')
+  throw new Error(`Unknown agent preset: "${preset}". Valid presets: ${valid}`)
 }
 
 /**

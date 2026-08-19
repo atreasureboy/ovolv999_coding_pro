@@ -133,20 +133,58 @@ function normalizePermissionRule(value: unknown): PermissionRule | null {
   }
 }
 
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isObject(value)) return undefined
+  const entries = Object.entries(value).filter(([, v]) => typeof v === 'string')
+  return entries.length > 0 ? (Object.fromEntries(entries) as Record<string, string>) : undefined
+}
+
+function normalizeMcpOAuth(value: unknown): McpServerConfig['oauth'] | undefined {
+  if (!isObject(value)) return undefined
+  const required = ['authorizationEndpoint', 'tokenEndpoint', 'clientId', 'redirectUri'] as const
+  for (const key of required) {
+    if (typeof value[key] !== 'string' || !value[key].trim()) return undefined
+  }
+  const oauth: NonNullable<McpServerConfig['oauth']> = {
+    authorizationEndpoint: value.authorizationEndpoint as string,
+    tokenEndpoint: value.tokenEndpoint as string,
+    clientId: value.clientId as string,
+    redirectUri: value.redirectUri as string,
+  }
+  if (typeof value.clientSecret === 'string' && value.clientSecret.trim()) oauth.clientSecret = value.clientSecret
+  if (typeof value.scope === 'string' && value.scope.trim()) oauth.scope = value.scope
+  return oauth
+}
+
 function normalizeMcpServer(value: unknown): McpServerConfig | null {
   if (!isObject(value)) return null
   if (typeof value.name !== 'string' || !value.name.trim()) return null
+  const type = value.type === 'http' ? 'http' : 'stdio'
+  if (type === 'http') {
+    if (typeof value.url !== 'string' || !value.url.trim()) return null
+    try {
+      const parsed = new URL(value.url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    } catch {
+      return null
+    }
+    return {
+      name: value.name,
+      type: 'http',
+      url: value.url.trim(),
+      headers: stringRecord(value.headers),
+      oauth: normalizeMcpOAuth(value.oauth),
+    }
+  }
   if (!Array.isArray(value.command) || value.command.length === 0) return null
   if (!value.command.every((c) => typeof c === 'string')) return null
-  const type = value.type === 'stdio' ? 'stdio' : 'stdio'
-  const env =
-    isObject(value.env)
-      ? (Object.fromEntries(
-          Object.entries(value.env).filter(([, v]) => typeof v === 'string'),
-        ) as Record<string, string>)
-      : undefined
-  const cwd = typeof value.cwd === 'string' ? value.cwd : undefined
-  return { name: value.name, type, command: [...value.command], env, cwd }
+  return {
+    name: value.name,
+    type: 'stdio',
+    command: [...value.command],
+    env: stringRecord(value.env),
+    cwd: typeof value.cwd === 'string' ? value.cwd : undefined,
+  }
 }
 
 function normalizeMcp(value: unknown, file: string | undefined, diags: ConfigDiagnostic[]): { servers: McpServerConfig[] } | undefined {
@@ -167,7 +205,7 @@ function normalizeMcp(value: unknown, file: string | undefined, diags: ConfigDia
     } else if (file) {
       diags.push({
         file, field: `mcp.servers[${i}]`, severity: 'warning',
-        message: 'invalid MCP server entry dropped (needs non-empty "name" and non-empty "command" array)',
+        message: 'invalid MCP server entry dropped (stdio needs non-empty "name" + "command" array; http needs "name" + valid "url")',
         fix: `Correct or remove this entry in "${file}".`,
       })
     }

@@ -32,7 +32,7 @@
  * removed from the in-memory index when the cap is exceeded.
  */
 
-import { existsSync, readFileSync, mkdirSync, statSync, copyFileSync, chmodSync, closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync, readdirSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, statSync, copyFileSync, chmodSync, closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync, writeFileSync, readdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
 
@@ -71,6 +71,12 @@ export interface EditedFileInfo {
 export interface BackupSidecar {
   /** Original absolute path of the file at the moment of trackEdit. */
   originalPath: string
+  /**
+   * True when the backup records "the file did NOT exist" (undo/redo of
+   * creations and deletions). The backup file itself is an empty marker;
+   * applying it removes the live file instead of writing content.
+   */
+  deleted?: boolean
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -109,6 +115,17 @@ const HISTORY_DIR_HASH_LEN = 32
  */
 const INDEX_FILENAME = 'index.json'
 
+/**
+ * Persistent redo-stack index — `<historyDir>/redo-index.json`, same shape
+ * as index.json (`{version: 1, entries: path → backupPath[]}`). Redo
+ * entries live in the SAME hash buckets as version backups but use an
+ * `r<ts>_<n>` filename prefix so rebuildIndexFromTree (which only matches
+ * `v<ts>_<n>`) never mistakes them for edit versions. The redo stack is
+ * best-effort across restarts: if this index is lost, /redo simply has
+ * nothing to redo — version history is untouched.
+ */
+const REDO_INDEX_FILENAME = 'redo-index.json'
+
 /** Suffix on a backup that marks its per-backup sidecar. */
 const SIDECAR_SUFFIX = '.meta.json'
 
@@ -126,8 +143,16 @@ function sidecarFor(backupPath: string): string {
 export class FileHistory {
   private historyDir: string
   private indexPath: string
+  private redoIndexPath: string
   /** filePath → array of backup paths (chronological, [0] = original) */
   private edits = new Map<string, string[]>()
+  /**
+   * Redo stacks per file (undo/redo pair semantics). An entry is popped by
+   * redoEdit(); entries are pushed by undoEdit() capturing the live state
+   * it is about to replace. Persisted to redo-index.json so /redo works
+   * across process restarts; a new edit (trackEdit) invalidates the stack.
+   */
+  private redoEntries = new Map<string, string[]>()
   /**
    * Paths whose trackEdit ran while the file did NOT exist — i.e. files
    * CREATED by this session's Write tool. In-memory only: the checkpoint
@@ -141,6 +166,7 @@ export class FileHistory {
   constructor(sessionDir: string) {
     this.historyDir = join(sessionDir, 'file-history')
     this.indexPath = join(this.historyDir, INDEX_FILENAME)
+    this.redoIndexPath = join(this.historyDir, REDO_INDEX_FILENAME)
     try {
       mkdirSync(this.historyDir, { recursive: true })
     } catch {
@@ -153,6 +179,7 @@ export class FileHistory {
     if (!this.loadIndexFromDisk()) {
       this.rebuildIndexFromTree()
     }
+    this.loadRedoIndexFromDisk()
     // Sync versionCounter past any counters we already saw so new backup
     // filenames can't collide with an old one in the same directory.
     this.syncVersionCounter()
@@ -313,6 +340,15 @@ export class FileHistory {
    * history is the record of what WAS there, not what IS there now.
    */
   private readSidecarOriginalPath(backupPath: string): string | null {
+    return this.readSidecar(backupPath)?.originalPath ?? null
+  }
+
+  /**
+   * Read the full per-backup sidecar (original path + optional deleted
+   * marker). Returns null when the sidecar is missing or unparseable —
+   * callers must drop the backup rather than guess.
+   */
+  private readSidecar(backupPath: string): BackupSidecar | null {
     const sidecarPath = sidecarFor(backupPath)
     if (!existsSync(sidecarPath)) return null
     let raw: string
@@ -330,7 +366,11 @@ export class FileHistory {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const candidate = (parsed as Record<string, unknown>).originalPath
     if (typeof candidate !== 'string' || candidate.length === 0) return null
-    return candidate
+    const deleted = (parsed as Record<string, unknown>).deleted
+    return {
+      originalPath: candidate,
+      ...(deleted === true ? { deleted: true } : {}),
+    }
   }
 
   /**
@@ -349,10 +389,10 @@ export class FileHistory {
    * records the path, so a missing sidecar only matters in the rebuild
    * path. We'd rather skip a backup's metadata than block the edit.
    */
-  private writeSidecarToDisk(backupPath: string, originalPath: string): void {
+  private writeSidecarToDisk(backupPath: string, sidecar: BackupSidecar): void {
     const sidecarPath = sidecarFor(backupPath)
     const payload = Buffer.from(
-      JSON.stringify({ originalPath }),
+      JSON.stringify(sidecar),
       'utf8',
     )
     // Same-directory tmp so the rename is atomic on POSIX. The suffix
@@ -389,15 +429,19 @@ export class FileHistory {
    */
   private syncVersionCounter(): void {
     let max = -1
-    for (const backups of this.edits.values()) {
-      for (const p of backups) {
-        const m = /_(\d+)$/.exec(p)
-        if (m) {
-          const n = Number(m[1])
-          if (Number.isFinite(n) && n > max) max = n
+    const scan = (lists: Iterable<string[]>): void => {
+      for (const backups of lists) {
+        for (const p of backups) {
+          const m = /_(\d+)$/.exec(p)
+          if (m) {
+            const n = Number(m[1])
+            if (Number.isFinite(n) && n > max) max = n
+          }
         }
       }
     }
+    scan(this.edits.values())
+    scan(this.redoEntries.values())
     if (max >= this.versionCounter) this.versionCounter = max + 1
   }
 
@@ -451,10 +495,16 @@ export class FileHistory {
       // tell WHICH file a backup belonged to. Without this sidecar the
       // rebuild would see only the hash bucket and have to either
       // refuse the backup or — worse — treat the hash as a path.
-      this.writeSidecarToDisk(backupPath, absPath)
+      this.writeSidecarToDisk(backupPath, { originalPath: absPath })
 
       const versions = this.edits.get(absPath) ?? []
       versions.push(backupPath)
+
+      // A fresh edit invalidates the redo stack for this file — the
+      // "undone futures" it captured no longer follow from the current
+      // timeline. Drop the captured states from disk too so the bucket
+      // doesn't accumulate dead redo backups.
+      this.clearRedoStack(absPath)
 
       // Bound retention: when the cap is exceeded, evict the OLDEST
       // backup from disk and from the in-memory index. Eviction runs
@@ -590,8 +640,44 @@ export class FileHistory {
     const absPath = resolve(filePath)
     const versions = this.edits.get(absPath)
     if (!versions || version < 0 || version >= versions.length) return false
-
     const backupPath = versions[version]
+    if (!backupPath) return false
+    // A rewind jumps to an arbitrary version — the redo stack captured
+    // intermediate futures that no longer follow from the current
+    // timeline, so it must be invalidated.
+    this.clearRedoStack(absPath)
+    return this.applyBackup(absPath, backupPath)
+  }
+
+  /**
+   * Apply a backup to the live path. Reads the backup's sidecar: a
+   * `deleted: true` marker removes the live file (restoring "the file did
+   * not exist"), otherwise content + mode are restored atomically.
+   *
+   * Atomic write: writes to a uniquely-suffixed tmp file IN THE SAME
+   * DIRECTORY as the live target, fsyncs it, then renames it over the live
+   * file. A crash mid-restore can never leave a half-written file at the
+   * live path — readers always see EITHER the previous content OR the
+   * fully-restored content, never a torn mix.
+   *
+   * Mode rewind semantics: we capture the BACKUP's mode (trackEdit
+   * already chmod'd the backup to match the live file at backup time) and
+   * re-apply it, so BOTH content AND mode revert to the snapshot.
+   *
+   * All failure modes return false and never throw; the live file is left
+   * untouched whenever the restore cannot complete.
+   */
+  private applyBackup(absPath: string, backupPath: string): boolean {
+    const sidecar = this.readSidecar(backupPath)
+    if (sidecar?.deleted) {
+      try {
+        if (existsSync(absPath)) unlinkSync(absPath)
+        return true
+      } catch {
+        return false
+      }
+    }
+
     let content: Buffer
     try {
       content = readFileSync(backupPath)
@@ -599,11 +685,8 @@ export class FileHistory {
       return false
     }
 
-    // Capture the backup's mode. trackEdit already chmod'd the backup
-    // to match the live file's mode at backup time, so this is exactly
-    // the mode the live file SHOULD have after a rewind. If statSync
-    // fails (defensive — should not happen since we just read the
-    // same path), we fall through and let the umask default apply.
+    // Capture the backup's mode. If statSync fails (defensive — should not
+    // happen since we just read the same path), the umask default applies.
     let backupMode: number | undefined
     try {
       backupMode = statSync(backupPath).mode
@@ -611,10 +694,6 @@ export class FileHistory {
       /* best-effort — see comment above */
     }
 
-    // Unique tmp in the SAME directory as the target so the rename is
-    // atomic on POSIX (cross-directory rename isn't). Suffix combines
-    // pid + Date.now() ms + 8 random bytes hex — collision-free under
-    // any realistic concurrency.
     const tmpPath = `${absPath}.restore.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
     let tmpFd: number | null = null
     try {
@@ -624,10 +703,7 @@ export class FileHistory {
       closeSync(tmpFd)
       tmpFd = null
       // chmod BEFORE the rename so the renamed file already has the
-      // rewound mode the moment it appears at the live path. chmodSync
-      // is sync on purpose — the gap between closeSync and chmod is
-      // already serial on this process; making it async would just
-      // add a microtask boundary.
+      // rewound mode the moment it appears at the live path.
       if (backupMode !== undefined) {
         chmodSync(tmpPath, backupMode)
       }
@@ -646,6 +722,201 @@ export class FileHistory {
       } catch {
         /* swallow */
       }
+    }
+  }
+
+  // ── undo / redo stack ─────────────────────────────────────────────────────
+
+  /**
+   * Capture the current live state of `absPath` as a backup in the given
+   * bucket directory with the given filename prefix ('v' for versions,
+   * 'r' for redo entries). Records a `deleted: true` sidecar marker when
+   * the file does not exist, so creation/deletion round-trips through
+   * undo/redo as well. Returns the backup path, or null on failure
+   * (the caller treats a failed snapshot as a failed undo/redo step —
+   * we never restore without first securing the state being replaced).
+   */
+  private writeStateSnapshot(absPath: string, prefix: 'v' | 'r'): string | null {
+    try {
+      const hash = createHash('sha256').update(absPath).digest('hex').slice(0, HISTORY_DIR_HASH_LEN)
+      const dir = join(this.historyDir, hash)
+      mkdirSync(dir, { recursive: true })
+      const backupPath = join(dir, `${prefix}${Date.now()}_${this.versionCounter++}`)
+
+      if (existsSync(absPath)) {
+        copyFileSync(absPath, backupPath)
+        try {
+          const stat = statSync(absPath)
+          chmodSync(backupPath, stat.mode)
+        } catch { /* best-effort */ }
+        this.writeSidecarToDisk(backupPath, { originalPath: absPath })
+      } else {
+        // Deletion marker — empty file; the sidecar carries the truth.
+        writeFileSync(backupPath, '')
+        this.writeSidecarToDisk(backupPath, { originalPath: absPath, deleted: true })
+      }
+      return backupPath
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Single-step undo: restore the live file to the MOST RECENT backup and
+   * pop that backup from the version list, pushing the replaced live state
+   * onto the redo stack. Unlike restoreOriginal (a full rewind to version
+   * 0), this pairs with redoEdit() for symmetric undo/redo navigation.
+   * Returns false when no versions are tracked or the snapshot fails.
+   */
+  undoEdit(filePath: string): boolean {
+    const absPath = resolve(filePath)
+    const versions = this.edits.get(absPath)
+    if (!versions || versions.length === 0) return false
+    const backupPath = versions[versions.length - 1]
+    if (!backupPath) return false
+
+    const redoBackup = this.writeStateSnapshot(absPath, 'r')
+    if (redoBackup === null) return false
+    const stack = this.redoEntries.get(absPath) ?? []
+    stack.push(redoBackup)
+    this.redoEntries.set(absPath, stack)
+
+    if (!this.applyBackup(absPath, backupPath)) {
+      // Roll back the redo entry — the live file is untouched, so the
+      // captured "replaced state" never happened.
+      stack.pop()
+      if (stack.length === 0) this.redoEntries.delete(absPath)
+      this.unlinkBackupQuietly(redoBackup)
+      this.saveRedoIndexToDisk()
+      return false
+    }
+
+    versions.pop()
+    if (versions.length === 0) this.edits.delete(absPath)
+    this.saveIndexToDisk()
+    this.saveRedoIndexToDisk()
+    return true
+  }
+
+  /**
+   * Single-step redo: re-apply the most recently undone state. The current
+   * live state is pushed onto the version list first, so a subsequent
+   * undoEdit() returns to exactly where we are now — the two stacks stay
+   * symmetric across any undo/redo interleaving, including file creation
+   * and deletion. Returns false when the redo stack is empty.
+   */
+  redoEdit(filePath: string): boolean {
+    const absPath = resolve(filePath)
+    const stack = this.redoEntries.get(absPath)
+    if (!stack || stack.length === 0) return false
+    const redoBackup = stack[stack.length - 1]
+    if (!redoBackup) return false
+    const sidecar = this.readSidecar(redoBackup)
+    if (!sidecar) return false
+
+    // Secure the current live state as a version backup before applying
+    // the redo — if this fails we abort rather than lose undo capability.
+    const versionBackup = this.writeStateSnapshot(absPath, 'v')
+    if (versionBackup === null) return false
+    const versions = this.edits.get(absPath) ?? []
+    versions.push(versionBackup)
+    this.edits.set(absPath, versions)
+
+    if (!this.applyBackup(absPath, redoBackup)) {
+      versions.pop()
+      if (versions.length === 0) this.edits.delete(absPath)
+      this.unlinkBackupQuietly(versionBackup)
+      this.saveIndexToDisk()
+      return false
+    }
+
+    stack.pop()
+    if (stack.length === 0) this.redoEntries.delete(absPath)
+    this.unlinkBackupQuietly(redoBackup)
+    this.saveIndexToDisk()
+    this.saveRedoIndexToDisk()
+    return true
+  }
+
+  /** Number of redo steps currently available for a file. */
+  getRedoDepth(filePath: string): number {
+    return this.redoEntries.get(resolve(filePath))?.length ?? 0
+  }
+
+  /** Drop the redo stack for a file (disk + memory) and persist. */
+  private clearRedoStack(absPath: string): void {
+    const stack = this.redoEntries.get(absPath)
+    if (!stack || stack.length === 0) return
+    for (const b of stack) this.unlinkBackupQuietly(b)
+    this.redoEntries.delete(absPath)
+    this.saveRedoIndexToDisk()
+  }
+
+  /** Unlink a backup and its sidecar; failures are swallowed. */
+  private unlinkBackupQuietly(backupPath: string): void {
+    try {
+      if (existsSync(backupPath)) unlinkSync(backupPath)
+    } catch { /* best-effort */ }
+    try {
+      const sidecar = sidecarFor(backupPath)
+      if (existsSync(sidecar)) unlinkSync(sidecar)
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * Persist the redo stacks to `<historyDir>/redo-index.json`. Same
+   * fd+fsync+rename convention as the version index. Failures are
+   * swallowed: the in-memory stack stays authoritative for this process.
+   */
+  private saveRedoIndexToDisk(): void {
+    const entries: Record<string, string[]> = {}
+    for (const [filePath, stack] of this.redoEntries) {
+      entries[filePath] = stack.slice()
+    }
+    const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
+    const tmpPath = `${this.redoIndexPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
+    let tmpFd: number | null = null
+    try {
+      tmpFd = openSync(tmpPath, 'w')
+      writeSync(tmpFd, payload, 0, payload.length, 0)
+      fsyncSync(tmpFd)
+      closeSync(tmpFd)
+      tmpFd = null
+      renameSync(tmpPath, this.redoIndexPath)
+    } catch {
+      if (tmpFd !== null) {
+        try { closeSync(tmpFd) } catch { /* swallow */ }
+      }
+      try { if (existsSync(tmpPath)) unlinkSync(tmpPath) } catch { /* swallow */ }
+    }
+  }
+
+  /**
+   * Load redo-index.json. Missing/corrupt index → empty stacks (redo is
+   * best-effort across restarts; version history is never affected).
+   */
+  private loadRedoIndexFromDisk(): void {
+    if (!existsSync(this.redoIndexPath)) return
+    let raw: string
+    try {
+      raw = readFileSync(this.redoIndexPath, 'utf8')
+    } catch {
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+    const entries = (parsed as Record<string, unknown>).entries
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return
+    for (const [filePath, stack] of Object.entries(entries as Record<string, unknown>)) {
+      if (typeof filePath !== 'string' || filePath.length === 0) continue
+      if (!Array.isArray(stack)) continue
+      const valid = stack.filter((b): b is string => typeof b === 'string' && b.length > 0 && existsSync(b))
+      if (valid.length > 0) this.redoEntries.set(filePath, valid)
     }
   }
 
@@ -669,6 +940,15 @@ export class FileHistory {
   /** Clear all history (for new sessions / tests). */
   clear(): void {
     this.edits.clear()
+    for (const stack of this.redoEntries.values()) {
+      for (const b of stack) this.unlinkBackupQuietly(b)
+    }
+    this.redoEntries.clear()
+    try {
+      if (existsSync(this.redoIndexPath)) unlinkSync(this.redoIndexPath)
+    } catch {
+      /* swallow */
+    }
     // Drop the persistent index too — otherwise a "fresh" session
     // restored from disk would re-load the cleared entries on next
     // construction. Best-effort; an unlink failure leaves the index on

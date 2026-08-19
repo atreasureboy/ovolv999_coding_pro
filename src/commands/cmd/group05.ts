@@ -31,7 +31,7 @@ registerCommand({
       createSnapshot, removeSnapshot, getSnapshot, listSnapshots,
       addFileToSnapshot, addTodoToSnapshot, toggleTodoInSnapshot,
       diffSnapshots, formatSnapshot, formatSnapshotList, formatSnapshotDiff,
-    } = require('../core/workspace.js') as typeof import('../../core/workspace.js')
+    } = require('../../core/workspace.js') as typeof import('../../core/workspace.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -111,7 +111,7 @@ registerCommand({
       useSnippet, toggleFavorite, searchSnippets,
       getCategories, getSnippetStats,
       formatSnippet, formatSnippetList, formatSnippetStats,
-    } = require('../core/snippets.js') as typeof import('../../core/snippets.js')
+    } = require('../../core/snippets.js') as typeof import('../../core/snippets.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -198,7 +198,7 @@ registerCommand({
       exportProfile, importProfile, getEffectiveConfig,
       initializeBuiltinProfiles,
       formatProfile, formatProfileList, formatEffectiveConfig,
-    } = require('../core/profiles.js') as typeof import('../../core/profiles.js')
+    } = require('../../core/profiles.js') as typeof import('../../core/profiles.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -282,7 +282,7 @@ registerCommand({
       analyzeFile, analyzeProjectFiles,
       formatFileMetrics, formatProjectMetrics,
       assessHealth, formatHealthAssessment,
-    } = require('../core/codeMetrics.js') as typeof import('../../core/codeMetrics.js')
+    } = require('../../core/codeMetrics.js') as typeof import('../../core/codeMetrics.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'help'
@@ -332,10 +332,10 @@ registerCommand({
   name: 'hooks',
   description: 'Manage lifecycle hooks (.ovogo/settings.json, CC-compatible). Usage: /hooks [list | add <event> <matcher> <command> | remove <event> <index> | clear <event> | test <event> <tool>]',
   handler: (args, ctx) => {
-    const { loadHookConfig } = require('../core/hooks/hooksConfig.js') as typeof import('../../core/hooks/hooksConfig.js')
-    const { executeHookCommand } = require('../core/hooks/hookExecutor.js') as typeof import('../../core/hooks/hookExecutor.js')
-    const { loadProjectSettings, saveProjectSettings } = require('../config/settings.js') as typeof import('../../config/settings.js')
-    const { HOOK_EVENTS: PROTOCOL_EVENTS } = require('../core/hooks/hookProtocol.js') as typeof import('../../core/hooks/hookProtocol.js')
+    const { loadHookConfig } = require('../../core/hooks/hooksConfig.js') as typeof import('../../core/hooks/hooksConfig.js')
+    const { executeHookCommand } = require('../../core/hooks/hookExecutor.js') as typeof import('../../core/hooks/hookExecutor.js')
+    const { loadProjectSettings, saveProjectSettings } = require('../../config/settings.js') as typeof import('../../config/settings.js')
+    const { HOOK_EVENTS: PROTOCOL_EVENTS } = require('../../core/hooks/hookProtocol.js') as typeof import('../../core/hooks/hookProtocol.js')
 
     const formatConfig = (projHooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout?: number }> }>>): string => {
       const lines: string[] = []
@@ -459,7 +459,7 @@ registerCommand({
   handler: (args, ctx) => {
     const {
       runDiagnostics, filterDiagnostics, formatDiagnosticsResult, clearCache,
-    } = require('../core/diagnostics.js') as typeof import('../../core/diagnostics.js')
+    } = require('../../core/diagnostics.js') as typeof import('../../core/diagnostics.js')
 
     const parts = args.trim().split(/\s+/)
     const clearFlag = parts.includes('--clear') || parts.includes('--fresh')
@@ -499,7 +499,7 @@ registerCommand({
     const {
       createGoal, getGoal, listGoals, startGoal, completeGoal, failGoal, pauseGoal, resumeGoal,
       addSubtask, updateSubtask, getProgress, formatGoal, formatGoalList, deleteGoal,
-    } = require('../core/goals.js') as typeof import('../../core/goals.js')
+    } = require('../../core/goals.js') as typeof import('../../core/goals.js')
 
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
@@ -593,7 +593,7 @@ registerCommand({
   aliases: ['export-session'],
   description: 'Export session transcript. Usage: /transcript [markdown|json|text] [stats]',
   handler: (args, ctx) => {
-    const transcriptModule = require('../core/sessionTranscript.js') as typeof import('../../core/sessionTranscript.js')
+    const transcriptModule = require('../../core/sessionTranscript.js') as typeof import('../../core/sessionTranscript.js')
     const { buildTranscript, exportTranscript, getTranscriptStats, formatStats } = transcriptModule
 
     const parts = args.trim().split(/\s+/)

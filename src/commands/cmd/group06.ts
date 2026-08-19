@@ -31,7 +31,7 @@ registerCommand({
   handler: (args) => {
     const {
       setEffort, cycleEffort, getEffortPrompt, formatEffort, formatEffortList,
-    } = require('../core/effort.js') as typeof import('../../core/effort.js')
+    } = require('../../core/effort.js') as typeof import('../../core/effort.js')
 
     const parts = args.trim().split(/\s+/)
     const level = parts[0]
@@ -64,7 +64,7 @@ registerCommand({
   aliases: ['teammem'],
   description: 'Manage team memory sync. Usage: /team-memory [init <url> | status | sync | files | add <file> | enable-auto | disable-auto]',
   handler: (args, ctx) => {
-    const teamMemModule = require('../core/teamMemory.js') as typeof import('../../core/teamMemory.js')
+    const teamMemModule = require('../../core/teamMemory.js') as typeof import('../../core/teamMemory.js')
     const {
       loadTeamConfig, saveTeamConfig, syncTeamMemory,
       findMemoryFiles, formatSyncResult, formatTeamMemoryStatus,
@@ -121,7 +121,7 @@ registerCommand({
   aliases: ['secrets', 'keychain'],
   description: 'Manage local vault. Usage: /vault [status | set <key> | get <key> | delete <key> | list]',
   handler: (args) => {
-    const keychainModule = require('../utils/keychain.js') as typeof import('../../utils/keychain.js')
+    const keychainModule = require('../../utils/keychain.js') as typeof import('../../utils/keychain.js')
     const { setSecret, getSecret, deleteSecret, listSecrets, getVaultMetadata, formatVaultStatus, getPassphraseFromEnv } = keychainModule
 
     const parts = args.trim().split(/\s+/)
@@ -276,7 +276,7 @@ registerCommand({
   aliases: ['msg'],
   description: 'Inter-agent messaging. Usage: /messages [agents | send <to> <msg> | list | stats]',
   handler: (args) => {
-    const msgMod = require('../core/messageBus.js') as typeof import('../../core/messageBus.js')
+    const msgMod = require('../../core/messageBus.js') as typeof import('../../core/messageBus.js')
     const { getMessageBus, formatAgentList, formatMessageList, formatBusStats } = msgMod
 
     const parts = args.trim().split(/\s+/)
@@ -305,7 +305,7 @@ registerCommand({
   name: 'sandbox',
   description: 'Sandbox configuration. Usage: /sandbox [status | on | off | strict | standard | add-writable <path> | deny <path>]',
   handler: (args) => {
-    const sandbox = require('../core/sandbox.js') as typeof import('../../core/sandbox.js')
+    const sandbox = require('../../core/sandbox.js') as typeof import('../../core/sandbox.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'status'
 
@@ -369,7 +369,7 @@ registerCommand({
   name: 'sync',
   description: 'Settings sync. Usage: /sync [status | push-file <path> | pull-file <path> [passphrase] | push-git <repo> | pull-git <repo> [passphrase]]',
   handler: (args) => {
-    const sync = require('../core/settingsSync.js') as typeof import('../../core/settingsSync.js')
+    const sync = require('../../core/settingsSync.js') as typeof import('../../core/settingsSync.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'status'
 
@@ -421,7 +421,7 @@ registerCommand({
   name: 'telemetry',
   description: 'Usage analytics. Usage: /telemetry [stats | on | off | export | clear]',
   handler: (args) => {
-    const tel = require('../core/telemetry.js') as typeof import('../../core/telemetry.js')
+    const tel = require('../../core/telemetry.js') as typeof import('../../core/telemetry.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'stats'
 
@@ -462,7 +462,7 @@ registerCommand({
   aliases: ['mdocs'],
   description: 'Extract project documentation. Usage: /magic-docs [write | <section>]',
   handler: (args) => {
-    const md = require('../core/magicDocs.js') as typeof import('../../core/magicDocs.js')
+    const md = require('../../core/magicDocs.js') as typeof import('../../core/magicDocs.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'preview'
 
@@ -496,7 +496,7 @@ registerCommand({
   name: 'ssh',
   description: 'SSH remote profiles. Usage: /ssh [list | add <name> <host> [user] [port] | remove <name> | test <name> | run <name> <command>]',
   handler: (args) => {
-    const ssh = require('../core/sshRemote.js') as typeof import('../../core/sshRemote.js')
+    const ssh = require('../../core/sshRemote.js') as typeof import('../../core/sshRemote.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
 
@@ -555,7 +555,7 @@ registerCommand({
   name: 'lsp',
   description: 'Language server status. Usage: /lsp [status | symbols <query>]',
   handler: async (args) => {
-    const lsp = require('../core/lsp/client.js') as typeof import('../../core/lsp/client.js')
+    const lsp = require('../../core/lsp/client.js') as typeof import('../../core/lsp/client.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'status'
 
@@ -596,7 +596,7 @@ registerCommand({
   name: 'update',
   description: 'Check for ovolv999 updates. Usage: /update [check | ignore <version> | install [beta]]',
   handler: (args) => {
-    const upd = require('../utils/autoUpdater.js') as typeof import('../../utils/autoUpdater.js')
+    const upd = require('../../utils/autoUpdater.js') as typeof import('../../utils/autoUpdater.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'check'
 

@@ -10,6 +10,7 @@ import { BashTool } from './bash.js'
 import { FileReadTool } from './fileRead.js'
 import { FileWriteTool } from './fileWrite.js'
 import { FileEditTool } from './fileEdit.js'
+import { ApplyPatchTool } from './applyPatch.js'
 import { GlobTool } from './glob.js'
 import { GrepTool } from './grep.js'
 import { TodoWriteTool } from './todo.js'
@@ -145,6 +146,7 @@ export function createTools(
     new FileReadTool(),
     new FileWriteTool(),
     new FileEditTool(),
+    new ApplyPatchTool(),
     new GlobTool(),
     new GrepTool(),
     new TodoWriteTool(),
@@ -222,6 +224,7 @@ export {
   FileReadTool,
   FileWriteTool,
   FileEditTool,
+  ApplyPatchTool,
   MultiEditTool,
   CodeStructureTool,
   CodeQualityTool,

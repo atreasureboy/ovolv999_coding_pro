@@ -26,7 +26,7 @@ registerCommand({
   name: 'cache',
   description: 'Prompt cache statistics. Usage: /cache [stats | reset | health]',
   handler: (args) => {
-    const cs = require('../utils/cacheStats.js') as typeof import('../../utils/cacheStats.js')
+    const cs = require('../../utils/cacheStats.js') as typeof import('../../utils/cacheStats.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'stats'
 
@@ -57,7 +57,7 @@ registerCommand({
   name: 'health',
   description: 'System health checks. Usage: /health',
   handler: () => {
-    const sh = require('../utils/systemHealth.js') as typeof import('../../utils/systemHealth.js')
+    const sh = require('../../utils/systemHealth.js') as typeof import('../../utils/systemHealth.js')
     const report = sh.runSystemHealthChecks()
     return text(sh.formatSystemHealth(report))
   },
@@ -71,7 +71,7 @@ registerCommand({
   name: 'ide',
   description: 'IDE detection info. Usage: /ide',
   handler: () => {
-    const ide = require('../utils/ide.js') as typeof import('../../utils/ide.js')
+    const ide = require('../../utils/ide.js') as typeof import('../../utils/ide.js')
     const info = ide.detectIDE()
     if (!info) return text('No IDE detected (running in a plain terminal).')
     const lines = [ide.formatIDEInfo(info), '']

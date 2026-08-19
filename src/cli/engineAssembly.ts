@@ -54,6 +54,7 @@ import { WorkspaceModule } from '../modules/workspace.js'
 import { WorkspaceWatcherModule } from '../modules/workspaceWatcher.js'
 // ReflectionModule removed from active profile — v0.5.3 Closure P9.
 import { McpModule } from '../modules/mcp.js'
+import { PluginsModule } from '../modules/plugins.js'
 import { detectProjectContext, formatProjectContext } from '../config/projectContext.js'
 import { createLoadSkillTool } from '../tools/loadSkill.js'
 import { createTerminalAskUserHandler } from '../tools/askUser.js'
@@ -276,6 +277,11 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   // preserved under experimental/ for any future honest
   // producer-of-candidates implementation.
   globalModuleRegistry.register('mcp', () => new McpModule())
+  // Round 33: real plugin runtime — user plugins under .ovolv999/plugins/
+  // are actually imported at boot and their tools/commands registered
+  // (previously the plugin system was discovery-only and never executed
+  // plugin code).
+  globalModuleRegistry.register('plugins', () => new PluginsModule())
   // P2.2: workspace_watcher turns the R8 chokidar-based WorkspaceWatcher
   // into a real runtime capability. It watches the cwd and user skills
   // directory, invalidates the toolSearch cache on file change, and
@@ -347,8 +353,8 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     extraTools: skills.size > 0 ? [loadSkillTool] : [],
     enabledModules: projectConfig?.enabledModules
       ?? (settings.mcp?.servers?.length
-        ? ['memory', 'critic', 'workspace', 'mcp']
-        : ['memory', 'critic', 'workspace']),
+        ? ['memory', 'critic', 'workspace', 'mcp', 'plugins']
+        : ['memory', 'critic', 'workspace', 'plugins']),
     agentFactory,
     createFileRenderer,
     askUserQuestion: createTerminalAskUserHandler({

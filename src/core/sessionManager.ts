@@ -954,3 +954,139 @@ export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
     }
   })
 }
+
+// ── fork ────────────────────────────────────────────────────────────────────
+
+export interface ForkResult {
+  /** Absolute path of the new session directory. */
+  forkDir: string
+  /** Number of messages copied into the fork. */
+  messages: number
+  /** True when the requested cut point was moved to a safe boundary. */
+  adjusted: boolean
+}
+
+/**
+ * Compute a safe fork cut point: the prefix [0, cut) must be a
+ * self-consistent conversation — no orphan `tool` rows at the boundary and
+ * no assistant `tool_calls` left without their matching tool results.
+ *
+ * Adjustment rules (cut only ever GROWS, never shrinks):
+ *   1. If messages[cut] is a `tool` row, the cut sits inside a tool-call
+ *      group — advance past the contiguous tool rows.
+ *   2. If the prefix contains assistant tool_calls whose results were NOT
+ *      included, advance to include their contiguous tool responses.
+ * The loop terminates because cut is monotonically increasing and bounded
+ * by messages.length.
+ */
+export function computeForkCutPoint(messages: OpenAIMessage[], requested?: number): number {
+  const n = messages.length
+  let cut = requested === undefined ? n : Math.max(0, Math.min(Math.trunc(requested), n))
+
+  for (;;) {
+    while (cut < n && messages[cut]?.role === 'tool') cut++
+
+    // Collect tool_call ids that are issued but not answered within [0, cut).
+    const pending = new Set<string>()
+    for (let i = 0; i < cut; i++) {
+      const m = messages[i]
+      if (!m) continue
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          if (tc.id) pending.add(tc.id)
+        }
+      } else if (m.role === 'tool' && m.tool_call_id) {
+        pending.delete(m.tool_call_id)
+      }
+    }
+    if (pending.size === 0) return cut
+
+    // Include the contiguous tool responses that satisfy the pending ids.
+    let j = cut
+    const missing = new Set(pending)
+    while (j < n && missing.size > 0) {
+      const m = messages[j]
+      if (!m) break
+      if (m.role === 'tool' && m.tool_call_id && missing.has(m.tool_call_id)) {
+        missing.delete(m.tool_call_id)
+        j++
+      } else if (m.role === 'tool') {
+        j++
+      } else {
+        break
+      }
+    }
+    if (j === cut) return cut // no progress possible — accept the boundary
+    cut = j
+  }
+}
+
+/**
+ * Create a unique fork directory name under `<cwd>/sessions/`.
+ *
+ * createSessionDir uses second-resolution timestamps, so a fork created in
+ * the same second as another fork (or the source session itself) would
+ * collide. On collision we append `_fork<k>` until the name is free — the
+ * `session_*` prefix keeps it visible to isSessionDirName, /sessions, and
+ * resolveSessionPath prefix matching.
+ */
+function createForkSessionDir(cwd: string, now: Date = new Date()): string {
+  assertNonEmpty(cwd, 'cwd')
+  const ts = now
+    .toISOString()
+    .replace('T', '_')
+    .replace(/:/g, '')
+    .slice(0, 17)
+  const sessionsRoot = join(cwd, 'sessions')
+  let candidate = `${SESSION_DIR_PREFIX}${ts}_fork`
+  let k = 2
+  while (existsSync(join(sessionsRoot, candidate))) {
+    candidate = `${SESSION_DIR_PREFIX}${ts}_fork${k}`
+    k++
+  }
+  const dir = join(sessionsRoot, candidate)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/**
+ * Fork an existing session into a NEW session directory.
+ *
+ * The fork copies the source conversation prefix [0, cut) — where cut
+ * defaults to the full history and is always adjusted to a safe boundary
+ * (see computeForkCutPoint) — into a fresh envelope. The source session is
+ * never modified. The forked history is written through saveSession, so it
+ * gets the same shape validation and atomic-write guarantees as a normal
+ * session save; the fork is immediately resumable via --resume / /resume.
+ *
+ * lastOutcome is intentionally NOT copied: the fork has not completed any
+ * turn of its own, and inheriting the source's verdict would make /sessions
+ * report the fork with the truth of a turn it never ran.
+ *
+ * Throws SessionNotFoundError when `sourceDir` has no history file, and
+ * propagates CorruptSessionError / UnknownSessionVersionError from the
+ * source load untouched.
+ */
+export function forkSession(cwd: string, sourceDir: string, atMessage?: number): ForkResult {
+  assertNonEmpty(cwd, 'cwd')
+  assertNonEmpty(sourceDir, 'sourceDir')
+
+  const envelope = loadSessionEnvelope(sourceDir)
+  if (!envelope) {
+    throw new SessionNotFoundError(`Source session has no history: ${sourceDir}`)
+  }
+
+  const requested = atMessage === undefined ? envelope.messages.length : atMessage
+  const cut = computeForkCutPoint(envelope.messages, requested)
+  const forkDir = createForkSessionDir(cwd)
+  // Clone each message (saveSession re-validates shapes and rejects orphan
+  // tool rows, so a bad prefix can never be persisted as a silent fork).
+  const prefix = envelope.messages.slice(0, cut).map((m) => ({ ...m }))
+  saveSession(forkDir, prefix)
+
+  return {
+    forkDir,
+    messages: prefix.length,
+    adjusted: cut !== Math.max(0, Math.min(Math.trunc(requested), envelope.messages.length)),
+  }
+}

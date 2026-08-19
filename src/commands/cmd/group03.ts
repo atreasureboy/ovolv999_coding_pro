@@ -284,7 +284,7 @@ registerCommand({
     const trimmed = args.trim().toLowerCase()
     // Lazy import to avoid circular dependency in UI layer
     const { loadKeybindings, writeDefaultConfig, DEFAULT_BINDINGS, ACTION_DESCRIPTIONS, ALL_KEY_ACTIONS } =
-      require('../ui/keybindings.js') as typeof import('../../ui/keybindings.js')
+      require('../../ui/keybindings.js') as typeof import('../../ui/keybindings.js')
 
     if (trimmed === 'reset' || trimmed === 'default') {
       const path = writeDefaultConfig(ctx.cwd)
@@ -340,7 +340,7 @@ registerCommand({
     const parts = args.trim().split(/\s+/)
     const subcommand = parts[0] ?? 'list'
     const { loadWorkflows, loadWorkflow, executeWorkflow, writeSampleWorkflow } =
-      require('../core/workflow.js') as typeof import('../../core/workflow.js')
+      require('../../core/workflow.js') as typeof import('../../core/workflow.js')
 
     if (subcommand === 'list' || subcommand === '' || !subcommand) {
       const workflows = loadWorkflows(ctx.cwd)
@@ -424,7 +424,7 @@ registerCommand({
   description: 'List known LLM providers and their static model metadata. Usage: /providers [provider]',
   handler: (args) => {
     const { MODELS, PROVIDERS, listProviders, detectProviderFromModel, getModelInfo } =
-      require('../core/providers.js') as typeof import('../../core/providers.js')
+      require('../../core/providers.js') as typeof import('../../core/providers.js')
 
     const trimmed = args.trim().toLowerCase()
 
@@ -491,7 +491,7 @@ registerCommand({
     }
 
     const { extractSkill, saveSkill, skillExists } =
-      require('../skills/extractor.js') as typeof import('../../skills/extractor.js')
+      require('../../skills/extractor.js') as typeof import('../../skills/extractor.js')
 
     if (skillExists(ctx.cwd, name)) {
       return text(`⚠ Skill "${name}" already exists. Use a different name or delete the file first.`)
@@ -562,10 +562,10 @@ registerCommand({
     const subcommand = parts[0] ?? 'list'
     const {
       loadPlugins, formatPluginList, enablePlugin, disablePlugin, createPluginScaffold,
-    } = require('../core/plugins.js') as typeof import('../../core/plugins.js')
+    } = require('../../core/plugins.js') as typeof import('../../core/plugins.js')
 
     // v0.3.3: register built-in plugins so /plugins shows them.
-    const { initBuiltinPlugins } = require('../core/builtinPlugins.js') as typeof import('../../core/builtinPlugins.js')
+    const { initBuiltinPlugins } = require('../../core/builtinPlugins.js') as typeof import('../../core/builtinPlugins.js')
     initBuiltinPlugins()
 
     if (subcommand === 'list' || subcommand === '' || !subcommand) {
@@ -613,7 +613,7 @@ registerCommand({
   handler: (_args, ctx) => {
     const {
       generateSuggestions, enrichContext, formatSuggestionList,
-    } = require('../core/suggestions.js') as typeof import('../../core/suggestions.js')
+    } = require('../../core/suggestions.js') as typeof import('../../core/suggestions.js')
 
     const enriched = enrichContext({
       conversationLength: ctx.history.length,
