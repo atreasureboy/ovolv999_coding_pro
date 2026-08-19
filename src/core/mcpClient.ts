@@ -66,6 +66,38 @@ export interface McpPromptInfo {
   arguments?: Array<{ name: string; description?: string; required?: boolean }>
 }
 
+/**
+ * MCP sampling — server-initiated completion requests (sampling/createMessage).
+ * The subset of the spec this client routes; the host supplies the actual
+ * model call via McpSamplingHandler (wired by McpModule to the engine's
+ * active transport).
+ */
+export interface McpSamplingRequest {
+  messages?: Array<{ role: string; content: unknown }>
+  maxTokens?: number
+  temperature?: number
+  stopSequences?: string[]
+  modelPreferences?: { hints?: Array<{ name?: string }>; costPriority?: number; speedPriority?: number }
+}
+
+export interface McpSamplingResult {
+  role: 'user' | 'assistant'
+  content: { type: 'text'; text: string }
+  model: string
+  stopReason?: string
+}
+
+export type McpSamplingHandler = (params: McpSamplingRequest) => Promise<McpSamplingResult>
+
+export interface McpStdioClientOptions {
+  /**
+   * Called when the server issues sampling/createMessage. When absent,
+   * sampling requests are rejected with a protocol error — honest refusal
+   * beats a silent hang on the server side.
+   */
+  samplingHandler?: McpSamplingHandler
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
@@ -87,7 +119,10 @@ export class McpStdioClient {
   private closed = false
   private closePromise: Promise<void> | null = null
 
-  constructor(private readonly server: McpServerConfig) {}
+  constructor(
+    private readonly server: McpServerConfig,
+    private readonly opts: McpStdioClientOptions = {},
+  ) {}
 
   /** Spawn the server and run the MCP initialize handshake. */
   async connect(): Promise<void> {
@@ -322,6 +357,12 @@ export class McpStdioClient {
       // Not valid JSON — ignore (some servers emit human logs on stdout by mistake)
       return
     }
+    // Server-initiated REQUEST (has id + method) — e.g. sampling/createMessage,
+    // ping, roots/list. Must be answered or the server blocks forever.
+    if (msg.id !== undefined && typeof msg.method === 'string') {
+      void this.handleServerRequest(msg)
+      return
+    }
     // Response to a request we sent
     if (typeof msg.id === 'number') {
       const pending = this.pending.get(msg.id)
@@ -337,7 +378,54 @@ export class McpStdioClient {
         pending.resolve(msg.result)
       }
     }
-    // Notifications / server-initiated messages: ignored in v1.
+    // Notifications without id: ignored in v1.
+  }
+
+  /**
+   * Round 36 (MCP sampling): answer server→client requests. Sampling goes
+   * to the wired handler; ping/roots get trivial honest answers; anything
+   * else gets MethodNotFound so servers degrade instead of hanging. Every
+   * path replies — a silent non-response stalls the remote side.
+   */
+  private async handleServerRequest(msg: Record<string, unknown>): Promise<void> {
+    const id = msg.id as number | string
+    const method = msg.method as string
+    const reply = (result?: unknown, error?: { code: number; message: string }): void => {
+      try {
+        this.send(error !== undefined
+          ? { jsonrpc: '2.0', id, error }
+          : { jsonrpc: '2.0', id, result: result ?? {} })
+      } catch {
+        /* transport gone — nothing else to do */
+      }
+    }
+    try {
+      switch (method) {
+        case 'ping':
+          reply({})
+          return
+        case 'roots/list':
+          reply({ roots: [] })
+          return
+        case 'sampling/createMessage': {
+          const handler = this.opts.samplingHandler
+          if (!handler) {
+            reply(undefined, { code: -32601, message: 'sampling is not supported by this client' })
+            return
+          }
+          const result = await handler((msg.params ?? {}))
+          reply(result)
+          return
+        }
+        default:
+          reply(undefined, { code: -32601, message: `method not supported: ${method}` })
+      }
+    } catch (err) {
+      reply(undefined, {
+        code: -32603,
+        message: `sampling failed: ${(err as Error).message}`,
+      })
+    }
   }
 
   private send(message: object): void {

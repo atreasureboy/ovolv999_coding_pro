@@ -33,7 +33,8 @@ import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/type
 import type { ResourceClaim } from '../core/executionRun.js'
 import { wrapCommand as sandboxWrap } from '../core/sandbox.js'
 import { BASH_DESCRIPTION } from '../prompts/tools.js'
-import { mkdirSync, accessSync, constants } from 'fs'
+import { mkdirSync, accessSync, constants, createWriteStream } from 'fs'
+import type { WriteStream } from 'fs'
 import { join } from 'path'
 import { beforeBashScan, trackBashMutation } from '../core/bashMutation.js'
 import { withGitMutex } from '../core/gitMutex.js'
@@ -626,6 +627,45 @@ export class BashTool implements Tool {
       }
       const TRUNCATION_MARKER_TEMPLATE = (n: number, b: number) =>
         `\n\n[... ${n.toLocaleString()} bytes of live output dropped from the middle (kept ${b.toLocaleString()} bytes at head + ${b.toLocaleString()} bytes at tail) ...]\n`
+
+      // ── Overflow file (Round 36, opencode's overflow-file pattern) ──
+      // Once output spills past the head+tail buffer, the dropped bytes
+      // are no longer lost: from the first dropped chunk onward, the FULL
+      // stream is appended to <sessionDir>/bash-output/<ts>_<pid>_<stream>.log
+      // and the truncation marker points the model at the file (it can
+      // Read it with offset/limit). Created lazily — short commands never
+      // touch the disk. Best-effort: logging failures never affect the run.
+      interface FullLogger {
+        record: (chunk: string) => void
+        close: () => void
+        path: () => string | null
+      }
+      const makeFullLogger = (streamName: 'stdout' | 'stderr'): FullLogger => {
+        const dir = context.sessionDir ? join(context.sessionDir, 'bash-output') : null
+        let ws: WriteStream | null = null
+        let p: string | null = null
+        return {
+          record(chunk: string) {
+            if (!dir) return
+            try {
+              if (!ws) {
+                mkdirSync(dir, { recursive: true })
+                p = join(dir, `${Date.now()}_${process.pid}_${streamName}.log`)
+                ws = createWriteStream(p, { flags: 'a' })
+                ws.on('error', () => { /* best-effort logging */ })
+              }
+              ws.write(chunk)
+            } catch { /* best-effort */ }
+          },
+          close() {
+            try { ws?.end() } catch { /* best-effort */ }
+            ws = null
+          },
+          path: () => p,
+        }
+      }
+      const stdoutLog = makeFullLogger('stdout')
+      const stderrLog = makeFullLogger('stderr')
       /**
        * Append a chunk to a head+tail buffer.
        *
@@ -676,20 +716,40 @@ export class BashTool implements Tool {
           state.droppedBytes += trim
         }
       }
-      /** Render a state to its final UTF-8 string, with marker if any. */
-      const renderState = (state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number }): string => {
+      /** Render a state to its final UTF-8 string, with marker if any.
+       *  The overflow logger (when supplied) is closed here and — if it
+       *  captured anything — its path is woven into the truncation marker. */
+      const renderState = (
+        state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number },
+        logger?: FullLogger,
+      ): string => {
+        logger?.close()
         if (state.droppedBytes > 0) {
-          return state.head.toString('utf8') + TRUNCATION_MARKER_TEMPLATE(state.droppedBytes, LIVE_BUFFER_BYTES) + state.tail.toString('utf8')
+          const overflow = logger?.path()
+          const pointer = overflow
+            ? `\n[Full output recorded in: ${overflow} — use Read (offset/limit) for the dropped portion.]\n`
+            : ''
+          return state.head.toString('utf8') + TRUNCATION_MARKER_TEMPLATE(state.droppedBytes, LIVE_BUFFER_BYTES) + pointer + state.tail.toString('utf8')
         }
         return (state.head.toString('utf8') + state.tail.toString('utf8'))
       }
       child.stdout?.setEncoding('utf8')
       child.stderr?.setEncoding('utf8')
       child.stdout?.on('data', (d: string) => {
+        const droppedBefore = stdoutState.droppedBytes
         appendHeadTail(stdoutState, d)
+        // Once the stream overflows the buffer, capture everything from
+        // here on in the overflow file.
+        if (stdoutState.droppedBytes > 0 || droppedBefore > 0) {
+          stdoutLog.record(d)
+        }
       })
       child.stderr?.on('data', (d: string) => {
+        const droppedBefore = stderrState.droppedBytes
         appendHeadTail(stderrState, d)
+        if (stderrState.droppedBytes > 0 || droppedBefore > 0) {
+          stderrLog.record(d)
+        }
       })
 
       // ── Cleanup helpers ──────────────────────────────────────
@@ -699,6 +759,11 @@ export class BashTool implements Tool {
       const settle = (result: ToolResult) => {
         if (settled) return
         settled = true
+        // Belt-and-braces: render paths already close the overflow logs;
+        // completion paths that skip rendering (spawn error) still must
+        // not leak the write streams.
+        stdoutLog.close()
+        stderrLog.close()
         if (abortListener && context.signal) {
           context.signal.removeEventListener('abort', abortListener)
           abortListener = null
@@ -772,7 +837,7 @@ export class BashTool implements Tool {
         // the timeout scheduled. child.on('close') clears it again
         // (idempotent: clearTimeout(null) is a no-op).
         clearTimeoutTimer()
-        const partialOut = [renderState(stdoutState), renderState(stderrState)].filter(Boolean).join('\n').trimEnd()
+        const partialOut = [renderState(stdoutState, stdoutLog), renderState(stderrState, stderrLog)].filter(Boolean).join('\n').trimEnd()
         const partial = partialOut ? `\n\nPartial output before cancellation:\n${truncateOutput(partialOut, 5000)}` : ''
         settle({
           content: `Command cancelled (abort signal).${partial}\n\nHint: re-run with a smaller scope, or use run_in_background:true for long commands.`,
@@ -805,8 +870,8 @@ export class BashTool implements Tool {
         // truncation marker (with dropped byte count) when the
         // middle was dropped. Early output AND the final error at
         // the tail are both preserved.
-        const stdoutOut = renderState(stdoutState)
-        const stderrOut = renderState(stderrState)
+        const stdoutOut = renderState(stdoutState, stdoutLog)
+        const stderrOut = renderState(stderrState, stderrLog)
         const partialOut = [stdoutOut, stderrOut].filter(Boolean).join('\n').trimEnd()
         const prefix = followMode ? `[Spectator mode: output streamed to tmux pane] ${followModeHint}\n` : ''
 

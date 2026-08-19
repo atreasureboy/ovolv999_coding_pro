@@ -18,9 +18,18 @@
  * the connections between user prompts and break subsequent tool calls.
  */
 
+import OpenAI from 'openai'
 import type { AgentModule, ModuleBootContext, ModuleBootResult } from '../core/module.js'
 import type { Tool, ToolContext } from '../core/types.js'
-import { McpStdioClient, type McpServerConfig, type McpResourceInfo, type McpResourceContent, type McpPromptInfo } from '../core/mcpClient.js'
+import {
+  McpStdioClient,
+  type McpServerConfig,
+  type McpResourceInfo,
+  type McpResourceContent,
+  type McpPromptInfo,
+  type McpSamplingRequest,
+  type McpSamplingResult,
+} from '../core/mcpClient.js'
 import { McpHttpClient } from '../core/mcpHttpClient.js'
 import { McpToolAdapter } from '../tools/mcpToolAdapter.js'
 
@@ -71,10 +80,16 @@ export class McpModule implements AgentModule {
     const servers = ctx.config.mcp?.servers ?? []
     if (servers.length === 0) return {}
 
+    // MCP sampling (server→client completions) runs on the engine's active
+    // transport. Built once per boot — every stdio server shares it. The
+    // engine's /model + cross-provider switches are NOT tracked here (the
+    // client is a boot snapshot); sampling is a best-effort convenience.
+    const samplingHandler = this.buildSamplingHandler(ctx)
+
     const tools: Tool[] = []
     for (const server of servers) {
       try {
-        const client = this.createClient(server)
+        const client = this.createClient(server, samplingHandler)
         await client.connect()
         const toolInfos = await client.listTools()
         this.clients.push(client)
@@ -105,11 +120,58 @@ export class McpModule implements AgentModule {
       : {}
   }
 
-  private createClient(server: McpServerConfig): McpClient {
+  private createClient(server: McpServerConfig, samplingHandler?: (params: McpSamplingRequest) => Promise<McpSamplingResult>): McpClient {
     if (server.type === 'http') {
       return new McpHttpClient(server)
     }
-    return new McpStdioClient(server)
+    return new McpStdioClient(server, samplingHandler ? { samplingHandler } : {})
+  }
+
+  /**
+   * Build the sampling callback from the engine boot config. Maps MCP
+   * message content (string or content-block array) onto chat-completion
+   * text, honours maxTokens/temperature when provided, and answers in the
+   * MCP content shape. Errors propagate to handleServerRequest, which turns
+   * them into a JSON-RPC error response for the server.
+   */
+  private buildSamplingHandler(ctx: ModuleBootContext): ((params: McpSamplingRequest) => Promise<McpSamplingResult>) | undefined {
+    const { apiKey, baseURL, model } = ctx.config
+    if (!apiKey) return undefined
+    const client = new OpenAI({ apiKey, baseURL, maxRetries: 2, timeout: 120_000 })
+
+    return async (params: McpSamplingRequest): Promise<McpSamplingResult> => {
+      const messages = (params.messages ?? [])
+        .map((m) => {
+          const role = m.role === 'assistant' ? 'assistant' : 'user'
+          const text = typeof m.content === 'string'
+            ? m.content
+            : Array.isArray(m.content)
+              ? (m.content as Array<{ type?: string; text?: string }>)
+                  .map((part) => (typeof part.text === 'string' ? part.text : ''))
+                  .filter(Boolean)
+                  .join('\n')
+              : ''
+          return { role, content: text } as const
+        })
+        .filter((m) => m.content.length > 0)
+      if (messages.length === 0) {
+        throw new Error('sampling request carried no usable messages')
+      }
+      const hinted = params.modelPreferences?.hints?.[0]?.name
+      const completion = await client.chat.completions.create({
+        model: (typeof hinted === 'string' && hinted.trim()) || model,
+        messages,
+        max_tokens: typeof params.maxTokens === 'number' && params.maxTokens > 0 ? params.maxTokens : 1024,
+        ...(typeof params.temperature === 'number' ? { temperature: params.temperature } : {}),
+      })
+      const text = completion.choices[0]?.message?.content ?? ''
+      return {
+        role: 'assistant',
+        content: { type: 'text', text },
+        model: completion.model ?? model,
+        stopReason: completion.choices[0]?.finish_reason ?? 'stop',
+      }
+    }
   }
 
   /**
