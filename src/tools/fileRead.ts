@@ -4,8 +4,8 @@
  */
 
 import { readFile, stat } from 'fs/promises'
-import { readdirSync } from 'fs'
-import { isAbsolute, resolve, dirname, basename, join } from 'path'
+import { readdirSync, openSync, readSync, closeSync } from 'fs'
+import { isAbsolute, resolve, dirname, basename, join, extname } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { containsNullByte } from '../core/pathSecurity.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -20,6 +20,47 @@ export interface ReadFileInput {
 
 const MAX_LINES_DEFAULT = 2000
 const MAX_FILE_SIZE_BYTES = 25_000_000 // 25MB — refuse larger, point to offset/limit
+/**
+ * Round 37 (opencode read hardening): one 100KB minified line would
+ * otherwise flow verbatim into the context window. Lines beyond this many
+ * characters are truncated with a marker; the full file stays reachable
+ * via Bash.
+ */
+const MAX_LINE_CHARS = 2000
+/** Sample size for the pre-read binary sniff (bytes). */
+const BINARY_SNIFF_BYTES = 1024
+
+/** Extensions that are binary by definition — skip the sniff entirely. */
+const BINARY_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp', '.tiff',
+  '.pdf', '.zip', '.gz', '.tgz', '.tar', '.7z', '.rar', '.bz2', '.xz',
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.o', '.a', '.class', '.jar',
+  '.pyc', '.pyo', '.wasm', '.mp3', '.mp4', '.mov', '.avi', '.webm',
+  '.ogg', '.flac', '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  '.sqlite', '.db', '.pack', '.idx',
+])
+
+/**
+ * Sniff the first BINARY_SNIFF_BYTES of a file for NUL bytes without
+ * loading the whole thing — a 25MB binary previously rode readFile into
+ * memory before the in-content check could reject it. Best-effort: any
+ * I/O failure falls through to the normal read path.
+ */
+function sniffBinary(filePath: string): boolean | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(filePath, 'r')
+    const buf = Buffer.alloc(BINARY_SNIFF_BYTES)
+    const n = readSync(fd, buf, 0, BINARY_SNIFF_BYTES, 0)
+    return buf.subarray(0, Math.max(0, n)).includes(0)
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* best-effort */ }
+    }
+  }
+}
 
 /**
  * Levenshtein distance (classic DP, bounded early-exit). Used only for
@@ -160,6 +201,19 @@ export class FileReadTool implements Tool {
         }
       }
 
+      // Round 37: binary rejection BEFORE lifting content into memory —
+      // extension fast path, then a 1KB magic-byte sniff. The in-content
+      // NUL check below stays as the safety net.
+      const binaryNotice = `File: ${file_path}\n(Binary file — not displayed. Use Bash to process: \`xxd\`, \`file\`, or \`strings\`)`
+      if (BINARY_EXTENSIONS.has(extname(file_path).toLowerCase())) {
+        markFileRead(file_path)
+        return { content: binaryNotice, isError: false }
+      }
+      if (sniffBinary(file_path) === true) {
+        markFileRead(file_path)
+        return { content: binaryNotice, isError: false }
+      }
+
       const raw = await readFile(file_path, 'utf8')
 
       // Binary file detection — check for null bytes in first 8000 chars.
@@ -194,7 +248,12 @@ export class FileReadTool implements Tool {
 
       const slice = lines.slice(startLine - 1, endLine)
       const numbered = slice
-        .map((line, i) => `${startLine + i}\t${line}`)
+        .map((line, i) => {
+          const shown = line.length > MAX_LINE_CHARS
+            ? `${line.slice(0, MAX_LINE_CHARS)} … [line truncated — ${line.length.toLocaleString()} chars total]`
+            : line
+          return `${startLine + i}\t${shown}`
+        })
         .join('\n')
 
       const header =
