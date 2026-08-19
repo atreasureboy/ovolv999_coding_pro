@@ -33,8 +33,8 @@ describe('relative require() paths in src/', () => {
     for (const file of walk(SRC_ROOT)) {
       const src = readFileSync(file, 'utf8')
       for (const m of src.matchAll(/require\((['"])((?:\.\.?\/)[^'"]+)\1\)/g)) {
-        const rel = m[2] as string
-        if (rel.endsWith('package.json')) continue
+        const rel = m[2]
+        if (!rel || rel.endsWith('package.json')) continue
         const base = resolve(dirname(file), rel)
         const candidates = [
           base,

@@ -4,7 +4,8 @@
  */
 
 import { readFile, stat } from 'fs/promises'
-import { isAbsolute, resolve } from 'path'
+import { readdirSync } from 'fs'
+import { isAbsolute, resolve, dirname, basename, join } from 'path'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import { containsNullByte } from '../core/pathSecurity.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -19,6 +20,63 @@ export interface ReadFileInput {
 
 const MAX_LINES_DEFAULT = 2000
 const MAX_FILE_SIZE_BYTES = 25_000_000 // 25MB — refuse larger, point to offset/limit
+
+/**
+ * Levenshtein distance (classic DP, bounded early-exit). Used only for
+ * the ENOENT "did you mean" hint, so paths stay short and the O(n*m)
+ * cost is trivial.
+ */
+function levenshtein(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const curr: number[] = [i]
+    let rowMin = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      const v = Math.min(prev[j] + 1, curr[j - 1] + 1, (prev[j - 1] ?? 0) + cost)
+      curr.push(v)
+      if (v < rowMin) rowMin = v
+    }
+    if (rowMin > cap) return cap + 1
+    prev = curr
+  }
+  return prev[b.length] ?? cap + 1
+}
+
+/**
+ * Suggest a sibling of `target` from its parent directory when the names
+ * are close (typo tolerance, opencode's "Did you mean" pattern). Returns
+ * an absolute path, or undefined when the parent is unreadable, empty, or
+ * nothing is similar enough — a wrong guess is worse than no guess.
+ */
+function suggestSimilarPath(target: string): string | undefined {
+  try {
+    const parent = dirname(target)
+    const wanted = basename(target)
+    if (!wanted) return undefined
+    let entries: string[]
+    try {
+      entries = readdirSync(parent)
+    } catch {
+      return undefined
+    }
+    const cap = Math.max(1, Math.min(3, Math.floor(wanted.length / 3)))
+    let best: string | undefined
+    let bestDist = cap + 1
+    for (const entry of entries.slice(0, 1000)) {
+      if (entry === wanted) return undefined // exists but unreadable → not a typo
+      const d = levenshtein(wanted.toLowerCase(), entry.toLowerCase(), cap)
+      if (d < bestDist) {
+        bestDist = d
+        best = entry
+      }
+    }
+    return best ? join(parent, best) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export class FileReadTool implements Tool {
   name = 'Read'
@@ -150,7 +208,9 @@ export class FileReadTool implements Tool {
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException
       if (error.code === 'ENOENT') {
-        return { content: `File not found: ${file_path}. Use Glob with a broad pattern (e.g. "**/<basename>") to locate the correct path.`, isError: true }
+        const hint = suggestSimilarPath(file_path)
+        const didYouMean = hint ? ` Did you mean: ${hint}?` : ''
+        return { content: `File not found: ${file_path}.${didYouMean} Use Glob with a broad pattern (e.g. "**/<basename>") to locate the correct path.`, isError: true }
       }
       if (error.code === 'EACCES') {
         return { content: `Permission denied: ${file_path}. Hint: check file permissions with Bash 'ls -la ${file_path}'.`, isError: true }
