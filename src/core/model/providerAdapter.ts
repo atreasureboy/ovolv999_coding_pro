@@ -26,6 +26,12 @@ import type OpenAI from 'openai'
 import type { ToolDefinition } from '../types.js'
 import type { ProviderId } from '../providers.js'
 import { AnthropicAdapter } from './anthropicAdapter.js'
+import {
+  buildReasoningParams,
+  normalizeHistoryForRequest,
+  extractReasoningDelta,
+  type ReasoningRequestOptions,
+} from './reasoningTransform.js'
 
 export type { ProviderId }
 
@@ -41,6 +47,18 @@ export interface ProviderStreamRequest {
   temperature?: number
   maxOutputTokens: number
   signal: AbortSignal
+  /**
+   * Round 42 (reasoning translation layer): normalized reasoning options.
+   * The adapter translates them into provider-specific body keys via
+   * buildReasoningParams — unknown flavors add NOTHING (a stray key is a
+   * 400 on most backends).
+   */
+  reasoning?: ReasoningRequestOptions
+  /**
+   * Provider id for flavor detection (falls back to the adapter's own
+   * providerId when absent).
+   */
+  provider?: string
 }
 
 export interface ProviderAdapter {
@@ -106,18 +124,23 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   async stream(
     req: ProviderStreamRequest,
   ): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>> {
-    const { model, systemPrompt, messages, tools, temperature, maxOutputTokens, signal } = req
+    const { model, systemPrompt, messages, tools, temperature, maxOutputTokens, signal, reasoning } = req
     const baseBody = {
       model,
       messages: [
         { role: 'system' as const, content: systemPrompt },
-        ...messages,
+        // Round 42: history reasoning normalization (strip for most
+        // flavors, replay as reasoning_content for DeepSeek R1).
+        ...normalizeHistoryForRequest(this.providerId, model, messages as unknown as Array<Record<string, unknown>>) as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
       ],
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? ('auto' as const) : undefined,
       temperature: temperature ?? 0,
       max_tokens: maxOutputTokens,
       stream: true as const,
+      // Round 42: provider-specific reasoning keys — spread only when the
+      // flavor is recognized (unknown models get nothing).
+      ...buildReasoningParams(this.providerId, model, reasoning),
     }
 
     // Fast path: include usage streaming if the latch is on.
@@ -141,6 +164,41 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
     return this.client.chat.completions.create(baseBody, { signal })
   }
+}
+
+/**
+ * Wrap a raw chunk stream so reasoning deltas are normalized into
+ * `delta.reasoning_content` regardless of which vendor field carried
+ * them. Synchronous wrapper (returns the generator directly) so callers
+ * can treat it as a drop-in stream — no extra await in the pipeline.
+ */
+export function withReasoningNormalization(
+  stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>,
+): AsyncIterable<OpenAI.Chat.ChatCompletionChunk> {
+  async function* normalized(): AsyncIterable<OpenAI.Chat.ChatCompletionChunk> {
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta as Record<string, unknown> | undefined
+      const reasoning = extractReasoningDelta(delta)
+      if (reasoning !== undefined) {
+        // Emit a normalized copy; strip the vendor field so downstream
+        // sees exactly one reasoning carrier.
+        const choices = chunk.choices?.map((c) => ({
+          ...c,
+          delta: {
+            ...((c.delta ?? {}) as Record<string, unknown>),
+            reasoning_content: reasoning,
+            reasoning: undefined,
+            thinking: undefined,
+            reasoning_details: undefined,
+          },
+        }))
+        yield { ...chunk, choices } as unknown as OpenAI.Chat.ChatCompletionChunk
+        continue
+      }
+      yield chunk
+    }
+  }
+  return normalized()
 }
 
 /**

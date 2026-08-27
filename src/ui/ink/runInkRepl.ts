@@ -23,7 +23,7 @@ import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/i
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
 import { wireModelBridge } from './modelBridge.js'
-import { formatSessionLoadDiagnostic, saveSession, summarizeOutcome } from '../../core/sessionManager.js'
+import { formatSessionLoadDiagnostic, saveSession, saveSessionIncremental, summarizeOutcome } from '../../core/sessionManager.js'
 import { warnOnce } from '../../utils/warnOnce.js'
 
 export interface InkReplOptions {
@@ -141,7 +141,8 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       // so the envelope carries the persisted verdict (v0.4.1 WS7).
       if (currentSessionDir && history.length > 0) {
         try {
-          saveSession(currentSessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
+          // Round 42: incremental per-turn save (append-only ledger).
+          saveSessionIncremental(currentSessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
         } catch (err: unknown) {
           store.addWarn(`Session save warning: ${(err as Error).message}`)
         }
@@ -325,7 +326,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
       // must learn their work did not persist).
       if (currentSessionDir && history.length > 0) {
         try {
-          saveSession(currentSessionDir, history, lastOutcome ? summarizeOutcome(lastOutcome) : undefined)
+          saveSessionIncremental(currentSessionDir, history, lastOutcome ? summarizeOutcome(lastOutcome) : undefined)
         } catch (err: unknown) {
           warnOnce('session:save:inkRepl', `Failed to persist session: ${(err as Error).message}`)
         }

@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
+import { appendDelta, hasPartsLedger, readParts } from './sessionParts.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import { warnOnce } from '../utils/warnOnce.js'
 
@@ -669,6 +670,14 @@ export function saveSession(
     tmpFd = null
     if (existsSync(historyPath)) copyFileSync(historyPath, `${historyPath}.bak`)
     renameSync(tmpPath, historyPath)
+    // Round 42 (part store): mirror the save into the append-only ledger.
+    // The envelope write above remains the durability floor (atomic,
+    // fsync'd); the ledger turns the NEXT save's common case into a
+    // small append via appendLedgerDelta (see saveSessionIncremental).
+    // Best-effort: a ledger failure never fails the session save.
+    try {
+      appendDelta(sessionDir, history, { ...(outcome ? { lastOutcome: outcome } : {}), ...(title ? { title } : {}) })
+    } catch { /* best-effort — envelope is authoritative */ }
   } catch (err) {
     // Best-effort: remove OUR orphan tmp file so we don't leak it on disk.
     // We only touch the path we just created — concurrent writers' tmps
@@ -706,6 +715,70 @@ export function loadSession(sessionDir: string): OpenAIMessage[] {
 }
 
 /**
+ * Round 42 (part store): INCREMENTAL save for the per-turn hot path.
+ *
+ * The classic saveSession rewrites the whole envelope every turn — O(n)
+ * file bytes per turn on long sessions. This variant appends only the
+ * NEW messages to the parts ledger (append-only JSONL) plus a meta
+ * upsert, skipping the envelope rewrite entirely when:
+ *   - the ledger exists AND its message prefix matches the live history.
+ * On any divergence (compaction rewrote memory, first save, torn state)
+ * it falls back to a full saveSession — correctness first; the append is
+ * an optimization, never the source of truth for recovery.
+ *
+ * Returns 'appended' | 'full' so callers can observe which path ran.
+ */
+export function saveSessionIncremental(
+  sessionDir: string,
+  history: OpenAIMessage[],
+  outcome?: OutcomeSummary,
+  title?: string,
+): 'appended' | 'full' {
+  assertNonEmpty(sessionDir, 'sessionDir')
+  // First save for a session dir MUST create history.json — /sessions and
+  // --resume discover sessions by its presence. No envelope → full path.
+  if (!existsSync(join(sessionDir, 'history.json'))) {
+    saveSession(sessionDir, history, outcome, title)
+    return 'full'
+  }
+  try {
+    const ledger = readParts(sessionDir)
+    const persisted = ledger.messages
+    let common = 0
+    const max = Math.min(persisted.length, history.length)
+    const eq = (a: OpenAIMessage, b: OpenAIMessage): boolean =>
+      JSON.stringify(a) === JSON.stringify(b)
+    while (common < max && eq(persisted[common], history[common])) {
+      common++
+    }
+    if (common !== persisted.length) {
+      // Ledger diverged from live history — full rewrite.
+      saveSession(sessionDir, history, outcome, title)
+      return 'full'
+    }
+    if (common === history.length) {
+      // No new messages; upsert meta only.
+      if (outcome !== undefined || title !== undefined) {
+        appendDelta(sessionDir, history, {
+          ...(outcome !== undefined ? { lastOutcome: outcome } : {}),
+          ...(title !== undefined ? { title } : {}),
+        })
+      }
+      return 'appended'
+    }
+    appendDelta(sessionDir, history, {
+      ...(outcome !== undefined ? { lastOutcome: outcome } : {}),
+      ...(title !== undefined ? { title } : {}),
+    })
+    return 'appended'
+  } catch {
+    // Anything unexpected — the full path is always safe.
+    saveSession(sessionDir, history, outcome, title)
+    return 'full'
+  }
+}
+
+/**
  * Load the FULL envelope (messages + persisted outcome truth) for a session
  * directory. Returns null when no history file exists. Error contract is
  * identical to loadSession: CorruptSessionError for unparseable content,
@@ -716,6 +789,25 @@ export function loadSession(sessionDir: string): OpenAIMessage[] {
 export function loadSessionEnvelope(sessionDir: string): SessionEnvelope | null {
   assertNonEmpty(sessionDir, 'sessionDir')
   const historyPath = join(sessionDir, 'history.json')
+
+  // Round 42 (part store): the append-only ledger is the freshest write
+  // stream — prefer it when present (it can be AHEAD of the envelope,
+  // which is only rewritten on the full path). Fall through to the
+  // envelope when absent or empty (older sessions never migrate eagerly;
+  // their first incremental save creates the ledger).
+  if (hasPartsLedger(sessionDir)) {
+    const ledger = readParts(sessionDir)
+    if (ledger.messages.length > 0 || ledger.meta.title !== undefined) {
+      return {
+        version: CURRENT_SESSION_VERSION,
+        schema: CURRENT_SESSION_SCHEMA,
+        updatedAt: ledger.meta.updatedAt ?? new Date().toISOString(),
+        messages: ledger.messages,
+        ...(ledger.meta.lastOutcome ? { lastOutcome: ledger.meta.lastOutcome } : {}),
+        ...(ledger.meta.title ? { title: ledger.meta.title } : {}),
+      }
+    }
+  }
 
   if (!existsSync(historyPath)) return null
 

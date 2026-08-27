@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -82,11 +82,27 @@ describe('session title persistence', () => {
   it('drops malformed titles on load instead of rejecting the session', () => {
     const dir = createSessionDir(cwd)
     saveSession(dir, HISTORY, undefined, 'good title')
-    // Corrupt the title field directly; the session must still load.
+    // Corrupt the title field in BOTH stores (Round 42: the parts ledger
+    // is the preferred read source when present).
     const path = join(dir, 'history.json')
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
     parsed.title = 42
     writeFileSync(path, JSON.stringify(parsed), 'utf8')
+    const ledgerPath = join(dir, 'parts.jsonl')
+    if (existsSync(ledgerPath)) {
+      const lines = readFileSync(ledgerPath, 'utf8').split('\n')
+        .map((l) => {
+          if (!l.includes('"kind":"meta"')) return l
+          try {
+            const rec = JSON.parse(l) as Record<string, unknown>
+            rec.title = 42
+            return JSON.stringify(rec)
+          } catch {
+            return l
+          }
+        })
+      writeFileSync(ledgerPath, lines.join('\n'), 'utf8')
+    }
     const env = loadSessionEnvelope(dir)
     expect(env?.messages).toHaveLength(2)
     expect(env?.title).toBeUndefined()

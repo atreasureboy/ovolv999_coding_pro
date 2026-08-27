@@ -45,6 +45,14 @@ export interface StreamResult {
      *  cache_creation_input_tokens; billed at a premium). */
     cacheWriteTokens?: number
   } | null
+  /**
+   * Round 42 (reasoning translation layer): reasoning text accumulated
+   * from reasoning_content / reasoning / thinking deltas. Attached to the
+   * assistant message as `reasoningContent`; replayed only for flavors
+   * that require it (DeepSeek R1), stripped otherwise — see
+   * normalizeHistoryForRequest.
+   */
+  reasoningText?: string
 }
 
 const STREAM_TIMEOUT_MS = 120_000
@@ -75,6 +83,8 @@ export class StreamConsumer {
     turnAbortController: AbortController | null,
   ): Promise<StreamResult> {
     let assistantText = ''
+    /** Round 42: normalized reasoning accumulated from the stream. */
+    let reasoningText = ''
     let finishReason: string | null = null
     let usage: StreamResult['usage'] = null
     const toolCallsMap = new Map<number, { index: number; id: string; name: string; arguments: string }>()
@@ -130,6 +140,7 @@ export class StreamConsumer {
           const thinkingContent = thinkingTagFilter.drainThinking()
           if (thinkingContent) {
             this.deps.renderer.streamReasoning?.(thinkingContent)
+            reasoningText += thinkingContent
           }
           if (visibleContent) {
             if (firstToken) {
@@ -140,6 +151,16 @@ export class StreamConsumer {
             this.deps.renderer.streamToken(visibleContent)
             assistantText += visibleContent
           }
+        }
+
+        // Round 42 (reasoning translation layer): vendor reasoning deltas
+        // arrive normalized as reasoning_content (withReasoningNormali­
+        // zation upstream). Render them as reasoning and accumulate for
+        // history replay (DeepSeek R1 requires it on the next request).
+        const reasoningDelta = (delta as Record<string, unknown>).reasoning_content
+        if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+          this.deps.renderer.streamReasoning?.(reasoningDelta)
+          reasoningText += reasoningDelta
         }
 
         if (delta.tool_calls) {
@@ -222,6 +243,6 @@ export class StreamConsumer {
       )
     }
 
-    return { assistantText, finishReason, rawToolCalls, usage }
+    return { assistantText, finishReason, rawToolCalls, usage, reasoningText: reasoningText || undefined }
   }
 }

@@ -22,6 +22,8 @@ import type { TokenUsage } from '../costTracker.js'
 import type { RendererInterface } from '../types.js'
 import { StreamConsumer, type StreamResult } from './streamConsumer.js'
 import type { ProviderAdapter, ProviderId } from './providerAdapter.js'
+import type { ReasoningRequestOptions } from './reasoningTransform.js'
+import { withReasoningNormalization } from './providerAdapter.js'
 import type { EventLog } from '../eventLog.js'
 
 export interface ModelGatewayDeps {
@@ -46,6 +48,12 @@ export interface ModelCallParams {
   abortSignal: AbortSignal
   /** The abort controller for watchdog-based force-abort on stream stall */
   turnAbortController: AbortController | null
+  /**
+   * Round 42: normalized reasoning options — translated into
+   * provider-specific body keys by the adapter (flavor-aware; unknown
+   * models add nothing). Optional: absent = provider defaults.
+   */
+  reasoning?: ReasoningRequestOptions
 }
 
 export interface ModelGatewayCallbacks {
@@ -154,11 +162,14 @@ export class ModelGateway {
       temperature,
       maxOutputTokens,
       signal: abortSignal,
+      // Round 42: normalized reasoning options — the adapter translates.
+      reasoning: params.reasoning,
+      provider: this.adapter.providerId,
     }
 
     let stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>
     try {
-      stream = await this.adapter.stream(streamReq)
+      stream = withReasoningNormalization(await this.adapter.stream(streamReq))
     } catch (caught: unknown) {
       this.renderer.stopSpinner()
       const err = caught instanceof Error ? caught : new Error(String(caught))

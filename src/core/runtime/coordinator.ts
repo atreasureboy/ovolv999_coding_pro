@@ -1092,7 +1092,7 @@ export class RuntimeCoordinator {
             // appended mid-call (engine.steer during streaming) before
             // they could ride the next request.
             controlMessageLog.clear()
-            const { assistantText, finishReason, rawToolCalls } =
+            const { assistantText, finishReason, rawToolCalls, reasoningText } =
               await this.callLLM(
                 effectivePrompt,
                 messages,
@@ -1127,6 +1127,9 @@ export class RuntimeCoordinator {
                       function: { name: tc.name, arguments: tc.arguments },
                     }))
                   : undefined,
+              // Round 42: keep reasoning with the message; request-body
+              // normalization strips/replays it per flavor.
+              ...(reasoningText ? { reasoningContent: reasoningText } : {}),
             }
             messages.push(assistantMsg)
             this.deps.contextManager.stampAssistantMessage()
@@ -1804,6 +1807,7 @@ export class RuntimeCoordinator {
     finishReason: string | null
     rawToolCalls: StreamingToolCall[]
     usage: TokenUsage | null
+    reasoningText?: string
   }> {
     let modelAtStart = this.deps.config.model
     let caughtErr: unknown = null
@@ -1931,6 +1935,8 @@ export class RuntimeCoordinator {
           ),
           abortSignal: turnAbortSignal,
           turnAbortController: this.deps.sharedState.currentTurnAbortController,
+          // Round 42: per-engine normalized reasoning options.
+          reasoning: this.deps.config.reasoning,
         },
         {
           onContextOverflow: async (msgs, signal) => {

@@ -23,6 +23,31 @@
 import { join } from 'path'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
+
+/**
+ * Round 42: parse reasoning options from the environment.
+ *   OVOGO_REASONING=off|minimal|low|medium|high
+ *   OVOGO_REASONING_BUDGET=<tokens>   (anthropic-style thinking budget)
+ * Invalid values are ignored (warn-once style) — never fatal.
+ */
+function parseReasoningEnv(): import('../core/model/reasoningTransform.js').ReasoningRequestOptions | undefined {
+  const effortRaw = process.env.OVOGO_REASONING?.trim().toLowerCase()
+  const budgetRaw = process.env.OVOGO_REASONING_BUDGET
+  if (!effortRaw && !budgetRaw) return undefined
+  const opts: import('../core/model/reasoningTransform.js').ReasoningRequestOptions = {}
+  if (effortRaw === 'off' || effortRaw === 'none' || effortRaw === 'disabled') {
+    opts.enabled = false
+  } else if (effortRaw === 'minimal' || effortRaw === 'low' || effortRaw === 'medium' || effortRaw === 'high') {
+    opts.effort = effortRaw
+  } else if (effortRaw) {
+    process.stderr.write(`[config] ignoring invalid OVOGO_REASONING="${effortRaw}" (off|minimal|low|medium|high)\n`)
+  }
+  if (budgetRaw) {
+    const n = parseInt(budgetRaw, 10)
+    if (Number.isFinite(n) && n > 0) opts.budgetTokens = n
+  }
+  return Object.keys(opts).length > 0 ? opts : undefined
+}
 import { createHash } from 'crypto'
 import { Writable } from 'stream'
 import { ExecutionEngine } from '../core/engine.js'
@@ -345,6 +370,9 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     temperature: projectConfig?.temperature
       ?? (process.env.OVOGO_TEMPERATURE ? parseFloat(process.env.OVOGO_TEMPERATURE) : undefined),
     maxOutputTokens: process.env.OVOGO_MAX_OUTPUT_TOKENS ? parseInt(process.env.OVOGO_MAX_OUTPUT_TOKENS, 10) : undefined,
+    // Round 42: normalized reasoning options from env (OVOGO_REASONING=
+    // off|minimal|low|medium|high, OVOGO_REASONING_BUDGET=<tokens>).
+    reasoning: parseReasoningEnv(),
     poor: projectConfig?.poor ?? settings.poor ?? (process.env.OVOGO_POOR === '1' ? { enabled: true } : undefined),
     mcp: settings.mcp,
     eventLog,

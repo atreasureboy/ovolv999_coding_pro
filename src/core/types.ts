@@ -127,6 +127,13 @@ export interface OpenAIMessage {
   tool_calls?: ToolCall[]
   tool_call_id?: string
   name?: string
+  /**
+   * Round 42 (reasoning translation): reasoning text captured from the
+   * stream. In-memory companion field — stripped before building
+   * provider request bodies (except DeepSeek R1 replay) and PERSISTED
+   * only through the part store's extension field so fork/resume keep it.
+   */
+  reasoningContent?: string
 }
 
 export interface ToolDefinition {
@@ -555,6 +562,12 @@ export interface EngineConfig {
   temperature?: number
   /** Max output tokens per LLM response (default: 8192) */
   maxOutputTokens?: number
+  /**
+   * Round 42 (reasoning translation): normalized reasoning options —
+   * translated per provider by the adapter layer (effort/budget/disable).
+   * Undefined = provider defaults.
+   */
+  reasoning?: import('./model/reasoningTransform.js').ReasoningRequestOptions
   /**
    * Continuation nudging — when the LLM stops (finish_reason=stop) but output
    * token budget remains, inject a "continue" nudge instead of completing.

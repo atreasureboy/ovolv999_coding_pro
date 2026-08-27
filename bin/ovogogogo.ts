@@ -84,6 +84,7 @@ import {
   loadSession,
   resolveSessionPath,
   saveSession,
+  saveSessionIncremental,
   summarizeOutcome,
   type OutcomeSummary,
 } from '../src/core/sessionManager.js'
@@ -884,7 +885,9 @@ async function runRepl(
   saveOnExit = (): void => {
     if (!currentSessionDir) return
     try {
-      saveSession(currentSessionDir, history, lastOutcomeSummary)
+      // Round 42: durable incremental save (append-only ledger + meta
+      // upsert); falls back to the full envelope rewrite when diverged.
+      saveSessionIncremental(currentSessionDir, history, lastOutcomeSummary)
     } catch (err: unknown) {
       renderer.warn(`Failed to persist session: ${(err as Error).message}`)
     }
@@ -1099,7 +1102,9 @@ async function runRepl(
         // envelope carries the persisted status (v0.4.1 WS7).
         if (sessionDir) {
           try {
-            saveSession(sessionDir, history, lastOutcomeSummary)
+            // Round 42: incremental per-turn save — appends only the new
+            // messages to the parts ledger instead of rewriting history.json.
+            saveSessionIncremental(sessionDir, history, lastOutcomeSummary)
             // Round 28 (conversation rewind): anchor this turn — /rewind
             // turn N can then restore BOTH the conversation prefix and
             // the file state as of this moment.
@@ -1199,7 +1204,7 @@ async function runRepl(
       // (v0.4.1 WS7).
       if (currentSessionDir) {
         try {
-          saveSession(currentSessionDir, history, lastOutcomeSummary)
+          saveSessionIncremental(currentSessionDir, history, lastOutcomeSummary)
         } catch (err: unknown) {
           warnOnce('session:save:repl', `Failed to persist session: ${(err as Error).message}`)
         }
@@ -1324,7 +1329,7 @@ async function runRepl(
         if (slashResult.type === 'exit') {
           if (currentSessionDir) {
             try {
-              saveSession(currentSessionDir, history, lastOutcomeSummary)
+              saveSessionIncremental(currentSessionDir, history, lastOutcomeSummary)
             } catch (err: unknown) {
               renderer.warn(`Failed to persist session on exit: ${(err as Error).message}`)
             }
