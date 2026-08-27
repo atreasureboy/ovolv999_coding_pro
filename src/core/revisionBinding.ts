@@ -180,6 +180,25 @@ interface UntrackedEntry {
 const UNTRACKED_HASH_LIMIT = 1_048_576 // 1 MiB
 
 /**
+ * Round 44c (fix: identity walk froze whole sessions): directories never
+ * worth hashing — heavy caches, dot-config jungles, build output. The
+ * pre-fix list missed .config/.npm/.claude/.local etc., so running the
+ * REPL from a home directory statSync'd + SHA-256'd hundreds of
+ * thousands of files SYNCHRONOUSLY on every turn start — the event loop
+ * starved and ESC/Ctrl+C appeared dead.
+ */
+const EXCLUDED_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache',
+  '.config', '.local', '.npm', '.cache', '.ovogo', '.ovolv999', '.claude',
+  '.opencode', '.codex', '.cursor', '.vscode', '.nuxt', '.next',
+  '__pycache__', '.venv', 'venv', '.mypy_cache', '.pytest_cache',
+  'target', 'build', 'out', '.turbo', '.svelte-kit', '.gradle', '.idea',
+])
+
+/** Hard cap on manifest entries — home-sized trees bail to a cheap hash. */
+const MANIFEST_MAX_ENTRIES = 5_000
+
+/**
  * v0.5.3 Closure (P6): walk the working directory's untracked
  * files. Excludes node_modules / .git / dist / coverage / session
  * / tmp. Hashes small files inline; large files use the size
@@ -189,7 +208,7 @@ function listUntracked(cwd: string): UntrackedEntry[] {
   const porcelain = execGit(cwd, 'status', '--porcelain', '--untracked-files=all')
   if (!porcelain.ok) return []
   const lines = porcelain.stdout.split('\n').filter((l) => l.length >= 3)
-  const EXCLUDES = new Set(['node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache'])
+  const EXCLUDES = EXCLUDED_DIRS
   const out: UntrackedEntry[] = []
   for (const line of lines) {
     // Porcelain v1:  XY <path> where `??` = untracked.
@@ -223,11 +242,19 @@ function listUntracked(cwd: string): UntrackedEntry[] {
  * hash changes.
  */
 function workspaceManifestHash(rootDir: string): string {
-  const EXCLUDES = new Set(['node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache'])
+  // Round 44c: shared exclude list (dot-dirs + caches) + entry cap.
+  const EXCLUDES = EXCLUDED_DIRS
   const entries: string[] = []
   try {
     walkForManifest(rootDir, rootDir, EXCLUDES, entries, '')
   } catch { /* ignore IO errors */ }
+  if (entries.length > MANIFEST_MAX_ENTRIES) {
+    // Huge workspace — content-hashing it synchronously would freeze the
+    // loop. Fall back to a stat-light identity: path + file count only.
+    const h = createHash('sha256')
+    h.update(`overflow:${entries.length}:${rootDir}`)
+    return h.digest('hex').slice(0, 16)
+  }
   const hash = createHash('sha256')
   for (const line of entries.sort()) {
     hash.update(line)
@@ -242,7 +269,12 @@ function walkForManifest(
   excludes: Set<string>,
   out: string[],
   rel: string,
+  depth: number = 0,
 ): void {
+  // Round 44c: bounded walk — depth and total-entry budgets so a
+  // pathological tree (or a forgotten EXCLUDES member) degrades to a
+  // partial manifest instead of starving the event loop.
+  if (depth > 12 || out.length > MANIFEST_MAX_ENTRIES) return
   let entries: string[]
   try {
     entries = readdirSync(dir)
@@ -250,13 +282,16 @@ function walkForManifest(
     return
   }
   for (const name of entries) {
-    if (excludes.has(name)) continue
+    if (out.length > MANIFEST_MAX_ENTRIES) return
+    // Hidden entries are never project sources — skipping them is both a
+    // perf fix and the semantically right identity boundary.
+    if (name.startsWith('.') || excludes.has(name)) continue
     const abs = join(dir, name)
     const childRel = rel ? `${rel}/${name}` : name
     let st
     try { st = statSync(abs) } catch { continue }
     if (st.isDirectory()) {
-      walkForManifest(rootDir, abs, excludes, out, childRel)
+      walkForManifest(rootDir, abs, excludes, out, childRel, depth + 1)
     } else if (st.isFile()) {
       let contentHash = 'skipped'
       if (st.size <= UNTRACKED_HASH_LIMIT) {
