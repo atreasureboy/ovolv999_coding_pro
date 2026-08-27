@@ -196,7 +196,36 @@ export class FileEditTool implements Tool {
         }
       }
 
+      // Exact match failed — Round 43 (opencode edit tolerance): models
+      // routinely emit ASCII quotes/dashes against source files using
+      // typographic ones (curly quotes, en/em dashes, NBSP). Before
+      // failing, retry the match under punctuation normalization; when
+      // unique, replace against the FILE's real bytes so its characters
+      // are preserved.
       const occurrences = countOccurrences(content, old_string)
+
+      if (occurrences === 0 && !replace_all) {
+        const normalizedContent = normalizeTypographic(content)
+        const normalizedOld = normalizeTypographic(old_string)
+        if (normalizedOld.length > 0) {
+          const normOccurrences = countOccurrences(normalizedContent, normalizedOld)
+          if (normOccurrences === 1) {
+            const idx = normalizedContent.indexOf(normalizedOld)
+            const realBlock = content.slice(idx, idx + old_string.length)
+            const spliced = content.slice(0, idx) + new_string + content.slice(idx + realBlock.length)
+            context.fileHistory?.trackEdit(file_path)
+            await atomicWrite(file_path, spliced)
+            markFileRead(file_path, spliced)
+            return {
+              content:
+                `Edit applied via typographic-character tolerance ` +
+                `(curly quotes/dashes in the file vs ASCII in your old_string).\n` +
+                `Prefer copying the exact characters from the file next time.`,
+              isError: false,
+            }
+          }
+        }
+      }
 
       if (occurrences === 0) {
         // Provide diagnostic info to help the LLM fix its edit
@@ -377,4 +406,18 @@ function findClosestMatch(content: string, target: string): string {
   }
 
   return `Hint: Use Read to view the current file content and ensure old_string matches exactly.`
+}
+
+/**
+ * Round 43: fold typographic variants to their ASCII counterparts so a
+ * model-authored ASCII old_string can match real-world source files that
+ * use curly quotes / en-em dashes / NBSP (prose, comments, strings).
+ * Mirrors opencode's edit tolerance and git apply's leniency.
+ */
+function normalizeTypographic(s: string): string {
+  return s
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u2013\u2014\u2015]/g, '-')
+    .replace(/[\u00A0\u2007\u202F\u2009\u200A\u3000]/g, ' ')
 }

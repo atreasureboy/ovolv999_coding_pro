@@ -224,7 +224,11 @@ export class FileReadTool implements Tool {
         return { content: binaryNotice, isError: false }
       }
 
-      const raw = await readFile(file_path, 'utf8')
+      const raw0 = await readFile(file_path, 'utf8')
+      // Round 43 (polish): strip a UTF-8 BOM — the model copies rendered
+      // lines verbatim into Edit's old_string; a hidden \uFEFF makes that
+      // exact match fail forever with no visible reason.
+      const raw = raw0.charCodeAt(0) === 0xFEFF ? raw0.slice(1) : raw0
 
       // Binary file detection — check for null bytes in first 8000 chars.
       // For binary files we still mark as read (so hasFileBeenRead works)

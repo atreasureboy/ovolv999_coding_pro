@@ -87,6 +87,8 @@ export class ContextManager {
   private lastAssistantTs: number | undefined = undefined
   private consecutiveCompactFailures = 0
   private suppressCompactWarning = false
+  /** Round 43: claim-once latches for repeatable reminders (per window). */
+  private latchedWarnings = new Set<string>()
   private resolvedContextWindow: number | null = null
   private pendingSnipCount: number | null = null
   /**
@@ -380,8 +382,17 @@ export class ContextManager {
       }
     }
 
-    if (this.deps.sessionDir && shouldWarn && !suppressWarning) {
+    // Round 43 (codex detail): the "context almost full" warning is
+    // claim-once per compaction window — nagging on EVERY turn above the
+    // threshold trains users to ignore it. The latch resets only after a
+    // successful compaction (the window advanced) or when usage drops
+    // back below the warn threshold.
+    const warningLatchKey = 'compact-warn'
+    if (pct < CONTEXT_WARN_PCT) this.latchedWarnings.delete(warningLatchKey)
+    const alreadyWarned = this.latchedWarnings.has(warningLatchKey)
+    if (this.deps.sessionDir && shouldWarn && !suppressWarning && !alreadyWarned) {
       this.deps.renderer.contextWarning(prev.estimatedInputTokens, prev.contextWindow, pct)
+      this.latchedWarnings.add(warningLatchKey)
     }
 
     if (shouldCompact && this.consecutiveCompactFailures < 3) {
@@ -420,6 +431,8 @@ export class ContextManager {
       if (compactResult.compacted) {
         messages.length = 0
         messages.push(...compactResult.messages)
+        // Window advanced — the next "almost full" deserves a fresh warn.
+        this.latchedWarnings.delete('compact-warn')
         this.deps.renderer.compactDone(
           compactResult.originalTokens,
           compactResult.summaryTokens,
@@ -551,6 +564,7 @@ export class ContextManager {
     if (compactResult.compacted) {
       messages.length = 0
       messages.push(...compactResult.messages)
+      this.latchedWarnings.delete('compact-warn')
       this.deps.renderer.compactDone(compactResult.originalTokens, compactResult.summaryTokens)
       return true
     }

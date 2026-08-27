@@ -179,34 +179,97 @@ function applyUpdateHunks(path: string, content: string, hunks: PatchHunk[]): st
         `surrounding context line so the hunk can be anchored.`,
       )
     }
-    const found = findSequence(fileLines, hunk.find, cursor)
-    if (found < 0) {
+    const found = findSequenceTolerant(fileLines, hunk.find, cursor)
+    if (found === null) {
       throw new Error(
         `Hunk ${h + 1} of ${path} does not match the file content. ` +
         `Re-read the file and regenerate the patch with exact context lines (whitespace matters).`,
       )
     }
-    fileLines.splice(found, hunk.find.length, ...hunk.replace)
-    cursor = found + hunk.replace.length
+    // Round 43: replace using the SAME tolerance level that found the
+    // match. Simple + obviously-correct reconstruction: keep the longest
+    // context prefix from the REAL file lines (preserving the file's
+    // exact bytes), then append the pattern's remaining replace lines
+    // verbatim. '-' lines were already excluded from `replace` at parse
+    // time, so the remaining replace tail is exactly what stays.
+    const { index: foundAt } = found
+    let commonPrefix = 0
+    while (
+      commonPrefix < hunk.replace.length
+      && hunk.replace[commonPrefix] === hunk.find[commonPrefix]
+    ) {
+      commonPrefix++
+    }
+    const realContext = fileLines.slice(foundAt, foundAt + commonPrefix)
+    const replacement = [...realContext, ...hunk.replace.slice(commonPrefix)]
+    fileLines.splice(foundAt, hunk.find.length, ...replacement)
+    cursor = foundAt + replacement.length
   }
   return fileLines.join('\n')
 }
 
-/** Find `needle` lines contiguously in `haystack` at or after `from`. */
-function findSequence(haystack: string[], needle: string[], from: number): number {
-  if (needle.length === 0) return -1
-  const last = haystack.length - needle.length
-  for (let i = Math.max(0, from); i <= last; i++) {
-    let ok = true
-    for (let j = 0; j < needle.length; j++) {
-      if (haystack[i + j] !== needle[j]) {
-        ok = false
-        break
+
+/**
+ * Round 43 (codex seek_sequence pattern): tolerance levels for hunk
+ * matching. Models routinely produce ASCII quotes/dashes against source
+ * files that use typographic ones (curly quotes, en/em dashes, NBSP) —
+ * an exact match then fails forever and the user hand-edits.
+ *
+ * Level 0 exact → 1 line-end trim → 2 both-ends trim → 3 Unicode
+ * punctuation normalization (curly quotes/dashes/space variants folded
+ * to ASCII on BOTH sides).
+ */
+type MatchLevel = 0 | 1 | 2 | 3
+
+const PUNCT_NORMALIZATION: Array<[RegExp, string]> = [
+  [/[\u2018\u2019\u201A\u201B\u2032]/g, "'"],
+  [/[\u201C\u201D\u201E\u201F\u2033]/g, '"'],
+  [/[\u2013\u2014\u2015]/g, '-'],
+  [/[\u00A0\u2007\u202F\u2009\u200A\u3000]/g, ' '],
+]
+
+function normalizePunct(line: string): string {
+  let out = line
+  for (const [re, replacement] of PUNCT_NORMALIZATION) out = out.replace(re, replacement)
+  return out
+}
+
+function linesEqualAtLevel(a: string, b: string, level: MatchLevel): boolean {
+  if (level === 0) return a === b
+  if (level === 1) return a.trimEnd() === b.trimEnd()
+  if (level === 2) return a.trim() === b.trim()
+  return normalizePunct(a.trim()) === normalizePunct(b.trim())
+}
+
+/**
+ * Contiguous sequence search with graded tolerance: try each level
+ * exhaustively before relaxing — the loosest level only ever applies to
+ * runs the strict levels could not find.
+ */
+function findSequenceTolerant(
+  haystack: string[],
+  needle: string[],
+  from: number,
+): { index: number; level: MatchLevel } | null {
+  for (const level of [0, 1, 2, 3] as MatchLevel[]) {
+    const idx = (() => {
+      if (needle.length === 0) return -1
+      const last = haystack.length - needle.length
+      for (let i = Math.max(0, from); i <= last; i++) {
+        let ok = true
+        for (let j = 0; j < needle.length; j++) {
+          if (!linesEqualAtLevel(haystack[i + j] ?? '', needle[j] ?? '', level)) {
+            ok = false
+            break
+          }
+        }
+        if (ok) return i
       }
-    }
-    if (ok) return i
+      return -1
+    })()
+    if (idx >= 0) return { index: idx, level }
   }
-  return -1
+  return null
 }
 
 const APPLY_PATCH_DESCRIPTION = `Apply a structured multi-file patch (codex apply_patch format).

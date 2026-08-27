@@ -54,6 +54,14 @@ const MAX_OUTPUT_LENGTH = 30_000
 // trailing "characters truncated" notice and any prefix. Going higher
 // would force downstream callers to slice off the head/tail marker.
 const LIVE_BUFFER_BYTES = 14 * 1024
+/**
+ * Round 43 (codex exec detail): stderr gets DOUBLE the live-buffer budget.
+ * Runaway commands flood stdout while the diagnostic value sits in the
+ * stderr tail; a symmetric cap regularly truncates away exactly the part
+ * the model needs. Emission is still capped downstream by the existing
+ * render paths — this only widens what we KEEP from the stderr stream.
+ */
+const LIVE_BUFFER_BYTES_STDERR = 28 * 1024
 const DEFAULT_TIMEOUT_MS = 1_800_000  // 30 min — long-running commands default
 const MAX_TIMEOUT_MS = 14_400_000    // 4 h — max for very long tasks
 const DEFAULT_SIGKILL_GRACE_MS = 5_000
@@ -693,12 +701,13 @@ export class BashTool implements Tool {
       const appendHeadTail = (
         state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number },
         chunk: string,
+        capacity: number = LIVE_BUFFER_BYTES,
       ): void => {
         const chunkBuf = Buffer.from(chunk, 'utf8')
         state.totalBytes += chunkBuf.length
         // Fill head first (verbatim early output).
-        if (state.head.length < LIVE_BUFFER_BYTES) {
-          const headRoom = LIVE_BUFFER_BYTES - state.head.length
+        if (state.head.length < capacity) {
+          const headRoom = capacity - state.head.length
           if (chunkBuf.length <= headRoom) {
             state.head = Buffer.concat([state.head, chunkBuf])
             return
@@ -706,12 +715,12 @@ export class BashTool implements Tool {
           // Chunk fills the head; remainder flows to tail logic below.
           state.head = Buffer.concat([state.head, chunkBuf.subarray(0, headRoom)])
           const remainder = chunkBuf.subarray(headRoom)
-          // Concatenate remainder onto tail, then trim to LIVE_BUFFER_BYTES.
+          // Concatenate remainder onto tail, then trim to capacity.
           const combined = Buffer.concat([state.tail, remainder])
-          if (combined.length <= LIVE_BUFFER_BYTES) {
+          if (combined.length <= capacity) {
             state.tail = combined
           } else {
-            const trim = combined.length - LIVE_BUFFER_BYTES
+            const trim = combined.length - capacity
             state.tail = combined.subarray(trim)
             state.droppedBytes += trim
           }
@@ -719,10 +728,10 @@ export class BashTool implements Tool {
         }
         // Head full — entire chunk goes to the sliding tail.
         const combined = Buffer.concat([state.tail, chunkBuf])
-        if (combined.length <= LIVE_BUFFER_BYTES) {
+        if (combined.length <= capacity) {
           state.tail = combined
         } else {
-          const trim = combined.length - LIVE_BUFFER_BYTES
+          const trim = combined.length - capacity
           state.tail = combined.subarray(trim)
           state.droppedBytes += trim
         }
@@ -733,6 +742,7 @@ export class BashTool implements Tool {
       const renderState = (
         state: { head: Buffer; tail: Buffer; droppedBytes: number; totalBytes: number },
         logger?: FullLogger,
+        capacity: number = LIVE_BUFFER_BYTES,
       ): string => {
         logger?.close()
         if (state.droppedBytes > 0) {
@@ -740,7 +750,7 @@ export class BashTool implements Tool {
           const pointer = overflow
             ? `\n[Full output recorded in: ${overflow} — use Read (offset/limit) for the dropped portion.]\n`
             : ''
-          return state.head.toString('utf8') + TRUNCATION_MARKER_TEMPLATE(state.droppedBytes, LIVE_BUFFER_BYTES) + pointer + state.tail.toString('utf8')
+          return state.head.toString('utf8') + TRUNCATION_MARKER_TEMPLATE(state.droppedBytes, capacity) + pointer + state.tail.toString('utf8')
         }
         return (state.head.toString('utf8') + state.tail.toString('utf8'))
       }
@@ -757,7 +767,7 @@ export class BashTool implements Tool {
       })
       child.stderr?.on('data', (d: string) => {
         const droppedBefore = stderrState.droppedBytes
-        appendHeadTail(stderrState, d)
+        appendHeadTail(stderrState, d, LIVE_BUFFER_BYTES_STDERR)
         if (stderrState.droppedBytes > 0 || droppedBefore > 0) {
           stderrLog.record(d)
         }
@@ -770,6 +780,21 @@ export class BashTool implements Tool {
       const settle = (result: ToolResult) => {
         if (settled) return
         settled = true
+        // Round 43 (codex IO-drain detail): a detached grandchild
+        // (`cmd &` + disown/nohup) can outlive the killed shell while
+        // HOLDING our stdout/stderr pipes — the streams then never end
+        // and Node never fires 'close', wedging the whole agent. After
+        // settle, give the streams a short drain window; if data still
+        // flows (or the fd is simply held open), destroy them. Losing
+        // tail output beats hanging forever.
+        for (const stream of [child.stdout, child.stderr]) {
+          if (!stream) continue
+          const s = stream
+          const drainTimer = setTimeout(() => {
+            try { s.destroy() } catch { /* already gone */ }
+          }, 2000)
+          if (typeof drainTimer.unref === 'function') drainTimer.unref()
+        }
         // Belt-and-braces: render paths already close the overflow logs;
         // completion paths that skip rendering (spawn error) still must
         // not leak the write streams.
@@ -848,7 +873,7 @@ export class BashTool implements Tool {
         // the timeout scheduled. child.on('close') clears it again
         // (idempotent: clearTimeout(null) is a no-op).
         clearTimeoutTimer()
-        const partialOut = [renderState(stdoutState, stdoutLog), renderState(stderrState, stderrLog)].filter(Boolean).join('\n').trimEnd()
+        const partialOut = [renderState(stdoutState, stdoutLog), renderState(stderrState, stderrLog, LIVE_BUFFER_BYTES_STDERR)].filter(Boolean).join('\n').trimEnd()
         const partial = partialOut ? `\n\nPartial output before cancellation:\n${truncateOutput(partialOut, 5000)}` : ''
         settle({
           content: `Command cancelled (abort signal).${partial}\n\nHint: re-run with a smaller scope, or use run_in_background:true for long commands.`,
@@ -882,7 +907,7 @@ export class BashTool implements Tool {
         // middle was dropped. Early output AND the final error at
         // the tail are both preserved.
         const stdoutOut = renderState(stdoutState, stdoutLog)
-        const stderrOut = renderState(stderrState, stderrLog)
+        const stderrOut = renderState(stderrState, stderrLog, LIVE_BUFFER_BYTES_STDERR)
         const partialOut = [stdoutOut, stderrOut].filter(Boolean).join('\n').trimEnd()
         const prefix = followMode ? `[Spectator mode: output streamed to tmux pane] ${followModeHint}\n` : ''
 
@@ -891,7 +916,10 @@ export class BashTool implements Tool {
         if (timedOut) {
           const partial = partialOut ? `\n\nPartial output before timeout:\n${truncateOutput(partialOut, 5000)}` : ''
           settle({
-            content: `Command timed out after ${timeoutMs / 1000}s.${partial}\n\nHint: for long-running commands, use run_in_background:true and check results with TaskGet, or raise the timeout argument.`,
+            // Round 43 (codex detail): surface the GNU timeout convention
+            // (exit code 124) so the model reads the familiar semantics
+            // instead of guessing what signal -9 / -15 meant.
+            content: `Command timed out after ${timeoutMs / 1000}s (exit code 124).${partial}\n\nHint: for long-running commands, use run_in_background:true and check results with TaskGet, or raise the timeout argument.`,
             isError: true,
             status: 'timed_out',
             summary: `Command timed out after ${timeoutMs / 1000}s`,

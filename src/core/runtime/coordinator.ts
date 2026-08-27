@@ -33,6 +33,7 @@ import type {
 } from '../types.js'
 import { calculateUSDCost, calculateUncachedUSDCost, type TokenUsage } from '../costTracker.js'
 import { recordCacheEntry } from '../../utils/cacheStats.js'
+import { rateLimitDelayMs } from '../../utils/rateLimit.js'
 import type { CostTracker } from '../costTracker.js'
 import type { BackgroundTaskManager } from '../backgroundTaskManager.js'
 import type { FileHistory } from '../fileHistory.js'
@@ -229,6 +230,8 @@ export class RuntimeCoordinator {
   // v0.5.3 Hotfix §4: cache the resolved ProjectIdentity so
   // 20 sequential turns don't each spawn a fresh `git rev-parse`.
   private _projectIdentityCache: { cwd: string; identity: ProjectIdentity } | null = null
+  /** Round 43: last gateway error, for Retry-After-aware backoff. */
+  private lastGatewayError: unknown = null
   // v0.5.3 P0-3: coordinator no longer carries its own provider
   // circuit state. The single source of truth is the ModelRouter's
   // per-profile circuit (consecutiveProfileFailures + circuitStates
@@ -1899,8 +1902,11 @@ export class RuntimeCoordinator {
             RuntimeCoordinator.MAX_BACKOFF_MS,
             Math.pow(2, consecutive) * 1000,
           )
-          const jitter = Math.floor(Math.random() * 500)
-          const delayMs = baseMs + jitter
+          // Round 43 (codex detail): a 429 that states its own retry
+          // window ("try again in 11.05s" / Retry-After) beats blind
+          // exponential backoff — re-hitting the wall 0.05s early or
+          // dumbly waiting 30s are both real user pain.
+          const delayMs = rateLimitDelayMs(this.lastGatewayError, baseMs + Math.floor(Math.random() * 500))
           this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${consecutive})`)
           await new Promise((resolve) => setTimeout(resolve, delayMs))
         }
@@ -1974,6 +1980,11 @@ export class RuntimeCoordinator {
         profileId: probeLease?.profileId,
       }) // result is non-null after await
     } catch (err) {
+      // Round 43 (codex detail): remember the last gateway error so the
+      // pre-call backoff in the NEXT state-machine pass can honor the
+      // provider's own retry window ("try again in 11.05s"/Retry-After)
+      // instead of blind exponential backoff.
+      this.lastGatewayError = err
       const attempts = (err as { attempts?: Array<{
         model: string; provider: string; success: boolean; error?: string; latencyMs: number; usage: TokenUsage | null
       }> }).attempts

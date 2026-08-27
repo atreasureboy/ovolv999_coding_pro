@@ -42,9 +42,15 @@ const _fileStates = new Map<string, FileState>()
  * SHA-256 of a UTF-8 string. Hex digest is 64 chars — cheap to store and
  * compare, and collision-resistant in practice (any collision here would
  * mean SHA-256 is broken).
+ *
+ * Round 43: BOM-invariant. Read strips a leading \uFEFF before rendering,
+ * so the content it registers must hash the same way as the raw bytes the
+ * Edit path reads — otherwise every BOM'd file reads as "modified since
+ * last read" on first edit.
  */
 function hashText(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex')
+  const normalized = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content
+  return createHash('sha256').update(normalized, 'utf8').digest('hex')
 }
 
 /**
