@@ -15,6 +15,7 @@
  */
 
 import { Text, Box, useInput, useStdin } from 'ink'
+import { t } from '../../theme.js'
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { SlashMenu, type SlashEntry } from './SlashMenu.js'
 import { FileSuggestMenu } from './FileSuggestMenu.js'
@@ -352,14 +353,14 @@ export function PromptInput({
   return (
     <Box flexDirection="column">
       <Box paddingLeft={2}>
-        <Text bold color="#63B3ED">◆ COMMAND DECK</Text>
+        <Text bold color={t.accent}>◆ COMMAND DECK</Text>
         <Text dimColor> · describe, build, transform</Text>
       </Box>
       {hasNewline ? (
         // Multi-line render: show each line, cursor on the active line
-        <Box width={terminalWidth} flexDirection="column" borderStyle="round" borderColor="#63B3ED" paddingX={1}>
+        <Box width={terminalWidth} flexDirection="column" borderStyle="round" borderColor={t.borderActive} paddingX={1}>
           <Box>
-            <Text color="#63B3ED">› </Text>
+            <Text color={t.primary}>› </Text>
             <Text dimColor>(multi-line · Ctrl+J=newline · Enter=submit)</Text>
           </Box>
           {text.split('\n').map((line, i, arr) => {
@@ -373,7 +374,7 @@ export function PromptInput({
                   <Text>
                     {line.slice(0, Math.max(0, relCursor))}
                   </Text>
-                  <Text color="blueBright">
+                  <Text color={t.info}>
                     {relCursor < line.length ? line[relCursor] : ' '}
                   </Text>
                   {relCursor < line.length ? <Text>{line.slice(relCursor + 1)}</Text> : null}
@@ -388,19 +389,19 @@ export function PromptInput({
           })}
         </Box>
       ) : (
-        <Box width={terminalWidth} borderStyle="round" borderColor="#A78BFA" paddingX={1}>
+        <Box width={terminalWidth} borderStyle="round" borderColor={t.borderActive} paddingX={1}>
           <Box width={2} flexShrink={0}>
-            <Text color="#C9A86A">›</Text>
+            <Text color={t.primary}>›</Text>
           </Box>
           {cursor === text.length && text.length > 0 ? (
             <>
               <Text>{text.slice(0, -1)}</Text>
-              <Text backgroundColor="#63B3ED" color="black">{text.at(-1)}</Text>
+              <Text backgroundColor={t.primary} color="#1a1a1a">{text.at(-1)}</Text>
             </>
           ) : (
             <>
               <Text>{text.slice(0, cursor)}</Text>
-              <Text backgroundColor="#63B3ED" color="black">{cursor < text.length ? text[cursor] : ' '}</Text>
+              <Text backgroundColor={t.primary} color="#1a1a1a">{cursor < text.length ? text[cursor] : ' '}</Text>
               {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
             </>
           )}

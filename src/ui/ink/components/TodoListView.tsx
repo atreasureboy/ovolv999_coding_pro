@@ -10,6 +10,7 @@
  */
 
 import { Text, Box } from 'ink'
+import { t } from '../../theme.js'
 
 export interface TodoItem {
   content: string
@@ -36,7 +37,7 @@ export function TodoListView({ todos }: { todos: TodoItem[] }): React.ReactEleme
   return (
     <Box flexDirection="column">
       <Box>
-        <Text bold color="greenBright">☑ Tasks</Text>
+        <Text bold color={t.success}>☑ Tasks</Text>
         <Text dimColor> [{bar}]</Text>
         <Text color={barColor}> {done}/{total}</Text>
       </Box>

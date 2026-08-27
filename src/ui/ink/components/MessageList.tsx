@@ -6,6 +6,9 @@
  *
  * In compact mode (default), consecutive Read/Grep/Glob tool calls are
  * collapsed into a single summary line. Verbose mode (Ctrl+O) shows all.
+ *
+ * Round 44: all colors come from the semantic theme (`t`) — no ad-hoc
+ * literals.
  */
 
 import { Text, Box } from 'ink'
@@ -13,6 +16,7 @@ import type { UIMessage } from '../store.js'
 import { ToolCallView } from '../ToolCallView.js'
 import { TodoListView, type TodoItem } from './TodoListView.js'
 import { Markdown } from './Markdown.js'
+import { t } from '../../theme.js'
 
 /** Tool types that are collapsible when appearing consecutively. */
 const COLLAPSIBLE_TOOLS = new Set(['Read', 'Grep', 'Glob'])
@@ -22,15 +26,15 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'user':
       return (
         <Box marginTop={1} paddingX={1}>
-          <Text color="#C9A86A">❯ </Text>
-          <Text bold>{msg.text}</Text>
+          <Text color={t.primary}>❯ </Text>
+          <Text bold color={t.text}>{msg.text}</Text>
         </Box>
       )
 
     case 'assistant':
       return (
         <Box marginTop={1} paddingX={1}>
-          <Text color="#A78BFA">● </Text>
+          <Text color={t.accent}>● </Text>
           <Markdown>{msg.text}</Markdown>
         </Box>
       )
@@ -59,30 +63,30 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'info':
       return (
         <Box>
-          <Text color="#7D8590">· {msg.text}</Text>
+          <Text color={t.muted}>· {msg.text}</Text>
         </Box>
       )
 
     case 'success':
       return (
         <Box>
-          <Text color="greenBright">✓ </Text>
-          <Text>{msg.text}</Text>
+          <Text color={t.success}>✓ </Text>
+          <Text color={t.text}>{msg.text}</Text>
         </Box>
       )
 
     case 'warn':
       return (
         <Box>
-          <Text color="yellowBright">⚠ </Text>
-          <Text>{msg.text}</Text>
+          <Text color={t.warning}>⚠ </Text>
+          <Text color={t.text}>{msg.text}</Text>
         </Box>
       )
 
     case 'error':
       return (
         <Box marginTop={1}>
-          <Text color="redBright">✗ {msg.text}</Text>
+          <Text color={t.error}>✗ {msg.text}</Text>
         </Box>
       )
 
@@ -90,20 +94,20 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
       return (
         <Box marginTop={1} flexDirection="column">
           <Box>
-            <Text color="magentaBright">⊕ </Text>
-            <Text bold>Agent</Text>
+            <Text color={t.primary}>⊕ </Text>
+            <Text bold color={t.text}>Agent</Text>
             {msg.agentType !== 'general-purpose' ? (
-              <Text dimColor> [{msg.agentType}]</Text>
+              <Text color={t.muted}> [{msg.agentType}]</Text>
             ) : null}
-            <Text dimColor> {msg.desc}</Text>
-            <Text color={msg.status === 'done' ? 'greenBright' : msg.status === 'failed' ? 'redBright' : 'yellow'}>
+            <Text color={t.muted}> {msg.desc}</Text>
+            <Text color={msg.status === 'done' ? t.success : msg.status === 'failed' ? t.error : t.warning}>
               {' '}
-              {msg.status === 'done' ? '✓' : msg.status === 'failed' ? '✗' : '...'}
+              {msg.status === 'done' ? '✓' : msg.status === 'failed' ? '✗' : '…'}
             </Text>
           </Box>
           {msg.summary ? (
             <Box marginLeft={4}>
-              <Text dimColor>{msg.summary.split('\n').slice(0, 4).join('\n')}</Text>
+              <Text color={t.muted}>{msg.summary.split('\n').slice(0, 4).join('\n')}</Text>
             </Box>
           ) : null}
         </Box>
@@ -112,13 +116,13 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'compact':
       return msg.phase === 'start' ? (
         <Box marginTop={1}>
-          <Text color="yellow">⟳ </Text>
-          <Text dimColor>Context {Math.round((msg.origTokens ?? 0) / 1000)}k — compacting...</Text>
+          <Text color={t.info}>⟳ </Text>
+          <Text color={t.muted}>Context {Math.round((msg.origTokens ?? 0) / 1000)}k — compacting…</Text>
         </Box>
       ) : (
         <Box>
-          <Text color="greenBright">✓ </Text>
-          <Text dimColor>
+          <Text color={t.success}>✓ </Text>
+          <Text color={t.muted}>
             {Math.round((msg.origTokens ?? 0) / 1000)}k → {Math.round((msg.sumTokens ?? 0) / 1000)}k (
             {Math.round((1 - (msg.sumTokens ?? 1) / (msg.origTokens ?? 1)) * 100)}% saved)
           </Text>
@@ -128,8 +132,8 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'context-warning':
       return (
         <Box marginTop={1}>
-          <Text color="yellowBright">⚠ </Text>
-          <Text dimColor>
+          <Text color={t.warning}>⚠ </Text>
+          <Text color={t.muted}>
             Context {Math.round(msg.pct * 100)}% ({Math.round(msg.tokens / 1000)}k/
             {Math.round(msg.max / 1000)}k)
           </Text>
@@ -195,9 +199,9 @@ function CollapsedToolGroup({ msgs }: { msgs: UIMessage[] }): React.ReactElement
 
   return (
     <Box marginTop={1}>
-      <Text dimColor>⤿ {typeStr} ×{msgs.length}</Text>
-      {errors > 0 ? <Text color="redBright"> ({errors} errors)</Text> : null}
-      <Text dimColor> — Ctrl+O to expand</Text>
+      <Text color={t.faint}>⤿ {typeStr} ×{msgs.length}</Text>
+      {errors > 0 ? <Text color={t.error}> ({errors} errors)</Text> : null}
+      <Text color={t.faint}> — Ctrl+O to expand</Text>
     </Box>
   )
 }
@@ -213,7 +217,7 @@ export function MessageList({ messages, maxMessages = 50, verbose = false }: Mes
     <Box flexDirection="column">
       {truncated ? (
         <Box marginBottom={1}>
-          <Text dimColor italic>↑ {total - maxMessages} earlier message{(total - maxMessages) !== 1 ? 's' : ''} hidden (showing last {maxMessages})</Text>
+          <Text color={t.faint} italic>↑ {total - maxMessages} earlier message{(total - maxMessages) !== 1 ? 's' : ''} hidden (showing last {maxMessages})</Text>
         </Box>
       ) : null}
       {groups.map((group, gi) => {

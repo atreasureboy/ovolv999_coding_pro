@@ -9,6 +9,7 @@
  */
 
 import { Text, Box, useInput } from 'ink'
+import { t } from '../../theme.js'
 import { useState } from 'react'
 
 export interface PermissionRequest {
@@ -78,13 +79,13 @@ export function PermissionDialog({
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellowBright" paddingX={1} marginY={1}>
         <Box>
-          <Text bold color="yellowBright">💬 Feedback for denial</Text>
+          <Text bold color={t.warning}>💬 Feedback for denial</Text>
         </Box>
         <Box marginTop={1}>
           <Text dimColor>Tell the model what to do differently:</Text>
         </Box>
         <Box marginLeft={2}>
-          <Text color="yellowBright">{'>'} {feedback}_</Text>
+          <Text color={t.warning}>{'> '} {feedback}_</Text>
         </Box>
         <Box marginTop={1}>
           <Text dimColor> Enter=submit · ESC=back</Text>
@@ -100,7 +101,7 @@ export function PermissionDialog({
         <Text dimColor> [{riskLabel}]</Text>
       </Box>
       <Box marginTop={1}>
-        <Text bold color="cyan">{request.toolName}</Text>
+        <Text bold color={t.info}>{request.toolName}</Text>
       </Box>
       <Box marginLeft={2}>
         <Text dimColor>{request.preview.slice(0, 100)}</Text>

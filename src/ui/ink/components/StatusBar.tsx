@@ -2,12 +2,12 @@
  * StatusBar — compact info bar at the bottom showing model, context pressure,
  * cost, and plan mode.
  *
- * Context pressure is shown as a visual bar: [████████░░░░░░░░] 50%
- * Color shifts: green < 50%, yellow 50-80%, red > 80%.
- * At >80% a ⚠ warning symbol is shown.
+ * Round 44: theme-token colors; a real gauge (━━━╸) instead of block
+ * glyphs; profile chips calm enough to coexist with plan mode.
  */
 
 import { Text, Box } from 'ink'
+import { t, pressureColor } from '../../theme.js'
 
 export interface StatusBarProps {
   model: string
@@ -29,14 +29,15 @@ export interface StatusBarProps {
   terminalWidth?: number
 }
 
-function contextBar(pct: number): { bar: string; color: string } {
-  const rounded = Math.round(pct * 100)
-  const width = 8
-  const filled = Math.min(width, Math.round(pct * width))
-  const empty = width - filled
-  const bar = '█'.repeat(filled) + '░'.repeat(empty)
-  const color = rounded > 80 ? 'redBright' : rounded > 50 ? 'yellow' : 'green'
-  return { bar, color }
+/** Thin ruler gauge: ━━━━╺──── 40% */
+function contextGauge(pct: number): { bar: string; color: string } {
+  const width = 10
+  const clamped = Math.max(0, Math.min(1, pct))
+  const filled = Math.round(clamped * width)
+  const head = filled > 0 ? '╸' : ''
+  const body = '━'.repeat(Math.max(0, filled - (filled > 0 ? 1 : 0)))
+  const empty = '─'.repeat(width - filled)
+  return { bar: body + head + empty, color: pressureColor(clamped) }
 }
 
 function formatTokens(n: number): string {
@@ -46,37 +47,37 @@ function formatTokens(n: number): string {
 
 export function StatusBar({ model, messageCount, contextPct, tokenCount, maxTokens, cost, apiCalls, planMode, verbose, profile, gitBranch, terminalWidth = 160 }: StatusBarProps): React.ReactElement {
   const pct = Math.round(contextPct * 100)
-  const { bar, color } = contextBar(contextPct)
+  const { bar, color } = contextGauge(contextPct)
   const costStr = cost < 0.01 ? cost.toFixed(4) : cost < 1 ? cost.toFixed(3) : cost.toFixed(2)
   const isHigh = pct > 80
 
   return (
     <Box width="100%" height={1} justifyContent="space-between" marginTop={1} paddingX={1} flexWrap="nowrap">
       <Box gap={1} flexShrink={1}>
-        <Text color="#63B3ED">◆</Text>
-        <Text bold color="#E8E3DA">BUILD</Text>
-        <Text color="#7D8590">/</Text>
-        <Text color="#C9A86A" wrap="truncate-end">{model}</Text>
-        {gitBranch && terminalWidth >= 100 ? <Text dimColor wrap="truncate-end">{gitBranch}</Text> : null}
-        {planMode ? <Text color="blueBright">PLAN</Text> : null}
+        <Text color={t.accent}>◆</Text>
+        <Text bold color={t.text}>BUILD</Text>
+        <Text color={t.faint}>/</Text>
+        <Text color={t.primary} wrap="truncate-end">{model}</Text>
+        {gitBranch && terminalWidth >= 100 ? <Text color={t.muted} wrap="truncate-end">{gitBranch}</Text> : null}
+        {planMode ? <Text bold color={t.info}>◇ PLAN</Text> : null}
         {profile && profile !== 'standard' ? (
-          <Text color={profile === 'fast' ? 'cyanBright' : profile === 'deep' ? 'magentaBright' : 'greenBright'}>
+          <Text color={profile === 'fast' ? t.info : profile === 'deep' ? t.accent : t.success}>
             {profile.toUpperCase()}
           </Text>
         ) : null}
-        {verbose ? <Text color="yellowBright">VERBOSE</Text> : null}
-        {terminalWidth >= 72 ? <Text dimColor>{messageCount} msgs</Text> : null}
+        {verbose ? <Text color={t.warning}>VERBOSE</Text> : null}
+        {terminalWidth >= 72 ? <Text color={t.muted}>{messageCount} msgs</Text> : null}
       </Box>
       <Box gap={1} flexShrink={0}>
-        {isHigh ? <Text color="redBright" bold>⚠</Text> : null}
-        <Text dimColor>CONTEXT</Text>
+        {isHigh ? <Text bold color={t.error}>⚠</Text> : null}
+        <Text color={t.muted}>CTX</Text>
         <Text color={color}>{bar}</Text>
         <Text color={color} bold={isHigh}>{pct}%</Text>
         {terminalWidth >= 105 && tokenCount !== undefined && maxTokens ? (
-          <Text dimColor>{formatTokens(tokenCount)}/{formatTokens(maxTokens)}</Text>
+          <Text color={t.faint}>{formatTokens(tokenCount)}/{formatTokens(maxTokens)}</Text>
         ) : null}
         {terminalWidth >= 130 && apiCalls > 0 ? (
-          <Text dimColor>${costStr} · {apiCalls} API</Text>
+          <Text color={t.muted}>${costStr} · {apiCalls} API</Text>
         ) : null}
       </Box>
     </Box>

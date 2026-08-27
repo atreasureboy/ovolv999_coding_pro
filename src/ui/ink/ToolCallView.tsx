@@ -8,6 +8,7 @@
 import { Text, Box } from 'ink'
 import { str } from '../../core/strings.js'
 import { DiffView, computeLineDiff } from './components/DiffView.js'
+import { t } from '../theme.js'
 
 interface ToolVisual {
   icon: string
@@ -15,27 +16,27 @@ interface ToolVisual {
 }
 
 const TOOL_VIZ: Record<string, ToolVisual> = {
-  Bash: { icon: '$', color: 'yellowBright' },
-  Read: { icon: '◇', color: 'cyanBright' },
-  Write: { icon: '◆', color: 'greenBright' },
-  Edit: { icon: '◆', color: 'blueBright' },
-  Glob: { icon: '◇', color: 'magentaBright' },
-  Grep: { icon: '◇', color: 'magentaBright' },
-  WebFetch: { icon: '◎', color: 'cyan' },
-  WebSearch: { icon: '◎', color: 'cyan' },
-  TodoWrite: { icon: '◆', color: 'greenBright' },
-  Agent: { icon: '◈', color: 'magentaBright' },
-  ShellSession: { icon: '◌', color: 'redBright' },
-  TmuxSession: { icon: '◌', color: 'redBright' },
-  AskUserQuestion: { icon: '?', color: 'yellowBright' },
-  ExitPlanMode: { icon: '◆', color: 'greenBright' },
-  Sleep: { icon: '·', color: 'gray' },
-  Snip: { icon: '◇', color: 'yellowBright' },
-  NotebookEdit: { icon: '◆', color: 'magentaBright' },
+  Bash: { icon: '$', color: t.warning },
+  Read: { icon: '◇', color: t.info },
+  Write: { icon: '◆', color: t.success },
+  Edit: { icon: '◆', color: t.primary },
+  Glob: { icon: '◇', color: t.accent },
+  Grep: { icon: '◇', color: t.accent },
+  WebFetch: { icon: '◎', color: t.info },
+  WebSearch: { icon: '◎', color: t.info },
+  TodoWrite: { icon: '◆', color: t.success },
+  Agent: { icon: '◈', color: t.primary },
+  ShellSession: { icon: '◌', color: t.error },
+  TmuxSession: { icon: '◌', color: t.error },
+  AskUserQuestion: { icon: '?', color: t.warning },
+  ExitPlanMode: { icon: '◆', color: t.success },
+  Sleep: { icon: '·', color: t.faint },
+  Snip: { icon: '◇', color: t.warning },
+  NotebookEdit: { icon: '◆', color: t.accent },
 }
 
 function viz(name: string): ToolVisual {
-  return TOOL_VIZ[name] ?? { icon: '·', color: 'white' }
+  return TOOL_VIZ[name] ?? { icon: '·', color: t.muted }
 }
 
 function previewTool(name: string, input: Record<string, unknown>): string {
@@ -106,8 +107,8 @@ function resultBadge(
       const exitMatch = result.match(/Exit code: (\d+)/)
       const code = exitMatch ? parseInt(exitMatch[1], 10) : (isError ? 1 : 0)
       return code === 0
-        ? { text: '✓ exit 0', color: 'greenBright' }
-        : { text: `✗ exit ${code}`, color: 'redBright' }
+        ? { text: '✓ exit 0', color: t.success }
+        : { text: `✗ exit ${code}`, color: t.error }
     }
     case 'Read': {
       const lines = result.split('\n').length
@@ -115,14 +116,14 @@ function resultBadge(
     }
     case 'Grep': {
       const matches = result.split('\n').filter((l) => l.trim() && !l.startsWith('Found')).length
-      return { text: `${matches} matches`, color: 'magentaBright' }
+      return { text: `${matches} matches`, color: t.accent }
     }
     case 'Glob': {
       const files = result.split('\n').filter((l) => l.trim()).length
-      return { text: `${files} file${files !== 1 ? 's' : ''}`, color: 'magentaBright' }
+      return { text: `${files} file${files !== 1 ? 's' : ''}`, color: t.accent }
     }
     case 'WebFetch':
-      return { text: `${result.length} chars`, color: 'cyan' }
+      return { text: `${result.length} chars`, color: t.info }
     default:
       return null
   }
@@ -138,7 +139,7 @@ export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCa
   const newText = name === 'Edit' ? str(input.new_string) : name === 'Write' ? str(input.content) : ''
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor={v.color} paddingLeft={1}>
+    <Box flexDirection="column" borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor={isError ? t.error : t.border} paddingLeft={1}>
       <Box>
         <Text color={v.color}>{v.icon}</Text>
         <Text bold color={v.color}> {name}</Text>
@@ -163,7 +164,7 @@ export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCa
             .slice(0, 6)
             .map((line, i) => (
               <Box key={i}>
-                <Text color={isError ? 'red' : undefined} dimColor={!isError}>
+                <Text color={isError ? t.error : undefined} dimColor={!isError}>
                   {line.length > 120 ? line.slice(0, 117) + '...' : line}
                 </Text>
               </Box>

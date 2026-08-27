@@ -7,6 +7,7 @@
  */
 
 import { Text, Box, useInput } from 'ink'
+import { t } from '../../theme.js'
 
 import { listCommands } from '../../../commands/index.js'
 
@@ -73,14 +74,14 @@ export function HelpOverlay({ onDismiss }: { onDismiss: () => void }): React.Rea
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1} marginY={1}>
       <Box>
-        <Text bold color="cyan">⌨  Keyboard Shortcuts</Text>
+        <Text bold color={t.accent}>⌨  Keyboard Shortcuts</Text>
       </Box>
       {getDynamicGroups().map((group, gi) => (
         <Box key={gi} flexDirection="column" marginTop={gi > 0 ? 1 : 0}>
-          <Text bold color="cyanBright">{group.title}</Text>
+          <Text bold color={t.text}>{group.title}</Text>
           {group.items.map((item, ii) => (
             <Box key={ii}>
-              <Text bold color="yellowBright">{item.key.padEnd(16, ' ')}</Text>
+              <Text bold color={t.primary}>{item.key.padEnd(16, ' ')}</Text>
               <Text dimColor> {item.desc}</Text>
             </Box>
           ))}

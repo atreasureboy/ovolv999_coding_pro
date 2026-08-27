@@ -9,6 +9,7 @@
  */
 
 import { Text, Box } from 'ink'
+import { t } from '../../theme.js'
 
 export interface DiffLine {
   type: 'add' | 'remove' | 'context'
@@ -34,26 +35,28 @@ export function DiffView({
           line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '
         const color =
           line.type === 'add'
-            ? 'greenBright'
+            ? t.diffAdded
             : line.type === 'remove'
-              ? 'redBright'
-              : undefined
-        const dim = line.type === 'context'
+              ? t.diffRemoved
+              : t.muted
+        // Round 44: soft row background + gutter numbers — diff rows read
+        // as bands instead of a wall of bright glyphs.
+        const bg = line.type === 'add' ? t.diffAddedBg : line.type === 'remove' ? t.diffRemovedBg : undefined
         const lineNum = line.type === 'remove'
           ? (line.oldLineNum ?? '')
           : (line.newLineNum ?? '')
 
         return (
-          <Box key={i}>
-            <Text dimColor>{String(lineNum).padStart(4, ' ')} </Text>
-            <Text color={color} dimColor={dim}>
-              {prefix} {line.text.length > 100 ? line.text.slice(0, 97) + '...' : line.text}
+          <Text key={i} backgroundColor={bg}>
+            <Text color={t.diffLineNumber}>{String(lineNum).padStart(4, ' ')} </Text>
+            <Text color={color} dimColor={line.type === 'context'}>
+              {prefix} {line.text.length > 100 ? line.text.slice(0, 97) + '…' : line.text + '\n'}
             </Text>
-          </Box>
+          </Text>
         )
       })}
       {hidden > 0 ? (
-        <Text dimColor>     ... {hidden} more lines</Text>
+        <Text color={t.faint}>     … {hidden} more lines</Text>
       ) : null}
     </Box>
   )

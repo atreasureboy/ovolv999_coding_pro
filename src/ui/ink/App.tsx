@@ -15,6 +15,7 @@
  */
 
 import { Text, Box, Static, useApp, useInput, useStdout } from 'ink'
+import { t } from '../theme.js'
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
 import { Banner } from './Banner.js'
@@ -364,9 +365,9 @@ export function App({
       {/* Interrupt overlay */}
       {state.interrupt?.active ? (
         <Box flexDirection="column" marginY={1}>
-          <Text color="yellowBright">⚡ Interrupted</Text>
+          <Text color={t.warning}>⚡ Interrupted</Text>
           {state.interrupt.feedback ? (
-            <Text color="yellowBright">⚡ {state.interrupt.feedback.slice(0, 120)}</Text>
+            <Text color={t.warning}>⚡ {state.interrupt.feedback.slice(0, 120)}</Text>
           ) : (
             <Text dimColor>当前步骤完成后停止——发送消息即可继续</Text>
           )}

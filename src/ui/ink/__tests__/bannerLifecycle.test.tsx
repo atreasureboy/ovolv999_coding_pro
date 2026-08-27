@@ -37,7 +37,9 @@ describe('banner lifecycle', () => {
     await new Promise(resolve => setImmediate(resolve))
 
     const frame = view.lastFrame() ?? ''
-    expect(count(frame, 'OVOLV999 / v0.3.5')).toBe(1)
+    // Round 44 banner composition: "OVOLV999 v<version>" (no slash).
+    expect(count(frame, 'OVOLV999')).toBe(1)
+    expect(frame).toContain('v0.3.5')
     expect(frame).toContain('reply one')
     expect(frame).toContain('reply two')
     view.unmount()

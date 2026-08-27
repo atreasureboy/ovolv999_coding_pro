@@ -1,9 +1,14 @@
 /**
- * Banner — startup banner showing version, model, cwd, and git info.
+ * Banner — startup banner: version, model, cwd, git info.
+ *
+ * Round 44: calmer composition — single-tone wordmark (no rainbow
+ * letters), left column logo + right metadata panel with a proper
+ * accent rule, everything theme-token colored.
  */
 
 import { Text, Box } from 'ink'
 import { BRAND_LOGO_ROWS } from '../brand.js'
+import { t } from '../theme.js'
 
 export interface BannerProps {
   version: string
@@ -33,38 +38,35 @@ export function Banner({ version, model, cwd, gitBranch, contextWindow, terminal
     <Box flexDirection="column" marginBottom={1}>
       <Box paddingX={1} flexDirection={wide ? 'row' : 'column'}>
         <Box width={wide ? 54 : undefined} flexDirection="column">
-          <Text bold color="#63B3ED">{BRAND_LOGO_ROWS.slice(0, 2).join('\n')}</Text>
-          <Text bold color="#A78BFA">{BRAND_LOGO_ROWS.slice(2, 4).join('\n')}</Text>
-          <Text bold color="#C9A86A">{BRAND_LOGO_ROWS[4]}</Text>
+          {/* Wordmark: violet block glyphs, one calm tone */}
+          <Text bold color={t.accent}>{BRAND_LOGO_ROWS.slice(0, 3).join('\n')}</Text>
+          <Text bold color={t.accent}>{BRAND_LOGO_ROWS.slice(3).join('\n')}</Text>
         </Box>
         {wide ? (
-          <Box
-            flexDirection="column"
-            borderStyle="single"
-            borderLeft
-            borderTop={false}
-            borderRight={false}
-            borderBottom={false}
-            borderColor="#7D8590"
-            paddingLeft={2}
-          >
-            <Text bold color="#E8E3DA">OVOLV999 / v{version}</Text>
-            <Text color="#A78BFA">AUTONOMOUS SOFTWARE FORGE</Text>
-            <Text color="#C9A86A">{model} · {ctxStr || '—'} CONTEXT</Text>
-            <Text dimColor>{cwd ? shortenPath(cwd) : '—'} · {gitBranch ?? 'NO GIT'}</Text>
-            <Text color="#68D391">◆ SYSTEM READY</Text>
+          <Box flexDirection="column" borderLeft borderColor={t.border} paddingLeft={2} justifyContent="center">
+            <Text bold color={t.text}>OVOLV999 <Text color={t.muted}>v{version}</Text></Text>
+            <Text color={t.accent}>AUTONOMOUS SOFTWARE FORGE</Text>
+            <Text color={t.info}>
+              {model}
+              {ctxStr ? <Text color={t.faint}> · {ctxStr} ctx</Text> : null}
+            </Text>
+            <Text color={t.muted}>
+              {cwd ? shortenPath(cwd) : '—'}
+              {gitBranch ? <Text color={t.primary}> ⎇ {gitBranch}</Text> : null}
+            </Text>
+            <Text color={t.success}>◆ ready</Text>
           </Box>
         ) : (
-          <Box gap={1}>
-            <Text bold color="#E8E3DA">OVOLV999 / v{version}</Text>
-            <Text color="#A78BFA">· {model}</Text>
-            <Text dimColor>· {cwd ? shortenPath(cwd) : '—'}</Text>
-            <Text color="#68D391">· ◆ READY</Text>
+          <Box gap={1} flexDirection="column">
+            <Text><Text bold color={t.text}>OVOLV999</Text> <Text color={t.muted}>v{version}</Text></Text>
+            <Text color={t.info}>· {model}</Text>
+            <Text color={t.muted}>· {cwd ? shortenPath(cwd) : '—'}</Text>
+            <Text color={t.success}>· ◆ ready</Text>
           </Box>
         )}
       </Box>
       <Box paddingX={1}>
-        <Text color="#7D8590">{'━'.repeat(Math.max(18, terminalWidth - 2))}</Text>
+        <Text color={t.border}>{'━'.repeat(Math.max(18, terminalWidth - 2))}</Text>
       </Box>
     </Box>
   )
