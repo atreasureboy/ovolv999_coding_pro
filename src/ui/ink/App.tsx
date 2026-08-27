@@ -249,6 +249,8 @@ export function App({
 
   const sigintCount = useRef(0)
   const abortCount = useRef(0)
+  /** Round 44: idle double-ESC exit (mirrors the Ctrl+C double-press). */
+  const escCount = useRef(0)
 
   useEffect(() => {
     if (!state.running) {
@@ -273,8 +275,25 @@ export function App({
           store.setInterrupt(true, '强行终止当前任务...')
           onHardAbort?.()
         }
-        return
       }
+      return
+    }
+
+    // Round 44: ESC while idle — first press shows the way out, second
+    // press within 1.5s exits. ESC during a turn remains the interrupt
+    // path above and NEVER kills the session.
+    if (key.escape || input === '\x1b') {
+      if (!store.hasOverlay()) {
+        escCount.current++
+        if (escCount.current >= 2) {
+          exit()
+          return
+        }
+        store.addInfo('再次按 ESC 退出 · Ctrl+C 亦可 · 单次 ESC 仅在任务运行时中断当前步骤')
+        const resetEsc = setTimeout(() => { escCount.current = 0 }, 1500)
+        resetEsc.unref?.()
+      }
+      return
     }
 
     if ((input === '\x04' || (key.ctrl && input === 'd')) && !state.running && !store.hasOverlay()) {
@@ -294,7 +313,11 @@ export function App({
       sigintCount.current++
       if (sigintCount.current >= 2) {
         exit()
+        return
       }
+      // Round 44: make the double-press discoverable — silence here read
+      // as "broken ESC/keybindings" to every new user.
+      store.addInfo('再按一次 Ctrl+C 退出 · Ctrl+D 亦可')
       // R18: unref so the reset timer can't keep the event loop alive if
       // the app exits within the 1.5s window. One-shot, ref-only mutation.
       const reset = setTimeout(() => { sigintCount.current = 0 }, 1500)
