@@ -685,170 +685,302 @@ ovolv999 读取多级配置（优先级从高到低）：
 
 ## 项目结构
 
+以下目录树由真实文件扫描生成（夜间审计 2026-08-28），与代码保持一致。
+核心子系统的职责说明见「架构全景」一节。
+
 ```
 ovolv999/
 ├── bin/
-│   └── ovogogogo.ts                # CLI 入口 + REPL + session subcommands + --bg
+│   └── ovogogogo.ts
 ├── src/
-│   ├── core/                        # 引擎核心
-│   │   ├── engine.ts                # 薄门面 — 组装子系统 + 委托 coordinator
-│   │   ├── types.ts                 # EngineConfig / Tool metadata / ToolContext
-│   │   ├── module.ts                # AgentModule 接口 (4 生命周期钩子)
-│   │   ├── moduleRegistry.ts        # 工厂注册 + 依赖解析 + 环检测
-│   │   ├── agentPresets.ts          # 4 preset + resolveAgentConfig
-│   │   ├── agentToolFilter.ts       # Agent 工具白名单过滤
-│   │   ├── compact.ts               # microCompact + strategy + tool_call 对保护
-│   │   ├── snipCompact.ts           # 手术式裁剪 (head/tail 截断)
-│   │   ├── semanticMemory.ts        # 语义记忆 + 来源优先级 + hash 去重
-│   │   ├── episodicMemory.ts        # 过程记忆 (成功+失败轨迹)
-│   │   ├── knowledgeBase.ts         # 结构化知识库
-│   │   ├── permissionSystem.ts      # 权限模式 + allow/deny 规则
-│   │   ├── permissionRules.ts       # glob 规则匹配
-│   │   ├── pathSecurity.ts          # 路径安全检查
-│   │   ├── sandbox.ts               # 3 级沙箱 (macOS/Linux)
-│   │   ├── lspClient.ts             # 进程内 LSP 客户端
-│   │   ├── sshRemote.ts             # SSH 远程会话
-│   │   ├── backgroundSession.ts     # detached 会话管理
-│   │   ├── backgroundTaskManager.ts # 后台任务生命周期
-│   │   ├── oauth.ts                 # MCP OAuth2 PKCE
-│   │   ├── mcpClient.ts             # MCP 客户端 (stdio + HTTP)
-│   │   ├── magicDocs.ts             # 自动文档提取 (7 种提取器)
-│   │   ├── telemetry.ts             # opt-in 本地遥测
-│   │   ├── settingsSync.ts          # 加密设置同步
-│   │   ├── autoClassifier.ts        # 请求自动分类
-│   │   ├── autoDream.ts             # 空闲知识整理
-│   │   ├── effort.ts                # effort 分级系统
-│   │   ├── budget.ts                # token 预算控制
-│   │   ├── modes.ts                 # 模式系统
-│   │   ├── hooks.ts                 # 6 种 Hook + HookRunner
-│   │   ├── goals.ts                 # 目标管理
-│   │   ├── diagnostics.ts           # LSP 诊断集成
-│   │   ├── sessionManager.ts        # 会话管理 (含 fork + 标题)
-│   │   ├── sessionParts.ts          # 追加式 parts 账本 (增量保存)
-│   │   ├── sessionTitle.ts          # 会话标题生成
-│   │   ├── conversationCheckpoints.ts # 对话检查点 (事务性 rewind)
-│   │   ├── revisionBinding.ts       # 工作区身份指纹 (有界遍历)
-│   │   ├── customAgents.ts          # .agents/ 磁盘自定义 agent
-│   │   ├── sessionTranscript.ts     # 会话转录
-│   │   ├── sessionStats.ts          # 会话统计
-│   │   ├── profiles.ts              # 配置 profile
-│   │   ├── snippets.ts              # 代码片段管理
-│   │   ├── bookmarks.ts             # 位置书签
-│   │   ├── commandHistory.ts        # 命令历史
-│   │   ├── fileHistory.ts           # 文件编辑历史 / rewind
-│   │   ├── fileDetection.ts         # 文件类型检测
-│   │   ├── fileState.ts             # 文件状态追踪
-│   │   ├── atomicWrite.ts           # 原子写入
-│   │   ├── costTracker.ts           # token/cost 统计
-│   │   ├── eventLog.ts              # 不可变审计流
-│   │   ├── messageBus.ts            # 内部消息总线
-│   │   ├── pluginManager.ts         # 插件管理
-│   │   ├── plugins.ts               # 插件接口
-│   │   ├── builtinPlugins.ts        # 内置插件
-│   │   ├── daemon.ts                # 后台守护进程
-│   │   ├── cron.ts                  # 定时任务
-│   │   ├── workflow.ts              # 工作流
-│   │   ├── loopEngine.ts            # 循环引擎
-│   │   ├── teamMemory.ts            # 团队记忆共享
-│   │   ├── skillSearch.ts           # 技能语义搜索
-│   │   ├── riskClassifier.ts        # 风险分类
-│   │   ├── thinkingTagFilter.ts     # thinking 标签过滤
-│   │   ├── promptSuggestions.ts     # 提示建议
-│   │   ├── suggestions.ts           # 自动建议
-│   │   ├── onboarding.ts            # 首次引导
-│   │   ├── migrations.ts            # 配置迁移
-│   │   ├── systemPrompt.ts          # 系统提示词组装
-│   │   ├── config.ts                # 配置管理
-│   │   ├── providers.ts             # LLM provider 管理
-│   │   ├── codeMetrics.ts           # 代码度量
-│   │   ├── claudeCodeWorkerManager.ts # tmux Claude Code worker 管理
-│   │   ├── queryStateMachine.ts     # 查询状态机 (loop reducer)
-│   │   ├── runtime/                 # 运行时协调层
-│   │   │   ├── coordinator.ts       # RuntimeCoordinator (主循环驱动)
-│   │   │   ├── boot.ts              # 启动序列 (模块 boot + 工具注册 + prompt 构建)
-│   │   │   ├── events.ts            # RunEvent 类型化协议 + RunEventEmitter
-│   │   │   ├── sharedState.ts       # SharedRuntimeState (跨 turn 状态 + 活跃追踪)
-│   │   │   └── terminationPolicy.ts # 终止决策 (纯函数)
-│   │   ├── model/                   # 模型调用层
-│   │   │   ├── modelGateway.ts      # LLM API 调用 + stream_options 兼容 + 跨 provider 重绑
-│   │   │   ├── providerAdapter.ts   # Provider 适配器 (openai 兼容 / anthropic 原生)
-│   │   │   ├── reasoningTransform.ts # reasoning 参数/流/历史三轴翻译
-│   │   │   ├── modelRouter.ts       # 多 profile 自适应路由
-│   │   │   └── streamConsumer.ts    # 流解析 + reasoning + tool_call 累积
-│   │   ├── context/                 # 上下文管理层
-│   │   │   ├── contextManager.ts    # budget 评估 + compaction + snip
-│   │   │   └── toolResultBudget.ts  # truncate + aggregate budget
-│   │   ├── toolRuntime/             # 工具运行时层
-│   │   │   ├── toolRegistry.ts      # 工具注册 + 查找 + 重名检测
-│   │   │   ├── toolPolicy.ts        # 统一 exposure + execution policy
-│   │   │   ├── toolExecutor.ts      # 单次 tool 执行 (hooks + 截断 + notify)
-│   │   │   └── toolScheduler.ts     # partitionToolCalls + batch 调度
-│   │   ├── moduleRuntime/           # 模块运行时层
-│   │   │   └── moduleManager.ts     # 模块生命周期 (boot/iter/complete/dispose)
-│   │   ├── taskTimer.ts             # 任务计时
-│   │   ├── workspace.ts             # 工作区管理
-│   │   └── strings.ts               # str() 安全转换 helper
-│   ├── server/                      # HTTP+SSE 观测服务器 (--serve / /serve)
-│   ├── tools/                       # 工具层
-│   │   ├── bash.ts                  # 跨平台 shell + 后台任务
-│   │   ├── fileRead.ts / fileWrite.ts / fileEdit.ts
-│   │   ├── glob.ts / grep.ts
-│   │   ├── todo.ts / notebookEdit.ts
-│   │   ├── webFetch.ts / webSearch.ts
-│   │   ├── agent.ts                 # AgentConfig 驱动 + 验证闸门
-│   │   ├── claudeCode.ts            # 外部 Claude Code worker
-│   │   ├── enterPlanMode.ts / exitPlanMode.ts / verifyPlanExecution.ts
-│   │   ├── tasks.ts                 # TaskCreate/Get/List/Update/Stop (5 工具)
-│   │   ├── worktree.ts              # Git worktree (3 工具)
-│   │   ├── mcpResources.ts          # MCP 资源 (2 工具)
-│   │   ├── sleep.ts / snip.ts
-│   │   ├── diagnostics.ts / goal.ts / askUser.ts
-│   │   ├── loadSkill.ts / shellSession.ts / tmuxSession.ts
+│   ├── cli/
+│   │   ├── acpServer.ts
+│   │   └── engineAssembly.ts
+│   ├── commands/
+│   │   ├── builtin.ts
+│   │   ├── cmd/
+│   │   │   ├── common.ts
+│   │   │   ├── group01.ts
+│   │   │   ├── group02.ts
+│   │   │   ├── group03.ts
+│   │   │   ├── group04.ts
+│   │   │   ├── group05.ts
+│   │   │   ├── group06.ts
+│   │   │   └── group07.ts
+│   │   ├── doctor.ts
+│   │   ├── index.ts
+│   │   └── shared.ts
+│   ├── config/
+│   │   ├── diagnostics.ts
+│   │   ├── ovogomd.ts
+│   │   ├── projectConfig.ts
+│   │   ├── projectContext.ts
+│   │   ├── providerProbe.ts
+│   │   ├── settings.ts
+│   │   └── wizard.ts
+│   ├── core/
+│   │   ├── agentPresets.ts
+│   │   ├── agentToolFilter.ts
+│   │   ├── atomicTransaction.ts
+│   │   ├── atomicWrite.ts
+│   │   ├── backgroundSession.ts
+│   │   ├── backgroundTaskManager.ts
+│   │   ├── bashMutation.ts
+│   │   ├── bookmarks.ts
+│   │   ├── budget.ts
+│   │   ├── builtinPlugins.ts
+│   │   ├── claudeCodeWorkerManager.ts
+│   │   ├── codeMetrics.ts
+│   │   ├── codeReview.ts
+│   │   ├── codeStructure.ts
+│   │   ├── commandHistory.ts
+│   │   ├── commandRunner.ts
+│   │   ├── compact.ts
+│   │   ├── context/
+│   │   │   ├── contextManager.ts
+│   │   │   └── toolResultBudget.ts
+│   │   ├── conversationCheckpoints.ts
+│   │   ├── costTracker.ts
+│   │   ├── cron.ts
+│   │   ├── customAgents.ts
+│   │   ├── daemon.ts
+│   │   ├── diagnostics.ts
+│   │   ├── effort.ts
+│   │   ├── engine.ts
+│   │   ├── episodicMemory.ts
+│   │   ├── eventLog.ts
+│   │   ├── executionContext.ts
+│   │   ├── executionRun.ts
+│   │   ├── executionRunEvents.ts
+│   │   ├── fileHistory.ts
+│   │   ├── fileState.ts
+│   │   ├── gitMutex.ts
+│   │   ├── goals.ts
+│   │   ├── hooks/
+│   │   │   ├── defaultRunner.ts
+│   │   │   ├── hookExecutor.ts
+│   │   │   ├── hookProtocol.ts
+│   │   │   └── hooksConfig.ts
+│   │   ├── knowledgeBase.ts
+│   │   ├── lazyTool.ts
+│   │   ├── localSearch.ts
+│   │   ├── longTermMemory.ts
+│   │   ├── loopEngine.ts
+│   │   ├── loopScaffold.ts
+│   │   ├── loopSupervisor.ts
+│   │   ├── lsp/
+│   │   │   ├── client.ts
+│   │   │   └── protocol.ts
+│   │   ├── magicDocs.ts
+│   │   ├── mcpClient.ts
+│   │   ├── mcpHttpClient.ts
+│   │   ├── memoryCandidate.ts
+│   │   ├── messageBus.ts
+│   │   ├── model/
+│   │   │   ├── agentModelPolicy.ts
+│   │   │   ├── anthropicAdapter.ts
+│   │   │   ├── anthropicSse.ts
+│   │   │   ├── modelGateway.ts
+│   │   │   ├── modelRouter.ts
+│   │   │   ├── modelRuntimeManager.ts
+│   │   │   ├── modelTier.ts
+│   │   │   ├── providerAdapter.ts
+│   │   │   ├── providerRuntimeBinding.ts
+│   │   │   ├── reasoningTransform.ts
+│   │   │   ├── routingErrors.ts
+│   │   │   ├── routingSignalCollector.ts
+│   │   │   └── streamConsumer.ts
+│   │   ├── modelCapabilities.ts
+│   │   ├── modes.ts
+│   │   ├── module.ts
+│   │   ├── moduleRegistry.ts
+│   │   ├── moduleRuntime/
+│   │   │   └── moduleManager.ts
+│   │   ├── onboarding.ts
+│   │   ├── pathSecurity.ts
+│   │   ├── permissionRules.ts
+│   │   ├── permissionSystem.ts
+│   │   ├── plugins.ts
+│   │   ├── profiles.ts
+│   │   ├── projectExplorer.ts
+│   │   ├── projectIdentity.ts
+│   │   ├── providers.ts
+│   │   ├── queryStateMachine.ts
+│   │   ├── repoStats.ts
+│   │   ├── resourceScheduler.ts
+│   │   ├── retryManager.ts
+│   │   ├── revisionBinding.ts
+│   │   ├── riskClassifier.ts
+│   │   ├── runtime/
+│   │   │   ├── boot.ts
+│   │   │   ├── completionContract.ts
+│   │   │   ├── coordinator.ts
+│   │   │   ├── criticTrigger.ts
+│   │   │   ├── deferredToolsReminder.ts
+│   │   │   ├── events.ts
+│   │   │   ├── evidence.ts
+│   │   │   ├── internalControlMessage.ts
+│   │   │   ├── prematureHandoff.ts
+│   │   │   ├── progressMonitor.ts
+│   │   │   ├── projectExploration.ts
+│   │   │   ├── reviewer.ts
+│   │   │   ├── runScopedContext.ts
+│   │   │   ├── sharedState.ts
+│   │   │   ├── taskGraph.ts
+│   │   │   ├── taskGraphStore.ts
+│   │   │   ├── taskIntent.ts
+│   │   │   ├── terminationPolicy.ts
+│   │   │   └── turnOutcome.ts
+│   │   ├── sandbox.ts
+│   │   ├── semanticMemory.ts
+│   │   ├── sessionManager.ts
+│   │   ├── sessionParts.ts
+│   │   ├── sessionStats.ts
+│   │   ├── sessionTitle.ts
+│   │   ├── sessionTranscript.ts
+│   │   ├── settingsSync.ts
+│   │   ├── snippets.ts
+│   │   ├── sshRemote.ts
+│   │   ├── strings.ts
+│   │   ├── structuredToolResult.ts
+│   │   ├── suggestions.ts
+│   │   ├── symbolIndex.ts
+│   │   ├── taskImpact.ts
+│   │   ├── taskTimer.ts
+│   │   ├── teamMemory.ts
+│   │   ├── telemetry.ts
+│   │   ├── thinkingTagFilter.ts
+│   │   ├── tmuxLayout.ts
+│   │   ├── todoStore.ts
+│   │   ├── toolRuntime/
+│   │   │   ├── permissionModeGate.ts
+│   │   │   ├── toolExecutor.ts
+│   │   │   ├── toolPolicy.ts
+│   │   │   ├── toolRegistry.ts
+│   │   │   └── toolScheduler.ts
+│   │   ├── toolSearch.ts
+│   │   ├── types.ts
+│   │   ├── workerAdapter.ts
+│   │   ├── workflow.ts
+│   │   ├── workingState.ts
+│   │   ├── workspace.ts
+│   │   └── workspaceWatcher.ts
+│   ├── integrations/
+│   │   ├── acp.ts
+│   │   ├── acpTransport.ts
+│   │   ├── acpWebSocket.ts
+│   │   ├── mcpOAuth.ts
+│   │   └── pipeMode.ts
+│   ├── memory/
+│   │   └── index.ts
+│   ├── modules/
+│   │   ├── critic.ts
+│   │   ├── mcp.ts
+│   │   ├── memory.ts
+│   │   ├── plugins.ts
+│   │   ├── workspace.ts
+│   │   └── workspaceWatcher.ts
+│   ├── prompts/
+│   │   ├── critic.ts
+│   │   ├── system.ts
+│   │   └── tools.ts
+│   ├── server/
+│   │   └── httpServer.ts
+│   ├── skills/
+│   │   ├── extractor.ts
+│   │   └── loader.ts
+│   ├── tools/
+│   │   ├── agent.ts
+│   │   ├── applyPatch.ts
+│   │   ├── askUser.ts
+│   │   ├── bash.ts
+│   │   ├── claudeCode.ts
+│   │   ├── codeQuality.ts
+│   │   ├── codeReview.ts
+│   │   ├── codeStructure.ts
+│   │   ├── diagnostics.ts
+│   │   ├── enterPlanMode.ts
+│   │   ├── exitPlanMode.ts
+│   │   ├── fileEdit.ts
+│   │   ├── fileRead.ts
+│   │   ├── fileWrite.ts
+│   │   ├── findTool.ts
+│   │   ├── glob.ts
+│   │   ├── goal.ts
+│   │   ├── grep.ts
+│   │   ├── index.ts
+│   │   ├── loadSkill.ts
+│   │   ├── lspTool.ts
+│   │   ├── mcpResources.ts
 │   │   ├── mcpToolAdapter.ts
-│   │   └── index.ts                 # 工具注册
-│   ├── commands/                    # 斜杠命令
-│   │   ├── builtin.ts               # 全部命令注册
-│   │   ├── index.ts / mod.ts
-│   ├── modules/                     # 内置能力模块
-│   │   ├── memory.ts                # 相关性检索 + 3 memory tools + episodic
-│   │   ├── critic.ts                # 每 N 轮 LLM 纠错
-│   │   └── workspace.ts             # sessionDir 注入
-│   └── (reflection 在 experimental/ 中保留为 no-op stub)
-│   ├── prompts/                     # 提示词
-│   │   ├── system.ts / tools.ts / critic.ts
-│   ├── ui/                          # 终端 UI (15 文件)
-│   │   ├── renderer.ts              # 流式输出 + 工具卡片 + spinner
-│   │   ├── input.ts                 # readline + stdin pipe
-│   │   ├── vim.ts                   # vim 模式 (normal/insert/visual)
-│   │   ├── keybindings.ts           # 可定制键绑定
-│   │   ├── theme.ts / markdown.ts / ansi.ts
-│   │   ├── statusLine.ts / statusLineCustom.ts
-│   │   ├── tmuxLayout.ts            # tmux 窗口管理
-│   │   ├── slashSuggest.ts / thinkingDisplay.ts
-│   │   ├── diffBrowser.ts / historyTrimmer.ts
-│   │   └── turnDeadline.ts
-│   ├── skills/                      # 技能系统
-│   │   ├── loader.ts                # frontmatter 解析 + formatSkillIndex
-│   │   └── extractor.ts             # 技能提取
-│   ├── utils/                       # 工具函数 (19 文件)
-│   │   ├── ide.ts                   # IDE 检测 (9 种编辑器)
-│   │   ├── autoUpdater.ts           # 自动更新检查
-│   │   ├── cacheStats.ts            # prompt cache 统计
-│   │   ├── systemHealth.ts          # 13 项系统健康检查
-│   │   ├── apiError.ts / cleanup.ts / clipboard.ts
-│   │   ├── doctor.ts / editor.ts / globMatch.ts
-│   │   ├── imageInput.ts / inputHistory.ts
-│   │   ├── keychain.ts / notifier.ts
-│   │   ├── secretScanner.ts / sessionExport.ts
-│   │   ├── terminalTitle.ts / vcr.ts
-│   │   └── ansi.ts
-│   └── integrations/                # 外部协议集成
-│       ├── acp.ts                   # Agent Communication Protocol server
-│       └── pipeMode.ts              # 管道模式
-├── tests/                           # vitest test suite
-└── package.json                     # runtime: openai/glob/zod/ink/react/@anthropic-ai-sdk/chokidar/vscode-jsonrpc
+│   │   ├── multiEdit.ts
+│   │   ├── notebookEdit.ts
+│   │   ├── projectExplorer.ts
+│   │   ├── searchExtraTools.ts
+│   │   ├── shellSession.ts
+│   │   ├── sleep.ts
+│   │   ├── snip.ts
+│   │   ├── symbolIndex.ts
+│   │   ├── taskGraphResolver.ts
+│   │   ├── taskPlan.ts
+│   │   ├── tasks.ts
+│   │   ├── tmuxSession.ts
+│   │   ├── todo.ts
+│   │   ├── verifyPlanExecution.ts
+│   │   ├── webFetch.ts
+│   │   ├── webSearch.ts
+│   │   └── worktree.ts
+│   ├── ui/
+│   │   ├── brand.ts
+│   │   ├── diffBrowser.ts
+│   │   ├── historyTrimmer.ts
+│   │   ├── ink/
+│   │   │   ├── App.tsx
+│   │   │   ├── Banner.tsx
+│   │   │   ├── Spinner.tsx
+│   │   │   ├── ToolCallView.tsx
+│   │   │   ├── components/
+│   │   │   ├── expandAtMentions.ts
+│   │   │   ├── fileSuggest.ts
+│   │   │   ├── gitInfo.ts
+│   │   │   ├── highlight.ts
+│   │   │   ├── inkRenderer.ts
+│   │   │   ├── modelBridge.ts
+│   │   │   ├── pasteStore.ts
+│   │   │   ├── runInkRepl.ts
+│   │   │   └── store.ts
+│   │   ├── input.ts
+│   │   ├── keybindings.ts
+│   │   ├── pipeRenderer.ts
+│   │   ├── renderer.ts
+│   │   ├── slashSuggest.ts
+│   │   ├── theme.ts
+│   │   ├── turnDeadline.ts
+│   │   └── turnOutcomeCard.ts
+│   └── utils/
+│       ├── apiError.ts
+│       ├── autoUpdater.ts
+│       ├── cacheStats.ts
+│       ├── cleanup.ts
+│       ├── clipboard.ts
+│       ├── editor.ts
+│       ├── gitignore.ts
+│       ├── globMatch.ts
+│       ├── ide.ts
+│       ├── inputHistory.ts
+│       ├── jsonc.ts
+│       ├── keychain.ts
+│       ├── notifier.ts
+│       ├── rateLimit.ts
+│       ├── secretScanner.ts
+│       ├── sessionExport.ts
+│       ├── systemHealth.ts
+│       ├── terminalTitle.ts
+│       ├── tty.ts
+│       └── warnOnce.ts
+├── package.json
+└── tsconfig.json
 ```
-
 ## AgentOS 概念对照
 
 | AgentOS 概念 | ovolv999 实现 |
