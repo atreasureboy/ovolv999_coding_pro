@@ -5,7 +5,7 @@
  * - Banner display
  * - Conversation messages (from UIStore)
  * - Live streaming text
- * - Spinner during turns
+ * - Codex-style `• Working (Ns · esc to interrupt)` status line
  * - PromptInput with slash autocomplete
  * - StatusBar (model, context, cost)
  * - Interrupt overlay
@@ -19,7 +19,6 @@ import { t } from '../theme.js'
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
 import { Banner } from './Banner.js'
-import { Spinner } from './Spinner.js'
 import { MessageList, MessageRow } from './components/MessageList.js'
 import { PromptInput } from './components/PromptInput.js'
 import { StatusBar } from './components/StatusBar.js'
@@ -106,6 +105,14 @@ export function App({
   const { stdout } = useStdout()
   const historyRef = useRef<OpenAIMessage[]>(initialHistory)
   const [showHelp, setShowHelp] = useState(false)
+  // Round 46 (codex status line): a 1s heartbeat while a turn runs so
+  // `• Working (12s · esc to interrupt)` counts up. No timer when idle.
+  const [nowTick, setNowTick] = useState(0)
+  useEffect(() => {
+    if (!state.running) return
+    const id = setInterval(() => setNowTick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [state.running])
   const inputHistory = useRef<string[]>(loadInputHistory())
   const turnStartTime = useRef(0)
   const renderEpoch = useRef(state.renderEpoch)
@@ -432,8 +439,17 @@ export function App({
         </Box>
       ) : null}
 
-      {/* Spinner */}
-      <Spinner active={state.spinnerActive} verb={state.spinnerVerb} />
+      {/* Round 46 (codex status line): one quiet line while working —
+          `• Working (12s · esc to interrupt)` — replacing the two-line
+          spinner + italic hint. The verb comes from the engine
+          (Thinking / running tools), elapsed counts up live. */}
+      {state.running ? (
+        <Box paddingLeft={1}>
+          <Text color={t.primary}>• </Text>
+          <Text color={t.text}>{state.spinnerVerb || 'Working'} </Text>
+          <Text color={t.muted}>({Math.max(0, Math.floor((Date.now() - turnStartTime.current) / 1000))}s · esc to interrupt)</Text>
+        </Box>
+      ) : null}
 
       {/* Interactive overlays — these capture keyboard while active */}
       {state.pendingPlan ? (
@@ -464,12 +480,9 @@ export function App({
         <HelpOverlay onDismiss={() => setShowHelp(false)} />
       ) : null}
 
-      {/* Input or "running..." indicator */}
-      {state.running || store.hasOverlay() || showHelp ? (
-        <Box width={terminalWidth} marginTop={1}>
-          <Text dimColor italic>  (turn in progress — ESC to interrupt)</Text>
-        </Box>
-      ) : (
+      {/* Input — hidden while a turn runs (the status line above owns
+          the "working" signal, codex-style). */}
+      {state.running || store.hasOverlay() || showHelp ? null : (
         <Box marginTop={1}>
           <PromptInput
             onSubmit={(text) => { void handleSubmit(text) }}

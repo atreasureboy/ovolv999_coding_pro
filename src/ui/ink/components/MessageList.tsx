@@ -26,7 +26,7 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'user':
       return (
         <Box marginTop={1} paddingX={1}>
-          <Text color={t.primary}>❯ </Text>
+          <Text color={t.primary}>› </Text>
           <Text bold color={t.text}>{msg.text}</Text>
         </Box>
       )

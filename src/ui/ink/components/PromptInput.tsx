@@ -350,50 +350,49 @@ export function PromptInput({
 
   const hasNewline = text.includes('\n')
 
+  // Round 46 (codex layout language): no chrome. A bare `›` prompt on a
+  // quiet line — no heading banner, no border box. Codex's whole composer
+  // is `› Ask Codex to do anything` and a footer; everything else is
+  // noise. Multi-line still needs an explicit hint (Ctrl+J is not
+  // discoverable), rendered as a dim trailing note instead of a frame.
+
   return (
     <Box flexDirection="column">
-      <Box paddingLeft={2}>
-        <Text bold color={t.accent}>◆ COMMAND DECK</Text>
-        <Text dimColor> · describe, build, transform</Text>
-      </Box>
       {hasNewline ? (
-        // Multi-line render: show each line, cursor on the active line
-        <Box width={terminalWidth} flexDirection="column" borderStyle="round" borderColor={t.borderActive} paddingX={1}>
+        // Multi-line render: each line, cursor on the active line.
+        <Box width={terminalWidth} flexDirection="column">
           <Box>
             <Text color={t.primary}>› </Text>
-            <Text dimColor>(multi-line · Ctrl+J=newline · Enter=submit)</Text>
+            <Text>{text.split('\n')[0]}</Text>
           </Box>
-          {text.split('\n').map((line, i, arr) => {
-            // Calculate absolute position of this line's start
-            const lineStart = i === 0 ? 0 : arr.slice(0, i).join('\n').length + 1
+          {text.split('\n').slice(1).map((line, i, arr) => {
+            const lineStart = text.split('\n').slice(0, i + 1).join('\n').length + 1
             const relCursor = cursor - lineStart
             const isCursorLine = relCursor >= 0 && relCursor <= line.length
-            if (isCursorLine && i === arr.length - 1 || (isCursorLine && relCursor <= line.length)) {
-              return (
-                <Box key={i} marginLeft={2}>
-                  <Text>
-                    {line.slice(0, Math.max(0, relCursor))}
-                  </Text>
-                  <Text color={t.info}>
-                    {relCursor < line.length ? line[relCursor] : ' '}
-                  </Text>
-                  {relCursor < line.length ? <Text>{line.slice(relCursor + 1)}</Text> : null}
-                </Box>
-              )
-            }
             return (
-              <Box key={i} marginLeft={2}>
-                <Text>{line || ' '}</Text>
+              <Box key={i} paddingLeft={2}>
+                {isCursorLine ? (
+                  <>
+                    <Text>{line.slice(0, Math.max(0, relCursor))}</Text>
+                    <Text backgroundColor={t.primary} color="#1a1a1a">
+                      {relCursor < line.length ? line[relCursor] : ' '}
+                    </Text>
+                    {relCursor < line.length ? <Text>{line.slice(relCursor + 1)}</Text> : null}
+                  </>
+                ) : (
+                  <Text>{line || ' '}</Text>
+                )}
               </Box>
             )
           })}
+          <Text color={t.faint}>  Ctrl+J newline · Enter submit</Text>
         </Box>
       ) : (
-        <Box width={terminalWidth} borderStyle="round" borderColor={t.borderActive} paddingX={1}>
-          <Box width={2} flexShrink={0}>
-            <Text color={t.primary}>›</Text>
-          </Box>
-          {cursor === text.length && text.length > 0 ? (
+        <Box paddingLeft={1}>
+          <Text color={t.primary}>› </Text>
+          {text.length === 0 && cursor === 0 ? (
+            <Text color={t.faint}>Ask ovolv999 to do anything…</Text>
+          ) : cursor === text.length && text.length > 0 ? (
             <>
               <Text>{text.slice(0, -1)}</Text>
               <Text backgroundColor={t.primary} color="#1a1a1a">{text.at(-1)}</Text>
