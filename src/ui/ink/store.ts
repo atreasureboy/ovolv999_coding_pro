@@ -212,7 +212,7 @@ export class UIStore {
 
   private add(msg: NewUIMessage, finalized = true): number {
     const id = this.nextId++
-    const message = { ...msg, id } as UIMessage
+    const message: UIMessage = { ...msg, id }
     this.state = {
       ...this.state,
       messages: [...this.state.messages, message],
