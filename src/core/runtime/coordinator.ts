@@ -232,6 +232,8 @@ export class RuntimeCoordinator {
   private _projectIdentityCache: { cwd: string; identity: ProjectIdentity } | null = null
   /** Round 43: last gateway error, for Retry-After-aware backoff. */
   private lastGatewayError: unknown = null
+  /** Round 45: completion-claim critic fires once per coordinator lifetime. */
+  private completionCriticSpentFor = false
   // v0.5.3 P0-3: coordinator no longer carries its own provider
   // circuit state. The single source of truth is the ModelRouter's
   // per-profile circuit (consecutiveProfileFailures + circuitStates
@@ -1020,14 +1022,24 @@ export class RuntimeCoordinator {
               if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.tool_calls || lastMsg.tool_calls.length === 0)) {
                 modelClaimingCompletion = true
               }
+              // Round 45 (audit fix): the completion-claim critic fires
+              // AT MOST ONCE per run — every iteration past the first
+              // re-ran a full LLM round-trip in the middle of the tool
+              // loop for the same already-reviewed claim.
+              const completionCriticFresh = !(
+                modelClaimingCompletion && this.completionCriticSpentFor
+              )
               criticRequested = shouldInvokeCritic({
                 snapshot: snap,
-                modelClaimingCompletion,
+                modelClaimingCompletion: modelClaimingCompletion && completionCriticFresh,
                 isCoreArchitecture: /architect|refactor|redesign|root cause/i.test(userMessage),
                 changedFilesCount: ws.filesChanged.length,
                 unresolvedCount: ws.unresolved.length,
                 remainingAcceptanceCount: snap.remainingAcceptanceCriteria.length,
               }).invoke
+              if (criticRequested && modelClaimingCompletion) {
+                this.completionCriticSpentFor = true
+              }
               if (criticRequested) {
                 this.deps.eventEmitter.emit({
                   type: 'CRITIC_INVOKED',
@@ -1402,7 +1414,11 @@ export class RuntimeCoordinator {
       : null
     const hasChanges = ws.filesChanged.length > 0
     if (runContext) {
-      const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+      // Round 45: reverse scan without copying the whole history.
+      let lastAssistant: OpenAIMessage | undefined
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === 'assistant') { lastAssistant = messages[i]; break }
+      }
       runContext.completionCandidate = {
         hasToolCalls: Boolean(lastAssistant?.tool_calls?.length),
         text: result.output,

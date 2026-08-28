@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { join, resolve, basename } from 'path'
 import { randomBytes } from 'crypto'
 import type { OpenAIMessage, ToolCall } from './types.js'
-import { appendDelta, hasPartsLedger, readParts } from './sessionParts.js'
+import { appendDelta, appendDeltaFrom, hasPartsLedger, readParts } from './sessionParts.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
 import { warnOnce } from '../utils/warnOnce.js'
 
@@ -756,20 +756,13 @@ export function saveSessionIncremental(
       saveSession(sessionDir, history, outcome, title)
       return 'full'
     }
-    if (common === history.length) {
-      // No new messages; upsert meta only.
-      if (outcome !== undefined || title !== undefined) {
-        appendDelta(sessionDir, history, {
-          ...(outcome !== undefined ? { lastOutcome: outcome } : {}),
-          ...(title !== undefined ? { title } : {}),
-        })
-      }
-      return 'appended'
-    }
-    appendDelta(sessionDir, history, {
+    // Round 45 (perf): feed the already-computed prefix to the ledger —
+    // appendDelta would otherwise re-read and re-compare the whole file.
+    const meta = {
       ...(outcome !== undefined ? { lastOutcome: outcome } : {}),
       ...(title !== undefined ? { title } : {}),
-    })
+    }
+    appendDeltaFrom(sessionDir, history, common, meta)
     return 'appended'
   } catch {
     // Anything unexpected — the full path is always safe.

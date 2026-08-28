@@ -417,7 +417,18 @@ export function App({
               })()}
             </Text>
           ) : null}
-          {state.streamingText ? <Text color={t.text}>{state.streamingText}</Text> : null}
+          {state.streamingText ? (
+            <Text color={t.text}>
+              {(() => {
+                // Round 45: tail window — rendering the WHOLE accumulated
+                // reply every 60ms made long responses progressively
+                // jankier (O(accumulated) re-layout per flush). The full
+                // text lands in the static history at turn end.
+                const lines = state.streamingText.split('\n')
+                return lines.slice(-12).join('\n')
+              })()}
+            </Text>
+          ) : null}
         </Box>
       ) : null}
 

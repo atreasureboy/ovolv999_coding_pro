@@ -19,6 +19,7 @@ import type { ExecutionEngine } from '../../core/engine.js'
 import type { OpenAIMessage } from '../../core/types.js'
 import type { RendererInterface } from '../renderer.js'
 import type { TurnOutcome } from '../../core/runtime/turnOutcome.js'
+import { appendCheckpoint } from '../../core/conversationCheckpoints.js'
 import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/index.js'
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
@@ -143,6 +144,10 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
         try {
           // Round 42: incremental per-turn save (append-only ledger).
           saveSessionIncremental(currentSessionDir, history, result.outcome ? summarizeOutcome(result.outcome) : undefined)
+          // Round 45 (audit fix): the classic path anchors a conversation
+          // checkpoint after every turn — the Ink path never did, so
+          // /rewind turn N was always empty on the DEFAULT UI. Parity now.
+          appendCheckpoint(currentSessionDir, history, engine.getFileHistory(), prompt.slice(0, 80), opts.cwd)
         } catch (err: unknown) {
           store.addWarn(`Session save warning: ${(err as Error).message}`)
         }

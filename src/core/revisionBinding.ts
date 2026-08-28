@@ -312,28 +312,14 @@ function walkForManifest(
  * changes the hash.
  */
 /**
- * Round 45 (usage polish): per-cwd cache keyed by (fileCount, newestMtime)
- * of the ROOT directory only. Repeated calls within a turn (identity →
- * memory promotion → untracked listing) skip the re-walk entirely; any
- * file created/removed/modified at the root invalidates it. Deeper
- * edits invalidate on the next turn's natural re-check via the root
- * mtime of changed parents is NOT tracked — accepted trade-off, the
- * previous behavior re-walked everything on EVERY call.
+ * Round 45 note: a TTL cache here was tried and REMOVED — it broke the
+ * content-bound contract (a file change must flip the hash immediately;
+ * revisionBindingTruth pins this). The R44c walk budgets (≤5k entries,
+ * depth ≤12) already bound the worst case to ~tens of ms for realistic
+ * projects, which is acceptable per call.
  */
-const wsHashCache = new Map<string, { key: string; hash: string }>()
-
 export function workspaceHash(cwd: string): string {
-  try {
-    const st = statSync(cwd)
-    const key = `${st.mtimeMs}:${st.size}`
-    const hit = wsHashCache.get(cwd)
-    if (hit && hit.key === key) return hit.hash
-    const hash = workspaceManifestHash(cwd)
-    wsHashCache.set(cwd, { key, hash })
-    return hash
-  } catch {
-    return workspaceManifestHash(cwd)
-  }
+  return workspaceManifestHash(cwd)
 }
 
 export { isAbsolute, relative, sep }

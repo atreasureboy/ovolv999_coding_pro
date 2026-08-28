@@ -83,11 +83,16 @@ export interface PageResult {
  * turns) while keeping cost O(line) instead of O(history).
  */
 function appendLineSync(sessionDir: string, line: string): void {
+  appendLinesSync(sessionDir, [line])
+}
+
+/** Durable batch append: ONE open+write+fsync+close for all lines. */
+function appendLinesSync(sessionDir: string, lines: string[]): void {
   const path = join(sessionDir, PARTS_FILENAME)
   let fd: number | null = null
   try {
     fd = openSync(path, 'a')
-    writeSync(fd, line + '\n', null, 'utf8')
+    writeSync(fd, lines.join('\n') + '\n', null, 'utf8')
     fsyncSync(fd)
   } finally {
     if (fd !== null) {
@@ -242,11 +247,34 @@ export function appendDelta(
     return history.length
   }
 
-  for (let i = persisted.length; i < history.length; i++) {
-    appendMessage(sessionDir, history[i], i)
+  return appendDeltaFrom(sessionDir, history, commonPrefix, meta)
+}
+
+/**
+ * Round 45: append a caller-COMPUTED delta (no second ledger read).
+ * All lines — new messages + optional meta upsert — are joined and
+ * written in ONE open+write+fsync: appending to a single-stream ledger
+ * is atomic per write, and the torn-tail reader already handles a
+ * truncated final line, so batching cannot corrupt. Cuts a 20-message
+ * turn from 21 fsyncs to 1.
+ */
+export function appendDeltaFrom(
+  sessionDir: string,
+  history: OpenAIMessage[],
+  persistedCount: number,
+  meta?: Partial<PartsMeta>,
+): number {
+  const lines: string[] = []
+  for (let i = persistedCount; i < history.length; i++) {
+    const rec: MsgRecord = { kind: 'msg', seq: i, msg: { ...history[i] } }
+    lines.push(JSON.stringify(rec))
   }
-  if (meta) appendMeta(sessionDir, meta)
-  return history.length - persisted.length
+  if (meta) {
+    const rec: MetaRecord = { kind: 'meta', schema: PARTS_SCHEMA, ...meta, updatedAt: new Date().toISOString() }
+    lines.push(JSON.stringify(rec))
+  }
+  if (lines.length > 0) appendLinesSync(sessionDir, lines)
+  return history.length - persistedCount
 }
 
 /** Structural equality for ledger-vs-live comparison (JSON-stable fields). */

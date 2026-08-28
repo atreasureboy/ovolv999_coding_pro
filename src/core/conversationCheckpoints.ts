@@ -261,14 +261,24 @@ export function appendCheckpoint(
           continue
         }
 
-        // Snapshot reuse — CONTENT-ADDRESSSED + verified (Round 32):
-        // the previous anchor's identity is reused only when the LIVE
-        // content hashes to the same digest. mtime+size alone had a
-        // stale window (two same-size writes with identical coarse
-        // mtimes on HFS+/FAT/network FS); hashing kills it. When the
-        // hash differs we still avoid a second copy: the snapshot file
-        // name IS the digest, so identical content across files/turns
-        // dedupes for free.
+        // Snapshot reuse — CONTENT-ADDRESSED + verified (Round 32), with
+        // the mtime+size FAST PATH FIRST (Round 45 audit fix): the live
+        // hash was computed BEFORE consulting the previous anchor's
+        // stat, so every turn re-read + re-hashed every tracked file —
+        // the very cost the `st` field exists to avoid. Now: when the
+        // previous anchor's mtime+size match the live stat exactly, the
+        // previous digest is reused WITHOUT hashing (same stale window
+        // as before applies only when the OS lies about mtime+size, the
+        // pre-Round-32 risk this file already documents); only a stat
+        // change triggers the SHA-256 read.
+        const prev = lastEntries[path]
+        if (
+          isV2Entry(prev) && prev.snap && prev.h &&
+          prev.st && prev.st[0] === stat.mtimeMs && prev.st[1] === stat.size
+        ) {
+          files[path] = { tip, snap: prev.snap, h: prev.h, st: prev.st, md: stat.mode }
+          continue
+        }
         const liveHash = (() => {
           try {
             return sha256File(path)
@@ -276,14 +286,12 @@ export function appendCheckpoint(
             return null
           }
         })()
-        const prev = lastEntries[path]
         if (
           liveHash &&
           isV2Entry(prev) && prev.snap && prev.h &&
-          prev.st && prev.st[0] === stat.mtimeMs && prev.st[1] === stat.size &&
           prev.h === liveHash
         ) {
-          files[path] = { tip, snap: prev.snap, h: prev.h, st: prev.st, md: stat.mode }
+          files[path] = { tip, snap: prev.snap, h: prev.h, st: [stat.mtimeMs, stat.size], md: stat.mode }
           continue
         }
 
