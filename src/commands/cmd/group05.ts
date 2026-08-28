@@ -19,6 +19,7 @@ const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
 import { saveProjectSettings } from '../../config/settings.js'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { text } from '../shared.js'
 import { loadProfilesRaw } from './common.js'
 
@@ -624,6 +625,94 @@ registerCommand({
 
     const path = exportTranscript(transcript, format)
     return text(`Transcript exported to: ${path}\n\nStats:\n${formatStats(getTranscriptStats(transcript))}`)
+  },
+})
+
+// ── /gc — session disk usage report + opt-in prune ─────────────────────────
+
+registerCommand({
+  name: 'gc',
+  description: 'Report session disk usage; optionally prune sessions older than N days',
+  usage: '/gc | /gc prune --days <N> [--yes]',
+  handler: (args, ctx) => {
+    const { readdirSync, statSync, rmSync } = require('fs') as typeof import('fs')
+    const sessionsRoot = join(ctx.cwd, 'sessions')
+    const dirSize = (dir: string): number => {
+      let total = 0
+      try {
+        for (const e of readdirSync(dir)) {
+          const p = join(dir, e)
+          let st
+          try { st = statSync(p) } catch { continue }
+          if (st.isDirectory()) total += dirSize(p)
+          else total += st.size
+        }
+      } catch { /* unreadable */ }
+      return total
+    }
+    const fmt = (n: number): string =>
+      n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`
+
+    if (!existsSync(sessionsRoot)) return text('No sessions directory.')
+
+    type Row = { name: string; size: number; mtime: number }
+    const rows: Row[] = []
+    for (const name of readdirSync(sessionsRoot)) {
+      const dir = join(sessionsRoot, name)
+      try {
+        if (!statSync(dir).isDirectory()) continue
+        rows.push({ name, size: dirSize(dir), mtime: statSync(join(dir, 'history.json')).mtime.getTime() })
+      } catch { /* history missing — use dir mtime */ 
+        try { rows.push({ name, size: dirSize(dir), mtime: statSync(dir).mtime.getTime() }) } catch { /* skip */ }
+      }
+    }
+    if (rows.length === 0) return text('No sessions found.')
+
+    const total = rows.reduce((n, r) => n + r.size, 0)
+    const parts = args.trim().split(/\s+/)
+    const pruneIdx = parts.indexOf('prune')
+
+    if (pruneIdx === -1) {
+      const lines = [
+        `Sessions: ${rows.length} · total ${fmt(total)}`,
+        `  current: ${ctx.sessionDir?.split('/').pop() ?? '—'} (never pruned)`,
+        '',
+        'Oldest 5:',
+        ...rows.slice().sort((a, b) => a.mtime - b.mtime).slice(0, 5)
+          .map((r) => `  ${new Date(r.mtime).toISOString().slice(0, 10)}  ${fmt(r.size).padStart(9)}  ${r.name}`),
+        '',
+        'Prune sessions older than N days: /gc prune --days 30 [--yes]',
+      ]
+      return text(lines.join('\n'))
+    }
+
+    const daysIdx = parts.indexOf('--days')
+    const days = daysIdx >= 0 ? parseInt(parts[daysIdx + 1] ?? '', 10) : NaN
+    if (!Number.isFinite(days) || days <= 0) {
+      return text('Usage: /gc prune --days <N> [--yes]')
+    }
+    const yes = parts.includes('--yes')
+    const cutoff = Date.now() - days * 86_400_000
+    const stale = rows.filter((r) => r.mtime < cutoff && join(sessionsRoot, r.name) !== ctx.sessionDir)
+    if (stale.length === 0) return text(`Nothing older than ${days} day(s) to prune.`)
+    if (!yes) {
+      return text(
+        `Would delete ${stale.length} session(s), freeing ${fmt(stale.reduce((n, r) => n + r.size, 0))}:\n` +
+        stale.slice(0, 10).map((r) => `  ${r.name}`).join('\n') +
+        (stale.length > 10 ? `\n  … +${stale.length - 10} more` : '') +
+        `\n\nRun with --yes to actually delete.`,
+      )
+    }
+    let deleted = 0
+    let freed = 0
+    for (const r of stale) {
+      try {
+        rmSync(join(sessionsRoot, r.name), { recursive: true, force: true })
+        deleted++
+        freed += r.size
+      } catch { /* best-effort per dir */ }
+    }
+    return text(`Pruned ${deleted} session(s), freed ${fmt(freed)}.`)
   },
 })
 
