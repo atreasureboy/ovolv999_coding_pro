@@ -34,59 +34,39 @@ export function effectiveModelFor(outcome: { modelAttempts?: ModelCallAttempt[] 
 }
 
 export function formatOutcomeCardText(opts: OutcomeCardOptions): string {
-  const { outcome, elapsedSec, model, costStr } = opts
-  const effectiveModel = effectiveModelFor(outcome, model)
+  const { outcome, elapsedSec, costStr } = opts
   const status = outcome.completion?.status ?? 'completed'
-  const statusSymbol =
-    status === 'completed' ? '✓ COMPLETED' :
-    status === 'partial' ? '◐ PARTIAL' :
-    status === 'blocked' ? '🛑 BLOCKED' :
-    status === 'cancelled' ? '⚡ CANCELLED' :
-    status === 'failed' ? '✗ FAILED' : '⚠️ EXHAUSTED'
 
+  // Round 46 (codex detail): `─ Worked for 12s ─────` — the turn-end
+  // marker is ONE quiet divider line, not a multi-row emoji card. Status
+  // and blockers still surface when they matter (non-completed turns);
+  // a completed turn just shows duration + cost.
   const lines: string[] = []
-  lines.push(`Turn Outcome: ${statusSymbol}`)
-  lines.push(`  ⏱ Duration: ${elapsedSec}s  ·  Model: ${effectiveModel}${costStr ? `  ·  Cost: ${costStr}` : ''}`)
+  const head = `Worked for ${elapsedSec}s${costStr ? ` · ${costStr}` : ''}`
+  const width = Math.max(40, head.length + 4)
+  const dashes = Math.max(3, width - head.length - 4)
+  lines.push(`─ ${head} ${'─'.repeat(dashes)}`)
 
+  const attention: string[] = []
+  if (status !== 'completed' && status !== 'cancelled') {
+    attention.push(`status: ${status}`)
+  }
   if (outcome.changedFiles && outcome.changedFiles.length > 0) {
-    lines.push(`  📁 Modified files (${outcome.changedFiles.length}):`)
-    for (const file of outcome.changedFiles.slice(0, 8)) {
-      lines.push(`     - ${file}`)
-    }
-    if (outcome.changedFiles.length > 8) {
-      lines.push(`     - ... and ${outcome.changedFiles.length - 8} more`)
-    }
+    const shown = outcome.changedFiles.slice(0, 5)
+    attention.push(`changed ${shown.map((f) => f.split('/').pop()).filter(Boolean).join(', ')}${outcome.changedFiles.length > 5 ? ` +${outcome.changedFiles.length - 5}` : ''}`)
   }
-
-  if (outcome.verification) {
-    if (outcome.verification.executed) {
-      const vStatus = outcome.verification.passed ? 'PASSED' : 'FAILED'
-      lines.push(`  🧪 Verification: Executed (${vStatus})`)
-      if (outcome.verification.failed && outcome.verification.failed.length > 0) {
-        for (const failItem of outcome.verification.failed.slice(0, 3)) {
-          lines.push(`     - ${failItem}`)
-        }
-      }
-    } else {
-      lines.push(`  🧪 Verification: Not executed`)
-    }
+  if (outcome.verification?.executed) {
+    attention.push(outcome.verification.passed ? 'verification passed' : 'verification FAILED')
   }
-
-  if (outcome.completion?.reasons && outcome.completion.reasons.length > 0) {
-    lines.push(`  🛑 Blockers / Reasons:`)
-    for (const r of outcome.completion.reasons) {
-      lines.push(`     - ${r}`)
-    }
+  for (const r of (outcome.completion?.reasons ?? []).slice(0, 3)) {
+    attention.push(r)
   }
-
-  if (outcome.completion?.requiredNextActions && outcome.completion.requiredNextActions.length > 0) {
-    lines.push(`  📋 Required Next Actions:`)
-    for (const act of outcome.completion.requiredNextActions) {
-      lines.push(`     - ${act}`)
-    }
+  for (const a of (outcome.completion?.requiredNextActions ?? []).slice(0, 2)) {
+    attention.push(`next: ${a}`)
   }
-
-  lines.push(`  💡 Quick Actions: /diff  ·  /undo  ·  /why`)
+  for (const a of attention) {
+    lines.push(`  · ${a}`)
+  }
 
   return lines.join('\n')
 }

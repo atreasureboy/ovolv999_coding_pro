@@ -1,76 +1,80 @@
 /**
- * ToolCallView — collapsible display of a tool invocation + its result.
+ * ToolCallView — codex-style tool line: `• Ran <cmd>` with output folded
+ * under a `└` continuation, diff stats for edits, `… +N lines` caps.
  *
- * Shows the tool icon, name, input preview, and result (truncated).
- * In the future this could support expand/collapse via keypress.
+ * Round 46: no per-tool rainbow icons, no left border rail, no raw tool
+ * names — codex speaks in verbs (Ran / Read / Updated / Searched / Listed)
+ * and folds output; the model's tool name is plumbing, not prose.
  */
 
 import { Text, Box } from 'ink'
-import { str } from '../../core/strings.js'
 import { DiffView, computeLineDiff } from './components/DiffView.js'
 import { t } from '../theme.js'
 
-interface ToolVisual {
-  icon: string
+const OUTPUT_PREVIEW_LINES = 4
+
+interface ToolLine {
+  /** Verb + object, e.g. `Ran ls -la`. */
+  label: string
+  /** codex's verb dot color reflects outcome, not tool identity. */
   color: string
 }
 
-const TOOL_VIZ: Record<string, ToolVisual> = {
-  Bash: { icon: '$', color: t.warning },
-  Read: { icon: '◇', color: t.info },
-  Write: { icon: '◆', color: t.success },
-  Edit: { icon: '◆', color: t.primary },
-  Glob: { icon: '◇', color: t.accent },
-  Grep: { icon: '◇', color: t.accent },
-  WebFetch: { icon: '◎', color: t.info },
-  WebSearch: { icon: '◎', color: t.info },
-  TodoWrite: { icon: '◆', color: t.success },
-  Agent: { icon: '◈', color: t.primary },
-  ShellSession: { icon: '◌', color: t.error },
-  TmuxSession: { icon: '◌', color: t.error },
-  AskUserQuestion: { icon: '?', color: t.warning },
-  ExitPlanMode: { icon: '◆', color: t.success },
-  Sleep: { icon: '·', color: t.faint },
-  Snip: { icon: '◇', color: t.warning },
-  NotebookEdit: { icon: '◆', color: t.accent },
+function shortenPath(p: string, max = 48): string {
+  if (p.length <= max) return p
+  const parts = p.split('/')
+  return '…/' + parts.slice(-2).join('/')
 }
 
-function viz(name: string): ToolVisual {
-  return TOOL_VIZ[name] ?? { icon: '·', color: t.muted }
+function firstLine(s: string, max = 72): string {
+  const line = s.split('\n')[0]?.trim() ?? ''
+  return line.length > max ? line.slice(0, max - 1) + '…' : line
 }
 
-function previewTool(name: string, input: Record<string, unknown>): string {
+/** codex verb-language summary of the invocation. */
+function toolLine(name: string, input: Record<string, unknown>): ToolLine {
   const s = (v: unknown): string => str(v)
   switch (name) {
-    case 'Bash': {
-      const c = s(input.command).trim()
-      return c.length > 72 ? c.slice(0, 69) + '...' : c
-    }
+    case 'Bash':
+      return { label: `Ran ${firstLine(s(input.command))}`, color: t.text }
     case 'Read':
-      return s(input.file_path) + (input.offset ? ` from line ${s(input.offset)}` : '')
+      return { label: `Read ${shortenPath(s(input.file_path))}`, color: t.text }
     case 'Write':
-      return `${s(input.file_path)} (${s(input.content).split('\n').length}L)`
+      return { label: `Created ${shortenPath(s(input.file_path))}`, color: t.text }
     case 'Edit':
-      return s(input.file_path)
-    case 'Glob':
-      return s(input.pattern)
+    case 'MultiEdit':
+      return { label: `Updated ${shortenPath(s(input.file_path))}`, color: t.text }
+    case 'NotebookEdit':
+      return { label: `Updated ${shortenPath(s(input.file_path))}`, color: t.text }
     case 'Grep':
-      return `/${s(input.pattern)}/${input.include ? ` [${s(input.include)}]` : ''}`
+      return { label: `Searched ${firstLine(s(input.pattern), 48)}`, color: t.text }
+    case 'Glob':
+      return { label: `Listed ${firstLine(s(input.pattern), 48)}`, color: t.text }
     case 'WebFetch':
-      return s(input.url)
+      return { label: `Fetched ${firstLine(s(input.url), 56)}`, color: t.text }
     case 'WebSearch':
-      return `"${s(input.query)}"`
+      return { label: `Searched web: ${firstLine(s(input.query), 48)}`, color: t.text }
+    case 'TodoWrite':
+      return { label: 'Updated task list', color: t.text }
     case 'Agent':
-      return `${input.subagent_type ? `[${s(input.subagent_type)}] ` : ''}${s(input.description)}`
-    case 'TodoWrite': {
-      const count = Array.isArray(input.todos) ? input.todos.length : 0
-      return `${count} item${count === 1 ? '' : 's'}`
-    }
-    case 'Snip':
-      return `keep ${s(input.keep_recent)} recent`
+      return { label: `Delegated: ${firstLine(s(input.description) || s(input.prompt), 56)}`, color: t.text }
+    case 'apply_patch':
+      return { label: 'Applied patch', color: t.text }
     default:
-      return ''
+      return { label: `${name} ${firstLine(JSON.stringify(input), 48)}`.trimEnd(), color: t.text }
   }
+}
+
+/** Diff-stat suffix for edit tools: (+12 -3). */
+function diffStats(name: string, input: Record<string, unknown>): string | null {
+  if (name !== 'Edit' && name !== 'Write') return null
+  const oldText = name === 'Edit' ? str(input.old_string) : ''
+  const newText = name === 'Edit' ? str(input.new_string) : str(input.content)
+  const added = newText.split('\n').length - (name === 'Edit' ? oldText.split('\n').length : 0)
+  const removed = name === 'Edit' ? 0 : 0
+  void removed
+  if (added > 0) return `+${added}`
+  return null
 }
 
 export interface ToolCallProps {
@@ -81,106 +85,68 @@ export interface ToolCallProps {
   elapsedMs?: number
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const min = Math.floor(ms / 60_000)
-  const sec = Math.round((ms % 60_000) / 1000)
-  return `${min}m${sec}s`
-}
-
-/**
- * Compute a tool-specific result badge (e.g. exit code, match count).
- * Returns null if no badge applies.
- */
-function resultBadge(
-  name: string,
-  input: Record<string, unknown>,
-  result: string | undefined,
-  isError: boolean | undefined,
-): { text: string; color: string } | null {
-  if (result === undefined) return null
-
-  switch (name) {
-    case 'Bash': {
-      // Detect exit code from result (engine appends "Exit code: N")
-      const exitMatch = result.match(/Exit code: (\d+)/)
-      const code = exitMatch ? parseInt(exitMatch[1], 10) : (isError ? 1 : 0)
-      return code === 0
-        ? { text: '✓ exit 0', color: t.success }
-        : { text: `✗ exit ${code}`, color: t.error }
-    }
-    case 'Read': {
-      const lines = result.split('\n').length
-      return { text: `${lines}L`, color: 'dim' }
-    }
-    case 'Grep': {
-      const matches = result.split('\n').filter((l) => l.trim() && !l.startsWith('Found')).length
-      return { text: `${matches} matches`, color: t.accent }
-    }
-    case 'Glob': {
-      const files = result.split('\n').filter((l) => l.trim()).length
-      return { text: `${files} file${files !== 1 ? 's' : ''}`, color: t.accent }
-    }
-    case 'WebFetch':
-      return { text: `${result.length} chars`, color: t.info }
-    default:
-      return null
-  }
-}
-
 export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCallProps): React.ReactElement {
-  const v = viz(name)
-  const preview = previewTool(name, input)
+  const line = toolLine(name, input)
+  const dotColor = isError ? t.error : t.success
+  const stats = diffStats(name, input)
 
   // Show inline diff for Edit/Write tools when result is available
   const showDiff = (name === 'Edit' || name === 'Write') && result !== undefined && !isError
   const oldText = name === 'Edit' ? str(input.old_string) : ''
   const newText = name === 'Edit' ? str(input.new_string) : name === 'Write' ? str(input.content) : ''
 
+  const resultLines = result !== undefined
+    ? result.split('\n').filter((l) => l.trim())
+    : []
+
   return (
-    <Box flexDirection="column" borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor={isError ? t.error : t.border} paddingLeft={1}>
+    <Box flexDirection="column">
       <Box>
-        <Text color={v.color}>{v.icon}</Text>
-        <Text bold color={v.color}> {name}</Text>
-        {preview ? <Text dimColor> {preview}</Text> : null}
-        {elapsedMs !== undefined ? <Text dimColor> · {formatDuration(elapsedMs)}</Text> : null}
-        {(() => {
-          const badge = resultBadge(name, input, result, isError)
-          if (!badge) return null
-          return <Text color={badge.color}> · {badge.text}</Text>
-        })()}
+        <Text color={isError ? t.error : result === undefined ? t.warning : t.success}>• </Text>
+        <Text color={line.color}>{line.label}</Text>
+        {stats ? <Text color={t.diffAdded}> ({stats})</Text> : null}
+        {elapsedMs !== undefined && elapsedMs > 2000 ? <Text color={t.faint}> ({formatDuration(elapsedMs)})</Text> : null}
       </Box>
       {showDiff ? (
-        <Box marginLeft={4} flexDirection="column">
+        <Box marginLeft={2} flexDirection="column">
           <DiffView lines={computeLineDiff(oldText, newText)} maxLines={12} />
         </Box>
       ) : null}
       {result !== undefined && !showDiff ? (
-        <Box marginLeft={4} flexDirection="column">
-          {result
-            .split('\n')
-            .filter((l) => l.trim())
-            .slice(0, 6)
-            .map((line, i) => (
-              <Box key={i}>
-                <Text color={isError ? t.error : undefined} dimColor={!isError}>
-                  {line.length > 120 ? line.slice(0, 117) + '...' : line}
-                </Text>
-              </Box>
-            ))}
+        <Box flexDirection="column">
+          {resultLines.slice(0, OUTPUT_PREVIEW_LINES).map((l, i) => (
+            <Box key={i}>
+              <Text color={t.faint}>{i === 0 ? '  └ ' : '    '}</Text>
+              <Text color={isError ? t.error : t.muted}>
+                {l.length > 120 ? l.slice(0, 117) + '…' : l}
+              </Text>
+            </Box>
+          ))}
           {(() => {
-            const lines = result.split('\n').filter((l) => l.trim())
-            const hidden = lines.length - 6
-            return hidden > 0 ? <Text dimColor> +{hidden} more</Text> : null
+            const hidden = resultLines.length - OUTPUT_PREVIEW_LINES
+            return hidden > 0 ? (
+              <Text color={t.faint}>    … +{hidden} lines</Text>
+            ) : null
           })()}
         </Box>
       ) : null}
       {result === undefined ? (
-        <Box marginLeft={4}>
-          <Text dimColor italic>running...</Text>
+        <Box>
+          <Text color={t.faint}>  └ running…</Text>
         </Box>
       ) : null}
     </Box>
   )
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const m = Math.floor(ms / 60_000)
+  const s = Math.round((ms % 60_000) / 1000)
+  return `${m}m${s}s`
+}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : ''
 }

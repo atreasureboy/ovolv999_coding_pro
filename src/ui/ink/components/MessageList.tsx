@@ -193,15 +193,30 @@ function groupMessages(messages: UIMessage[]): MessageGroup[] {
 }
 
 function CollapsedToolGroup({ msgs }: { msgs: UIMessage[] }): React.ReactElement {
-  const types = new Set(msgs.map((m) => (m.type === 'tool' ? m.name : '')))
-  const typeStr = [...types].join('/')
+  // Round 46 (codex grouping): consecutive read-only tools collapse into
+  // a verb group — `• Explored` with children under `└` — instead of a
+  // `⤿ Read/Grep ×3` counter row.
   const errors = msgs.filter((m) => m.type === 'tool' && m.isError).length
-
+  const child = (m: UIMessage): string => {
+    if (m.type !== 'tool') return ''
+    const p = (m.input.file_path ?? m.input.pattern ?? m.input.command ?? m.input.query ?? '') as string
+    const s = typeof p === 'string' ? p.split('/').slice(-1)[0] || p : ''
+    return `${m.name === 'Grep' ? 'Searched' : m.name === 'Glob' ? 'Listed' : 'Read'} ${s.slice(0, 48)}`
+  }
   return (
-    <Box marginTop={1}>
-      <Text color={t.faint}>⤿ {typeStr} ×{msgs.length}</Text>
-      {errors > 0 ? <Text color={t.error}> ({errors} errors)</Text> : null}
-      <Text color={t.faint}> — Ctrl+O to expand</Text>
+    <Box marginTop={1} flexDirection="column">
+      <Box>
+        <Text color={errors > 0 ? t.error : t.success}>• </Text>
+        <Text color={t.text}>Explored</Text>
+        {errors > 0 ? <Text color={t.error}> ({errors} failed)</Text> : null}
+      </Box>
+      {msgs.slice(0, 6).map((m) => (
+        <Box key={m.id} paddingLeft={2}>
+          <Text color={t.faint}>└ </Text>
+          <Text color={t.muted}>{child(m)}</Text>
+        </Box>
+      ))}
+      {msgs.length > 6 ? <Text color={t.faint}>  … +{msgs.length - 6} more</Text> : null}
     </Box>
   )
 }

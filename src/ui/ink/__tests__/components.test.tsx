@@ -179,9 +179,9 @@ describe('MessageList tool collapsing', () => {
     ]
     const { lastFrame } = render(<MessageList messages={msgs} />)
     const frame = lastFrame() ?? ''
-    expect(frame).toContain('⤿')
-    expect(frame).toContain('Read ×4')
-    expect(frame).toContain('Ctrl+O')
+    // Round 46 codex grouping: `• Explored` + `└` children
+    expect(frame).toContain('Explored')
+    expect(frame).toContain('\u2514 Read file4.ts')
   })
 
   it('does not collapse fewer than 3 consecutive reads', () => {
@@ -191,7 +191,6 @@ describe('MessageList tool collapsing', () => {
     ]
     const { lastFrame } = render(<MessageList messages={msgs} />)
     const frame = lastFrame() ?? ''
-    expect(frame).not.toContain('⤿')
     expect(frame).toContain('result 1')
     expect(frame).toContain('result 2')
   })
@@ -204,7 +203,6 @@ describe('MessageList tool collapsing', () => {
     ]
     const { lastFrame } = render(<MessageList messages={msgs} verbose />)
     const frame = lastFrame() ?? ''
-    expect(frame).not.toContain('⤿')
     expect(frame).toContain('result 1')
     expect(frame).toContain('result 3')
   })
@@ -217,8 +215,7 @@ describe('MessageList tool collapsing', () => {
     ]
     const { lastFrame } = render(<MessageList messages={msgs} />)
     const frame = lastFrame() ?? ''
-    expect(frame).toContain('⤿')
-    expect(frame).toContain('Read/Grep/Glob ×3')
+    expect(frame).toContain('Explored')
   })
 
   it('does not collapse non-collapsible tools (Bash, Write)', () => {
@@ -229,7 +226,6 @@ describe('MessageList tool collapsing', () => {
     ]
     const { lastFrame } = render(<MessageList messages={msgs} />)
     const frame = lastFrame() ?? ''
-    expect(frame).not.toContain('⤿')
     expect(frame).toContain('result 1')
     expect(frame).toContain('result 3')
   })
