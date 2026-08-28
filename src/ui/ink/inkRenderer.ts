@@ -62,6 +62,10 @@ export class InkRenderer implements RendererInterface {
 
   toolStart(name: string, input: Record<string, unknown>, callId?: string): void {
     this.store.addToolStart(name, input, callId)
+    // Round 46 (codex detail): the status line verb follows the activity
+    // — '• Editing files (3s · esc to interrupt)' instead of a permanent
+    // 'Thinking'. Turn end resets it via setRunning(false).
+    this.store.setSpinner(true, toolVerb(name))
   }
 
   toolResult(name: string, result: string, isError: boolean, callId?: string): void {
@@ -188,5 +192,33 @@ export class InkRenderer implements RendererInterface {
 
   destroy(): void {
     this.store.setSpinner(false)
+  }
+}
+
+/** Round 46: activity verb per tool family for the status line. */
+function toolVerb(name: string): string {
+  switch (name) {
+    case 'Bash':
+    case 'ShellSession':
+    case 'TmuxSession':
+      return 'Running command'
+    case 'Read':
+    case 'Glob':
+    case 'Grep':
+    case 'LSP':
+      return 'Reading code'
+    case 'Edit':
+    case 'Write':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+    case 'apply_patch':
+      return 'Editing files'
+    case 'WebFetch':
+    case 'WebSearch':
+      return 'Fetching web'
+    case 'Agent':
+      return 'Delegating'
+    default:
+      return 'Working'
   }
 }

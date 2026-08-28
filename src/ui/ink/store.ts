@@ -242,7 +242,18 @@ export class UIStore {
   /** Flush accumulated streaming text as a message, then clear the buffer. */
   flushStreamingText(): void {
     const text = this.state.streamingText.trim()
+    const reasoning = this.state.streamingReasoning.trim()
     this.state = { ...this.state, streamingText: '', streamingReasoning: '' }
+    // Round 46 (codex ReasoningSummaryCell): the turn's reasoning stays
+    // in history as a dim block (rendered dim by the info type), tail
+    // only — raw thinking runs long and the conclusion is what matters.
+    if (reasoning) {
+      const lines = reasoning.split('\n').filter((l) => l.trim())
+      const tail = lines.slice(-8)
+      const head = lines.length > 8 ? `… +${lines.length - 8} earlier` : null
+      const body = [head, ...tail].filter(Boolean).join('\n')
+      this.add({ type: 'info', text: `thinking · ${body}` })
+    }
     if (text) this.add({ type: 'assistant', text })
     else this.emit()
   }

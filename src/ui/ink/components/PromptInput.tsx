@@ -41,12 +41,18 @@ export interface PromptInputProps {
   cwd: string
   /** Called when user presses Ctrl+Y (copy last reply). */
   onCopy?: () => void
+  /**
+   * Round 46 (codex queue): while a turn runs the input stays usable and
+   * Enter QUEUES the message. When set, shows the queue depth hint.
+   */
+  queueHint?: number
   terminalWidth?: number
 }
 
 export function PromptInput({
   onSubmit,
   disabled,
+  queueHint,
   onInterrupt,
   skills,
   history,
@@ -65,6 +71,7 @@ export function PromptInput({
   // ── Compute slash menu entries ────────────────────────────────────────────
 
   const normalizedCommandText = normalizeSlashCommandInput(text)
+  const queueHintActive = disabled && queueHint !== undefined
   const showMenu = normalizedCommandText.startsWith('/') && !normalizedCommandText.includes(' ') && !disabled
 
   const menuEntries: SlashEntry[] = (() => {
@@ -213,7 +220,10 @@ export function PromptInput({
       return
     }
 
-    if (disabled) return
+    // Round 46 (codex queue): while a turn runs, typing still works —
+    // Enter submits into the QUEUE (handleSubmit routes it). Everything
+    // stays editable; only autocompletes that need engine state are off.
+    if (disabled && !queueHintActive) return
 
     // ── Enter: submit or autocomplete ────────────────────────────────────
     if (key.return) {
@@ -391,7 +401,11 @@ export function PromptInput({
         <Box paddingLeft={1}>
           <Text color={t.primary}>› </Text>
           {text.length === 0 && cursor === 0 ? (
-            <Text color={t.faint}>Ask ovolv999 to do anything…</Text>
+            <Text color={t.faint}>
+              {queueHint !== undefined
+                ? `enter to queue for after this turn${queueHint > 0 ? ` · ${queueHint} queued` : ''}`
+                : 'Ask ovolv999 to do anything…'}
+            </Text>
           ) : cursor === text.length && text.length > 0 ? (
             <>
               <Text>{text.slice(0, -1)}</Text>

@@ -133,6 +133,14 @@ export function App({
 
   const handleSubmit = useCallback(
     async (text: string) => {
+      // Round 46 (codex queue): typing during a running turn queues the
+      // message instead of being impossible (input was hidden) — the
+      // queued message auto-submits when the turn settles.
+      if (state.running && !text.startsWith('/')) {
+        queueRef.current.push(text)
+        store.addInfo(`Queued (${queueRef.current.length}) — runs after this turn`)
+        return
+      }
       // Track input history
       inputHistory.current.push(text)
       saveInputHistory(text)
@@ -212,6 +220,13 @@ export function App({
           if (stdout.isTTY) stdout.write('\x07')
         }
       }
+
+      // Round 46 (codex queue): drain queued messages — one at a time so
+      // each queued line runs as its own full turn.
+      const next = queueRef.current.shift()
+      if (next) {
+        void handleSubmit(next)
+      }
     },
     [runTurn, dispatchSlash, store, model],
   )
@@ -256,6 +271,8 @@ export function App({
 
   const sigintCount = useRef(0)
   const abortCount = useRef(0)
+  /** Round 46 (codex queue): messages typed while a turn runs. */
+  const queueRef = useRef<string[]>([])
   /** Round 44: idle double-ESC exit (mirrors the Ctrl+C double-press). */
   const escCount = useRef(0)
 
@@ -480,13 +497,14 @@ export function App({
         <HelpOverlay onDismiss={() => setShowHelp(false)} />
       ) : null}
 
-      {/* Input — hidden while a turn runs (the status line above owns
-          the "working" signal, codex-style). */}
-      {state.running || store.hasOverlay() || showHelp ? null : (
+      {/* Input — stays visible DURING a turn (codex queue behavior):
+          submitting while running queues the message for after the turn. */}
+      {store.hasOverlay() || showHelp ? null : (
         <Box marginTop={1}>
           <PromptInput
             onSubmit={(text) => { void handleSubmit(text) }}
             disabled={state.running}
+            queueHint={state.running ? queueRef.current.length : undefined}
             onInterrupt={handleInterrupt}
             skills={skills}
             history={inputHistory.current}
