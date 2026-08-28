@@ -34,6 +34,15 @@
 - `/gc` 看一眼磁盘报告；`/gc prune --days 14`（先不加 --yes）确认列表合理
 - 粘贴一大段文本提交，确认 `[Pasted text #N]` 正常展开
 
+## 第二段夜巡追加（同夜）
+- `findLatestSession` 崩溃恢复：只写账本、没写 envelope 的会话曾被 --resume 漏掉 → 现在账本也算有效会话
+- 排队消息 UI 可视化：turn 运行中排队列表实时显示（⤷ queued: …）
+- `!` bash 透传 / `#` 记忆捕获 / Shift+Tab 权限模式轮换（对齐 Claude Code 三大交互）
+- `?` 广播按键冲突修复（打 "what?" 会弹帮助）
+- provider.apiKeyEnv：settings.json 可不再存明文 key
+- README 项目结构树整体重生成（23 个幽灵文件清除，148 个真实文件补录）
+- repoStats walk 加 25k 条目预算：/tmp 场景 24.6s → 285ms，modelRoutingIntegration 套件复活
+
 ## 建议下一步方向
 - 用真实项目跑几天，积累的问题清单比继续静态审计更有价值
 - 若 /tmp 类大目录场景常见，可考虑把 identity/repoStats 的预算调低（当前 5000/25000 条）
