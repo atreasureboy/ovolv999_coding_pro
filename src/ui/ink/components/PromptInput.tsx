@@ -42,6 +42,14 @@ export interface PromptInputProps {
   /** Called when user presses Ctrl+Y (copy last reply). */
   onCopy?: () => void
   /**
+   * Round 47: reports whether the composer holds no text and no
+   * overlay/search is active. PRINTABLE-char global bindings (like `?`
+   * for help) MUST gate on this — useInput is broadcast, so the App
+   * handler sees every typed character and `what?` would otherwise pop
+   * the help overlay mid-sentence.
+   */
+  onComposerEmptyChange?: (empty: boolean) => void
+  /**
    * Round 46 (codex queue): while a turn runs the input stays usable and
    * Enter QUEUES the message. When set, shows the queue depth hint.
    */
@@ -58,6 +66,7 @@ export function PromptInput({
   history,
   cwd,
   onCopy,
+  onComposerEmptyChange,
   terminalWidth = 80,
 }: PromptInputProps): React.ReactElement {
   const { setRawMode } = useStdin()
@@ -67,6 +76,9 @@ export function PromptInput({
   const [menuSelected, setMenuSelected] = useState(0)
   const [fileSelected, setFileSelected] = useState(0)
   const [searchMode, setSearchMode] = useState(false)
+  useEffect(() => {
+    onComposerEmptyChange?.(text.trim().length === 0 && !searchMode)
+  }, [text, searchMode, onComposerEmptyChange])
 
   // ── Compute slash menu entries ────────────────────────────────────────────
 

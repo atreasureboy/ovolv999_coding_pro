@@ -72,7 +72,7 @@ export function HelpOverlay({ onDismiss }: { onDismiss: () => void }): React.Rea
   })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1} marginY={1}>
+    <Box flexDirection="column" borderStyle="round" borderColor={t.borderActive} paddingX={2} paddingY={1} marginY={1}>
       <Box>
         <Text bold color={t.accent}>⌨  Keyboard Shortcuts</Text>
       </Box>

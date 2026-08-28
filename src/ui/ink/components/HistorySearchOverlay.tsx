@@ -6,6 +6,7 @@
  */
 
 import { Text, Box, useInput } from 'ink'
+import { t } from '../../theme.js'
 import { useState, useMemo } from 'react'
 
 export interface HistorySearchProps {
@@ -61,11 +62,11 @@ export function HistorySearchOverlay({ history, onSelect, onCancel }: HistorySea
   })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={0}>
+    <Box flexDirection="column" borderStyle="round" borderColor={t.borderActive} paddingX={1} marginY={0}>
       <Box>
-        <Text bold color="cyan">⌕ reverse-i-search: </Text>
+        <Text bold color={t.info}>⌕ reverse-i-search: </Text>
         <Text color="cyanBright">{query}</Text>
-        <Text color="cyan">_</Text>
+        <Text color={t.info}>_</Text>
       </Box>
       {matches.length > 0 ? (
         <Box flexDirection="column" marginTop={0}>

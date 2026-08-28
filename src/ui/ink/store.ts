@@ -74,6 +74,12 @@ export interface UIState {
   streamingReasoning: string
   /** True while engine.runTurn() is in flight. */
   running: boolean
+  /**
+   * Round 47: false while the composer holds text (or history-search is
+   * active). PRINTABLE-char keybindings (`?`) must gate on this — useInput
+   * is broadcast, so a global handler sees every typed character.
+   */
+  composerEmpty: boolean
   /** Spinner state. */
   spinnerActive: boolean
   spinnerVerb: string
@@ -119,6 +125,7 @@ const INITIAL_STATE: UIState = {
   streamingText: '',
   streamingReasoning: '',
   running: false,
+  composerEmpty: true,
   spinnerActive: false,
   spinnerVerb: '',
   banner: null,
@@ -396,6 +403,12 @@ export class UIStore {
   }
 
   // ── State setters ─────────────────────────────────────────────────────────
+
+  setComposerEmpty(empty: boolean): void {
+    if (this.state.composerEmpty === empty) return
+    this.state = { ...this.state, composerEmpty: empty }
+    this.emit()
+  }
 
   setRunning(running: boolean): void {
     if (!running) {

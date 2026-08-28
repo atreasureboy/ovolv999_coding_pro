@@ -340,7 +340,10 @@ export function App({
     const action = lookupAction(input, key, keybindings.bindings)
 
     // Help overlay toggle (only when no overlay/turn is active)
-    if (action === 'toggle-help' && !state.running && !store.hasOverlay()) {
+    // Round 47 FIX: also require an EMPTY composer — `?` is a printable
+    // binding and useInput is broadcast, so typing "what?" popped the
+    // help overlay mid-sentence.
+    if (action === 'toggle-help' && !state.running && !store.hasOverlay() && store.getState().composerEmpty) {
       setShowHelp((v) => !v)
       return
     }
@@ -525,6 +528,7 @@ export function App({
             history={inputHistory.current}
             cwd={cwd}
             onCopy={handleCopy}
+            onComposerEmptyChange={(empty) => store.setComposerEmpty(empty)}
             terminalWidth={terminalWidth}
           />
         </Box>

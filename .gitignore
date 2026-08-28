@@ -39,6 +39,8 @@ resume.cfg
 # .bg_logs/ artifacts one `git add .` away from being committed.
 .ovogo/
 .bg_logs/
+.ovolv999/
+.agents/
 
 # Scan findings (contain target data)
 .ovogo/findings/
