@@ -74,6 +74,11 @@ export interface ProviderConfig {
   /** 'openai' | 'minimax' | 'anthropic' | any provider id (adapter selection). */
   provider?: string
   apiKey?: string
+  /**
+   * Round 47: environment variable holding the API key — keeps the
+   * plaintext key out of settings.json (parity with models.profiles).
+   */
+  apiKeyEnv?: string
   baseURL?: string
   model?: string
 }
@@ -215,12 +220,27 @@ function normalizeMcp(value: unknown, file: string | undefined, diags: ConfigDia
   return servers.length > 0 ? { servers } : undefined
 }
 
-function normalizeProvider(value: unknown): ProviderConfig | undefined {
+function normalizeProvider(value: unknown, file?: string, diags?: ConfigDiagnostic[]): ProviderConfig | undefined {
   if (!isObject(value)) return undefined
   const p = value
   const out: ProviderConfig = {}
   if (typeof p.provider === 'string' && p.provider.trim()) out.provider = p.provider.trim()
   if (typeof p.apiKey === 'string' && p.apiKey.trim()) out.apiKey = p.apiKey.trim()
+  // Round 47: apiKeyEnv — same uppercase-env-name discipline as
+  // models.profiles (diagnosed in normalizeModels).
+  if (typeof p.apiKeyEnv === 'string' && p.apiKeyEnv.trim()) {
+    if (/^[A-Z_][A-Z0-9_]*$/.test(p.apiKeyEnv.trim())) {
+      out.apiKeyEnv = p.apiKeyEnv.trim()
+    } else if (file && diags) {
+      diags.push({
+        file,
+        field: 'provider.apiKeyEnv',
+        severity: 'warning',
+        message: 'invalid API-key environment variable name dropped',
+        fix: 'Use an uppercase environment variable name such as TOKENRHYTHM_API_KEY.',
+      })
+    }
+  }
   if (typeof p.baseURL === 'string' && p.baseURL.trim()) out.baseURL = p.baseURL.trim()
   if (typeof p.model === 'string' && p.model.trim()) out.model = p.model.trim()
   return Object.keys(out).length > 0 ? out : undefined
@@ -406,7 +426,7 @@ function normalizeSettingsFields(value: Record<string, unknown>, file: string | 
       ? { enabled: value.poor.enabled }
       : undefined,
     mcp: normalizeMcp(value.mcp, file, diags),
-    provider: normalizeProvider(value.provider),
+    provider: normalizeProvider(value.provider, file, diags),
     models: normalizeModels(value.models, file, diags),
     permissions: rawPermissions
       ? {

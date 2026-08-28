@@ -599,13 +599,28 @@ function resolveApiEnvironment(): ResolvedApiEnvironment {
 
   // 2) first-run wizard output (explicit user choice via `ovolv999 init`).
   // Beats the OpenAI default and any non-minimax Claude fallback.
+  // Round 47 (security parity with models.profiles): `apiKeyEnv` names an
+  // environment variable holding the key, so ~/.ovogo/settings.json can
+  // stay out of the secret-holding business. Literal `apiKey` still wins
+  // when both are present; env expansion failure falls through to the
+  // OpenAI default instead of a cryptic 401 downstream.
   const wizard = loadGlobalProvider()
-  if (wizard?.apiKey) {
-    return {
-      apiKey: wizard.apiKey,
-      baseURL: wizard.baseURL,
-      model: process.env.OVOGO_MODEL ?? wizard.model ?? 'gpt-4o',
-      provider: wizard.provider ?? 'openai',
+  if (wizard) {
+    const envKey = wizard.apiKeyEnv ? process.env[wizard.apiKeyEnv] : undefined
+    const apiKey = wizard.apiKey ?? envKey
+    if (apiKey) {
+      if (!wizard.apiKey && wizard.apiKeyEnv && !envKey) {
+        process.stderr.write(
+          `Warning: provider.apiKeyEnv="${wizard.apiKeyEnv}" is not set — falling back to the OpenAI default.\n`,
+        )
+      } else {
+        return {
+          apiKey,
+          baseURL: wizard.baseURL,
+          model: process.env.OVOGO_MODEL ?? wizard.model ?? 'gpt-4o',
+          provider: wizard.provider ?? 'openai',
+        }
+      }
     }
   }
 
