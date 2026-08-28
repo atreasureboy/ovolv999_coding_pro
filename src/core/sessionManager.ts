@@ -1072,6 +1072,15 @@ export function listSessionsDetailed(cwd: string): DetailedSessionInfo[] {
         const stat = statSync(historyPath)
         updatedAt = stat.mtime.toISOString().replace('T', ' ').slice(0, 16)
       }
+      // Round 46e: incremental saves update parts.jsonl AFTER the last
+      // full envelope write — the ledger's mtime is the truthful
+      // "last touched" when it is newer.
+      const partsPath = join(s.dir, 'parts.jsonl')
+      if (existsSync(partsPath)) {
+        const pstat = statSync(partsPath)
+        const pIso = pstat.mtime.toISOString().replace('T', ' ').slice(0, 16)
+        if (!updatedAt || pIso > updatedAt) updatedAt = pIso
+      }
 
       const envelope = loadSessionEnvelope(s.dir)
       if (envelope) {

@@ -195,8 +195,10 @@ const EXCLUDED_DIRS = new Set([
   'target', 'build', 'out', '.turbo', '.svelte-kit', '.gradle', '.idea',
 ])
 
-/** Hard cap on manifest entries — home-sized trees bail to a cheap hash. */
+/** Hard cap on manifest entries — walk stops here (hash marks truncation). */
 const MANIFEST_MAX_ENTRIES = 5_000
+/** Files that get a real content hash; beyond this, size-only entries. */
+const MANIFEST_HASH_BUDGET = 1_000
 
 /**
  * v0.5.3 Closure (P6): walk the working directory's untracked
@@ -243,22 +245,25 @@ function listUntracked(cwd: string): UntrackedEntry[] {
  */
 function workspaceManifestHash(rootDir: string): string {
   // Round 44c: shared exclude list (dot-dirs + caches) + entry cap.
+  // Round 46e FIX: the old overflow path returned sha256(count:root) —
+  // two DIFFERENT 6000-file trees (or one tree before/after an edit)
+  // produced the SAME fingerprint, silently breaking dirty detection on
+  // large workspaces. Now every walked entry is hashed; beyond the
+  // content-hash budget entries degrade to size-only lines (size
+  // changes still flip the hash) instead of vanishing from the
+  // fingerprint entirely.
   const EXCLUDES = EXCLUDED_DIRS
   const entries: string[] = []
   try {
     walkForManifest(rootDir, rootDir, EXCLUDES, entries, '')
   } catch { /* ignore IO errors */ }
-  if (entries.length > MANIFEST_MAX_ENTRIES) {
-    // Huge workspace — content-hashing it synchronously would freeze the
-    // loop. Fall back to a stat-light identity: path + file count only.
-    const h = createHash('sha256')
-    h.update(`overflow:${entries.length}:${rootDir}`)
-    return h.digest('hex').slice(0, 16)
-  }
   const hash = createHash('sha256')
   for (const line of entries.sort()) {
     hash.update(line)
     hash.update('\n')
+  }
+  if (entries.length >= MANIFEST_MAX_ENTRIES) {
+    hash.update(`truncated:${rootDir}`)
   }
   return hash.digest('hex').slice(0, 16)
 }
@@ -274,7 +279,7 @@ function walkForManifest(
   // Round 44c: bounded walk — depth and total-entry budgets so a
   // pathological tree (or a forgotten EXCLUDES member) degrades to a
   // partial manifest instead of starving the event loop.
-  if (depth > 12 || out.length > MANIFEST_MAX_ENTRIES) return
+  if (depth > 12 || out.length >= MANIFEST_MAX_ENTRIES) return
   let entries: string[]
   try {
     entries = readdirSync(dir)
@@ -282,7 +287,7 @@ function walkForManifest(
     return
   }
   for (const name of entries) {
-    if (out.length > MANIFEST_MAX_ENTRIES) return
+    if (out.length >= MANIFEST_MAX_ENTRIES) return
     // Hidden entries are never project sources — skipping them is both a
     // perf fix and the semantically right identity boundary.
     if (name.startsWith('.') || excludes.has(name)) continue
@@ -293,12 +298,19 @@ function walkForManifest(
     if (st.isDirectory()) {
       walkForManifest(rootDir, abs, excludes, out, childRel, depth + 1)
     } else if (st.isFile()) {
+      // Round 46e: content hashing has its own budget — past it, entries
+      // degrade to size-only (still hash-relevant) instead of either
+      // reading unbounded bytes or being dropped from the manifest.
       let contentHash = 'skipped'
-      if (st.size <= UNTRACKED_HASH_LIMIT) {
+      if (out.length < MANIFEST_HASH_BUDGET && st.size <= UNTRACKED_HASH_LIMIT) {
         try {
           const buf = readFileSync(abs)
           contentHash = createHash('sha256').update(buf).digest('hex').slice(0, 16)
         } catch { /* unreadable */ }
+      } else if (st.size > UNTRACKED_HASH_LIMIT) {
+        contentHash = 'big'
+      } else {
+        contentHash = 'size-only'
       }
       out.push(`${childRel}|${st.size}|${contentHash}`)
     }
