@@ -18,7 +18,7 @@
  * drop in later without touching the gates.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, statSync } from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { dirname, join } from 'path'
 import { homedir } from 'os'
@@ -237,6 +237,43 @@ export class JsonlMemoryBackend implements MemoryBackend {
     if (existsSync(filePath)) return
     mkdirSync(dirname(filePath), { recursive: true })
     writeFileSync(filePath, '', { flag: 'wx' })
+  }
+
+  /**
+   * Round 47 (long-session degradation): mtime-keyed load cache. Boot
+   * queries ran the full file read+parse EVERY turn against an
+   * ever-growing memory file. The cache invalidates on file mtime change
+   * (our own writes bump it, external edits are picked up on the next
+   * call after the change) — same-file read-back cost drops to one stat.
+   */
+  private loadCache: { mtimeMs: number; records: MemoryRecord[] } | null = null
+
+  loadCached(now: string): MemoryRecord[] {
+    let mtimeMs = 0
+    try {
+      mtimeMs = statSync(this.filePath).mtimeMs
+    } catch {
+      return []
+    }
+    if (this.loadCache && this.loadCache.mtimeMs === mtimeMs) {
+      return this.loadCache.records
+    }
+    // Cache the RAW merged set — TTL (now-dependent) is applied by the
+    // caller per query, never baked into the cache.
+    const raw = readFileSync(this.filePath, 'utf8')
+    const lines = raw.split('\n').filter(Boolean)
+    const byId = new Map<string, MemoryRecord>()
+    for (const line of lines) {
+      try {
+        const rec = JSON.parse(line) as MemoryRecord
+        byId.set(rec.id, rec)
+      } catch {
+        continue // corrupted line — skip
+      }
+    }
+    const records = [...byId.values()]
+    this.loadCache = { mtimeMs, records }
+    return records
   }
 
   upsert(record: MemoryRecord): void {
@@ -485,7 +522,15 @@ export class LongTermMemory {
    */
   query(filter: MemoryQueryFilter = {}): MemoryRecord[] {
     const now = this.now()
-    let records = this.requireBackend().load(now)
+    const backend = this.requireBackend()
+    // Round 47: hot-path cached load for the JSONL backend (per-turn
+    // boot/query); other backends keep their own semantics.
+    let records = backend instanceof JsonlMemoryBackend
+      ? backend.loadCached(now)
+      : backend.load(now)
+    // Round 47: TTL is applied at query time (never baked into the cache
+    // — the cache is keyed on file mtime, but `now` advances).
+    records = records.filter((r) => !r.expiresAt || r.expiresAt >= now)
     if (filter.repo) records = records.filter((r) => r.repo === filter.repo)
     if (filter.branch) records = records.filter((r) => r.branch === filter.branch)
     if (filter.kind) records = records.filter((r) => r.kind === filter.kind)

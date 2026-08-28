@@ -386,8 +386,10 @@ export function App({
   const maxCtx = maxContextTokens ?? 200_000
   const contextPct = maxCtx > 0 ? tokens / maxCtx : 0
   const terminalWidth = safeTerminalWidth(stdout.columns)
-  const committedMessages = state.messages.filter((message) => message.id <= state.committedThroughId)
-  const liveMessages = state.messages.filter((message) => message.id > state.committedThroughId)
+  // Round 47: read the store's incrementally-maintained shards — the old
+  // per-emit double filter over the full messages array grew O(history).
+  const committedMessages = store.committedView()
+  const liveMessages = store.liveView()
   const staticItems: Array<
     | { kind: 'banner'; id: string; version: string; model: string }
     | { kind: 'message'; id: string; message: (typeof committedMessages)[number] }

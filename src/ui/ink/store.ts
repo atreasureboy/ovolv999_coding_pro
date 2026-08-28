@@ -162,11 +162,46 @@ export class UIStore {
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
+  // Round 47 (long-session degradation): committed/live SHARDS. The App
+  // used to filter the full messages array TWICE on every emit (streaming
+  // flush ≈ every 60ms; turn end ≥6 emits in a burst) — O(total history)
+  // per emission, growing without bound. Shards are maintained
+  // incrementally; `messages` remains the source of truth for update()
+  // sweeps, the shards are derived indexes.
+
+  /** Public read-only views for the App (no per-emit re-filtering). */
+  committedView(): UIMessage[] {
+    return this.committedShard
+  }
+
+  liveView(): UIMessage[] {
+    return this.liveShard
+  }
+
+  private committedShard: UIMessage[] = []
+  private liveShard: UIMessage[] = []
+
+  private reindexShards(): void {
+    const through = this.state.committedThroughId
+    this.committedShard = this.state.messages.filter((m) => m.id <= through)
+    this.liveShard = this.state.messages.filter((m) => m.id > through)
+  }
+
   private advanceCommitted(): void {
     let committedThroughId = this.state.committedThroughId
-    while (this.finalizedIds.delete(committedThroughId + 1)) committedThroughId++
+    const promoted: UIMessage[] = []
+    while (this.finalizedIds.delete(committedThroughId + 1)) {
+      committedThroughId++
+      const m = this.liveShard.find((x) => x.id === committedThroughId)
+      if (m) promoted.push(m)
+    }
     if (committedThroughId !== this.state.committedThroughId) {
       this.state = { ...this.state, committedThroughId }
+      if (promoted.length > 0) {
+        this.committedShard = [...this.committedShard, ...promoted]
+        const promotedIds = new Set(promoted.map((m) => m.id))
+        this.liveShard = this.liveShard.filter((m) => !promotedIds.has(m.id))
+      }
     }
   }
 
@@ -177,10 +212,12 @@ export class UIStore {
 
   private add(msg: NewUIMessage, finalized = true): number {
     const id = this.nextId++
+    const message = { ...msg, id } as UIMessage
     this.state = {
       ...this.state,
-      messages: [...this.state.messages, { ...msg, id }],
+      messages: [...this.state.messages, message],
     }
+    this.liveShard = [...this.liveShard, message]
     if (finalized) this.markFinal(id)
     this.emit()
     return id
@@ -193,6 +230,10 @@ export class UIStore {
         m.id === id ? ({ ...m, ...patch } as UIMessage) : m,
       ),
     }
+    // Keep the live shard's object identity in sync for patched rows.
+    this.liveShard = this.liveShard.map((m) =>
+      m.id === id ? ({ ...m, ...patch } as UIMessage) : m,
+    )
     if (finalized) this.markFinal(id)
     this.emit()
   }
@@ -481,6 +522,8 @@ export class UIStore {
     if (this.planResolver) { this.planResolver(false); this.planResolver = null }
     if (this.permissionResolver) { this.permissionResolver({ approved: false, alwaysAllow: false }); this.permissionResolver = null }
     if (this.selectResolver) { this.selectResolver(null); this.selectResolver = null }
+    this.committedShard = []
+    this.liveShard = []
     this.state = {
       ...this.state,
       messages: [],
@@ -498,6 +541,8 @@ export class UIStore {
   /** Full reset (for testing). */
   reset(): void {
     this.finalizedIds.clear()
+    this.committedShard = []
+    this.liveShard = []
     this.state = { ...INITIAL_STATE }
     this.nextId = 1
     this.emit()
