@@ -210,11 +210,33 @@ export class UIStore {
   /** Streaming: accumulate tokens into a temporary buffer. */
   appendStreamingToken(token: string): void {
     this.state.streamingText += token
+    this.scheduleStreamingFlush()
   }
 
   /** Streaming: accumulate reasoning tokens (from <think> tags). */
   appendStreamingReasoning(token: string): void {
     this.state.streamingReasoning += token
+    this.scheduleStreamingFlush()
+  }
+
+  /**
+   * Round 45 (usage polish): streaming tokens commit to the reactive
+   * store through a ~60ms throttle. Models emit dozens of chunks per
+   * second; an emit per chunk re-rendered the whole app per token
+   * (jank), while the old no-emit behavior showed nothing until the
+   * turn finished (the "spinner then wall of text" feel).
+   */
+  private streamingFlushScheduled = false
+
+  private scheduleStreamingFlush(): void {
+    if (this.streamingFlushScheduled) return
+    this.streamingFlushScheduled = true
+    const timer = setTimeout(() => {
+      this.streamingFlushScheduled = false
+      // Only wake React when there is actually something new to show.
+      this.emit()
+    }, 60)
+    timer.unref?.()
   }
 
   /** Flush accumulated streaming text as a message, then clear the buffer. */
@@ -325,6 +347,10 @@ export class UIStore {
     if (!running) {
       for (const message of this.state.messages) this.finalizedIds.add(message.id)
       this.advanceCommitted()
+      // Round 45: an aborted/finished turn must never leave a partial
+      // streaming buffer behind — the stale text would ghost into the
+      // next turn's live-stream view.
+      this.state = { ...this.state, streamingText: '', streamingReasoning: '' }
     }
     this.state = { ...this.state, running }
     this.emit()

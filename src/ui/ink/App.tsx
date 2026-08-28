@@ -340,7 +340,12 @@ export function App({
 
   // ── Context state for StatusBar ───────────────────────────────────────────
 
-  const tokens = estimateTokens(historyRef.current)
+  // Round 45 (usage polish): token estimation re-runs only when the
+  // message count changes — the full-history JSON.stringify otherwise
+  // ran on EVERY render (each keystroke, each spinner tick) and grew
+  // linearly with the session.
+  const historyLength = historyRef.current.length
+  const tokens = useMemo(() => estimateTokens(historyRef.current), [historyLength])
   const maxCtx = maxContextTokens ?? 200_000
   const contextPct = maxCtx > 0 ? tokens / maxCtx : 0
   const terminalWidth = safeTerminalWidth(stdout.columns)
@@ -398,6 +403,23 @@ export function App({
       ) : null}
 
       <MessageList messages={liveMessages} verbose={state.verbose} />
+
+      {/* Round 45: live streaming — reasoning (dim) + visible text as it
+          arrives, throttled by the store. Replaces the old behavior of
+          showing nothing until the whole turn finished. */}
+      {state.running && (state.streamingReasoning || state.streamingText) ? (
+        <Box flexDirection="column" marginTop={1} paddingX={1}>
+          {state.streamingReasoning ? (
+            <Text color={t.muted} italic>
+              {(() => {
+                const lines = state.streamingReasoning.split('\n')
+                return lines.slice(-4).join('\n')
+              })()}
+            </Text>
+          ) : null}
+          {state.streamingText ? <Text color={t.text}>{state.streamingText}</Text> : null}
+        </Box>
+      ) : null}
 
       {/* Spinner */}
       <Spinner active={state.spinnerActive} verb={state.spinnerVerb} />

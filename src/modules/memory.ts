@@ -585,7 +585,11 @@ export class MemoryModule implements AgentModule, MemoryModuleControl {
 
     if (candidates.length === 0) return
 
-    const binding: RevisionBinding = await buildRevisionBinding({ cwd: ctx.cwd })
+    // Round 45 (usage polish): reuse the run's already-resolved identity
+    // binding when available instead of re-running git detection +
+    // workspace hashing at the end of every turn.
+    const binding: RevisionBinding = runCtx?.projectIdentity?.binding
+      ?? await buildRevisionBinding({ cwd: ctx.cwd })
 
     // v0.5.3 Hotfix §6: emit MEMORY_PROMOTION_STARTED before
     // decidePromotion runs. The audit trail can prove the

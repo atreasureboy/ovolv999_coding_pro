@@ -73,7 +73,29 @@ describe('UIStore', () => {
       expect(store.getState().streamingText).toBe('Hello world')
     })
 
-    it('flushes as assistant message and clears buffer', () => {
+    it('throttles emit during streaming (Round 45: no per-chunk re-render storm)', async () => {
+    let emissions = 0
+    const unsub = store.subscribe(() => emissions++)
+    for (let i = 0; i < 50; i++) store.appendStreamingToken('x')
+    // Synchronous burst → coalesced: at most the single scheduled flush
+    // could have run, and none within the same tick.
+    const syncEmissions = emissions
+    await new Promise((r) => setTimeout(r, 120))
+    const afterFlush = emissions
+    unsub()
+    expect(syncEmissions).toBeLessThanOrEqual(1)
+    expect(afterFlush).toBeLessThanOrEqual(1)
+  })
+
+  it('clears streaming buffers when the turn ends (setRunning(false))', () => {
+    store.appendStreamingToken('partial')
+    store.appendStreamingReasoning('thoughts')
+    store.setRunning(false)
+    expect(store.getState().streamingText).toBe('')
+    expect(store.getState().streamingReasoning).toBe('')
+  })
+
+  it('flushes as assistant message and clears buffer', () => {
       store.appendStreamingToken('Hello')
       store.appendStreamingToken(' world')
       store.flushStreamingText()

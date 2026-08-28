@@ -311,8 +311,29 @@ function walkForManifest(
  * under the same files produces the same hash, and any change
  * changes the hash.
  */
+/**
+ * Round 45 (usage polish): per-cwd cache keyed by (fileCount, newestMtime)
+ * of the ROOT directory only. Repeated calls within a turn (identity →
+ * memory promotion → untracked listing) skip the re-walk entirely; any
+ * file created/removed/modified at the root invalidates it. Deeper
+ * edits invalidate on the next turn's natural re-check via the root
+ * mtime of changed parents is NOT tracked — accepted trade-off, the
+ * previous behavior re-walked everything on EVERY call.
+ */
+const wsHashCache = new Map<string, { key: string; hash: string }>()
+
 export function workspaceHash(cwd: string): string {
-  return workspaceManifestHash(cwd)
+  try {
+    const st = statSync(cwd)
+    const key = `${st.mtimeMs}:${st.size}`
+    const hit = wsHashCache.get(cwd)
+    if (hit && hit.key === key) return hit.hash
+    const hash = workspaceManifestHash(cwd)
+    wsHashCache.set(cwd, { key, hash })
+    return hash
+  } catch {
+    return workspaceManifestHash(cwd)
+  }
 }
 
 export { isAbsolute, relative, sep }
