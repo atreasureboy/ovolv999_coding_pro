@@ -459,7 +459,7 @@ tool_calls [A, B, C, D, E, F]
 | **安全/沙箱** | `/sandbox` `/vault` `/permissions` |
 | **远程/同步** | `/sync` `/ssh` `/lsp` `/update` `/cache` `/ide` |
 | **团队/记忆** | `/team-memory` `/dream` `/messages` `/telemetry` `/magic-docs` |
-| **系统** | `/init` `/version` `/copy` `/help` `/history` `/keybindings` `/workflow` `/onboard` `/daemon` `/schedule` `/timer` `/profile` `/notify` `/share` |
+| **系统** | `/init` `/version` `/copy` `/help` `/history` `/keybindings` `/workflow` `/onboard` `/daemon` `/schedule` `/timer` `/profile` `/notify` `/share` `/title` `/fork` `/serve` `/gc` |
 
 ## 如何扩展
 
@@ -723,7 +723,12 @@ ovolv999/
 │   │   ├── hooks.ts                 # 6 种 Hook + HookRunner
 │   │   ├── goals.ts                 # 目标管理
 │   │   ├── diagnostics.ts           # LSP 诊断集成
-│   │   ├── sessionManager.ts        # 会话管理
+│   │   ├── sessionManager.ts        # 会话管理 (含 fork + 标题)
+│   │   ├── sessionParts.ts          # 追加式 parts 账本 (增量保存)
+│   │   ├── sessionTitle.ts          # 会话标题生成
+│   │   ├── conversationCheckpoints.ts # 对话检查点 (事务性 rewind)
+│   │   ├── revisionBinding.ts       # 工作区身份指纹 (有界遍历)
+│   │   ├── customAgents.ts          # .agents/ 磁盘自定义 agent
 │   │   ├── sessionTranscript.ts     # 会话转录
 │   │   ├── sessionStats.ts          # 会话统计
 │   │   ├── profiles.ts              # 配置 profile
@@ -765,8 +770,11 @@ ovolv999/
 │   │   │   ├── sharedState.ts       # SharedRuntimeState (跨 turn 状态 + 活跃追踪)
 │   │   │   └── terminationPolicy.ts # 终止决策 (纯函数)
 │   │   ├── model/                   # 模型调用层
-│   │   │   ├── modelGateway.ts      # LLM API 调用 + stream_options 兼容
-│   │   │   └── streamConsumer.ts    # 流解析 + thinking + tool_call 累积
+│   │   │   ├── modelGateway.ts      # LLM API 调用 + stream_options 兼容 + 跨 provider 重绑
+│   │   │   ├── providerAdapter.ts   # Provider 适配器 (openai 兼容 / anthropic 原生)
+│   │   │   ├── reasoningTransform.ts # reasoning 参数/流/历史三轴翻译
+│   │   │   ├── modelRouter.ts       # 多 profile 自适应路由
+│   │   │   └── streamConsumer.ts    # 流解析 + reasoning + tool_call 累积
 │   │   ├── context/                 # 上下文管理层
 │   │   │   ├── contextManager.ts    # budget 评估 + compaction + snip
 │   │   │   └── toolResultBudget.ts  # truncate + aggregate budget
@@ -780,6 +788,7 @@ ovolv999/
 │   │   ├── taskTimer.ts             # 任务计时
 │   │   ├── workspace.ts             # 工作区管理
 │   │   └── strings.ts               # str() 安全转换 helper
+│   ├── server/                      # HTTP+SSE 观测服务器 (--serve / /serve)
 │   ├── tools/                       # 工具层
 │   │   ├── bash.ts                  # 跨平台 shell + 后台任务
 │   │   ├── fileRead.ts / fileWrite.ts / fileEdit.ts
