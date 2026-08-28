@@ -206,6 +206,7 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   const instance = render(
     createElement(AppComponent, {
       store,
+      engine,
       _version: opts.version,
       model: opts.model,
       skills: opts.skills,

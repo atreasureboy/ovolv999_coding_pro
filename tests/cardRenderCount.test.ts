@@ -47,7 +47,7 @@ function cardCounts(messages: Array<{ type: string; text?: string }>): { outcome
   let error = 0
   for (const m of messages) {
     const text = m.text ?? ''
-    if (text.includes('Turn Outcome:')) outcome++
+    if (text.includes('Worked for ') || text.includes('Turn Outcome:')) outcome++
     if (m.type === 'error' && text.includes('✖')) error++
   }
   return { outcome, error }
@@ -60,6 +60,7 @@ describe('Ink — exactly one terminal card per turn (v0.4.1 C5)', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'app-card-'))
     const store = new UIStore()
     const instance = render(createElement(App, {
+      engine: undefined,
       store,
       _version: '0.4.1-test',
       model: 'gpt-4o',
@@ -92,6 +93,7 @@ describe('Ink — exactly one terminal card per turn (v0.4.1 C5)', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'app-card-'))
     const store = new UIStore()
     const instance = render(createElement(App, {
+      engine: undefined,
       store,
       _version: '0.4.1-test',
       model: 'gpt-4o',
@@ -124,6 +126,7 @@ describe('Ink — exactly one terminal card per turn (v0.4.1 C5)', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'app-card-'))
     const store = new UIStore()
     const instance = render(createElement(App, {
+      engine: undefined,
       store,
       _version: '0.4.1-test',
       model: 'gpt-4o',
@@ -179,7 +182,7 @@ describe('classic — renderOutcomeCard emits exactly one renderer call (v0.4.1 
     const { calls, renderer } = countingRenderer()
     renderOutcomeCard(renderer, { outcome: completedOutcome, elapsedSec: '1.0', model: 'm' })
     expect(calls.success ?? []).toHaveLength(1)
-    expect(calls.success?.[0]).toContain('Turn Outcome: ✓ COMPLETED')
+    expect(calls.success?.[0]).toContain('Worked for 1.0s')
     expect(calls.warn ?? []).toHaveLength(0)
     expect(calls.error ?? []).toHaveLength(0)
     expect(calls.info ?? []).toHaveLength(0)
@@ -195,7 +198,7 @@ describe('classic — renderOutcomeCard emits exactly one renderer call (v0.4.1 
     } as unknown as TurnOutcome
     renderOutcomeCard(renderer, { outcome: failed, elapsedSec: '1.0', model: 'm' })
     expect(calls.error ?? []).toHaveLength(1)
-    expect(calls.error?.[0]).toContain('Turn Outcome: ✗ FAILED')
+    expect(calls.error?.[0]).toContain('status: failed')
     expect(calls.success ?? []).toHaveLength(0)
     expect(calls.warn ?? []).toHaveLength(0)
     expect(calls.info ?? []).toHaveLength(0)

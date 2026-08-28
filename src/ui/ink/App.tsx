@@ -15,6 +15,8 @@
  */
 
 import { Text, Box, Static, useApp, useInput, useStdout } from 'ink'
+import { appendFileSync } from 'fs'
+import { join } from 'path'
 import { t } from '../theme.js'
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { type UIStore, useUIStore, type UIState } from './store.js'
@@ -55,6 +57,8 @@ export function safeTerminalWidth(columns: number | undefined): number {
 
 export interface AppProps {
   store: UIStore
+  /** Round 48: engine access for `!` bash passthrough (tool execution). */
+  engine?: import('../../core/engine.js').ExecutionEngine
   _version: string
   model: string
   skills: Array<{ name: string; description: string }>
@@ -88,6 +92,7 @@ export interface AppProps {
 
 export function App({
   store,
+  engine,
   _version: _v,
   model,
   skills,
@@ -149,6 +154,61 @@ export function App({
       // Track input history
       inputHistory.current.push(text)
       saveInputHistory(text)
+
+      // ── Round 48: `!` bash passthrough (Claude Code parity) ──────────
+      // The USER runs a shell command directly — no model, no permission
+      // gate (the user IS the authority). Output is folded into the
+      // conversation so the model sees it on the next turn.
+      if (text.startsWith('!')) {
+        const command = text.slice(1).trim()
+        if (!command) {
+          store.addInfo('Usage: !<command> — runs your shell command directly')
+          return
+        }
+        const bash = engine?.getTools().find((tl) => tl.name === 'Bash')
+        if (!engine || !bash) {
+          store.addError('Bash tool unavailable in this context')
+          return
+        }
+        store.addUserMessage(`! ${command}`)
+        const result = await bash.execute(
+          { command },
+          {
+            cwd,
+            permissionMode: 'bypassPermissions',
+            sessionDir,
+            signal: AbortSignal.timeout(600_000),
+          } as unknown as Parameters<typeof bash.execute>[1],
+        )
+        const output = result.content.length > 4_000
+          ? result.content.slice(0, 4_000) + `\n… (${result.content.length - 4_000} more chars)`
+          : result.content
+        historyRef.current = [
+          ...historyRef.current,
+          { role: 'user', content: `[!bash] ${command}\n${output}` },
+        ]
+        store.addToolComplete('Bash', { command }, output, result.isError)
+        return
+      }
+
+      // ── Round 48: `#` memory capture (Claude Code parity) ────────────
+      // `#note` appends the line to the project OVOGO.md so it becomes
+      // standing context for every future turn — no model call.
+      if (text.startsWith('#')) {
+        const note = text.slice(1).trim()
+        if (!note) {
+          store.addInfo('Usage: #<note> — appends the line to OVOGO.md (project memory)')
+          return
+        }
+        const memoryPath = join(cwd, 'OVOGO.md')
+        try {
+          appendFileSync(memoryPath, `- ${note}\n`, 'utf8')
+          store.addSuccess(`Saved to OVOGO.md: ${note.slice(0, 80)}${note.length > 80 ? '…' : ''}`)
+        } catch (err: unknown) {
+          store.addError(`Failed to write OVOGO.md: ${(err as Error).message}`)
+        }
+        return
+      }
 
       // Slash command?
       if (text.startsWith('/')) {
@@ -296,6 +356,14 @@ export function App({
   }, [state.running])
 
   useInput((input, key) => {
+    // ── Round 48: Shift+Tab permission-mode cycle (Claude Code parity) ──
+    // default → acceptEdits → plan → default. Routed through the slash
+    // dispatcher so persistence + rules stay in one place.
+    if (key.tab && key.shift && !store.hasOverlay()) {
+      void dispatchSlash('/permissions cycle')
+      return
+    }
+
     if (state.running) {
       if (key.escape || input === '\x1b') {
         if (abortCount.current === 0) {

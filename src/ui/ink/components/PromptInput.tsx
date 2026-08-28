@@ -243,8 +243,9 @@ export function PromptInput({
       return
     }
 
-    // ── Tab: autocomplete ────────────────────────────────────────────────
+    // ── Tab: autocomplete (Shift+Tab is the App's mode cycle — skip) ────
     if (key.tab) {
+      if (key.shift) return
       if (showMenu) { autocomplete(); return }
       if (fileContext.active && fileSuggestions.length > 0) { autocompleteFile(); return }
       return

@@ -341,6 +341,14 @@ export class UIStore {
   }
 
   /** v0.4.1 C1: a tool result with no matchable call — rendered, never guessed. */
+  /**
+   * Round 48: append a completed tool row from OUTSIDE the store
+   * (the App's `!` passthrough renders its bash output as a tool line).
+   */
+  addToolComplete(name: string, input: Record<string, unknown>, result: string, isError: boolean): void {
+    this.add({ type: 'tool', name, input, result, isError })
+  }
+
   addOrphanToolResult(result: string, isError: boolean): void {
     const snippet = result.length > 200 ? `${result.slice(0, 200)}…` : result
     this.add({

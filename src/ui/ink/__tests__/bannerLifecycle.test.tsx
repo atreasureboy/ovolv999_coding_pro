@@ -18,6 +18,7 @@ describe('banner lifecycle', () => {
     store.setBanner('0.3.5', 'MiniMax-M3')
     const view = render(
       <App
+        engine={undefined}
         store={store}
         _version="0.3.5"
         model="MiniMax-M3"
