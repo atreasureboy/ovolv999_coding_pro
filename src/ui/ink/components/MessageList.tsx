@@ -63,7 +63,7 @@ export function MessageRow({ msg }: { msg: UIMessage }): React.ReactElement {
     case 'info':
       return (
         <Box>
-          <Text color={t.muted}>· {msg.text}</Text>
+          <Text color={t.muted} italic={msg.text.startsWith('thought — ')}>· {msg.text}</Text>
         </Box>
       )
 

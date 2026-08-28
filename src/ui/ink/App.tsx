@@ -136,7 +136,12 @@ export function App({
       // Round 46 (codex queue): typing during a running turn queues the
       // message instead of being impossible (input was hidden) — the
       // queued message auto-submits when the turn settles.
-      if (state.running && !text.startsWith('/')) {
+      // Round 46b FIX: read liveness from the STORE, not the callback
+      // closure — `state.running` was captured at creation time (deps:
+      // runTurn/dispatchSlash/store/model), so mid-turn submissions saw
+      // stale `false` and BYPASSED the queue, firing a concurrent turn.
+      const turnLive = store.getState().running
+      if (turnLive) {
         queueRef.current.push(text)
         store.addInfo(`Queued (${queueRef.current.length}) — runs after this turn`)
         return
@@ -197,7 +202,15 @@ export function App({
         }
       } catch (err: unknown) {
         const error = err as Error
-        if (error.name !== 'AbortError') {
+        if (error.name === 'AbortError') {
+          // Round 46b FIX: the user interrupted the turn — queued messages
+          // were typed against a timeline that no longer exists. Drain the
+          // queue loudly instead of silently auto-running stale intents.
+          if (queueRef.current.length > 0) {
+            queueRef.current = []
+            store.addInfo('已清空排队消息（turn 被中断）')
+          }
+        } else {
           // v0.4.1 WS8 (render-once): the SINGLE Ink error renderer.
           // runOneTurn rethrows non-abort failures here; the card carries
           // the session's real log path and the turn's real attempt count

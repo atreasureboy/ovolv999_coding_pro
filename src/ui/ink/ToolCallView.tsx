@@ -70,11 +70,13 @@ function diffStats(name: string, input: Record<string, unknown>): string | null 
   if (name !== 'Edit' && name !== 'Write') return null
   const oldText = name === 'Edit' ? str(input.old_string) : ''
   const newText = name === 'Edit' ? str(input.new_string) : str(input.content)
-  const added = newText.split('\n').length - (name === 'Edit' ? oldText.split('\n').length : 0)
-  const removed = name === 'Edit' ? 0 : 0
-  void removed
-  if (added > 0) return `+${added}`
-  return null
+  // Real LCS diff (same engine as the inline diff view) so the (+a -r)
+  // suffix reflects actual changes, not naive line-count deltas.
+  const lines = computeLineDiff(oldText, newText)
+  const added = lines.filter((l) => l.type === 'add').length
+  const removed = lines.filter((l) => l.type === 'remove').length
+  if (added === 0 && removed === 0) return null
+  return `+${added} -${removed}`
 }
 
 export interface ToolCallProps {

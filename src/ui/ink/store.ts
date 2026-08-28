@@ -252,7 +252,9 @@ export class UIStore {
       const tail = lines.slice(-8)
       const head = lines.length > 8 ? `… +${lines.length - 8} earlier` : null
       const body = [head, ...tail].filter(Boolean).join('\n')
-      this.add({ type: 'info', text: `thinking · ${body}` })
+      // NOTE: rendered as `· <text>` by MessageRow(info) — no extra
+      // prefix here or it renders double-dotted.
+      this.add({ type: 'info', text: `thought — ${body}` })
     }
     if (text) this.add({ type: 'assistant', text })
     else this.emit()

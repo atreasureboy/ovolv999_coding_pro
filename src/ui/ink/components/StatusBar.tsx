@@ -43,7 +43,7 @@ export function StatusBar({ contextPct, planMode, verbose, profile, terminalWidt
   return (
     <Box width="100%" justifyContent="space-between" paddingX={2} flexWrap="nowrap">
       <Box gap={2} flexShrink={1}>
-        <Text color={t.faint}>{left.join(' · ')}</Text>
+        <Text color={t.faint} wrap="truncate-end">{left.join(' · ')}</Text>
       </Box>
       <Box flexShrink={0} gap={1}>
         <Text color={color}>{right}</Text>
