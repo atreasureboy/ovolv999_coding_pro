@@ -877,9 +877,13 @@ export function findLatestSession(cwd: string): string | null {
     return null
   }
 
+  // Round 47 (crash-resume): a session that crashed before its first
+  // FULL save has only parts.jsonl — the ledger IS the conversation.
+  // Skipping such dirs made --resume silently drop the most recent
+  // (interrupted) session.
   for (const entry of [...entries].filter(isSessionDirName).sort().reverse()) {
     const dir = join(sessionsDir, entry)
-    if (existsSync(join(dir, 'history.json'))) return dir
+    if (existsSync(join(dir, 'history.json')) || hasPartsLedger(dir)) return dir
   }
   return null
 }

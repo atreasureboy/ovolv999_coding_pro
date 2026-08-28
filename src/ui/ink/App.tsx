@@ -542,6 +542,19 @@ export function App({
         </Box>
       ) : null}
 
+      {/* Round 47: queued messages stay visible while a turn runs. The
+          streaming flush re-renders the app regularly, so the ref list
+          refreshes without extra state. */}
+      {state.running && queueRef.current.length > 0 ? (
+        <Box paddingLeft={3} flexDirection="column">
+          {queueRef.current.map((q, i) => (
+            <Text key={`${i}-${q.slice(0, 8)}`} color={t.faint} wrap="truncate-end">
+              ⤷ queued: {q.length > 60 ? q.slice(0, 57) + '…' : q}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+
       {/* Round 46 (codex status line): one quiet line while working —
           `• Working (12s · esc to interrupt)` — replacing the two-line
           spinner + italic hint. The verb comes from the engine
