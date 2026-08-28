@@ -187,7 +187,7 @@ const UNTRACKED_HASH_LIMIT = 1_048_576 // 1 MiB
  * thousands of files SYNCHRONOUSLY on every turn start — the event loop
  * starved and ESC/Ctrl+C appeared dead.
  */
-const EXCLUDED_DIRS = new Set([
+export const EXCLUDED_DIRS = new Set([
   'node_modules', '.git', 'dist', 'coverage', 'session', 'tmp', '.cache',
   '.config', '.local', '.npm', '.cache', '.ovogo', '.ovolv999', '.claude',
   '.opencode', '.codex', '.cursor', '.vscode', '.nuxt', '.next',

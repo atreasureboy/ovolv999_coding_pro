@@ -212,9 +212,11 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
       model: 'gpt-4o',
     })
 
-    expect(cardText).toContain('BLOCKED')
+    // Round 46b card: quiet divider + attention bullets.
+    expect(cardText).toContain('Worked for 2.5s')
+    expect(cardText).toContain('status: blocked')
     expect(cardText).toContain('Verification command failed')
-    expect(cardText).toContain('Fix test failure in test.ts')
+    expect(cardText).toContain('next: Fix test failure in test.ts')
   })
 
   it('9. auto model router returns active profiles', () => {
@@ -262,7 +264,7 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
     expect(res.outcome.output).toBe('Pipe output response')
   })
 
-  it('14. format outcome card presents quick actions (/diff, /undo)', () => {
+  it('14. format outcome card: completed turns are one quiet line', () => {
     const card = formatOutcomeCardText({
       outcome: {
         runId: 'r2',
@@ -280,8 +282,12 @@ describe('v0.4 Daily Driver UX Convergence Suite', () => {
       model: 'gpt-4o',
     })
 
-    expect(card).toContain('COMPLETED')
-    expect(card).toContain('/diff')
-    expect(card).toContain('/undo')
+    // Round 46b card: completed turns show the divider + change summary;
+    // no emoji banner, no quick-action advertising.
+    expect(card).toContain('Worked for 1.2s')
+    expect(card).toContain('changed index.ts')
+    expect(card).toContain('verification passed')
+    expect(card).not.toContain('COMPLETED')
+    expect(card).not.toContain('Quick Actions')
   })
 })

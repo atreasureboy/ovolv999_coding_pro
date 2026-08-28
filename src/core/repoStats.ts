@@ -34,6 +34,7 @@ import {
   realpathSync,
 } from 'node:fs'
 import { join, relative, resolve, extname, sep, dirname } from 'node:path'
+import { EXCLUDED_DIRS } from './revisionBinding.js'
 
 const DEFAULT_EXCLUDED_DIRS = new Set([
   'node_modules',
@@ -53,6 +54,11 @@ const DEFAULT_EXCLUDED_DIRS = new Set([
   'sessions',
   '__snapshots__',
   '.pnpm-store',
+  // Round 46e (cross-layer audit): unify with the identity walk's exclude
+  // set — .config/.npm/.claude/.local are not project sources, and a walk
+  // that dives into a home directory's config jungle is what froze the
+  // first turn for minutes.
+  ...EXCLUDED_DIRS,
   '.yarn',
 ])
 
@@ -191,6 +197,15 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
 
   const ignorePatterns = readIgnoreFile(absRoot, ignoreFileName)
 
+  // Round 46e (cross-layer audit): entry BUDGET for the walk. Depth caps
+  // don't bound WIDE trees — cwd=/tmp (23k top-level entries) or a home
+  // directory took 20-30s of synchronous statSync per Router query,
+  // freezing the turn. Budgeted entries degrade the outcome to
+  // 'partial', which the Router already treats honestly.
+  const MAX_WALKED_ENTRIES = 25_000
+  let walkedEntries = 0
+  let entryBudgetExhausted = false
+
   let totalFileCount = 0
   let sourceFileCount = 0
   let largestFileBytes = 0
@@ -230,6 +245,10 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
       const name = entry.name
       if (excludedPrefixes.some((p) => name.startsWith(p))) continue
       if (excludedDirs.has(name)) continue
+      if (++walkedEntries > MAX_WALKED_ENTRIES) {
+        entryBudgetExhausted = true
+        return true
+      }
       const full = join(dir, name)
       const rel = relative(absRoot, full).split(sep).join('/')
       let stat
@@ -262,7 +281,12 @@ export function walkRepo(rootDir: string, opts: RepoStatsOptions = {}): RepoStat
     return makeUnknownStats(`walk threw: ${(err as Error).message}`)
   }
 
-  if (depthCappedAt !== undefined || failedSubdirs.length > 0) {
+  if (entryBudgetExhausted) {
+    outcome = {
+      kind: 'partial',
+      reason: `entry budget (${MAX_WALKED_ENTRIES}) reached`,
+    }
+  } else if (depthCappedAt !== undefined || failedSubdirs.length > 0) {
     outcome = {
       kind: 'partial',
       reason: depthCappedAt !== undefined
