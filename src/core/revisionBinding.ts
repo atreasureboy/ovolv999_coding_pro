@@ -193,6 +193,12 @@ const EXCLUDED_DIRS = new Set([
   '.opencode', '.codex', '.cursor', '.vscode', '.nuxt', '.next',
   '__pycache__', '.venv', 'venv', '.mypy_cache', '.pytest_cache',
   'target', 'build', 'out', '.turbo', '.svelte-kit', '.gradle', '.idea',
+  // Round 46e (cross-layer audit): runtime-generated dirs. 'sessions' is
+  // the ovolv999 session store — it APPENDS every turn (parts.jsonl), so
+  // hashing it flipped the workspace identity on every single turn and
+  // made dirty detection pure noise. The others are tool/runtime outputs
+  // for the same reason.
+  'sessions', '.loop', '.agents', '.bg_logs', '.gtest',
 ])
 
 /** Hard cap on manifest entries — walk stops here (hash marks truncation). */

@@ -28,6 +28,15 @@ describe('detectReasoningFlavor', () => {
     expect(detectReasoningFlavor('openrouter', 'x/y')).toBe('openrouter-native')
     expect(detectReasoningFlavor(undefined, 'some-unknown-model')).toBe('none')
   })
+
+  it('Round 46e: an OpenAI-COMPATIBLE gateway label does not force openai-effort', () => {
+    // provider 'openai' + third-party model → silent (no reasoning_effort
+    // key sent to a gateway that may 400 on it).
+    expect(detectReasoningFlavor('openai', 'deepseek-v4-flash-0731')).toBe('none')
+    expect(detectReasoningFlavor('openai', 'some-gateway-model')).toBe('none')
+    // …but real OpenAI family ids still detected by model pattern.
+    expect(detectReasoningFlavor('openai', 'gpt-5.2')).toBe('openai-effort')
+  })
 })
 
 describe('buildReasoningParams', () => {

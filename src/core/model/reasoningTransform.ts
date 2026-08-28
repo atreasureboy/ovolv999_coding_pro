@@ -67,7 +67,13 @@ export function detectReasoningFlavor(provider: string | undefined, model: strin
   if (m.includes('glm-') || m.includes('glm4') || m.includes('chatglm')) return 'glm-object'
   if (m.includes('minimax-m') || p === 'minimax') return 'minimax-config'
   if (m.includes('o1') || m.includes('o3') || m.includes('o4') || m.includes('gpt-5')) return 'openai-effort'
-  if (p === 'openai') return 'openai-effort'
+  // Round 46e FIX: no bare `provider === 'openai'` fallback. 'openai' in
+  // this codebase means "OpenAI-COMPATIBLE transport" for countless
+  // third-party gateways (TokenRhythm, OpenRouter relays, vLLM, …) —
+  // sending OpenAI's `reasoning_effort` to a deepseek-v4 behind such a
+  // gateway is a 400 waiting to happen. Model-id patterns above are the
+  // only openai-effort signal; unknown models stay SILENT (a stray key
+  // is a 400; silence is provider-default reasoning).
   return 'none'
 }
 
