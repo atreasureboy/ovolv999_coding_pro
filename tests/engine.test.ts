@@ -127,6 +127,44 @@ describe('partitionToolCalls', () => {
     expect(partitionToolCalls([], allTools)).toHaveLength(0)
   })
 
+  it('serializes same-file calls when the model spells the path differently (cwd canonicalization)', () => {
+    // Production file tools claim the RAW model-supplied path as key
+    // (no `file:` prefix — mirroring fileEdit/fileWrite). `src/a.ts` and
+    // `./src/a.ts` resolve to the same file; without canonicalization
+    // these were two distinct keys and the calls ran concurrently.
+    const PathWrite = claimTool('Write', (i) => [{ type: 'file', key: String(i.file_path), access: 'write' }])
+    const PathEdit = claimTool('Edit', (i) => [{ type: 'file', key: String(i.file_path), access: 'write' }])
+    const tools = [PathWrite, PathEdit]
+    const calls = [
+      makeParsedToolCall('Write', { file_path: 'src/a.ts', content: '1' }),
+      makeParsedToolCall('Edit', { file_path: './src/a.ts', old_string: '1', new_string: '2' }),
+    ]
+    const batches = partitionToolCalls(calls, tools, '/repo')
+    expect(batches).toHaveLength(2)
+  })
+
+  it('serializes absolute vs relative spellings of the same file', () => {
+    const PathWrite = claimTool('Write', (i) => [{ type: 'file', key: String(i.file_path), access: 'write' }])
+    const PathEdit = claimTool('Edit', (i) => [{ type: 'file', key: String(i.file_path), access: 'write' }])
+    const calls = [
+      makeParsedToolCall('Write', { file_path: 'src/a.ts', content: '1' }),
+      makeParsedToolCall('Edit', { file_path: '/repo/src/a.ts', old_string: '1', new_string: '2' }),
+    ]
+    const batches = partitionToolCalls(calls, [PathWrite, PathEdit], '/repo')
+    expect(batches).toHaveLength(2)
+  })
+
+  it('canonicalization does not over-serialize distinct files', () => {
+    const PathEdit = claimTool('Edit', (i) => [{ type: 'file', key: String(i.file_path), access: 'write' }])
+    const calls = [
+      makeParsedToolCall('Edit', { file_path: 'src/a.ts', old_string: 'x', new_string: 'y' }),
+      makeParsedToolCall('Edit', { file_path: 'src/b.ts', old_string: 'x', new_string: 'y' }),
+    ]
+    const batches = partitionToolCalls(calls, [PathEdit], '/repo')
+    expect(batches).toHaveLength(1)
+    expect(batches[0].safe).toBe(true)
+  })
+
   it('defaults to serial when no tool instances are supplied (cannot compute claims)', () => {
     // Back-compat callers that pass only call names: with no tool to
     // declare claims, every call is conservatively serial (provider-runtime contract §六.3).

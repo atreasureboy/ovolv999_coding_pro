@@ -27,6 +27,7 @@
  *   - Git serialization      → type='git' always exclusive
  */
 
+import { resolve } from 'path'
 import type { ResourceClaim, RunStatus } from './executionRun.js'
 import type { ExecutionRunRegistry } from './executionRun.js'
 import type { RunEventEnvelope } from './executionRunEvents.js'
@@ -134,9 +135,9 @@ function claimsConflict(
  * ToolScheduler partition planner to decide which tool calls may
  * launch together in a parallel batch WITHOUT first racing for the
  * lock. This is a best-effort planner hint — the authoritative check
- * remains `ResourceScheduler.acquire()` (which also normalises keys
- * per workspace). Pre-acquire claims use raw tool-generated keys,
- * which are consistent within a single turn (same cwd).
+ * remains `ResourceScheduler.acquire()` (which also namespaces keys
+ * per workspace). Both sides receive keys canonicalized by
+ * `canonicalizeClaimKeys` — raw model-spelled paths are NOT comparable.
  */
 export function claimsConflictBetween(a: ResourceClaim[], b: ResourceClaim[]): boolean {
   if (a.length === 0 || b.length === 0) return false
@@ -148,6 +149,29 @@ export function claimsConflictBetween(a: ResourceClaim[], b: ResourceClaim[]): b
     }
   }
   return false
+}
+
+/**
+ * Canonicalize path-typed claim keys so the same file always maps to the
+ * same key regardless of how the model spelled the path (`src/a.ts` vs
+ * `./src/a.ts` vs the absolute form). Without this, two parallel
+ * Write/Edit calls on one file produce distinct keys, pass the conflict
+ * check, and run concurrently — exactly the race the claim system
+ * exists to prevent. Tools resolve their own paths in execute(), so the
+ * claim layer must resolve too or the gate is keyed on spelling.
+ *
+ * Only `file`/`directory` claims are resolved; synthetic keys
+ * (`wt://agent/…`) and non-path resources (git refs, ports, processes)
+ * pass through untouched. path.resolve also normalizes `.`/`..` in
+ * absolute keys.
+ */
+export function canonicalizeClaimKeys(claims: ResourceClaim[], cwd?: string): ResourceClaim[] {
+  if (!cwd) return claims
+  return claims.map((claim) => {
+    if (claim.type !== 'file' && claim.type !== 'directory') return claim
+    if (claim.key.includes('://')) return claim
+    return { ...claim, key: resolve(cwd, claim.key) }
+  })
 }
 
 /**

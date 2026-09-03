@@ -27,7 +27,7 @@ import type { ToolRegistry } from './toolRegistry.js'
 import type { SharedRuntimeState } from '../runtime/sharedState.js'
 import type { RunEventEmitter } from '../runtime/events.js'
 import type { ResourceScheduler, ResourceLease } from '../resourceScheduler.js'
-import { claimsConflictBetween } from '../resourceScheduler.js'
+import { canonicalizeClaimKeys, claimsConflictBetween } from '../resourceScheduler.js'
 import type { ResourceClaim } from '../executionRun.js'
 
 export interface ParsedToolCall {
@@ -63,7 +63,7 @@ export interface ToolBatch {
  * `executeWithClaims` — partition is a best-effort planner that avoids
  * launching tools which would immediately block on the lock.
  */
-export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): ToolBatch[] {
+export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[], cwd?: string): ToolBatch[] {
   const batches: ToolBatch[] = []
   const findTool = (name: string) => tools?.find(t => t.name === name)
 
@@ -79,6 +79,9 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): Too
     } catch {
       claims = []
     }
+    // Same-spelling-only keys would let parallel Write/Edit calls on one
+    // file slip past the conflict check (raw model paths vs resolved).
+    claims = canonicalizeClaimKeys(claims, cwd)
     const parallelizable = claims.length > 0
     const last = batches[batches.length - 1]
 
@@ -137,7 +140,7 @@ export class ToolScheduler {
     turnNumber: number,
   ): Promise<{ aborted: boolean }> {
     const turnAbortSignal = turnAbortController.signal
-    const batches = partitionToolCalls(parsedCalls, this.deps.toolRegistry.getAll())
+    const batches = partitionToolCalls(parsedCalls, this.deps.toolRegistry.getAll(), toolContext.cwd)
 
     for (const batch of batches) {
       if (turnAbortSignal.aborted) return { aborted: true }
@@ -188,13 +191,15 @@ export class ToolScheduler {
     const scheduler = this.deps.resourceScheduler
     const tool = this.deps.toolRegistry.getAll().find(t => t.name === toolName)
     // Same containment as partitionToolCalls: a throwing claims() degrades
-    // to no-claims (serial) instead of escaping before acquire().
+    // to no-claims (serial) instead of escaping before acquire(). Keys are
+    // canonicalized identically so the gate agrees with the partition plan.
     let claims: ResourceClaim[] = []
     try {
       claims = tool?.metadata?.claims ? tool.metadata.claims(input) : []
     } catch {
       claims = []
     }
+    claims = canonicalizeClaimKeys(claims, toolContext.cwd)
     let lease: ResourceLease | null = null
     if (scheduler && claims.length > 0) {
       const acquireId = runId ?? `toolcall_${callId}`
