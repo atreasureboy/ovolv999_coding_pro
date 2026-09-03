@@ -44,15 +44,29 @@ describe('TaskPlan tool (Phase 3)', () => {
     expect(g.get('a')!.status).toBe('failed')
   })
 
-  it('complete_node succeeds when acceptance criteria are satisfied (v0.3.5: via evidence)', async () => {
+  it('complete_node fails CLOSED when criteria are declared but no EvidenceStore is wired', async () => {
     const g = new TaskGraph()
     const t = tool(g)
     await t.execute({ action: 'add', id: 'a', acceptanceCriteria: ['x'] }, ctx)
     // v0.3.5: node must be started before completing (state transition validation)
     await t.execute({ action: 'start', id: 'a' }, ctx)
     const r = await t.execute({ action: 'complete_node', id: 'a' }, ctx)
-    expect(g.get('a')!.status).toBe('completed')
+    // A declared criterion plus a missing verification store is a wiring
+    // failure, not a satisfied criterion — the anti-false-success gate
+    // must not silently open.
+    expect(r.isError).toBe(true)
+    expect(g.get('a')!.status).not.toBe('completed')
+    expect(r.content).toContain('no EvidenceStore')
+  })
+
+  it('complete_node completes a criteria-free node without an EvidenceStore', async () => {
+    const g = new TaskGraph()
+    const t = tool(g)
+    await t.execute({ action: 'add', id: 'b', title: 'no criteria' }, ctx)
+    await t.execute({ action: 'start', id: 'b' }, ctx)
+    const r = await t.execute({ action: 'complete_node', id: 'b' }, ctx)
     expect(r.isError).toBe(false)
+    expect(g.get('b')!.status).toBe('completed')
   })
 
   it('list renders the graph snapshot', async () => {

@@ -70,7 +70,15 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[]): Too
   for (const call of calls) {
     const tool = findTool(call.tc.name)
     // provider-runtime contract §六.3: only claim-declaring tools may parallelise.
-    const claims = tool?.metadata?.claims ? tool.metadata.claims(call.input) : []
+    // claims() is model-input-derived and must never be able to kill the run:
+    // a throw here escapes schedule() with NO tool result for ANY call in the
+    // batch. Failure degrades to [] (documented serial fallback).
+    let claims: ResourceClaim[] = []
+    try {
+      claims = tool?.metadata?.claims ? tool.metadata.claims(call.input) : []
+    } catch {
+      claims = []
+    }
     const parallelizable = claims.length > 0
     const last = batches[batches.length - 1]
 
@@ -179,7 +187,14 @@ export class ToolScheduler {
   ): Promise<{ result: Awaited<ReturnType<ToolExecutor['execute']>>; lease: ResourceLease | null }> {
     const scheduler = this.deps.resourceScheduler
     const tool = this.deps.toolRegistry.getAll().find(t => t.name === toolName)
-    const claims = tool?.metadata?.claims ? tool.metadata.claims(input) : []
+    // Same containment as partitionToolCalls: a throwing claims() degrades
+    // to no-claims (serial) instead of escaping before acquire().
+    let claims: ResourceClaim[] = []
+    try {
+      claims = tool?.metadata?.claims ? tool.metadata.claims(input) : []
+    } catch {
+      claims = []
+    }
     let lease: ResourceLease | null = null
     if (scheduler && claims.length > 0) {
       const acquireId = runId ?? `toolcall_${callId}`

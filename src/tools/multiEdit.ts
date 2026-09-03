@@ -61,8 +61,9 @@ export class MultiEditTool implements Tool {
       const edits = (input as { edits?: unknown[] }).edits
       if (!Array.isArray(edits)) return []
       return edits
-        .filter((e) => typeof (e as Record<string, unknown>).file_path === 'string')
-        .map((e) => ({ type: 'file' as const, key: (e as Record<string, unknown>).file_path as string, access: 'write' as const }))
+        .filter((e): e is Record<string, unknown> =>
+          !!e && typeof e === 'object' && typeof (e as Record<string, unknown>).file_path === 'string')
+        .map((e) => ({ type: 'file' as const, key: e.file_path as string, access: 'write' as const }))
     },
   }
 

@@ -22,9 +22,19 @@ import {
   formatTaskList,
   formatTaskDetail,
 } from '../core/backgroundTaskManager.js'
+import { wrapCommand as sandboxWrap } from '../core/sandbox.js'
 
 function getManager(ctx: ToolContext): BackgroundTaskManager | undefined {
   return ctx.backgroundTaskManager
+}
+
+/**
+ * Background execution MUST NOT be a sandbox escape hatch (H1, mirrors
+ * Bash.run_in_background): TaskCreate's commands get the same wrapCommand()
+ * policy and the caller's abort signal, so a task cannot outlive its run.
+ */
+function wrapBackgroundCommand(command: string, ctx: ToolContext): string {
+  return sandboxWrap(command, ctx.cwd)
 }
 
 // ── TaskCreate ──────────────────────────────────────────────────────────────
@@ -87,11 +97,14 @@ The task runs detached. Use TaskGet with block=true to wait for completion.`,
       return Promise.resolve({ content: 'Error: command is required', isError: true })
     }
 
-    const id = manager.createTask(command, {
+    const id = manager.createTask(wrapBackgroundCommand(command, ctx), {
       description: input.description as string | undefined,
       cwd: ctx.cwd,
       sessionDir: ctx.sessionDir,
       metadata: input.metadata as Record<string, unknown> | undefined,
+      // Forward the caller's abort signal so a parent cancel stops the
+      // background task (same contract as Bash.run_in_background).
+      signal: ctx.signal,
     })
 
     const task = manager.getTask(id)

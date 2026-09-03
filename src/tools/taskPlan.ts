@@ -225,8 +225,15 @@ export class TaskPlanTool implements Tool {
             }
             // All satisfied — complete with evidence-backed proof
             g.complete(id)
+          } else if (node.acceptanceCriteria.length > 0) {
+            // Criteria declared but no EvidenceStore: fail CLOSED. This tool
+            // promises "the system verifies automatically" — silently
+            // completing here is exactly the text-claim completion the
+            // contract forbids. (A missing store is a wiring failure, not
+            // an absence of requirements.)
+            return err(`Cannot complete "${id}" — ${node.acceptanceCriteria.length} acceptance criteria declared but no EvidenceStore is available to verify them. This is a runtime wiring failure, not a satisfied criterion.`)
           } else {
-            // No criteria or no evidence store — fall back to direct complete
+            // No criteria — nothing to verify.
             g.complete(id)
           }
           const n = g.get(id)!

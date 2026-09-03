@@ -240,7 +240,9 @@ export class WorktreeManager {
   isWorktreePath(path: string): boolean {
     const abs = resolve(path)
     for (const wt of this.active.values()) {
-      if (abs.startsWith(wt.path)) return true
+      // Segment compare, not prefix: /repo/.worktrees-x must not match
+      // /repo/.worktrees.
+      if (abs === wt.path || abs.startsWith(wt.path + '/')) return true
     }
     return false
   }

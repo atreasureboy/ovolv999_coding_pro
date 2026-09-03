@@ -976,6 +976,10 @@ branch, and surfaces conflict file names so a parent agent can resolve manually.
         mainRenderer.agentDone(description, false)
         if (paneSlot && this.createFileRenderer) { tmuxLayout.releaseSlot(paneSlot.slot); childRenderer.destroy() }
         else if (paneSlot) { tmuxLayout.releaseSlot(paneSlot.slot) }
+        // This early return predates the try/finally that deregisters the
+        // subtask — without this delete the entry leaks forever and every
+        // later "N workers still running" surface sees a phantom.
+        sharedRuntimeState?.activeSubtasks?.delete(subtaskId)
         return {
           content: `[${agentLabel}] "${description}" blocked: unable to create isolated worktree — ${(err as Error).message}`,
           isError: true,
