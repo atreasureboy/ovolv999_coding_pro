@@ -83,8 +83,8 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 | `core/context/` | 上下文预算 | contextManager, toolResultBudget |
 | `tools/` | 42+ 个工具 (createTools 41 + loadSkill + MCP 动态) | agent.ts(子引擎+验证闸门), claudeCode.ts(tmux worker), taskPlan.ts(13 action) |
 | `modules/` | 6 个生产模块 + reflection(experimental/) | memory, critic, workspace, workspace_watcher, mcp, plugins |
-| `ui/` | 三前端共享引擎 | ink/(UIStore 单向桥), vim.ts(纯状态机), statusLine |
-| `commands/` | 89 个 slash 命令 | builtin.ts(3487 行单文件) |
+| `ui/` | 三前端共享引擎 | ink/(UIStore 单向桥), statusLine |
+| `commands/` | 143 个 slash 命令(2026-09-03 实测 listCommands) | builtin.ts 薄 barrel + cmd/group01-07(Round 29 拆分) |
 | `integrations/` | 外部协议 | acp.ts(JSON-RPC stdio), pipeMode |
 
 ### 六大核心机制(详见 docs/ADR/001-007)

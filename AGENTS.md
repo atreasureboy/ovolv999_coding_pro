@@ -21,7 +21,7 @@
 - `src/core/` — engine, types, compact, costTracker, providers, workflow
 - `src/tools/` — tool implementations (Bash, Read, Write, Edit, Grep, Glob, Agent, Worktree, etc.)
 - `src/commands/` — slash commands
-- `src/ui/` — Ink/React REPL + keybindings + vim mode
+- `src/ui/` — Ink/React REPL + keybindings
 - `src/skills/` — skill loader + extractor
 - `src/integrations/` — ACP protocol server
 - `src/utils/` — shared utilities (clipboard, cleanup, apiError, etc.)

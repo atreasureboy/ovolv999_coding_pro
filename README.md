@@ -452,7 +452,7 @@ tool_calls [A, B, C, D, E, F]
 |------|------|
 | **会话** | `/exit` `/clear` `/reset` `/resume` `/sessions` `/status` `/context` `/cost` |
 | **上下文** | `/compact` `/snip` `/rewind` `/undo` `/retry` `/export` `/audit` `/snapshot` |
-| **模式** | `/mode` `/poor` `/vim` `/style` `/effort` `/budget` `/model` `/models` |
+| **模式** | `/mode` `/poor` `/style` `/effort` `/budget` `/model` `/models` |
 | **工具/权限** | `/permissions` `/config` `/files` `/cwd` `/tasks` `/workers` `/plugins` |
 | **搜索/知识** | `/search` `/knowledge` `/skill-save` `/skills` `/suggest` `/cmd-history` `/bookmark` `/snippet` |
 | **代码/Git** | `/diff` `/commit` `/git` `/branch` `/metrics` `/diff-browser` `/review` `/security-review` |
