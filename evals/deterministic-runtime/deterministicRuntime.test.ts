@@ -51,7 +51,7 @@ describe('deterministic-runtime (eval:deterministic)', () => {
   it('eval-3: cross-provider profile is rejected at config-validation', () => {
     expect(() => validateProfiles({
       activeProvider: 'openai',
-      profiles: [p('a', 'gpt-4o', 'openai'), p('b', 'claude-sonnet', 'anthropic')],
+      profiles: [p('a', 'gpt-4o', 'openai', {}), p('b', 'claude-sonnet', 'anthropic', {})],
     })).toThrow(ProfileValidationError)
   })
 

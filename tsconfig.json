@@ -16,6 +16,6 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false
   },
-  "include": ["bin/**/*.ts", "bin/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts"],
+  "include": ["bin/**/*.ts", "bin/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "evals/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

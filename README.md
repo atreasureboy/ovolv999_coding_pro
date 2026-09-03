@@ -1036,6 +1036,8 @@ pnpm eval:real          # opt-in real-LLM evals (not in CI by default)
 pnpm check              # typecheck + lint + unit + integration + eval:deterministic
 ```
 
+原生 OpenAI Responses 传输可通过 `OVOGO_OPENAI_API_MODE=responses` 启用。真实模型评测要求同时设置 `OVOGO_REAL_EVAL=1`、`OPENAI_API_KEY` 和 `OVOGO_REAL_EVAL_MODEL`，未配置时 `pnpm eval:real` 会明确失败，不会产生空测试假绿。
+
 ## 许可
 
 MIT License

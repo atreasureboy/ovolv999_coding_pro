@@ -26,6 +26,7 @@ import type OpenAI from 'openai'
 import type { ToolDefinition } from '../types.js'
 import type { ProviderId } from '../providers.js'
 import { AnthropicAdapter } from './anthropicAdapter.js'
+import { OpenAIResponsesAdapter } from './responsesAdapter.js'
 import {
   buildReasoningParams,
   normalizeHistoryForRequest,
@@ -218,10 +219,14 @@ export function withReasoningNormalization(
 export interface ProviderAdapterConfig {
   provider?: string
   client: OpenAI
+  apiMode?: 'chat-completions' | 'responses'
 }
 
 export function createProviderAdapter(cfg: ProviderAdapterConfig): ProviderAdapter {
   const pid = (cfg.provider ?? 'openai-compatible').toLowerCase() as ProviderId
+  if (pid === 'openai' && cfg.apiMode === 'responses') {
+    return new OpenAIResponsesAdapter(cfg.client)
+  }
   if (pid === 'anthropic') {
     return new AnthropicAdapter({
       apiKey: cfg.client.apiKey ?? '',

@@ -367,6 +367,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     // environment (minimax vs openai today; both route through the
     // openai-compatible adapter since MiniMax M3 is served at /v1).
     provider: opts.provider,
+    apiMode: process.env.OVOGO_OPENAI_API_MODE === 'responses' ? 'responses' : 'chat-completions',
     // Phase 2: adaptive model routing profiles (from ~/.ovogo/settings.json).
     models: settings.models,
     maxIterations: projectConfig?.maxIterations ?? opts.maxIterations,

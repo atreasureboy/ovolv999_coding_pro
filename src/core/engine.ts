@@ -336,7 +336,7 @@ export class ExecutionEngine {
     // resolveBindings reuses the engine's existing adapter (one
     // transport) — the BindingRegistry is a read-only view, not a
     // second router or adapter.
-    const providerAdapter = createProviderAdapter({ provider: this.config.provider, client: this.client })
+    const providerAdapter = createProviderAdapter({ provider: this.config.provider, client: this.client, apiMode: this.config.apiMode })
     // Round 41 audit fix: bindings used to report the BOOT provider/baseURL
     // for EVERY profile — /models + /route displayed wrong transports for
     // cross-provider profiles from construction time. Report each profile's
@@ -463,7 +463,7 @@ export class ExecutionEngine {
       // touching the OpenAI SDK directly. The adapter owns provider
       // request shape + stream_options probing; selection is driven by
       // config.provider (default openai-compatible).
-      adapter: createProviderAdapter({ provider: this.config.provider, client: this.client }),
+      adapter: createProviderAdapter({ provider: this.config.provider, client: this.client, apiMode: this.config.apiMode }),
       renderer: this.renderer,
       eventLog: this.eventLog,
     })
@@ -1118,7 +1118,7 @@ export class ExecutionEngine {
       let previousAdapter: ReturnType<ModelGateway['swapAdapter']> | null = null
       try {
         const client = new OpenAI({ apiKey, baseURL, maxRetries: 5, timeout: 120_000 })
-        const adapter = createProviderAdapter({ provider, client })
+        const adapter = createProviderAdapter({ provider, client, apiMode: this.config.apiMode })
         // Construction succeeded → commit. swapAdapter returns the old
         // adapter first so a later failure can still roll back.
         previousAdapter = this.modelGateway.swapAdapter(adapter)

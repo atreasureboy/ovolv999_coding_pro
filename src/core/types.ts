@@ -512,6 +512,7 @@ export interface EngineConfig {
    * the extension point for native adapters.
    */
   provider?: string
+  apiMode?: 'chat-completions' | 'responses'
   /**
    * Phase 2: model profiles for adaptive routing (adaptive runtime contract §四).
    * `profiles` is a list of ModelProfile-shaped objects; when >1 and

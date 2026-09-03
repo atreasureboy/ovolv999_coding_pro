@@ -6,6 +6,7 @@ import {
   StubProviderAdapter,
 } from '../../src/core/model/providerAdapter.js'
 import { AnthropicAdapter } from '../../src/core/model/anthropicAdapter.js'
+import { OpenAIResponsesAdapter } from '../../src/core/model/responsesAdapter.js'
 
 function makeClient(): OpenAI {
   return new OpenAI({ apiKey: 'test-key' })
@@ -21,6 +22,11 @@ describe('createProviderAdapter', () => {
   it('uses explicit provider id when given', () => {
     const adapter = createProviderAdapter({ provider: 'minimax', client: makeClient() })
     expect(adapter.providerId).toBe('minimax')
+  })
+
+  it('uses the native Responses adapter only when explicitly enabled for OpenAI', () => {
+    const adapter = createProviderAdapter({ provider: 'openai', apiMode: 'responses', client: makeClient() })
+    expect(adapter).toBeInstanceOf(OpenAIResponsesAdapter)
   })
 
   it('returns AnthropicAdapter for provider=anthropic', () => {
