@@ -65,6 +65,10 @@ export interface Command {
   usage?: string
   /** Aliases (e.g. ['q'] for /exit) */
   aliases?: string[]
+  /** Set automatically for alias registry entries — the canonical name this
+   *  alias dispatches to. listCommands() uses it to collapse aliases into
+   *  their one canonical command. */
+  aliasOf?: string
   enabled?: (ctx: SlashCommandContext) => boolean
   handler: (args: string, ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>
 }
@@ -100,7 +104,7 @@ export function registerCommand(cmd: Command): void {
   }
   registry.set(cmd.name, cmd)
   for (const alias of cmd.aliases ?? []) {
-    registry.set(alias, { ...cmd, name: alias })
+    registry.set(alias, { ...cmd, name: alias, aliasOf: cmd.name })
   }
 }
 
@@ -109,12 +113,14 @@ export function getCommand(name: string): Command | undefined {
 }
 
 export function listCommands(): Command[] {
-  // Deduplicate by command name (not aliases)
+  // Collapse alias entries into their canonical command — alias registry
+  // entries carry aliasOf, so the dedupe key is the canonical name.
   const seen = new Set<string>()
   const result: Command[] = []
   for (const cmd of registry.values()) {
-    if (!seen.has(cmd.name)) {
-      seen.add(cmd.name)
+    const key = cmd.aliasOf ?? cmd.name
+    if (!seen.has(key)) {
+      seen.add(key)
       result.push(cmd)
     }
   }

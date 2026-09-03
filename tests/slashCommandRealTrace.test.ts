@@ -145,10 +145,15 @@ describe('Slash commands v0.3.1', () => {
     }).toThrow(/registered twice/)
   })
 
-  it('listCommands dedupes by name', () => {
+  it('listCommands dedupes by name and collapses aliases', () => {
     const cmds = listCommands()
     const plan = cmds.filter((c) => c.name === 'plan')
     expect(plan.length).toBe(1)
+    // '/exit' declares aliases ['q', 'quit']. Alias registry entries used to
+    // surface as standalone commands: registration overwrites name to the
+    // alias, so the old name-keyed dedupe never matched them.
+    expect(getCommand('q')?.aliasOf).toBe('exit')
+    expect(cmds.filter((c) => c.aliasOf !== undefined)).toEqual([])
   })
 
   it('dispatchSlashCommand routes /model auto through to the engine', async () => {
