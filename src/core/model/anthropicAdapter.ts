@@ -83,7 +83,21 @@ export class AnthropicAdapter implements ProviderAdapter {
     const betaHeaders = extractAnthropicBetaHeaders(providerOptions)
     const betaHeader = betaHeaders.length > 0 ? betaHeaders.join(',') : undefined
 
-    return this.iterate(params, req.model, req.signal, betaHeader)
+    const gen = this.iterate(params, req.model, req.signal, betaHeader)
+    // Eager establishment: an async-generator body does not run until the
+    // first next(), so every transport error (connection, 401, 429, 5xx,
+    // overloaded) surfaced only when the consumer started pulling — AFTER
+    // the gateway had already declared the stream established, making its
+    // compaction + provider-fallback recovery unreachable on this
+    // transport. Pull the first chunk inside stream() so establishment
+    // errors land where the gateway recovers, then rejoin the held chunk
+    // in front of the continuation.
+    const first = await gen.next()
+    async function* rejoin(): AsyncGenerator<OpenAI.Chat.ChatCompletionChunk> {
+      if (!first.done) yield first.value
+      yield* gen
+    }
+    return rejoin()
   }
 
   private async *iterate(
