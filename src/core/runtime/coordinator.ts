@@ -71,7 +71,7 @@ import { shouldInvokeCritic } from './criticTrigger.js'
 import { reviewRun } from './reviewer.js'
 import type { TaskGraph } from './taskGraph.js'
 import type { TaskGraphStore } from './taskGraphStore.js'
-import { ControlMessageLog } from './internalControlMessage.js'
+import { ControlMessageLog, isControlMessage } from './internalControlMessage.js'
 import { collectDeferredToolNames } from './deferredToolsReminder.js'
 import { renderTodoPromptBlock, ensureLoaded } from '../todoStore.js'
 import { collectRoutingSignals, signalsToRoutingInput } from '../model/routingSignalCollector.js'
@@ -2093,7 +2093,23 @@ export class RuntimeCoordinator {
         },
         {
           onContextOverflow: async (msgs, signal) => {
-            return this.deps.contextManager.reactiveCompact(msgs, signal)
+            const compacted = await this.deps.contextManager.reactiveCompact(msgs, signal)
+            // reactiveCompact mutates `msgs` in place, and the Gateway
+            // retries against the same array — but when control messages
+            // rendered for THIS call, `msgs` is the per-call copy
+            // ([...controlMessages, ...messages]). Without the write-back
+            // the compaction is discarded: the live loop history stays
+            // oversized and every later call re-overflows and re-pays a
+            // summarization call. Mirror the budget_check contract —
+            // compaction lands in the live history — and keep the
+            // "[control messages never enter user history]" invariant by
+            // stripping the ephemeral prefix before it lands.
+            if (compacted && msgs !== messages) {
+              const withoutControl = msgs.filter((m) => !isControlMessage(m))
+              messages.length = 0
+              messages.push(...withoutControl)
+            }
+            return compacted
           },
           // v0.3.1 (runtime truth contract §三.1.4): wire real fallback through the
           // Router. The Router's lastDecision.fallbackChain is the
