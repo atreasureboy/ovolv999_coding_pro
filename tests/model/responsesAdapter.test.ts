@@ -68,4 +68,25 @@ describe('OpenAIResponsesAdapter', () => {
     expect(chunks[0].choices[0]?.delta.content).toBe('hello')
     expect(chunks[1].choices[0]?.finish_reason).toBe('stop')
   })
+
+  it('maps response.incomplete to finish_reason length instead of failing the stream', async () => {
+    const client = {
+      responses: {
+        create: async () => (async function* () {
+          yield { type: 'response.output_text.delta', delta: 'partial' }
+          yield { type: 'response.incomplete', response: { usage: { input_tokens: 5, output_tokens: 9, total_tokens: 14 } } }
+        })(),
+      },
+    }
+    const adapter = new OpenAIResponsesAdapter(client as never)
+    const stream = await adapter.stream({
+      model: 'gpt-test', systemPrompt: 'system', messages: [], tools: [], maxOutputTokens: 10,
+      signal: new AbortController().signal,
+    })
+    const chunks = []
+    for await (const chunk of stream) chunks.push(chunk)
+    expect(chunks[0].choices[0]?.delta.content).toBe('partial')
+    expect(chunks[1].choices[0]?.finish_reason).toBe('length')
+    expect(chunks[1].usage?.completion_tokens).toBe(9)
+  })
 })

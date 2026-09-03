@@ -64,4 +64,19 @@ describe('TaskControlPlane', () => {
     expect(completed?.status).toBe('succeeded')
     expect(completed?.result?.changedFiles).toEqual(['a.ts'])
   })
+
+  it('resolves with the terminal state when a run is cancelled mid-flight', async () => {
+    const { value } = plane()
+    const task = value.enqueue({ goal: 'doomed', cwd: '/tmp' })
+    const worker = new TaskWorker(value, {
+      workerId: 'worker-a',
+      execute: async () => {
+        value.cancel(task.id)
+        return { summary: 'finished anyway' }
+      },
+    })
+    const outcome = await worker.runOnce()
+    expect(outcome?.status).toBe('cancelled')
+    expect(value.events(task.id).map((event) => event.type)).toEqual(['enqueued', 'claimed', 'cancelled'])
+  })
 })

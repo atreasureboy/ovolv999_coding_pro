@@ -272,7 +272,15 @@ export class TaskWorker {
       const result = await this.options.execute(task)
       return this.plane.complete(task.id, this.options.workerId, result)
     } catch (error) {
-      return this.plane.fail(task.id, this.options.workerId, error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      try {
+        return this.plane.fail(task.id, this.options.workerId, message)
+      } catch (ownershipError) {
+        // Cancel or lease recovery took the task mid-run — fail() is no
+        // longer ours to record; report the terminal state, don't reject.
+        if (ownershipError instanceof TaskOwnershipError) return this.plane.get(task.id) ?? task
+        throw ownershipError
+      }
     } finally {
       clearInterval(heartbeat)
     }

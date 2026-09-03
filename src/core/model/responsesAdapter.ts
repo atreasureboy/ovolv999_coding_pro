@@ -115,11 +115,15 @@ async function* translateResponseStream(stream: AsyncIterable<unknown>): AsyncIt
       yield chatChunk({ tool_calls: [{ index, function: { arguments: event.delta } }] })
       continue
     }
-    if (type === 'response.completed') {
+    if (type === 'response.completed' || type === 'response.incomplete') {
+      // Chat-completions parity: `response.incomplete` (e.g. max_output_tokens
+      // truncation) maps to finish_reason 'length', not a stream failure — a
+      // truncated turn stays usable for the completion contract to judge.
       const response = record(event.response)
       const usage = record(response?.usage)
       const details = record(usage?.input_tokens_details)
-      const chunk = chatChunk({}, hasToolCalls ? 'tool_calls' : 'stop')
+      const finished = hasToolCalls ? 'tool_calls' : type === 'response.incomplete' ? 'length' : 'stop'
+      const chunk = chatChunk({}, finished)
       chunk.usage = {
         prompt_tokens: Number(usage?.input_tokens ?? 0),
         completion_tokens: Number(usage?.output_tokens ?? 0),
@@ -130,7 +134,7 @@ async function* translateResponseStream(stream: AsyncIterable<unknown>): AsyncIt
       yield chunk
       continue
     }
-    if (type === 'error' || type === 'response.failed' || type === 'response.incomplete' || type === 'response.cancelled') {
+    if (type === 'error' || type === 'response.failed' || type === 'response.cancelled') {
       const response = record(event.response)
       const error = record(event.error) ?? record(response?.error)
       throw new Error(stringValue(error?.message) || `OpenAI Responses API stream ended with ${type}`)
