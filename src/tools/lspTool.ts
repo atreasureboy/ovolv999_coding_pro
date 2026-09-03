@@ -76,6 +76,30 @@ export function _resetLspToolCaches(): void {
   inflight.clear()
 }
 
+/** Test seam: view the shared registry (tests inject fake clients here). */
+export function _lspRegistryForTests(): Map<string, ServerState> {
+  return sharedServerStates
+}
+
+/**
+ * Tear down every shared LSP server (best-effort). engineAssembly.dispose()
+ * calls this so a language server spawned mid-session cannot outlive the
+ * CLI process — previously nothing ever stopped these clients.
+ */
+export async function shutdownAllLspServers(): Promise<void> {
+  // Let in-flight spawns settle first so their clients are in the
+  // registry (and get stopped) instead of registering a live server
+  // after the sweep.
+  await Promise.allSettled([...inflight.values()])
+  const stops: Array<Promise<void>> = []
+  for (const state of sharedServerStates.values()) {
+    try { stops.push(state.client.stop()) } catch { /* best-effort: never block teardown */ }
+  }
+  sharedServerStates.clear()
+  warmAttempted.clear()
+  await Promise.allSettled(stops)
+}
+
 /**
  * Get-or-start the shared LSP server for (cwd, name). Same contract as
  * the tool's internal path: resolves a ServerState or an { error }.

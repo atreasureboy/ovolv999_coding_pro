@@ -84,6 +84,7 @@ import { PluginsModule } from '../modules/plugins.js'
 import { detectProjectContext, formatProjectContext } from '../config/projectContext.js'
 import { createLoadSkillTool } from '../tools/loadSkill.js'
 import { createTerminalAskUserHandler } from '../tools/askUser.js'
+import { shutdownAllLspServers } from '../tools/lspTool.js'
 import { tmuxLayout } from '../core/tmuxLayout.js'
 import { PermissionManager, resolvePermissionMode } from '../core/permissionSystem.js'
 import { createSessionDir } from '../core/sessionManager.js'
@@ -548,6 +549,11 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
     if (disposed) return
     disposed = true
     try { engine.dispose() } catch { /* best-effort — never let cleanup throw */ }
+    // Language servers spawned by the lsp tool / FileRead warmup must not
+    // outlive the CLI — nothing else ever stops them. Fire-and-forget:
+    // dispose stays sync and never throws (shutdownAllLspServers is
+    // allSettled-based).
+    try { void shutdownAllLspServers() } catch { /* best-effort */ }
     try { tmuxLayout.destroy() } catch { /* best-effort */ }
     if (scratchSessionDir) {
       try { rmSync(scratchSessionDir, { recursive: true, force: true }) } catch { /* best-effort */ }
