@@ -48,21 +48,42 @@ echo "  Tool source files (src/tools/*.ts): $TOOL_FILES"
 # ── 3. Module count ──
 echo ""
 echo "--- Module count ---"
-# Production modules = modules/ subdirectories with index.ts minus experimental/
+# Production modules = module files directly under src/modules/ (flat layout,
+# one module per file, excluding helpers/tests/declarations)
 PROD_MODULES=$(ls src/modules/*.ts 2>/dev/null | grep -v "index\|test\|\.d\." | wc -l)
-echo "  Production modules (src/modules/*/index.ts): $PROD_MODULES"
+echo "  Production modules (src/modules/*.ts): $PROD_MODULES"
+DOC_MODULES=$(grep -oP '\K\d+(?= 个生产模块)' CLAUDE.md 2>/dev/null | head -1)
+if [ -n "$DOC_MODULES" ] && [ "$DOC_MODULES" != "$PROD_MODULES" ]; then
+  echo "  MISMATCH: CLAUDE.md claims $DOC_MODULES 个生产模块, code has $PROD_MODULES"
+  FAIL=1
+fi
 
 # ── 4. ICM kind count ──
 echo ""
 echo "--- ICM kind count ---"
 ICM_KINDS=$(grep -oP "kind: '\K[^']+" src/core/runtime/internalControlMessage.ts 2>/dev/null | sort -u | wc -l)
 echo "  InternalControlMessage kinds: $ICM_KINDS"
+DOC_ICM=$(grep -oP '\K\d+(?= 种类型化信号)' CLAUDE.md 2>/dev/null | head -1)
+if [ -n "$DOC_ICM" ] && [ "$DOC_ICM" != "$ICM_KINDS" ]; then
+  echo "  MISMATCH: CLAUDE.md claims $DOC_ICM 种 ICM 信号, code has $ICM_KINDS"
+  FAIL=1
+fi
 
 # ── 5. RunEvent variant count ──
 echo ""
 echo "--- RunEvent variant count ---"
 EVENT_VARIANTS=$(grep -oP "type: '\K[^']+" src/core/runtime/events.ts 2>/dev/null | sort -u | wc -l)
 echo "  RunEvent variants: $EVENT_VARIANTS"
+DOC_EVENTS_README=$(grep -oP 'RunEvent \K\d+(?= 种类型化变体)' README.md 2>/dev/null | head -1)
+if [ -n "$DOC_EVENTS_README" ] && [ "$DOC_EVENTS_README" != "$EVENT_VARIANTS" ]; then
+  echo "  MISMATCH: README claims RunEvent $DOC_EVENTS_README 变体, code has $EVENT_VARIANTS"
+  FAIL=1
+fi
+DOC_EVENTS_CLAUDE=$(grep -oP 'RunEvent \K\d+(?= 变体)' CLAUDE.md 2>/dev/null | head -1)
+if [ -n "$DOC_EVENTS_CLAUDE" ] && [ "$DOC_EVENTS_CLAUDE" != "$EVENT_VARIANTS" ]; then
+  echo "  MISMATCH: CLAUDE.md claims RunEvent $DOC_EVENTS_CLAUDE 变体, code has $EVENT_VARIANTS"
+  FAIL=1
+fi
 
 # ── Summary ──
 echo ""

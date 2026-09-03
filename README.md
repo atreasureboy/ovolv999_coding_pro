@@ -141,7 +141,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | 16 | completion-time critic 生效 | `modelClaimingCompletion: true` 真实传递 | `tests/completionContractStatus.test.ts` |
 | 17 | 不存在两套 Critic 调度 | `shouldInvokeCritic` 单一入口 | `tests/criticReviewer.test.ts` |
 | 18 | 内部控制消息不污染用户历史 | `ControlMessageLog` 临时渲染给 provider 后 `clear()` | `tests/internalControlMessage.test.ts` |
-| 19 | `/trace` 基于事件回放 | RunEvent 54 种类型化变体（内存层）+ run.* 持久事件 | `tests/runEventTypes.test.ts` |
+| 19 | `/trace` 基于事件回放 | RunEvent 56 种类型化变体（内存层）+ run.* 持久事件 | `tests/runEventTypes.test.ts` |
 | 20 | `/why` 基于真实决策证据 | `Router.getLastDecision()` + `RouterEventListener` | `tests/slashCommandRealTrace.test.ts` |
 | 21 | `/progress` 可用 | `getContextManager / getTaskGraph / getProgressMonitor / getCostTracker` | 同上 |
 | 22 | 重复 SlashCommand 注册会被检测 | dev 模式 throw | 同上 |

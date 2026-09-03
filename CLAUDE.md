@@ -82,18 +82,18 @@ bin/ovogogogo.ts (Ink REPL / --pipe / --bg / ACP / --loop)
 | `core/moduleRuntime/` | 模块生命周期 | moduleManager(拓扑 boot,critical/best_effort) |
 | `core/context/` | 上下文预算 | contextManager, toolResultBudget |
 | `tools/` | 42+ 个工具 (createTools 41 + loadSkill + MCP 动态) | agent.ts(子引擎+验证闸门), claudeCode.ts(tmux worker), taskPlan.ts(13 action) |
-| `modules/` | 5 个生产模块 (含 workspace_watcher) + reflection(experimental/) | memory, critic, workspace, workspace_watcher, mcp |
+| `modules/` | 6 个生产模块 + reflection(experimental/) | memory, critic, workspace, workspace_watcher, mcp, plugins |
 | `ui/` | 三前端共享引擎 | ink/(UIStore 单向桥), vim.ts(纯状态机), statusLine |
 | `commands/` | 89 个 slash 命令 | builtin.ts(3487 行单文件) |
 | `integrations/` | 外部协议 | acp.ts(JSON-RPC stdio), pipeMode |
 
 ### 六大核心机制(详见 docs/ADR/001-007)
 
-1. **事件驱动 Run 状态机**:RunStatus **12 态**,VALID_TRANSITIONS 强制;blocked 唯一可恢复非终态,lost 供恢复失败。事件双层:持久 `runs.jsonl`(8 种 run.*)+ 内存 ~45 种 RunEvent。注册表调用全 best-effort——"注册表 bug 不能破坏真实 turn"。
+1. **事件驱动 Run 状态机**:RunStatus **12 态**,VALID_TRANSITIONS 强制;blocked 唯一可恢复非终态,lost 供恢复失败。事件双层:持久 `runs.jsonl`(8 种 run.*)+ 内存 56 种 RunEvent。注册表调用全 best-effort——"注册表 bug 不能破坏真实 turn"。
 2. **Claim 并发调度**:工具 `metadata.claims(input)` 声明 R/W/X;`ResourceScheduler.acquire` 原子 all-or-nothing 是**唯一正确性闸门**,分区并行只是优化;无声明默认串行;git 强制 exclusive。
 3. **模型路由**:纯函数打分,`(1-complexity)×cost×0.8` 使简单任务下沉廉价模型;manual override sticky 恒最高;决策带 reasonCodes 供 `/why`。Fallback **只在流建立边界、单次、复用传输**——绝不重放副作用 tool。三态 Provider 熔断器(5 次/30s/半开)。
 4. **完成验证契约**:**模型说 stop ≠ 完成**。7 态:completed/partial/blocked/failed/cancelled/exhausted/incomplete(TurnOutcome 收敛为 6 态对外)。只在**正向失败证据**出现时阻塞;耗尽/部分完成映射 blocked 而非 failed。
-5. **内部控制消息**:12 种类型化信号存 ControlMessageLog,llm_call 时 renderForProvider → **立即 clear**,永不进用户历史/导出。
+5. **内部控制消息**:13 种类型化信号存 ControlMessageLog,llm_call 时 renderForProvider → **立即 clear**,永不进用户历史/导出。
 6. **JSONL EventStore**:零依赖,appendBatch 原子,eventId 去重;EventStore 接口预留 SQLite。
 
 ### 反假成功纵深(项目灵魂)
@@ -110,7 +110,7 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 
 ## 文档 vs 现实台账(2026-07-28 核实,README 已按此修订)
 
-**已修 README**:完成契约 7 态(非 6)、TaskPlan 13 action(非 12)、RunEvent 55 变体(非 19)、
+**已修 README**:完成契约 7 态(非 6)、TaskPlan 13 action(非 12)、RunEvent 56 变体(非 19)、
 引擎记忆实为 Semantic+Episodic(KnowledgeBase/TeamMemory 仅命令级)、Auto-Dream 是被动统计库(无 LLM)、
 内置模块 5 个(含 mcp)、能力矩阵 §11 LongTermMemory 与 §12 ProviderAdapter 注册表标注"未接线"、
 §5 路由信号标注部分为代理值。
