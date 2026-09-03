@@ -1393,6 +1393,7 @@ export class RuntimeCoordinator {
           }
 
           case 'tool_execution': {
+            const filesChangedBefore = this.deps.contextManager.getWorkingState().filesChanged.length
             const { aborted } = await this.deps.toolScheduler.schedule(
               pendingParsedCalls,
               toolContext,
@@ -1401,6 +1402,14 @@ export class RuntimeCoordinator {
               messages,
               state.iteration,
             )
+            // Runtime truth contract §evidence: a workspace mutation invalidates
+            // prior evidence — a criterion satisfied by a test run that
+            // PRE-dates the latest edit must not count at complete_node.
+            // bumpRevision() is what makes record_evidence stamps comparable.
+            const filesChangedAfter = this.deps.contextManager.getWorkingState().filesChanged.length
+            if (filesChangedAfter > filesChangedBefore) {
+              try { runContext?.evidence.bumpRevision() } catch { /* best-effort */ }
+            }
 
             const hardAborted = turnAbortController.signal.aborted
             state = transitionQueryState(state, {

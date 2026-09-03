@@ -54,6 +54,17 @@ getRevision(): number {
     return this.currentRevision
   }
 
+  /**
+   * Runtime truth contract §evidence: the revision is the workspace-mutation
+   * counter. record() stamps the CURRENT revision; a bump invalidates every
+   * record stamped earlier — getValidEvidence() only counts records from the
+   * current revision, so evidence cannot outlive the code state it was
+   * observed on. Returns the new revision.
+   */
+  bumpRevision(): number {
+    return ++this.currentRevision
+  }
+
   record(evidence: Omit<TaskEvidence, 'id' | 'revision' | 'createdAt' | 'valid'>): TaskEvidence {
     const full: TaskEvidence = {
       ...evidence,
@@ -68,19 +79,24 @@ getRevision(): number {
     return full
   }
 
-  /** Get all valid evidence for a node (optionally filtered by criterion). */
+  /** Get all valid evidence for a node (optionally filtered by criterion).
+   *  Valid = not invalidated AND stamped at the current revision — anything
+   *  older describes a code state that no longer exists. */
   getValidEvidence(nodeId: string, criterionId?: string): TaskEvidence[] {
     const list = this.evidence.get(nodeId) ?? []
-    return list.filter((e) => e.valid && (!criterionId || e.criterionId === criterionId))
+    return list.filter((e) =>
+      e.valid
+      && e.revision === this.currentRevision
+      && (!criterionId || e.criterionId === criterionId))
   }
 
   /** Compute criterion status from evidence. */
   computeCriterionStatus(nodeId: string, criterionId: string, description: string): CriterionState {
     const valid = this.getValidEvidence(nodeId, criterionId)
     if (valid.length === 0) {
-      // Check if there's stale evidence
+      // Check if there's stale evidence (invalidated, or pre-dates a revision bump)
       const all = (this.evidence.get(nodeId) ?? []).filter((e) => e.criterionId === criterionId)
-      const hasStale = all.some((e) => !e.valid)
+      const hasStale = all.some((e) => !e.valid || e.revision !== this.currentRevision)
       const hasFailed = all.some((e) => e.exitCode !== undefined && e.exitCode !== 0)
       if (hasFailed) return { id: criterionId, description, status: 'failed' }
       if (hasStale) return { id: criterionId, description, status: 'stale' }
