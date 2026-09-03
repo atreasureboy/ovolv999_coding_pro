@@ -135,11 +135,11 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
           },
           timeout: {
             type: 'number',
-            description: '(wait_for) Max wait in milliseconds, default 30000',
+            description: '(wait_for) Max wait in milliseconds, default 30000 (clamped to 1000-600000)',
           },
           interval: {
             type: 'number',
-            description: '(wait_for) Polling interval in milliseconds, default 1000',
+            description: '(wait_for) Polling interval in milliseconds, default 1000 (clamped to 100-10000)',
           },
         },
         required: ['action'],
@@ -288,8 +288,13 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
   private async _waitFor(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const name     = str(input.session)
     const pattern  = str(input.pattern)
-    const timeout  = Number(input.timeout  ?? 30_000)
-    const interval = Number(input.interval ?? 1_000)
+    // Clamp: an unbounded model-supplied timeout parks the tool slot for
+    // as long as the model likes (days, with a big enough number), and an
+    // interval near zero tight-loops tmux capture-pane.
+    const rawTimeout  = Number(input.timeout  ?? 30_000)
+    const rawInterval = Number(input.interval ?? 1_000)
+    const timeout  = Number.isFinite(rawTimeout)  ? Math.min(Math.max(rawTimeout, 1_000), 600_000) : 30_000
+    const interval = Number.isFinite(rawInterval) ? Math.min(Math.max(rawInterval, 100), 10_000) : 1_000
 
     if (!name)    return { content: 'Error: session is required for wait_for', isError: true }
     if (!pattern) return { content: 'Error: pattern is required for wait_for', isError: true }

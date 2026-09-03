@@ -83,7 +83,7 @@ export class ShellSessionTool implements Tool {
           port: { type: 'number', description: 'TCP port to listen on' },
           session_id: { type: 'string', description: 'Session ID (format: shell_PORT)' },
           command: { type: 'string', description: 'Command to execute (required for exec)' },
-          timeout: { type: 'number', description: 'Max wait for output in milliseconds (default 8000)' },
+          timeout: { type: 'number', description: 'Max wait for output in milliseconds (default 8000, clamped to 500-120000)' },
           log_dir: { type: 'string', description: 'Directory for session logs (default /tmp)' },
         },
         required: ['action'],
@@ -226,7 +226,10 @@ export class ShellSessionTool implements Tool {
   private _exec(input: Record<string, unknown>): Promise<ToolResult> {
     const id      = resolveId(input)
     const command = str(input.command).trim()
-    const timeout = Number(input.timeout ?? 8_000)
+    // Clamp: a model-supplied timeout of 1e12 must not park the tool slot
+    // (or arm a 31,000-year timer); sub-500ms starves the remote command.
+    const rawTimeout = Number(input.timeout ?? 8_000)
+    const timeout = Number.isFinite(rawTimeout) ? Math.min(Math.max(rawTimeout, 500), 120_000) : 8_000
 
     if (!command) return Promise.resolve({ content: 'Error: command is required for exec', isError: true })
 
@@ -242,7 +245,7 @@ export class ShellSessionTool implements Tool {
       let timeoutTimer: ReturnType<typeof setTimeout> | null = null
       const marker = `__EOC_${Date.now().toString(36)}__`
 
-      const finish = () => {
+      const finish = (timedOut = false) => {
         if (done) return
         done = true
         if (stabilize) clearTimeout(stabilize)
@@ -252,20 +255,32 @@ export class ShellSessionTool implements Tool {
         output = output.replace(new RegExp(escapeRegex(marker) + '\\r?\\n?', 'g'), '')
         output = stripEcho(output, command)
         output = stripPrompt(output)
+        // A timeout is NOT a silent success: the model must be able to
+        // tell "command finished" from "output is partial and the command
+        // may still be running remotely".
+        if (timedOut) {
+          const partial = output.trimEnd()
+          const body = partial || '(no output yet)'
+          resolve({
+            content: `${body}\n[timed out after ${timeout}ms — output may be partial and the command may still be running]`,
+            isError: true,
+          })
+          return
+        }
         resolve({ content: output.trimEnd() || '(empty output)', isError: false })
       }
 
       const onData = (chunk: Buffer) => {
         chunks.push(chunk)
         const text = chunk.toString('utf8')
-        if (text.includes(marker)) { if (stabilize) clearTimeout(stabilize); stabilize = setTimeout(finish, 200); return }
+        if (text.includes(marker)) { if (stabilize) clearTimeout(stabilize); stabilize = setTimeout(() => finish(), 200); return }
         if (stabilize) clearTimeout(stabilize)
-        stabilize = setTimeout(finish, 400)
+        stabilize = setTimeout(() => finish(), 400)
       }
 
       socket.on('data', onData)
       socket.write(command + `\necho '${marker}'\n`)
-      timeoutTimer = setTimeout(finish, timeout)
+      timeoutTimer = setTimeout(() => finish(true), timeout)
     })
   }
 
