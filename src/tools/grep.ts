@@ -80,7 +80,7 @@ function jsSearch(
   const MAX_FILES = 20_000
   const MAX_BYTES = 2 * 1024 * 1024
 
-  const walk = (dir: string, depth: number): void => {
+  const walk = (dir: string, rel: string, depth: number): void => {
     if (depth > 16 || truncated) return
     let entries
     try {
@@ -91,12 +91,16 @@ function jsSearch(
     for (const ent of entries) {
       if (truncated) return
       const full = join(dir, ent.name)
+      // Excludes match the bare name OR the path relative to the search
+      // root — `vendor/**` carries a slash, so testing only `ent.name`
+      // could never match it and the directory stayed in the results.
+      const excluded = excludeRes.some((r) => r.test(ent.name) || r.test(rel ? `${rel}/${ent.name}` : ent.name))
       if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || excludeRes.some((r) => r.test(ent.name))) continue
-        walk(full, depth + 1)
+        if (SKIP_DIRS.has(ent.name) || excluded) continue
+        walk(full, rel ? `${rel}/${ent.name}` : ent.name, depth + 1)
       } else if (ent.isFile()) {
         if (visited++ > MAX_FILES) { truncated = true; return }
-        if (excludeRes.some((r) => r.test(ent.name))) continue
+        if (excluded) continue
         if (includeRe && !includeRe.test(full.split('/').pop() ?? '') && !includeRe.test(full)) continue
         let content: string
         try {
@@ -137,7 +141,7 @@ function jsSearch(
       }
     }
   }
-  walk(root, 0)
+  walk(root, '', 0)
   return { lines: out, truncated }
 }
 
@@ -314,7 +318,18 @@ export class GrepTool implements Tool {
           const grepFlags = ['-r', case_insensitive ? '-i' : '', output_mode === 'files_with_matches' ? '-l' : '-n']
             .filter(Boolean)
           if (effectiveGlob) grepFlags.push('--include', effectiveGlob)
-          for (const ex of excludes) grepFlags.push('--exclude', ex.replace(/\*\*/g, '*'))
+          for (const ex of excludes) {
+            if (ex.includes('/')) {
+              // GNU grep's --exclude matches BASENAMES only — a
+              // slash-bearing glob like `vendor/**` can never match any
+              // basename, so the directory stayed in the results. Exclude
+              // by directory with the glob's leading path segment.
+              const seg = ex.replace(/^\*\*\//, '').split('/')[0]
+              if (seg && seg !== '*') grepFlags.push('--exclude-dir', seg)
+            } else {
+              grepFlags.push('--exclude', ex.replace(/\*\*/g, '*'))
+            }
+          }
           grepFlags.push('-E', pattern, searchDir)
           try {
             const fallback = await execFileAsync('grep', grepFlags.filter(Boolean), {

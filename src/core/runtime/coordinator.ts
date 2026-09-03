@@ -344,6 +344,13 @@ export class RuntimeCoordinator {
         registry.transition(effectiveRunId, 'preparing', { phase: 'boot' })
       } catch { /* best-effort */ }
     }
+    // Set once the run has received its deliberate terminal (or
+    // legitimately non-terminal 'blocked') transition from a code path
+    // that owns the decision — the loop postlude (GAP-C) or the
+    // routing-unavailable handler. The finally safety net must not
+    // second-guess those: 'blocked' is non-terminal in the state
+    // machine but IS the correct end state for this run.
+    let registryTerminalized = false
     // v0.3.2 (run-scoped runtime contract §Phase 9): lifecycle start marker. Emitted
     // after RUN_STARTED but before the loop begins, so /trace can
     // show "execution started" distinctly from "run started" (the
@@ -542,6 +549,22 @@ export class RuntimeCoordinator {
 
     // ── State machine driver ──
     let state: QueryState = transitionQueryState({ kind: 'boot' }, { type: 'booted' })
+
+    // Run-scoped evidence baseline (runtime invariants §十 R5). WorkingState
+    // accumulates for the whole SESSION — it feeds the system prompt's
+    // long-term memory block. But the completion gate must judge THIS run:
+    // otherwise a failure from an earlier turn (or a probing command that
+    // exits non-zero by design — `test -e`, `grep -q` with no match) blocks
+    // every later turn's completion until the exact command string happens
+    // to be re-run with exit 0. Gates below subtract this baseline.
+    const verificationBaseline = (() => {
+      const ws0 = this.deps.contextManager.getWorkingState()
+      return {
+        passed: [...ws0.verification.passed],
+        failed: [...ws0.verification.failed],
+        unresolved: [...ws0.unresolved],
+      }
+    })()
 
     // v0.3.2 P1-1 fix: create RunScopedRuntimeContext + classify TaskIntent
     // BEFORE routing so the router can consume the intent signal and the
@@ -1416,6 +1439,14 @@ export class RuntimeCoordinator {
       ? assessProjectExploration(explorationProfile, ws.filesRead)
       : null
     const hasChanges = ws.filesChanged.length > 0
+    // Run-scoped verification delta (R5): judge only commands executed
+    // during THIS run — session-cumulative failures stay in the
+    // system-prompt memory block but must not block this run's gate.
+    const runVerification = {
+      passed: ws.verification.passed.filter(c => !verificationBaseline.passed.includes(c)),
+      failed: ws.verification.failed.filter(c => !verificationBaseline.failed.includes(c)),
+    }
+    const runUnresolved = ws.unresolved.filter(u => !verificationBaseline.unresolved.includes(u))
     if (runContext) {
       // Round 45: reverse scan without copying the whole history.
       let lastAssistant: OpenAIMessage | undefined
@@ -1448,17 +1479,17 @@ export class RuntimeCoordinator {
         ? [`Inspect enough relevant files for evidence (${ws.filesRead.length}/${genericAnalysisReadTarget})`]
         : []
       const unsatisfiedExecutionVerification = executionVerificationRequired
-        && ws.verification.passed.length + ws.verification.failed.length === 0
+        && runVerification.passed.length + runVerification.failed.length === 0
         ? ['Execute at least one real verification command and report its result']
         : []
       const review = reviewRun({
         taskKind: runContext?.taskKind ?? 'informational',
         goalPresent: userMessage.trim().length > 0,
         changedFiles: ws.filesChanged,
-        verificationExecuted: ws.verification.passed.length + ws.verification.failed.length > 0,
-        verificationPassed: ws.verification.failed.length === 0,
-        unhandledFailures: ws.verification.failed.length,
-        unresolvedBlockers: ws.unresolved.length,
+        verificationExecuted: runVerification.passed.length + runVerification.failed.length > 0,
+        verificationPassed: runVerification.failed.length === 0,
+        unhandledFailures: runVerification.failed.length,
+        unresolvedBlockers: runUnresolved.length,
         unsatisfiedCriteria: [
           ...unsatisfiedFromGraph,
           ...unsatisfiedExploration,
@@ -1512,7 +1543,7 @@ export class RuntimeCoordinator {
         acceptanceCriteria.push({
           id: 'execution-verification-evidence',
           description: 'Execute at least one real verification command and report its result',
-          satisfied: ws.verification.passed.length + ws.verification.failed.length > 0,
+          satisfied: runVerification.passed.length + runVerification.failed.length > 0,
         })
       }
       const v = evaluateCompletion({
@@ -1520,15 +1551,15 @@ export class RuntimeCoordinator {
         modelStopped: true,
         acceptanceCriteria,
         verification: {
-          executed: ws.verification.passed.length + ws.verification.failed.length > 0,
-          passed: ws.verification.failed.length === 0,
-          failed: [...ws.verification.failed],
+          executed: runVerification.passed.length + runVerification.failed.length > 0,
+          passed: runVerification.failed.length === 0,
+          failed: [...runVerification.failed],
         },
         taskGraph: tgSnapshot ? {
           nodes: tgSnapshot.nodes.map((n) => ({ id: n.id, status: n.status })),
         } : undefined,
         activeWorkers: [...sharedState.activeSubtasks.entries()].map(([id]) => ({ id, status: 'running' as const })),
-        unresolvedBlockers: [...ws.unresolved],
+        unresolvedBlockers: [...runUnresolved],
         changedFiles: [...ws.filesChanged],
         reviewerFindings,
         budgetState: { remaining: 1, exceeded: false },
@@ -1594,6 +1625,7 @@ export class RuntimeCoordinator {
         : 'failed'
       try {
         const run = registry.get(effectiveRunId)
+        registryTerminalized = true
         if (run && !isTerminalRunStatus(run.status)) {
           registry.transition(effectiveRunId, targetStatus, {
             phase: result.reason === 'max_iterations' ? 'iteration-budget-exhausted'
@@ -1642,11 +1674,26 @@ export class RuntimeCoordinator {
     // v0.3.4 (durable supervisor contract §Phase 1): construct the canonical TurnOutcome
     // BEFORE module/hook completion so they receive it.
     const wsFinal = this.deps.contextManager.getWorkingState()
+    // Map the 7-state contract verdict onto the 6-state external
+    // CompletionStatus. The contract's internal 'incomplete' ("keep
+    // going" — acceptance unmet but not blocked) collapses to
+    // 'blocked': the previous `as CompletionStatus ?? 'completed'`
+    // cast let 'incomplete' leak into outcome.completion.status, a
+    // value outside the documented union that no downstream switch
+    // handles. The cast below is guarded by the exhaustive enumeration.
+    const verdictStatus: string | undefined = result.completionStatus
     const status: CompletionStatus =
       result.reason === 'error' ? 'failed'
       : result.reason === 'interrupted' ? 'cancelled'
       : result.reason === 'max_iterations' ? 'exhausted'
-      : (result.completionStatus as CompletionStatus) ?? 'completed'
+      : verdictStatus === 'partial'
+        || verdictStatus === 'blocked'
+        || verdictStatus === 'failed'
+        || verdictStatus === 'cancelled'
+        || verdictStatus === 'exhausted'
+        ? verdictStatus as CompletionStatus
+      : verdictStatus === undefined || verdictStatus === 'completed' ? 'completed'
+      : 'blocked'
     const outcome: TurnOutcome = {
       runId: effectiveRunId,
       stopReason: result.reason === 'interrupted' ? 'cancelled'
@@ -1779,6 +1826,21 @@ export class RuntimeCoordinator {
           status: 'blocked',
           result: { reason: 'routing_unavailable', stopped: true, output: '' },
         })
+        // GAP-C: this early return bypasses the normal terminal
+        // transition in the loop's postlude — without it the registry
+        // entry stays 'running' until the next process restart.
+        if (registry && registryRun) {
+          try {
+            const current = registry.get(effectiveRunId)
+            registryTerminalized = true
+            if (current && !isTerminalRunStatus(current.status)) {
+              registry.transition(effectiveRunId, 'blocked', {
+                phase: 'routing-unavailable',
+                error: 'no provider profile available',
+              })
+            }
+          } catch { /* best-effort */ }
+        }
         return { result: { reason: 'routing_unavailable', stopped: true, output: '' }, newHistory: history, outcome: blocked }
       }
       // Any other error: re-throw so the Engine's outer handler
@@ -1786,6 +1848,23 @@ export class RuntimeCoordinator {
       throw lifecycleErr
     }
     } finally {
+      // GAP-C safety net: every exit from run() must leave the registry
+      // entry terminal. The normal path transitions explicitly in the
+      // postlude; re-thrown lifecycle errors (and any future early exit)
+      // skip it, leaving a phantom 'running' entry that blocks recovery
+      // surfaces until the next process restart. Best-effort — the
+      // registry is observability, not control plane.
+      if (registry && registryRun && !registryTerminalized) {
+        try {
+          const run = registry.get(effectiveRunId)
+          if (run && !isTerminalRunStatus(run.status)) {
+            registry.transition(effectiveRunId, 'failed', {
+              phase: 'run-exited-nonterminal',
+              error: 'run() exited without a terminal transition',
+            })
+          }
+        } catch { /* best-effort */ }
+      }
       try { this.deps.runContextStore?.close(effectiveRunId) } catch { /* best-effort */ }
       // v0.5.3 Hotfix §1: clear activeRunId so consecutive turns
       // never see a stale id from a closed run.

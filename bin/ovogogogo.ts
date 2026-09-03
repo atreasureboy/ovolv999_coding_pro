@@ -2297,64 +2297,81 @@ async function main(): Promise<void> {
     }
   }
 
-  // Pipe input?
-  if (!process.stdin.isTTY) {
-    const piped = await readStdin()
-    if (piped) {
-      // Update saveOnExit to capture the post-turn history snapshot
-      saveOnExit = (): void => {
-        if (!sessionDir) return
-        try {
-          saveSession(sessionDir, resumedHistory, lastOutcomeSummary)
-        } catch (err: unknown) {
-          warnOnce('session:save:exit', `Failed to persist session: ${(err as Error).message}`)
+  // Dispatch. Wrapped so cleanup() runs when main() resolves on ANY
+  // path. Previously cleanup() was reachable only via the process 'exit'
+  // event — which never fires while any handle keeps the event loop
+  // alive (e.g. workspace_watcher's chokidar watchers), so single-shot
+  // and pipe turns completed and then HUNG forever instead of exiting
+  // with the pinned v0.4.1 C4 exit code. cleanup() is idempotent; the
+  // 'exit'-event registration remains the signal / crash-path net.
+  const dispatch = async (): Promise<void> => {
+    // Pipe input?
+    if (!process.stdin.isTTY) {
+      const piped = await readStdin()
+      if (piped) {
+        // Update saveOnExit to capture the post-turn history snapshot
+        saveOnExit = (): void => {
+          if (!sessionDir) return
+          try {
+            saveSession(sessionDir, resumedHistory, lastOutcomeSummary)
+          } catch (err: unknown) {
+            warnOnce('session:save:exit', `Failed to persist session: ${(err as Error).message}`)
+          }
         }
+        await runSingleTask(engine, renderer, piped, cwd, resumedHistory, sessionDir, resumedHistory)
+        return
       }
-      await runSingleTask(engine, renderer, piped, cwd, resumedHistory, sessionDir, resumedHistory)
+    }
+
+    // Loop mode?
+    if (loop) {
+      const { runLoop } = await import('../src/core/loopEngine.js')
+      renderer.info('Loop mode activated — reading .loop/ configuration')
+      await runLoop(engine, renderer, {
+        cwd,
+        loopDir: join(cwd, '.loop'),
+        maxIters: loopMaxIters,
+        restart: loopRestart,
+      })
       return
     }
-  }
 
-  // Loop mode?
-  if (loop) {
-    const { runLoop } = await import('../src/core/loopEngine.js')
-    renderer.info('Loop mode activated — reading .loop/ configuration')
-    await runLoop(engine, renderer, {
-      cwd,
-      loopDir: join(cwd, '.loop'),
-      maxIters: loopMaxIters,
-      restart: loopRestart,
-    })
-    return
-  }
+    // Single task from args?
+    if (task) {
+      await runSingleTask(engine, renderer, task, cwd, resumedHistory, sessionDir, resumedHistory)
+      return
+    }
 
-  // Single task from args?
-  if (task) {
-    await runSingleTask(engine, renderer, task, cwd, resumedHistory, sessionDir, resumedHistory)
-    return
-  }
+    // Interactive REPL
+    if (ink && uiStore && inkRendererInstance) {
+      const { runInkRepl } = await import('../src/ui/ink/runInkRepl.js')
+      const skillsArray = [...skills.values()].map((s) => ({ name: s.name, description: s.description }))
+      await runInkRepl({
+        store: uiStore,
+        engine,
+        inkRenderer: inkRendererInstance,
+        version: VERSION,
+        model: effectiveModel,
+        skills: skillsArray,
+        cwd,
+        sessionDir,
+        resumedHistory,
+        maxContextTokens: maxCtxTokens,
+        loopMaxIters,
+      })
+      return
+    }
 
-  // Interactive REPL
-  if (ink && uiStore && inkRendererInstance) {
-    const { runInkRepl } = await import('../src/ui/ink/runInkRepl.js')
-    const skillsArray = [...skills.values()].map((s) => ({ name: s.name, description: s.description }))
-    await runInkRepl({
-      store: uiStore,
-      engine,
-      inkRenderer: inkRendererInstance,
-      version: VERSION,
-      model: effectiveModel,
-      skills: skillsArray,
-      cwd,
-      sessionDir,
-      resumedHistory,
-      maxContextTokens: maxCtxTokens,
-      loopMaxIters,
-    })
-    return
+    await runRepl(engine, planConfig, renderer, cwd, skills, sessionDir, resumedHistory, loopMaxIters)
   }
-
-  await runRepl(engine, planConfig, renderer, cwd, skills, sessionDir, resumedHistory, loopMaxIters)
+  try {
+    await dispatch()
+  } finally {
+    // Idempotent — see the cleanup definition above. Runs the session
+    // save, engine.dispose (module dispose → watcher close), and cost
+    // summary on every natural exit path.
+    cleanup()
+  }
 }
 
 /**
