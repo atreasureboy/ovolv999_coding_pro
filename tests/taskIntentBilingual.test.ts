@@ -61,6 +61,18 @@ describe('TaskIntent bilingual classification (background autonomy contract §Ph
     })
   })
 
+  describe('English analysis-subject suppression', () => {
+    it('deliberation ("whether to refactor") is analysis, not mutation', () => {
+      expect(classifyTaskIntent('assess whether to refactor the storage layer').kind).toBe('analysis')
+    })
+    it('conditional implementation ("before you implement") is analysis', () => {
+      expect(classifyTaskIntent('analyze the migration risk before you implement anything').kind).toBe('analysis')
+    })
+    it('explicit connector keeps mutation', () => {
+      expect(classifyTaskIntent('analyze the codebase then fix the race condition').kind).toBe('mutation')
+    })
+  })
+
   describe('Low-confidence defaults', () => {
     it('ambiguous goal defaults to informational', () => {
       const intent = classifyTaskIntent('do the thing')

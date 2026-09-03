@@ -68,9 +68,19 @@ export function classifyTaskIntent(userMessage: string, options: {
   const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check|test|diagnose|troubleshoot)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证|测试|诊断|排查)/
   const mutationStartsWith = /^\s*(fix|implement|refactor|rewrite|write|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up|polish|redesign|修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化)/i.test(text)
   const mutationAfterAnalysis = /\b(?:and|then|after(?:wards)?)\s+(?:fix|implement|refactor|rewrite|add|remove|edit|modify|patch|change|update|build|create|install|configure)\b|(?:并|然后|之后|后|并且|且)[，,\s]*(?:修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/i
-  const mutationWordIsAnalysisSubject = /(?:评估|研究|分析|审计|检查)[\s\S]{0,12}(?:迁移风险|迁移方案|竞品实现|现有实现|实现方式|实现逻辑)\s*$/i.test(text)
+  // The mutation word appears only as the OBJECT of analysis/deliberation
+  // (“评估迁移风险”, "assess whether to refactor", "…before you implement
+  // anything") — suppress mutation UNLESS an explicit connector re-fires
+  // (“分析X并修复Y” stays mutation). English half mirrors the Chinese one.
+  const mutationWordIsAnalysisSubject = new RegExp(
+    '(?:评估|研究|分析|审计|检查)[\\s\\S]{0,12}(?:迁移风险|迁移方案|竞品实现|现有实现|实现方式|实现逻辑)\\s*$'
+    + '|\\b(?:assess|evaluate|analyze|analyse|study|review|audit|examine|investigate)\\b[\\s\\S]{0,24}(?:the\\s+)?(?:migration|refactor\\w*|rewrite|redesign|re-?architect\\w*)[\\s\\S]{0,16}$'
+    + '|\\b(?:whether|if)\\s+to\\s+(?:fix|implement|refactor|rewrite|migrate|rebuild|replace|remove|delete|add|change|update)\\b'
+    + '|\\bbefore\\s+(?:you\\s+|we\\s+|i\\s+)?(?:fix|implement|refactor|rewrite|migrate|rebuild|replace|touch|change|update|edit|modify)\\b',
+    'i',
+  ).test(text)
   const requestsMutation = mutationKeywords.test(text)
-    && (mutationStartsWith || !analysisKeywords.test(text) || mutationAfterAnalysis.test(text) || !mutationWordIsAnalysisSubject)
+    && (!mutationWordIsAnalysisSubject || mutationAfterAnalysis.test(text))
 
   // Highest priority: explicit user-stated kind.
   if (explicit) {
