@@ -79,4 +79,41 @@ describe('Router.tryAcquireProbe / finishProbe — production wiring (P1-3 + Hot
     openCircuit(r)
     expect(r.tryAcquireProbe('p1')).toBeNull() // open
   })
+
+  it('an expired lease is evicted lazily and the profile becomes probeable again', () => {
+    const r = newRouter()
+    openCircuit(r)
+    r['circuitStates'].set('p1', 'half-open')
+
+    const stale = r.tryAcquireProbe('p1')
+    expect(stale).not.toBeNull()
+    // Simulate a caller that died without finishProbe (hung call past
+    // the turn-level deadline the TTL bounds).
+    ;(stale as { acquiredAt: number }).acquiredAt = Date.now() - 11 * 60 * 1000
+
+    const fresh = r.tryAcquireProbe('p1')
+    expect(fresh).not.toBeNull()
+    expect(fresh!.leaseId).not.toBe(stale!.leaseId)
+  })
+
+  it('a late finishProbe from the evicted caller cannot clobber the replacement lease', () => {
+    const r = newRouter()
+    openCircuit(r)
+    r['circuitStates'].set('p1', 'half-open')
+
+    const stale = r.tryAcquireProbe('p1')!
+    ;(stale as { acquiredAt: number }).acquiredAt = Date.now() - 11 * 60 * 1000
+    const fresh = r.tryAcquireProbe('p1')!
+    expect(fresh.leaseId).not.toBe(stale.leaseId)
+
+    // The dead caller finally settles and reports success — it must NOT
+    // close the circuit or release the replacement's slot.
+    r.finishProbe(stale, 'success')
+    expect(r.getProfileCircuitState('p1')).toBe('half-open')
+    expect(r.getProbeInFlight().has('p1')).toBe(true)
+
+    // The live probe still owns the lease and drives the verdict.
+    r.finishProbe(fresh, 'success')
+    expect(r.getProfileCircuitState('p1')).toBe('closed')
+  })
 })

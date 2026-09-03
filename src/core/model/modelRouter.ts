@@ -248,6 +248,9 @@ const DEFAULT_LONG_CONTEXT_THRESHOLD = 0.8
 const DEFAULT_FAILURE_ESCALATION = 2
 const CIRCUIT_OPEN_THRESHOLD = 5
 const CIRCUIT_HALF_OPEN_COOLDOWN_MS = 30_000
+/** Probe leases expire after this long (one model call, bounded by the
+ *  turn-level hard deadline) — see tryAcquireProbe's lazy eviction. */
+const PROBE_LEASE_TTL_MS = 10 * 60 * 1000
 
 export class ModelRouter {
   private profiles: ModelProfile[]
@@ -537,7 +540,24 @@ export class ModelRouter {
   tryAcquireProbe(profileId: string, attemptScopeId: string = randomUUID()): ProbeLease | null {
     const state = this.getProfileCircuitState(profileId)
     if (state !== 'half-open') return null
-    if (this.probeInFlight.has(profileId)) return null
+    if (this.probeInFlight.has(profileId)) {
+      // Lease TTL: a probe is ONE model call, bounded by the turn-level
+      // deadline. A lease older than that means its caller died without
+      // finishProbe (hung call the watchdog failed to settle) — evict it
+      // lazily so the profile is probeable again instead of being stuck
+      // half-open for the process lifetime. A LATE finishProbe from the
+      // evicted caller is a no-op (its leaseId is no longer in
+      // activeLeases), so it cannot clobber the replacement lease.
+      const now = Date.now()
+      for (const [leaseId, lease] of this.activeLeases) {
+        if (lease.profileId !== profileId) continue
+        if (now - lease.acquiredAt <= PROBE_LEASE_TTL_MS) return null
+        this.activeLeases.delete(leaseId)
+        this.probeInFlight.delete(profileId)
+        break
+      }
+      if (this.probeInFlight.has(profileId)) return null
+    }
     this.probeInFlight.add(profileId)
     const profile = this.profiles.find((p) => p.id === profileId)
     const lease: ProbeLease = {
