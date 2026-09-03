@@ -10,6 +10,7 @@
 import type OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import type { ProviderAdapter, ProviderStreamRequest } from './providerAdapter.js'
+import { buildReasoningParams } from './reasoningTransform.js'
 import {
   AnthropicChunkTranslator,
   buildAnthropicRequest,
@@ -79,6 +80,30 @@ export class AnthropicAdapter implements ProviderAdapter {
       temperature: req.temperature,
       providerOptions,
     })
+
+    // Round 42 symmetry: normalized reasoning options ride every
+    // ProviderStreamRequest; the OpenAI-compatible adapter translates
+    // them per flavor, but this transport dropped them on the floor.
+    // Translate the anthropic-thinking flavor here. An explicit
+    // providerOptions.thinkingBudget stays the manual override —
+    // buildAnthropicRequest already applied it.
+    if (!providerOptions.thinkingBudget) {
+      const reasoningParams = buildReasoningParams('anthropic', req.model, req.reasoning)
+      const thinking = (reasoningParams as { thinking?: { type: string; budget_tokens?: number } } | undefined)?.thinking
+      if (thinking?.type === 'enabled' && typeof thinking.budget_tokens === 'number') {
+        // The Messages API rejects budget_tokens >= max_tokens. Fit the
+        // budget into the request's output budget while reserving the
+        // floor for the visible answer; if the request cannot fit both,
+        // skip thinking rather than send a guaranteed 400.
+        const fittedBudget = Math.min(thinking.budget_tokens, maxTokens - 1_024)
+        if (fittedBudget >= 1_024) {
+          ;(params as { thinking?: unknown }).thinking = { type: 'enabled', budget_tokens: fittedBudget }
+          // Thinking is incompatible with temperature sampling — the API
+          // requires temperature 1 (or unset) while it is enabled.
+          ;(params as { temperature?: number }).temperature = 1
+        }
+      }
+    }
 
     const betaHeaders = extractAnthropicBetaHeaders(providerOptions)
     const betaHeader = betaHeaders.length > 0 ? betaHeaders.join(',') : undefined
