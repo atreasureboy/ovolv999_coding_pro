@@ -971,7 +971,12 @@ export class RuntimeCoordinator {
                 // keeps running.
                 pm.recordVerification(this.deps.contextManager.getWorkingState().verification.failed.length)
                 const elapsedMin = (Date.now() - turnStartMs) / 60_000
-                const verdict = pm.detectStall(elapsedMin, 1)
+                // Real budget pressure: the fraction was hardcoded to 1,
+                // which kept the monitor's budget-pressure branch dead.
+                // measureBudget is pure measurement (contract §context),
+                // and 1 keeps the not-yet-measured fallback behaviour.
+                const budgetSnap = this.deps.contextManager.measureBudget({ messages, toolDefs })
+                const verdict = pm.detectStall(elapsedMin, budgetSnap.initialized ? budgetSnap.remainingRatio : 1)
                 this.deps.eventEmitter.emit({
                   type: 'PROGRESS_RECORDED',
                   kind: verdict.kind === 'progressing' ? 'progress' :
