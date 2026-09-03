@@ -23,6 +23,7 @@ export interface DefaultHookRunnerOptions {
   cwd?: string
   sessionId?: string
   configOverride?: HookConfig
+  includeProject?: boolean
 }
 
 function genSessionId(): string {
@@ -66,6 +67,7 @@ function execToHookResult(exec: {
 export class DefaultHookRunner implements IHookRunner {
   private readonly cwd: string
   private readonly sessionId: string
+  private readonly includeProject: boolean
   private config: HookConfig | null
   /** Round 26 re-audit (D7): SessionStart must fire ONCE per session (CC
    *  semantics) — the coordinator invokes run* at every turn, so an
@@ -75,11 +77,12 @@ export class DefaultHookRunner implements IHookRunner {
   constructor(options: DefaultHookRunnerOptions = {}) {
     this.cwd = options.cwd ?? process.cwd()
     this.sessionId = options.sessionId ?? genSessionId()
-    this.config = options.configOverride ?? loadHookConfig(this.cwd) ?? null
+    this.includeProject = options.includeProject === true
+    this.config = options.configOverride ?? loadHookConfig(this.cwd, this.includeProject) ?? null
   }
 
   reload(): void {
-    this.config = loadHookConfig(this.cwd) ?? null
+    this.config = loadHookConfig(this.cwd, this.includeProject) ?? null
   }
 
   setConfig(config: HookConfig | null): void {

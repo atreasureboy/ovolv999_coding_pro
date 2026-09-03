@@ -17,8 +17,8 @@
 
 import { createInterface, type Interface as ReadlineInterface } from 'readline'
 import { EventEmitter } from 'events'
-import { writeFileSync, readFileSync } from 'fs'
-import { resolve, relative, normalize } from 'path'
+import { writeFileSync, readFileSync, realpathSync, existsSync } from 'fs'
+import { resolve, relative, normalize, dirname, basename, join } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -320,41 +320,37 @@ export class ACPServer extends EventEmitter {
   }
 
   private handleFileRead(id: string | number | undefined, params?: Record<string, unknown>): void {
-    if (!this.handlers.onFileRead) {
-      // Default: read from filesystem
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      const path = String(params?.path ?? '')
-      if (!path) {
-        this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "path"')
-        return
-      }
-      const resolvedPath = resolve(this.cwd, path)
-      if (!this.isPathSafe(resolvedPath)) {
-        this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Path traversal denied')
-        return
-      }
-      try {
-        const content = readFileSync(resolvedPath, 'utf8')
-        this.respond(id, { path, content })
-      } catch (err) {
-        this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to read: ${(err as Error).message}`)
-      }
+    if (!this.initialized) {
+      this.respondError(id, RPC_ERRORS.INVALID_REQUEST.code, 'Server not initialized')
       return
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    const path = String(params?.path ?? '')
+    const path = typeof params?.path === 'string' ? params.path : ''
     if (!path) {
       this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Missing "path"')
       return
     }
-    const content = this.handlers.onFileRead(path)
-    this.respond(id, { path, content })
+    const resolvedPath = resolve(this.cwd, path)
+    try {
+      const canonicalPath = realpathSync(resolvedPath)
+      if (!this.isPathSafe(canonicalPath)) {
+        this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Path traversal denied')
+        return
+      }
+      const content = this.handlers.onFileRead
+        ? this.handlers.onFileRead(canonicalPath)
+        : readFileSync(canonicalPath, 'utf8')
+      this.respond(id, { path, content })
+    } catch (err) {
+      this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to read: ${(err as Error).message}`)
+    }
   }
 
   private handleFileWrite(id: string | number | undefined, params?: Record<string, unknown>): void {
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    const path = String(params?.path ?? '')
+    if (!this.initialized) {
+      this.respondError(id, RPC_ERRORS.INVALID_REQUEST.code, 'Server not initialized')
+      return
+    }
+    const path = typeof params?.path === 'string' ? params.path : ''
     // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const content = String(params?.content ?? '')
 
@@ -363,20 +359,24 @@ export class ACPServer extends EventEmitter {
       return
     }
 
-    if (this.handlers.onFileWrite) {
-      this.handlers.onFileWrite(path, content)
-    } else {
-      const resolvedPath = resolve(this.cwd, path)
-      if (!this.isPathSafe(resolvedPath)) {
+    const resolvedPath = resolve(this.cwd, path)
+    try {
+      const canonicalParent = realpathSync(dirname(resolvedPath))
+      const canonicalPath = existsSync(resolvedPath)
+        ? realpathSync(resolvedPath)
+        : join(canonicalParent, basename(resolvedPath))
+      if (!this.isPathSafe(canonicalPath)) {
         this.respondError(id, RPC_ERRORS.INVALID_PARAMS.code, 'Path traversal denied')
         return
       }
-      try {
-        writeFileSync(resolvedPath, content, 'utf8')
-      } catch (err) {
-        this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to write: ${(err as Error).message}`)
-        return
+      if (this.handlers.onFileWrite) {
+        this.handlers.onFileWrite(canonicalPath, content)
+      } else {
+        writeFileSync(canonicalPath, content, 'utf8')
       }
+    } catch (err) {
+      this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to write: ${(err as Error).message}`)
+      return
     }
 
     this.respond(id, { path, written: true })
@@ -384,7 +384,7 @@ export class ACPServer extends EventEmitter {
 
   private isPathSafe(resolvedPath: string): boolean {
     try {
-      const rel = relative(resolve(this.cwd), resolvedPath)
+      const rel = relative(realpathSync(resolve(this.cwd)), resolvedPath)
       const normalized = normalize(rel)
       return !normalized.startsWith('..') && normalized !== ''
     } catch {

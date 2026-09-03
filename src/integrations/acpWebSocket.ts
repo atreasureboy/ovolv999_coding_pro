@@ -10,7 +10,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ACPTransport } from './acpTransport.js'
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -184,6 +184,7 @@ function encodeFrame(opcode: number, payload: Buffer): Buffer {
 export interface AcpWebSocketServerOptions {
   port: number
   host?: string
+  authToken: string
   /** Optional callback per connection — receives the raw Socket and the ACPServer transport. */
   onConnection?: (transport: WebSocketACPTransport, remoteAddress: string | undefined) => void
   /**
@@ -266,6 +267,26 @@ export class AcpWebSocketServer {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Socket): void {
+    const authorization = req.headers.authorization
+    const bearer = typeof authorization === 'string' && authorization.startsWith('Bearer ')
+      ? authorization.slice(7)
+      : ''
+    const queryToken = (() => {
+      try {
+        return new URL(req.url ?? '/', 'http://localhost').searchParams.get('token') ?? ''
+      } catch {
+        return ''
+      }
+    })()
+    const suppliedToken = bearer || queryToken
+    const expected = Buffer.from(this.options.authToken)
+    const supplied = Buffer.from(suppliedToken)
+    if (expected.length === 0 || expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
     // Security (H4): Origin check. Browsers force an Origin header on
     // cross-site WebSocket handshakes; native clients send none. Allow
     // origin-less requests (CLI/ACP agents), reject browser origins that

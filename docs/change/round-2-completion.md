@@ -5,7 +5,7 @@
 ## 范围
 
 1. **Hook 全部事件接通**:Phase 2 只接通了 PreToolUse / PostToolUse,还差 UserPromptSubmit / SessionStart / PostToolUseFailure
-2. **ACP WebSocket CLI 入口**:`--acp-ws --port 8765` 真实可用
+2. **ACP WebSocket CLI 入口**:`--acp-ws 8765` 真实可用
 3. **MCP OAuth 接入 McpModule**:OAuth token 自动获取、刷新、过期清理
 4. **Anthropic 增强**:thinking blocks + prompt caching(beta headers)
 5. **CHANGELOG / README 更新**:5 大特性的对外描述
@@ -28,7 +28,7 @@
 | 文件 | 变更 |
 |---|---|
 | `src/core/runtime/coordinator.ts` | 调用 `runUserPromptSubmit` / `runSessionStart` / `runPostToolUseFailure` |
-| `bin/ovogogogo.ts` | 解析 `--acp-ws --port <port>` |
+| `bin/ovogogogo.ts` | 解析 `--acp-ws <port>` |
 | `src/cli/acpServer.ts` | ACP WS 启动逻辑 + CLI 集成 |
 | `src/modules/mcp/index.ts` | OAuth flow 接入 boot/execute |
 | `src/core/model/anthropicAdapter.ts` | 接受 `providerOptions.anthropicBeta` + `cacheControl` |

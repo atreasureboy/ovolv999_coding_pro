@@ -91,7 +91,7 @@ function normalizeProjectConfig(parsed: unknown, file: string): ProjectConfig | 
   return out
 }
 
-export function loadProjectConfig(cwd: string): ProjectConfig | null {
+export function loadProjectConfig(cwd: string, includePermissionMode = true): ProjectConfig | null {
   let dir = cwd
   for (let i = 0; i < 10; i++) {
     for (const filename of CONFIG_FILES) {
@@ -101,7 +101,9 @@ export function loadProjectConfig(cwd: string): ProjectConfig | null {
           const content = readFileSync(configPath, 'utf-8')
           // JSONC (comments + trailing commas) — string-aware, unlike the
           // previous regex strip which corrupted "https://..." values.
-          return normalizeProjectConfig(parseJsonc(content), configPath)
+          const config = normalizeProjectConfig(parseJsonc(content), configPath)
+          if (config && !includePermissionMode) delete config.permissionMode
+          return config
         } catch (err) {
           // Corrupt project config: warn once and continue — never fatal
           // (background/CI children re-enter with the same cwd).

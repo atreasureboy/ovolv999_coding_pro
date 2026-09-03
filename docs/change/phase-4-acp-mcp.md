@@ -5,7 +5,7 @@
 ## 范围
 
 1. **ACP transport 抽象化**:`StdioTransport` 与 `WebSocketTransport` 共用 `ACPTransport` 接口
-2. **ACP WebSocket 服务**:`--acp-ws --port 8765`,每个 client 一个独立 ACP 实例
+2. **ACP WebSocket 服务**:`--acp-ws 8765`,每个 client 一个独立 ACP 实例
 3. **MCP OAuth**:Authorization Code + PKCE 流程,token 持久化,自动 refresh
 
 ## 设计决策
@@ -46,7 +46,7 @@
 - `npx tsc --noEmit`
 - `pnpm lint`
 - `npx vitest run`
-- **行为验证需用户手动**:启动 `ovolv999 --acp-ws --port 8765`,用任何 WS 客户端连入测试
+- **行为验证需用户手动**:启动 `ovolv999 --acp-ws 8765`,用任何 WS 客户端连入测试
 
 ## 风险
 

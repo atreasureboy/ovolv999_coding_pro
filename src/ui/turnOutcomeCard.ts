@@ -36,13 +36,14 @@ export function effectiveModelFor(outcome: { modelAttempts?: ModelCallAttempt[] 
 export function formatOutcomeCardText(opts: OutcomeCardOptions): string {
   const { outcome, elapsedSec, costStr } = opts
   const status = outcome.completion?.status ?? 'completed'
+  const model = effectiveModelFor(outcome, opts.model)
 
   // Round 46 (codex detail): `─ Worked for 12s ─────` — the turn-end
   // marker is ONE quiet divider line, not a multi-row emoji card. Status
   // and blockers still surface when they matter (non-completed turns);
   // a completed turn just shows duration + cost.
   const lines: string[] = []
-  const head = `Worked for ${elapsedSec}s${costStr ? ` · ${costStr}` : ''}`
+  const head = `Worked for ${elapsedSec}s · Model: ${model}${costStr ? ` · ${costStr}` : ''}`
   const width = Math.max(40, head.length + 4)
   const dashes = Math.max(3, width - head.length - 4)
   lines.push(`─ ${head} ${'─'.repeat(dashes)}`)

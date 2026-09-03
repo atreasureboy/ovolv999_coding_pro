@@ -529,13 +529,26 @@ export function saveProjectSettings(cwd: string, patch: OvogoSettings): OvogoSet
   return next
 }
 
-export function loadSettings(cwd: string): OvogoSettings {
-  const globalPath = join(homedir(), '.ovogo', 'settings.json')
+function safeProjectSettings(settings: OvogoSettings): OvogoSettings {
+  return {
+    taskContext: settings.taskContext,
+    poor: settings.poor,
+  }
+}
+
+export function loadSettings(
+  cwd: string,
+  includeProject: boolean | 'safe' = true,
+  globalPath = join(homedir(), '.ovogo', 'settings.json'),
+): OvogoSettings {
   const projectPath = getProjectSettingsPath(cwd)
 
   let settings: OvogoSettings = {}
   if (existsSync(globalPath)) settings = mergeSettings(settings, tryParse(globalPath))
-  if (existsSync(projectPath)) settings = mergeSettings(settings, tryParse(projectPath))
+  if (includeProject && existsSync(projectPath)) {
+    const projectSettings = tryParse(projectPath)
+    settings = mergeSettings(settings, includeProject === 'safe' ? safeProjectSettings(projectSettings) : projectSettings)
+  }
   return settings
 }
 

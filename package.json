@@ -50,10 +50,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/gap tests/phase tests/eval",
+    "test:integration": "vitest run tests/eval",
     "test:esm": "tsx tests/esm-runner/repoStats-real-esm.mjs && tsx tests/esm-runner/sandbox-bwrap-isolation.mjs",
     "test:golden-path": "vitest run tests/v052GoldenPath.test.ts tests/v053RealGoldenPath.test.ts tests/v053RealGoldenPath.profileFallback.test.ts",
-    "test:runtime-behavior": "vitest run tests/runtime-behavior tests/v053Hotfix tests/v053 tests/v053RealGoldenPath.profileFallback.test.ts tests/v053RealGoldenPath.test.ts tests/memoryRepoIsolation.test.ts tests/sourceQuoteHardening.test.ts tests/memoryBackendContract.test.ts tests/revisionBindingTruth.test.ts tests/memoryConflictProvenance.test.ts tests/probePerAttemptTruth.test.ts tests/probeLeaseProduction.test.ts",
+    "test:runtime-behavior": "vitest run tests/v053Hotfix tests/v053 tests/v053RealGoldenPath.profileFallback.test.ts tests/v053RealGoldenPath.test.ts",
     "eval:wiring": "vitest run evals/wiring-smoke",
     "eval:deterministic": "vitest run evals/deterministic-runtime tests/eval",
     "eval:real": "vitest run evals/real",
@@ -85,9 +85,9 @@
     "typescript-eslint": "^8.59.1",
     "vitest": "^4.1.5"
   },
-  "overrides": {
-    "brace-expansion": "5.0.8",
-    "tr46": "^6.0.0",
-    "whatwg-url": "^17.1.0"
+  "pnpm": {
+    "overrides": {
+      "brace-expansion": "5.0.9"
+    }
   }
 }

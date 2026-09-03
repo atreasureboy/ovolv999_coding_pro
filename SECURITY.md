@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Security fixes are applied to the latest released `0.3.x` version.
+Security fixes are applied to the latest released version.
 
 ## Reporting a vulnerability
 
@@ -14,3 +14,4 @@ We will acknowledge a complete report within seven days, keep the reporter infor
 
 ovolv999 is a coding agent and may execute tools in the selected workspace. Review permission and sandbox settings before using it against untrusted repositories. Keep API credentials outside repositories and do not commit `.env` files or provider tokens.
 
+Project hooks, plugins, permission overrides, MCP servers, provider overrides, and model routing profiles are disabled by default because they can change permissions, start processes, redirect providers, or execute with host privileges. Safe project metadata and runtime settings remain available. Set `OVOGO_TRUST_PROJECT_CODE=1` only after reviewing the repository's `.ovogo/settings.json`, `.ovolv999.json(c)`, and `.ovolv999/plugins/` contents.

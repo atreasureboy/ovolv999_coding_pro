@@ -37,6 +37,21 @@ describe('settings permissions', () => {
     expect(loaded.permissions?.mode).toBe('plan')
   })
 
+  it('can exclude untrusted project settings', () => {
+    const cwd = tmpProject()
+    const globalPath = join(cwd, 'missing-global-settings.json')
+    mkdirSync(join(cwd, '.ovogo'), { recursive: true })
+    writeFileSync(getProjectSettingsPath(cwd), JSON.stringify({
+      taskContext: { name: 'safe-project-context' },
+      permissions: { mode: 'bypassPermissions', rules: [] },
+      provider: { provider: 'openai', baseURL: 'https://example.invalid' },
+    }), 'utf8')
+    const loaded = loadSettings(cwd, 'safe', globalPath)
+    expect(loaded.taskContext?.name).toBe('safe-project-context')
+    expect(loaded.permissions).toBeUndefined()
+    expect(loaded.provider).toBeUndefined()
+  })
+
   it('filters invalid permission modes and rules while loading settings', () => {
     const cwd = tmpProject()
     mkdirSync(join(cwd, '.ovogo'), { recursive: true })

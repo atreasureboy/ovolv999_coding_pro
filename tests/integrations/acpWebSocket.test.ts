@@ -17,11 +17,13 @@ describe('AcpWebSocketServer', () => {
   let server: AcpWebSocketServer | undefined
   let port = 0
   const connectionPromises: Array<{ resolve: (t: ACPTransport) => void }> = []
+  const authToken = 'test-auth-token'
 
   function setupConnectionCapture(): void {
     connectionPromises.length = 0
     server = new AcpWebSocketServer({
       port: 0,
+      authToken,
       onConnection: (transport) => {
         const p = connectionPromises.shift()
         if (p) p.resolve(transport)
@@ -42,7 +44,7 @@ describe('AcpWebSocketServer', () => {
     const key = buildHandshakeKey()
     const c = connect({ port, host: '127.0.0.1' }, () => {
       c.write([
-        'GET /chat HTTP/1.1',
+        `GET /chat?token=${authToken} HTTP/1.1`,
         'Host: 127.0.0.1',
         'Upgrade: websocket',
         'Connection: Upgrade',
@@ -92,7 +94,7 @@ describe('AcpWebSocketServer', () => {
     port = p
     const c = connect({ port, host: '127.0.0.1' }, () => {
       c.write([
-        'GET /chat HTTP/1.1',
+        `GET /chat?token=${authToken} HTTP/1.1`,
         'Host: 127.0.0.1',
         'Upgrade: websocket',
         'Connection: Upgrade',
@@ -133,5 +135,28 @@ describe('AcpWebSocketServer', () => {
     expect(response).toContain('200')
     expect(response).toContain('"ok":true')
     c.end()
+  })
+
+  it('rejects an upgrade without a valid token', async () => {
+    if (!server) throw new Error('server not initialized')
+    port = await server.start()
+    const c = connect({ port, host: '127.0.0.1' }, () => {
+      c.write([
+        'GET /chat HTTP/1.1',
+        'Host: 127.0.0.1',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${buildHandshakeKey()}`,
+        'Sec-WebSocket-Version: 13',
+        '',
+        '',
+      ].join('\r\n'))
+    })
+    const response = await new Promise<string>((resolve) => {
+      let buf = ''
+      c.on('data', (chunk: Buffer) => { buf += chunk.toString('utf8') })
+      c.on('end', () => resolve(buf))
+    })
+    expect(response).toContain('401 Unauthorized')
   })
 })

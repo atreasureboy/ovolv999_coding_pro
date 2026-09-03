@@ -202,9 +202,11 @@ function mergeConfigs(base: HookConfig, override: HookConfig): HookConfig {
  * Load hooks config from disk. Project settings override user settings.
  * Returns null if no hooks are configured anywhere.
  */
-export function loadHookConfig(cwd: string): HookConfig | null {
+export function loadHookConfig(cwd: string, includeProject = true): HookConfig | null {
   const userConfig = readJsonConfig(join(homedir(), '.ovogo', 'settings.json'))
-  const projectConfig = readJsonConfig(join(cwd, '.ovogo', 'settings.json'))
+  const projectConfig = includeProject
+    ? readJsonConfig(join(cwd, '.ovogo', 'settings.json'))
+    : null
   if (!userConfig && !projectConfig) return null
   if (!userConfig) return projectConfig
   if (!projectConfig) return userConfig

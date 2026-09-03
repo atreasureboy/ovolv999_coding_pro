@@ -29,6 +29,14 @@ afterEach(() => {
 })
 
 describe('PluginsModule runtime loading', () => {
+  it('does not execute project plugins before workspace trust is granted', async () => {
+    makePlugin('untrusted', { provides: { tools: ['tools.js'] } }, {
+      'tools.js': `throw new Error('must not execute')`,
+    })
+    const result = await new PluginsModule().boot(bootCtx())
+    expect(result.tools).toBeUndefined()
+  })
+
   it('imports plugin tools and returns them for engine registration', async () => {
     makePlugin('demo', { provides: { tools: ['tools.js'] } }, {
       'tools.js': `
@@ -43,7 +51,7 @@ module.exports = { tools: [tool] }
 `,
     })
 
-    const module = new PluginsModule()
+    const module = new PluginsModule({ trustProjectCode: true })
     const result = await module.boot(bootCtx())
     expect(result.tools).toHaveLength(1)
     const tool = result.tools![0]
@@ -65,7 +73,7 @@ function mkTool(n) {
 module.exports = () => [mkTool('shape_a'), mkTool('shape_b')]
 `,
     })
-    const result = await new PluginsModule().boot(bootCtx())
+    const result = await new PluginsModule({ trustProjectCode: true }).boot(bootCtx())
     expect((result.tools ?? []).map((t) => t.name).sort()).toEqual(['shape_a', 'shape_b'])
   })
 
@@ -79,7 +87,7 @@ module.exports = [{
 }]
 `,
     })
-    const result = await new PluginsModule().boot(bootCtx())
+    const result = await new PluginsModule({ trustProjectCode: true }).boot(bootCtx())
     expect(result.tools ?? []).toHaveLength(0)
 
     const { getCommand } = await import('../src/commands/index.js')
@@ -93,7 +101,7 @@ module.exports = [{
     makePlugin('off', { enabled: false, provides: { tools: ['tools.js'] } }, {
       'tools.js': `module.exports = { tools: [{ name: 'off_tool', definition: {}, async execute() { return { content: '', isError: false } } }] }`,
     })
-    const result = await new PluginsModule().boot(bootCtx())
+    const result = await new PluginsModule({ trustProjectCode: true }).boot(bootCtx())
     expect(result.tools ?? []).toHaveLength(0)
   })
 
@@ -108,7 +116,7 @@ module.exports = [{
         async execute() { return { content: 'ok', isError: false } },
       }] }`,
     })
-    const result = await new PluginsModule().boot(bootCtx())
+    const result = await new PluginsModule({ trustProjectCode: true }).boot(bootCtx())
     expect((result.tools ?? []).map((t) => t.name)).toEqual(['fine_tool'])
   })
 
@@ -116,7 +124,7 @@ module.exports = [{
     makePlugin('badshape', { provides: { tools: ['tools.js'] } }, {
       'tools.js': `module.exports = { tools: [{ name: 42, definition: null }] }`,
     })
-    const result = await new PluginsModule().boot(bootCtx())
+    const result = await new PluginsModule({ trustProjectCode: true }).boot(bootCtx())
     expect(result.tools ?? []).toHaveLength(0)
   })
 })

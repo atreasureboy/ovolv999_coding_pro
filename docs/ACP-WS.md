@@ -14,13 +14,14 @@ This is the historical default. Just run `ovolv999` from your editor — no flag
 ## Quick start (WebSocket)
 
 ```bash
-ovolv999 --acp-ws --port 8765
+ovolv999 --acp-ws 8765
 ```
 
 Output:
 
 ```
 [acp-ws] listening on ws://127.0.0.1:8765
+[acp-ws] connect with ws://127.0.0.1:8765/?token=<generated-token>
 ```
 
 Health check:
@@ -30,7 +31,7 @@ curl http://127.0.0.1:8765/health
 # {"ok":true,"connections":0}
 ```
 
-Connect from any WebSocket client (browser, Node, Python) and exchange JSON-RPC messages line-delimited.
+Connect with the generated URL. Set `OVOGO_ACP_WS_TOKEN` before startup to provide a stable token instead.
 
 ## Protocol
 
@@ -78,10 +79,10 @@ Limitations (intentional, to keep zero-deps):
 The server binds to `127.0.0.1` by default — it does not listen on public interfaces. To bind externally:
 
 ```bash
-ovolv999 --acp-ws --port 8765 --bind 0.0.0.0
+OVOGO_ACP_WS_TOKEN="$(openssl rand -hex 32)" ovolv999 --acp-ws 8765 --acp-ws-bind 0.0.0.0
 ```
 
-When binding externally, ensure the port is protected (firewall, reverse proxy, SSH tunnel). The protocol has **no authentication** — anyone who can connect can drive the engine.
+Every WebSocket upgrade requires the bearer token through `Authorization: Bearer <token>` or the `?token=<token>` query parameter. When binding externally, also use TLS, a firewall, or an SSH tunnel because query parameters and plain `ws://` traffic are not encrypted.
 
 ## Disconnecting
 
@@ -92,7 +93,7 @@ Close the WebSocket connection. The server cleans up its per-connection ACPServe
 ### Browser dashboard
 
 ```javascript
-const ws = new WebSocket('ws://127.0.0.1:8765')
+const ws = new WebSocket('ws://127.0.0.1:8765/?token=<TOKEN>')
 ws.onopen = () => {
   ws.send(JSON.stringify({
     jsonrpc: '2.0', id: 1, method: 'initialize',
@@ -111,7 +112,7 @@ ws.onmessage = (ev) => {
 import asyncio, json, websockets
 
 async def main():
-    async with websockets.connect('ws://127.0.0.1:8765') as ws:
+    async with websockets.connect('ws://127.0.0.1:8765/?token=<TOKEN>') as ws:
         await ws.send(json.dumps({
             'jsonrpc': '2.0', 'id': 1, 'method': 'message',
             'params': {'text': 'Refactor src/foo.ts to use async/await'},

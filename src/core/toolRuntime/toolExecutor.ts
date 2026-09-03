@@ -283,7 +283,13 @@ export class ToolExecutor {
         return finalize(result)
       }
       const ask = hookOutcomes.find((o) => o.decision === 'ask')
-      if (ask && this.deps.requestPermission) {
+      if (ask) {
+        if (!this.deps.requestPermission) {
+          return finalize({
+            content: `Tool "${toolName}" requires approval from hook (${ask.hookName}), but no permission prompt is available.`,
+            isError: true,
+          })
+        }
         const permResult = await this.deps.requestPermission(toolName, input, 'needs-approval')
         if (!permResult.approved) {
           const reason = permResult.feedback?.trim() ?? ask.reason ?? 'hook asked for approval'
@@ -297,6 +303,38 @@ export class ToolExecutor {
       const firstWithUpdate = hookOutcomes.find((o) => o.updatedInput)
       if (firstWithUpdate?.updatedInput) {
         input = firstWithUpdate.updatedInput
+        const updatedGlobResult = evaluateDefaultGlobRule(toolName, input)
+        if (updatedGlobResult.decision === 'deny') {
+          recordDecision('hook', 'deny', `updated input: ${updatedGlobResult.reason}`, updatedGlobResult.matchedRule?.id)
+          return finalize({ content: `Permission rule denied hook-updated input: ${updatedGlobResult.reason}`, isError: true })
+        }
+        const updatedApproved = sessionApprovalCache.isApproved(toolName, extractPrimaryArg(input))
+        if (updatedGlobResult.decision !== 'allow' && !updatedApproved && modeGated !== 'allow') {
+          const updatedDangerous = toolName === 'Bash' && typeof input.command === 'string'
+            ? classifyCommandRisk(input.command) === 'dangerous'
+            : false
+          const updatedPermission = permissionManager.check(toolName, input, updatedDangerous)
+          if (updatedPermission === 'deny') {
+            recordDecision('hook', 'deny', 'permission manager denied hook-updated input')
+            return finalize({ content: `Permission denied for hook-updated ${toolName} input.`, isError: true })
+          }
+          if (updatedPermission === 'ask') {
+            if (!this.deps.requestPermission) {
+              return finalize({
+                content: `Permission denied for hook-updated ${toolName}: approval is required, but no permission prompt is available.`,
+                isError: true,
+              })
+            }
+            const updatedApproval = await this.deps.requestPermission(
+              toolName,
+              input,
+              updatedDangerous ? 'dangerous' : 'needs-approval',
+            )
+            if (!updatedApproval.approved) {
+              return finalize({ content: `Permission denied by user for hook-updated ${toolName}.`, isError: true })
+            }
+          }
+        }
       }
       // additionalContext is buffered in ControlMessageLog (next LLM call
       // renders it then clears). Engine injects via toolContext hookContext.

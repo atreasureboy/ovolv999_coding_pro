@@ -21,7 +21,7 @@
  */
 
 import { join } from 'path'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
 
 /**
@@ -62,6 +62,7 @@ import type { OvogoSettings } from '../config/settings.js'
 import { loadProjectConfig } from '../config/projectConfig.js'
 import type { ProjectConfig } from '../config/projectConfig.js'
 import { DefaultHookRunner } from '../core/hooks/defaultRunner.js'
+import { loadHookConfig } from '../core/hooks/hooksConfig.js'
 import type { IHookRunner } from '../core/types.js'
 import type { Skill } from '../skills/loader.js'
 import { formatSkillIndex } from '../skills/loader.js'
@@ -159,8 +160,17 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   if (!quiet) renderer.info(`workspace   ${cwd}`)
 
   // Load settings + hooks
-  const settings = loadSettings(cwd)
-  const projectConfig = loadProjectConfig(cwd)
+  const trustProjectCode = process.env.OVOGO_TRUST_PROJECT_CODE === '1'
+  const settings = loadSettings(cwd, trustProjectCode ? true : 'safe')
+  const projectConfig = loadProjectConfig(cwd, trustProjectCode)
+  if (!trustProjectCode && !quiet && [
+    join(cwd, '.ovogo', 'settings.json'),
+    join(cwd, '.ovolv999.json'),
+    join(cwd, '.ovolv999.jsonc'),
+    join(cwd, '.ovolv999', 'plugins'),
+  ].some((path) => existsSync(path))) {
+    renderer.warn('unsafe project configuration disabled; set OVOGO_TRUST_PROJECT_CODE=1 after review')
+  }
   if (projectConfig && !quiet) {
     renderer.info(`config      project settings loaded`)
   }
@@ -173,11 +183,13 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   // is now normalized to the CC schema, so both config styles work.
   const hookRunner = new DefaultHookRunner({
     cwd,
-    ...(settings.hooks ? { configOverride: settings.hooks } : {}),
+    includeProject: trustProjectCode,
+    configOverride: loadHookConfig(cwd, trustProjectCode) ?? {},
   }) as IHookRunner
 
-  if (!quiet && settings.hooks) {
-    const hookCount = (Object.values(settings.hooks) as unknown as Array<{ length?: number } | undefined>)
+  const activeHooks = loadHookConfig(cwd, trustProjectCode)
+  if (!quiet && activeHooks) {
+    const hookCount = (Object.values(activeHooks) as unknown as Array<{ length?: number } | undefined>)
       .reduce((sum, matchers) => sum + (matchers?.length ?? 0), 0)
     if (hookCount > 0) renderer.info(`hooks       ${hookCount} loaded`)
   }
@@ -306,7 +318,7 @@ export async function assembleEngine(opts: AssemblyOptions): Promise<AssembledEn
   // are actually imported at boot and their tools/commands registered
   // (previously the plugin system was discovery-only and never executed
   // plugin code).
-  globalModuleRegistry.register('plugins', () => new PluginsModule())
+  globalModuleRegistry.register('plugins', () => new PluginsModule({ trustProjectCode }))
   // P2.2: workspace_watcher turns the R8 chokidar-based WorkspaceWatcher
   // into a real runtime capability. It watches the cwd and user skills
   // directory, invalidates the toolSearch cache on file change, and

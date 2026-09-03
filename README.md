@@ -40,7 +40,7 @@ ovolv999 是一个**多模型 Coding Agent Runtime**。所有 Agent 行为都走
 | **Hook 协议** (PreToolUse / PostToolUse / UserPromptSubmit 等 6 种事件,JSON stdin/stdout) | R2 | [ADR-009](docs/ADR/009-hook-protocol.md) · [HOOKS.md](docs/HOOKS.md) |
 | **7 种 Permission Modes** (default / acceptEdits / plan / auto / bypassPermissions / dontAsk / bubble) | R3 + R5 | [PERMISSION-MODES.md](docs/PERMISSION-MODES.md) |
 | **Sandbox/Bubble 模式** (macOS sandbox-exec + Linux Landlock helper) | R3 + R4 + R5 | [SANDBOX.md](docs/SANDBOX.md) |
-| **ACP WebSocket 传输** (`--acp-ws --port 8765`) + **MCP HTTP + OAuth PKCE** + **Daemon 长会话** | R4 + R5 + R6 | [ACP-WS.md](docs/ACP-WS.md) · [MCP-OAUTH.md](docs/MCP-OAUTH.md) · [DAEMON.md](docs/DAEMON.md) |
+| **ACP WebSocket 传输** (`--acp-ws 8765`) + **MCP HTTP + OAuth PKCE** + **Daemon 长会话** | R4 + R5 + R6 | [ACP-WS.md](docs/ACP-WS.md) · [MCP-OAUTH.md](docs/MCP-OAUTH.md) · [DAEMON.md](docs/DAEMON.md) |
 | **Anthropic 原生适配器** (zero-deps fetch + SSE,支持 thinking + cache beta headers) | R3 | [ADR-010](docs/ADR/010-anthropic-adapter.md) |
 | **LSP 集成** (`lsp` tool: definition / references / hover / documentSymbol) | R3 + R5 | [LSP.md](docs/LSP.md) |
 

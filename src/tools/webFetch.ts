@@ -351,8 +351,6 @@ Large pages are truncated — use start_index to paginate.`,
         return { content: `Fetch error: too many redirects (>${MAX_REDIRECTS}) for ${url}.`, isError: true }
       }
 
-      clearTimeout(timer)
-
       if (!response.ok) {
         const status = response.status
         let hint = ''
@@ -401,6 +399,7 @@ Large pages are truncated — use start_index to paginate.`,
         }
         return { content: `Fetch error: ${error.message ?? String(err)}`, isError: true }
       }
+      clearTimeout(timer)
 
       let text: string
       if (contentType.includes('text/html')) {

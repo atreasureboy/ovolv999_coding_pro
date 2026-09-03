@@ -116,6 +116,11 @@ function extractCommands(mod: Record<string, unknown>): Command[] {
 export class PluginsModule implements AgentModule {
   readonly name = 'plugins'
   criticality = 'best_effort' as const
+  private readonly trustProjectCode: boolean
+
+  constructor(options: { trustProjectCode?: boolean } = {}) {
+    this.trustProjectCode = options.trustProjectCode === true
+  }
 
   async boot(ctx: ModuleBootContext): Promise<ModuleBootResult> {
     let registry
@@ -131,6 +136,7 @@ export class PluginsModule implements AgentModule {
 
     for (const plugin of registry.plugins.values()) {
       if (!plugin.enabled || !plugin.path || plugin.source === 'builtin') continue
+      if (plugin.source === 'project' && !this.trustProjectCode) continue
       const provides = plugin.manifest.provides
       if (!provides) continue
 

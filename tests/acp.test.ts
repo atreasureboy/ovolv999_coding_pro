@@ -326,16 +326,22 @@ describe('ACPServer: file/read', () => {
   })
 
   it('uses custom handler when provided', async () => {
-    const { server, output } = createServer({ onFileRead: () => 'custom content' })
+    const cwd = mkdtempSync(join(tmpdir(), 'ovolv999-acp-custom-read-'))
+    const path = join(cwd, 'input.txt')
+    writeFileSync(path, 'fixture', 'utf8')
+    const onFileRead = vi.fn(() => 'custom content')
+    const { server, output } = createServer({ onFileRead }, cwd)
     await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
     output.length = 0
 
     await server.handleMessage({
-      jsonrpc: '2.0', id: 1, method: 'file/read', params: { path: '/anywhere' },
+      jsonrpc: '2.0', id: 1, method: 'file/read', params: { path },
     })
     const responses = getResponses(output)
     const r = responses[0] as { result: { content: string } }
     expect(r.result.content).toBe('custom content')
+    expect(onFileRead).toHaveBeenCalledWith(path)
+    rmSync(cwd, { recursive: true, force: true })
   })
 
   it('rejects missing path param', async () => {
@@ -374,8 +380,9 @@ describe('ACPServer: file/write', () => {
   })
 
   it('uses custom handler', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'ovolv999-acp-custom-write-'))
     const onFileWrite = vi.fn()
-    const { server, output } = createServer({ onFileWrite })
+    const { server, output } = createServer({ onFileWrite }, cwd)
     await server.handleMessage({ jsonrpc: '2.0', id: 0, method: 'initialize' })
     output.length = 0
 
@@ -383,7 +390,8 @@ describe('ACPServer: file/write', () => {
       jsonrpc: '2.0', id: 1, method: 'file/write',
       params: { path: 'test.txt', content: 'data' },
     })
-    expect(onFileWrite).toHaveBeenCalledWith('test.txt', 'data')
+    expect(onFileWrite).toHaveBeenCalledWith(join(cwd, 'test.txt'), 'data')
+    rmSync(cwd, { recursive: true, force: true })
   })
 })
 

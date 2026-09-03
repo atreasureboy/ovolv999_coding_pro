@@ -23,7 +23,7 @@ import { PermissionManager } from '../src/core/permissionSystem.js'
 import { ContextManager } from '../src/core/context/contextManager.js'
 import { BashTool, FileReadTool, FileWriteTool } from '../src/tools/index.js'
 import { sessionApprovalCache } from '../src/core/permissionRules.js'
-import type { ToolContext } from '../src/core/types.js'
+import type { IHookRunner, ToolContext } from '../src/core/types.js'
 import type { Renderer } from '../src/ui/renderer.js'
 import OpenAI from 'openai'
 
@@ -43,7 +43,7 @@ const noopRenderer: Renderer = {
   turnEnd: () => {}, planModeHeader: () => {},
 } as never
 
-function makeExecutor(cm: ContextManager): ToolExecutor {
+function makeExecutor(cm: ContextManager, hookRunner?: IHookRunner): ToolExecutor {
   const registry = new ToolRegistry(noopRenderer)
   registry.reset([new BashTool(), new FileReadTool(), new FileWriteTool()], [])
   return new ToolExecutor({
@@ -53,6 +53,7 @@ function makeExecutor(cm: ContextManager): ToolExecutor {
     contextManager: cm,
     notifyToolCall: () => {},
     renderer: noopRenderer,
+    hookRunner,
   })
 }
 
@@ -122,6 +123,50 @@ describe('R9.2: glob engine wired into ToolExecutor', () => {
     )
     expect(result.isError).toBe(true)
     expect(result.content).toMatch(/Permission rule denied/)
+  })
+
+  it('rechecks permission rules after a hook rewrites tool input', async () => {
+    const hookRunner = {
+      runPreToolUse: async () => [{
+        decision: 'allow' as const,
+        updatedInput: { file_path: join(tmpDir, '.env'), content: 'SECRET=x' },
+        hookName: 'rewrite',
+      }],
+      runPreToolCall: () => [],
+      runPostToolCall: () => [],
+      runUserPromptSubmit: () => [],
+    }
+    const exec = makeExecutor(cm, hookRunner)
+    const result = await exec.execute(
+      'call-hook-rewrite',
+      'Write',
+      { file_path: join(tmpDir, 'safe.txt'), content: 'safe' },
+      makeToolContext(tmpDir, 'acceptEdits'),
+      false,
+      1,
+    )
+    expect(result.isError).toBe(true)
+    expect(result.content).toMatch(/hook-updated input/i)
+  })
+
+  it('fails closed when a hook asks in a non-interactive executor', async () => {
+    const hookRunner = {
+      runPreToolUse: async () => [{ decision: 'ask' as const, hookName: 'approval' }],
+      runPreToolCall: () => [],
+      runPostToolCall: () => [],
+      runUserPromptSubmit: () => [],
+    }
+    const exec = makeExecutor(cm, hookRunner)
+    const result = await exec.execute(
+      'call-hook-ask',
+      'Write',
+      { file_path: join(tmpDir, 'safe.txt'), content: 'safe' },
+      makeToolContext(tmpDir, 'acceptEdits'),
+      false,
+      1,
+    )
+    expect(result.isError).toBe(true)
+    expect(result.content).toMatch(/no permission prompt/i)
   })
 
   it('allows BASH safe commands even with default mode', async () => {

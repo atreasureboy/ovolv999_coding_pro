@@ -8,10 +8,12 @@
  */
 
 import { writeFileSync, readFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import type { WebSocketACPTransport } from '../integrations/acpWebSocket.js';
 import { AcpWebSocketServer } from '../integrations/acpWebSocket.js'
 import { ACPServer } from '../integrations/acp.js'
 import type { ACPHandlers } from '../integrations/acp.js'
+import { loadHookConfig } from '../core/hooks/hooksConfig.js'
 
 export interface AcpWsCliOptions {
   port: number
@@ -24,7 +26,7 @@ export interface AcpWsCliOptions {
 }
 
 export function getAcpWsHelp(): string {
-  return `ovolv999 --acp-ws --port <PORT> [--acp-ws-bind <HOST>]
+  return `ovolv999 --acp-ws <PORT> [--acp-ws-bind <HOST>]
 
 Run ovolv999 as an ACP WebSocket server (RFC 6455). Same JSON-RPC 2.0
 protocol as the stdio ACP transport, but on ws:// so browsers / dashboards
@@ -42,7 +44,7 @@ Health check:
   → {"ok":true,"connections":N}
 
 Example browser client:
-  const ws = new WebSocket('ws://127.0.0.1:8765')
+  const ws = new WebSocket('ws://127.0.0.1:8765/?token=<TOKEN>')
   ws.onopen = () => ws.send(JSON.stringify({
     jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { clientInfo: { name: 'browser', version: '1.0' } },
@@ -56,12 +58,17 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
     process.exit(1)
   }
 
+  const authToken = process.env.OVOGO_ACP_WS_TOKEN?.trim() || randomBytes(32).toString('hex')
   const handlers: ACPHandlers = {
     onMessage: async (text: string) => {
       const { ExecutionEngine } = await import('../core/engine.js')
       const { Renderer } = await import('../ui/renderer.js')
       const { DefaultHookRunner } = await import('../core/hooks/defaultRunner.js')
-      const hookRunner = new DefaultHookRunner({ cwd: opts.cwd })
+      const hookRunner = new DefaultHookRunner({
+        cwd: opts.cwd,
+        includeProject: process.env.OVOGO_TRUST_PROJECT_CODE === '1',
+        configOverride: loadHookConfig(opts.cwd, process.env.OVOGO_TRUST_PROJECT_CODE === '1') ?? {},
+      })
       const renderer = new Renderer({ stream: process.stderr })
       const engine = new ExecutionEngine(
         {
@@ -98,6 +105,7 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
   const server = new AcpWebSocketServer({
     port: opts.port,
     host: opts.host,
+    authToken,
     onConnection: (transport: WebSocketACPTransport) => {
       const acpServer = new ACPServer(handlers, {
         cwd: opts.cwd,
@@ -116,6 +124,7 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
 
   const port = await server.start()
   process.stderr.write(`[acp-ws] listening on ws://${opts.host}:${port}\n`)
+  process.stderr.write(`[acp-ws] connect with ws://${opts.host}:${port}/?token=${authToken}\n`)
   process.stderr.write(`[acp-ws] health check: http://${opts.host}:${port}/health\n`)
 
   const shutdown = (): void => {

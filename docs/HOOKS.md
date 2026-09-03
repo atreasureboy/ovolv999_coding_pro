@@ -6,6 +6,8 @@ Hooks let you intercept ovolv999 tool calls, modify their arguments, deny them, 
 
 Drop a settings file at `~/.ovogo/settings.json` (or `<project>/.ovogo/settings.json`):
 
+Project hooks are disabled until the repository is trusted. Review the hook commands, then run ovolv999 with `OVOGO_TRUST_PROJECT_CODE=1`. User-level hooks under `~/.ovogo/settings.json` remain enabled by default.
+
 ```json
 {
   "hooks": {

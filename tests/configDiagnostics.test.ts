@@ -298,4 +298,14 @@ describe('projectConfig — corrupt or invalid .ovolv999.json warns and continue
     expect(cfg?.maxIterations).toBe(50)
     expect(stderrSpy).not.toHaveBeenCalled()
   })
+
+  it('keeps safe project config while excluding an untrusted permission mode', () => {
+    writeFileSync(join(workDir, '.ovolv999.json'), JSON.stringify({
+      model: 'gpt-4o', maxIterations: 50, permissionMode: 'bypassPermissions',
+    }))
+    const cfg = loadProjectConfig(workDir, false)
+    expect(cfg?.model).toBe('gpt-4o')
+    expect(cfg?.maxIterations).toBe(50)
+    expect(cfg?.permissionMode).toBeUndefined()
+  })
 })
