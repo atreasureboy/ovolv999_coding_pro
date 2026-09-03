@@ -180,7 +180,9 @@ export class ObservabilityServer {
   // ── HTTP handling ────────────────────────────────────────────────────────
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
-    res.setHeader('access-control-allow-origin', '*')
+    // No CORS header by design (mirrors the ACP WS origin posture): local
+    // tools don't need CORS, and a permissive header would let any webpage
+    // the user visits read /sessions and the /events stream cross-origin.
     res.setHeader('cache-control', 'no-store')
     const url = new URL(req.url ?? '/', 'http://local')
     try {
@@ -278,20 +280,23 @@ export class ObservabilityServer {
   }
 }
 
-// ── Shared instance (for the /serve slash command) ─────────────────────────
+// ── Shared instance (for --serve) ──────────────────────────────────────────
 
 let shared: ObservabilityServer | null = null
 
 /**
- * Shared instance for the /serve slash command. When `port` is supplied
- * and the current instance isn't listening on it, the instance is
- * REBUILT (a stopped server keeps its old options; the new port must win).
+ * Shared instance backing --serve. A supplied `port`/`host` must win: when
+ * the running instance differs, it is stopped and rebuilt (a stopped
+ * instance always rebuilds).
  */
 export function getSharedObservabilityServer(cwd: string, port?: number, host?: string): ObservabilityServer {
-  if (!shared || (port !== undefined && !shared.listening)) {
+  const addr = shared?.address ?? null
+  const conflicts = addr !== null
+    && ((port !== undefined && addr.port !== port) || (host !== undefined && addr.host !== host))
+  if (!shared || conflicts || (port !== undefined && !shared.listening)) {
     // Round 41 audit fix: stop the old instance before replacing it —
     // its engine-event subscription otherwise leaked forever.
-    shared?.stop().catch(() => { /* best-effort */ })
+    void shared?.stop().catch(() => { /* best-effort */ })
     shared = new ObservabilityServer({
       cwd,
       ...(port !== undefined ? { port } : {}),
