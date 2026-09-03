@@ -30,6 +30,8 @@ export class WebSocketACPTransport implements ACPTransport {
   private sendQueue: string[] = []
   private closing = false
   private closedListeners: Array<() => void> = []
+  /** RFC 6455 fragmentation: payloads of the message currently being assembled. */
+  private fragments: Buffer[] = []
 
   constructor(socket: Socket, private readonly remoteAddress: string | undefined) {
     this.socket = socket
@@ -94,7 +96,24 @@ export class WebSocketACPTransport implements ACPTransport {
     const queued = this.sendQueue.join('')
     this.sendQueue.length = 0
     try {
-      this.socket.write(encodeFrame(0x1, Buffer.from(queued, 'utf8')))
+      const payload = Buffer.from(queued, 'utf8')
+      // Split oversized batches at line boundaries — peers enforce the same
+      // 1 MiB frame cap we do, and a line split across frames would parse
+      // as two broken JSON lines on the receiving side.
+      let start = 0
+      while (start < payload.length) {
+        let end = Math.min(start + MAX_FRAME_BYTES, payload.length)
+        if (end < payload.length) {
+          const lastNewline = payload.lastIndexOf(0x0a, end - 1)
+          if (lastNewline <= start) {
+            this.markClosed() // single line exceeds the frame cap
+            return
+          }
+          end = lastNewline + 1
+        }
+        this.socket.write(encodeFrame(0x1, payload.subarray(start, end)))
+        start = end
+      }
     } catch {
       this.markClosed()
     }
@@ -105,6 +124,7 @@ export class WebSocketACPTransport implements ACPTransport {
     while (this.buffer.length >= 2) {
       const first = this.buffer[0]
       const second = this.buffer[1]
+      const fin = (first & 0x80) !== 0
       const op = first & 0x0f
       const masked = (second & 0x80) !== 0
       let payloadLen = second & 0x7f
@@ -137,7 +157,7 @@ export class WebSocketACPTransport implements ACPTransport {
         }
       }
       this.buffer = this.buffer.subarray(offset + payloadLen)
-      this.dispatchFrame(op, payload)
+      this.dispatchFrame(op, payload, fin)
       if (op === 0x8) {
         this.markClosed()
         return
@@ -145,17 +165,46 @@ export class WebSocketACPTransport implements ACPTransport {
     }
   }
 
-  private dispatchFrame(opcode: number, payload: Buffer): void {
-    if (opcode === 0x1) {
-      const text = payload.toString('utf8')
-      const lines = text.split('\n')
-      for (const line of lines) {
-        if (line.trim() && this.handler) this.handler(line)
+  private dispatchFrame(opcode: number, payload: Buffer, fin: boolean): void {
+    if (opcode === 0x1 && fin) {
+      this.dispatchText(payload.toString('utf8'))
+      return
+    }
+    if (opcode === 0x1 || opcode === 0x0) {
+      // RFC 6455 fragmentation: the FIN-less first text frame opens a
+      // message; 0x0 continuations append; the FIN-bearing piece completes
+      // it. Dropping fragments silently truncated JSON-RPC frames.
+      if (opcode === 0x1) {
+        this.fragments = [payload]
+        return
       }
-    } else if (opcode === 0x8) {
+      if (this.fragments.length === 0) {
+        this.markClosed() // stray continuation — protocol error
+        return
+      }
+      this.fragments.push(payload)
+      const total = this.fragments.reduce((sum, part) => sum + part.length, 0)
+      if (total > MAX_FRAME_BYTES) {
+        this.markClosed()
+        return
+      }
+      if (!fin) return
+      const text = Buffer.concat(this.fragments).toString('utf8')
+      this.fragments = []
+      this.dispatchText(text)
+      return
+    }
+    if (opcode === 0x8) {
       this.close()
     } else if (opcode === 0x9) {
       try { this.socket.write(encodeFrame(0xA, payload)) } catch { /* noop */ }
+    }
+  }
+
+  private dispatchText(text: string): void {
+    const lines = text.split('\n')
+    for (const line of lines) {
+      if (line.trim() && this.handler) this.handler(line)
     }
   }
 }
