@@ -171,23 +171,41 @@ export function App({
           return
         }
         store.addUserMessage(`! ${command}`)
-        const result = await bash.execute(
-          { command },
-          {
-            cwd,
-            permissionMode: 'bypassPermissions',
-            sessionDir,
-            signal: AbortSignal.timeout(600_000),
-          } as unknown as Parameters<typeof bash.execute>[1],
-        )
-        const output = result.content.length > 4_000
-          ? result.content.slice(0, 4_000) + `\n… (${result.content.length - 4_000} more chars)`
-          : result.content
-        historyRef.current = [
-          ...historyRef.current,
-          { role: 'user', content: `[!bash] ${command}\n${output}` },
-        ]
-        store.addToolComplete('Bash', { command }, output, result.isError)
+        // Serialize against turns: without running=true a concurrent prompt
+        // would interleave and clobber historyRef (last writer wins). A
+        // rejection here must not escape either — handleSubmit's promise is
+        // discarded and unhandledRejection is process-fatal.
+        store.setRunning(true)
+        store.setSpinner(true, 'Shell')
+        try {
+          const result = await bash.execute(
+            { command },
+            {
+              cwd,
+              permissionMode: 'bypassPermissions',
+              sessionDir,
+              signal: AbortSignal.timeout(600_000),
+            } as unknown as Parameters<typeof bash.execute>[1],
+          )
+          const output = result.content.length > 4_000
+            ? result.content.slice(0, 4_000) + `\n… (${result.content.length - 4_000} more chars)`
+            : result.content
+          historyRef.current = [
+            ...historyRef.current,
+            { role: 'user', content: `[!bash] ${command}\n${output}` },
+          ]
+          store.addToolComplete('Bash', { command }, output, result.isError)
+        } catch (err: unknown) {
+          const error = err as Error
+          store.addError(
+            error.name === 'TimeoutError' || error.name === 'AbortError'
+              ? `!${command} — timed out (10 min cap)`
+              : `!${command} failed: ${error.message}`,
+          )
+        } finally {
+          store.setRunning(false)
+          store.setSpinner(false)
+        }
         return
       }
 
@@ -212,8 +230,16 @@ export function App({
 
       // Slash command?
       if (text.startsWith('/')) {
-        const handled = await dispatchSlash(text)
-        if (handled) return
+        // A throwing command handler must not kill the REPL — this
+        // rejection would escape the discarded handleSubmit promise and
+        // hit the process-fatal unhandledRejection handler.
+        try {
+          const handled = await dispatchSlash(text)
+          if (handled) return
+        } catch (err: unknown) {
+          store.addError(`/${text.slice(1).trim().split(/\s+/)[0] || '?'} failed: ${(err as Error).message}`)
+          return
+        }
         // Unknown command — let the engine try it as a prompt
       }
 
@@ -388,7 +414,10 @@ export function App({
     // press within 1.5s exits. ESC during a turn remains the interrupt
     // path above and NEVER kills the session.
     if (key.escape || input === '\x1b') {
-      if (!store.hasOverlay()) {
+      // HelpOverlay owns ESC while open (dismiss); the idle-ESC quit
+      // countdown must not also count that press, or "dismiss, then tap
+      // ESC again" within 1.5s quits the app.
+      if (!store.hasOverlay() && !showHelp) {
         escCount.current++
         if (escCount.current >= 2) {
           exit()
