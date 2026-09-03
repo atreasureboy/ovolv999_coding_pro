@@ -10,7 +10,7 @@ TypeScript 5.7 strict ESM,Node ≥ 20,~82k 行 src,测试套件全绿。运行�
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
 当前版本:**0.6.1**(package.json / CHANGELOG / VERSION / README 一致)。
-> 本 CLAUDE.md 最后核实: 2026-08-10 (v0.6.1 全量架构审计 + Rounds 6-14 完成)。
+> 本 CLAUDE.md 最后核实: 2026-09-03 (v0.6.1;Rounds 6-14 + 夜间审计 Rounds 17-22 完成)。
 
 v0.6.1 关键不变量(延续 v0.5.3):
 
@@ -137,6 +137,11 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
   - `messageBus.receive()`:返回类型谎言(`as unknown as` 把 Promise 强转为同步值),改为诚实的联合返回类型 `AgentMessage | null | Promise<AgentMessage | null>`。
   - `oauth.waitForCode()`:超时计时器在 codePromise 先 resolve 时不清理(轻微泄漏),改用 `.finally(clearTimeout)`。
 - P3 大迁移:品牌目录收敛(引用计数已记录,迁移需用户数据搬家方案)、Windows 租约指纹降级补救(/proc-only)
+- ~~P2.7 夜间审计轮(Rounds 17-22,2026-09-03)~~ → **已完成(6 commits,e33cb37..5bb93d0)**:
+  - UTF-16 光标:`textCursor.ts` prevCursor/nextCursor,composer 三处输入修复(backspace/箭头/光标单元渲染),多行渲染 O(n²) 重切分消除
+  - Evidence revision 真实化:`bumpRevision()` 由 coordinator 在工具批次改变 filesChanged 时调用;getValidEvidence 只认当前 revision;stale 分支可达(complete_node 拒绝过期证据)
+  - 疑问句意图:`QUESTION_LEAD`(英文疑问开头)抑制 mutation 关键词误分类;isInterrogativeLead 门控 analysis 验证催逼与 post-loop execution-verification 准则("how do I configure X" 不再被要求改文件/跑命令;中文 怎么/如何 保持 imperative)
+  - StatusBar 死 props 移除(7 个不再渲染的 props);/vim stub 删除(Round 26 已删引擎,stub 谎称 Ctrl+\);命令别名折叠(aliasOf,listCommands 143→93);CLAUDE.md/README/AGENTS vim 与命令数漂移收敛
 
 **路由信号状态(2026-08-05 核实)**:
 - `repoFileCount`:已真实化 — v0.5.3 移除 `filesTouched×10` 代理,现使用 `RepoStatsService.walkRepo()` 真实文件系统遍历
