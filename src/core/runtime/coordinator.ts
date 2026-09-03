@@ -232,7 +232,7 @@ export class RuntimeCoordinator {
   private _projectIdentityCache: { cwd: string; identity: ProjectIdentity } | null = null
   /** Round 43: last gateway error, for Retry-After-aware backoff. */
   private lastGatewayError: unknown = null
-  /** Round 45: completion-claim critic fires once per coordinator lifetime. */
+  /** Round 45: completion-claim critic fires at most once per run. */
   private completionCriticSpentFor = false
   // v0.5.3 P0-3: coordinator no longer carries its own provider
   // circuit state. The single source of truth is the ModelRouter's
@@ -287,6 +287,7 @@ export class RuntimeCoordinator {
     // don't accumulate stale model-call attempts from prior turns.
     this.modelCallsThisRun = []
     this.usageMissingWarned = false
+    this.completionCriticSpentFor = false
 
     // P1-2 fix: resolve the effective parentRunId ONCE. A per-turn
     // override (opts.parentRunId, e.g. from runLoop's kind='loop' run)
@@ -1249,7 +1250,9 @@ export class RuntimeCoordinator {
                 })
                 controlMessageLog.append({
                   kind: 'budget_warning',
-                  remainingPct: 1 - decision.pct,
+                  // decision.pct is 0-100; remainingPct is a 0-1 fraction
+                  // (the renderer multiplies by 100).
+                  remainingPct: Math.max(0, 1 - decision.pct / 100),
                 })
                 state = transitionQueryState(state, { type: 'continue' })
                 break
@@ -1924,7 +1927,17 @@ export class RuntimeCoordinator {
           // dumbly waiting 30s are both real user pain.
           const delayMs = rateLimitDelayMs(this.lastGatewayError, baseMs + Math.floor(Math.random() * 500))
           this.deps.renderer.warn?.(`Provider backoff: waiting ${Math.round(delayMs / 1000)}s before retry (failure #${consecutive})`)
-          await new Promise((resolve) => setTimeout(resolve, delayMs))
+          // Abort-aware sleep: Ctrl+C must not wait out a 60s backoff
+          // window before the next check_abort observes the cancel.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(finish, delayMs)
+            function finish(): void {
+              clearTimeout(timer)
+              turnAbortSignal.removeEventListener('abort', finish)
+              resolve()
+            }
+            turnAbortSignal.addEventListener('abort', finish, { once: true })
+          })
         }
       }
     }
