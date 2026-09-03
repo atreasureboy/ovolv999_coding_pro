@@ -170,16 +170,21 @@ describe('P1-2: ToolScheduler acquires + releases claims around execute', () => 
     })
 
     const messages: OpenAIMessage[] = []
-    await expect(
-      scheduler.schedule(
-        [{ tc: { id: 'tc1', name: 'Edit', arguments: '{}' }, input: { path: '/a' } }],
-        { cwd: '/r', permissionMode: 'auto' } as never,
-        false,
-        new AbortController(),
-        messages,
-        1,
-      ),
-    ).rejects.toThrow('tool crashed')
+    // The throw becomes a structured error tool result (protocol invariant:
+    // every call gets a tool message) — schedule() resolves instead of
+    // rejecting, so a crashed tool cannot corrupt the conversation.
+    await scheduler.schedule(
+      [{ tc: { id: 'tc1', name: 'Edit', arguments: '{}' }, input: { path: '/a' } }],
+      { cwd: '/r', permissionMode: 'auto' } as never,
+      false,
+      new AbortController(),
+      messages,
+      1,
+    )
+
+    const toolMsgs = messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs).toHaveLength(1)
+    expect(String(toolMsgs[0].content)).toContain('tool crashed')
 
     // Critical: lock was released despite the throw.
     expect(rs.snapshotHoldings().length).toBe(0)

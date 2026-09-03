@@ -107,17 +107,24 @@ export class ToolExecutor {
         : this.deps.contextManager.truncateToolResult(originalText)
       const truncated = exposedText !== originalText
       const finalResult: ToolResult = truncated ? { ...result, content: exposedText } : result
-      eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result: finalResult })
+      // Instrumentation is best-effort (mirrors the scheduler's contract):
+      // a throwing listener or event-log append must not lose the result —
+      // an escaping throw would surface as a missing tool message.
+      try {
+        eventEmitter?.emit({ type: 'TOOL_COMPLETED', callId, toolName, result: finalResult })
+      } catch { /* best-effort */ }
       const registry = this.deps.sharedState?.toolCallRegistry
       if (registry && callId) {
         if (registry.has(callId)) {
           // Duplicate callId — reject. Record to the audit EventLog
           // (never silently overwrite).
-          eventLog?.append('tool_result_duplicate_call_id', 'tool_executor', {
-            runId: runIdFromContext,
-            callId,
-            toolName,
-          })
+          try {
+            eventLog?.append('tool_result_duplicate_call_id', 'tool_executor', {
+              runId: runIdFromContext,
+              callId,
+              toolName,
+            })
+          } catch { /* best-effort */ }
         } else {
           registry.set(callId, {
             runId: runIdFromContext,
@@ -132,6 +139,19 @@ export class ToolExecutor {
         }
       }
       return finalResult
+    }
+    // Fail-closed prompt wrapper (Round 26 L4 posture): a prompt that
+    // THROWS (readline closed mid-prompt, raced /exit, Ink teardown) is
+    // a denial, not an escape — an escaping rejection would abort
+    // execute() and drop the tool message for this call.
+    const requestPermissionSafe = async (
+      riskLevel: 'safe' | 'needs-approval' | 'dangerous',
+    ): Promise<{ approved: boolean; feedback?: string }> => {
+      try {
+        return await this.deps.requestPermission!(toolName, input, riskLevel)
+      } catch (err) {
+        return { approved: false, feedback: `permission prompt failed: ${(err as Error).message}` }
+      }
     }
     const allTools = toolRegistry.getAll()
 
@@ -234,7 +254,7 @@ export class ToolExecutor {
       if (permission === 'ask') {
         if (this.deps.requestPermission) {
           const riskLevel = isDangerous ? 'dangerous' : 'needs-approval'
-          const permResult = await this.deps.requestPermission(toolName, input, riskLevel)
+          const permResult = await requestPermissionSafe(riskLevel)
           if (!permResult.approved) {
             const feedback = permResult.feedback?.trim()
             const result: ToolResult = {
@@ -269,9 +289,16 @@ export class ToolExecutor {
     // runPreToolCall (which is fire-and-forget observation only). Legacy
     // runner path is preserved for back-compat — when no runPreToolUse
     // is defined, fire the legacy form for telemetry and continue.
-    const hookOutcomes = this.deps.hookRunner?.runPreToolUse
-      ? await this.deps.hookRunner.runPreToolUse(toolName, input, context.signal ?? new AbortController().signal)
-      : null
+    // Hook infrastructure is best-effort: a runner that THROWS (malformed
+    // user hook config) is not a deny decision and must not abort execute()
+    // — the tool would lose its result message. Failures degrade to "no
+    // outcomes" and the tool proceeds under the normal permission layers.
+    let hookOutcomes: Awaited<ReturnType<NonNullable<IHookRunner['runPreToolUse']>>> | null = null
+    if (this.deps.hookRunner?.runPreToolUse) {
+      try {
+        hookOutcomes = await this.deps.hookRunner.runPreToolUse(toolName, input, context.signal ?? new AbortController().signal)
+      } catch { hookOutcomes = null }
+    }
     if (hookOutcomes) {
       const deny = hookOutcomes.find((o) => o.decision === 'deny')
       if (deny) {
@@ -290,7 +317,7 @@ export class ToolExecutor {
             isError: true,
           })
         }
-        const permResult = await this.deps.requestPermission(toolName, input, 'needs-approval')
+        const permResult = await requestPermissionSafe('needs-approval')
         if (!permResult.approved) {
           const reason = permResult.feedback?.trim() ?? ask.reason ?? 'hook asked for approval'
           const result: ToolResult = {
@@ -325,9 +352,7 @@ export class ToolExecutor {
                 isError: true,
               })
             }
-            const updatedApproval = await this.deps.requestPermission(
-              toolName,
-              input,
+            const updatedApproval = await requestPermissionSafe(
               updatedDangerous ? 'dangerous' : 'needs-approval',
             )
             if (!updatedApproval.approved) {
@@ -357,12 +382,16 @@ export class ToolExecutor {
         }
       }
     } else if (this.deps.hookRunner) {
-      const legacyResults = await Promise.resolve(
-        this.deps.hookRunner.runPreToolCall(toolName, input),
-      )
-      void legacyResults
+      try {
+        const legacyResults = await Promise.resolve(
+          this.deps.hookRunner.runPreToolCall(toolName, input),
+        )
+        void legacyResults
+      } catch { /* best-effort */ }
     }
-    eventEmitter?.emit({ type: 'TOOL_STARTED', callId, toolName, input })
+    try {
+      eventEmitter?.emit({ type: 'TOOL_STARTED', callId, toolName, input })
+    } catch { /* best-effort */ }
 
     let result: ToolResult
     try {
@@ -416,12 +445,17 @@ export class ToolExecutor {
     // additionalContext is buffered for the next LLM call; never
     // pollutes user-visible history.
     if (this.deps.hookRunner?.runPostToolUse) {
-      const postOutcomes = await this.deps.hookRunner.runPostToolUse(
-        toolName,
-        result.content,
-        result.isError,
-        context.signal ?? new AbortController().signal,
-      )
+      // Best-effort: the result is already in hand — a throwing post-hook
+      // must not discard it.
+      let postOutcomes: Awaited<ReturnType<NonNullable<IHookRunner['runPostToolUse']>>> = []
+      try {
+        postOutcomes = await this.deps.hookRunner.runPostToolUse(
+          toolName,
+          result.content,
+          result.isError,
+          context.signal ?? new AbortController().signal,
+        )
+      } catch { /* best-effort */ }
       const ctx = postOutcomes
         .map((o) => o.additionalContext)
         .filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -439,14 +473,20 @@ export class ToolExecutor {
         }
       }
     } else if (this.deps.hookRunner) {
-      const legacyResults = await Promise.resolve(
-        this.deps.hookRunner.runPostToolCall(toolName, result.content, result.isError),
-      )
-      void legacyResults
+      try {
+        const legacyResults = await Promise.resolve(
+          this.deps.hookRunner.runPostToolCall(toolName, result.content, result.isError),
+        )
+        void legacyResults
+      } catch { /* best-effort */ }
     }
     result = finalize(result, { originalText, exposedText })
 
-    this.deps.notifyToolCall(toolName, input, result, turnNumber)
+    // Module notification is best-effort — any of the 6 production modules
+    // throwing must not lose the completed result.
+    try {
+      this.deps.notifyToolCall(toolName, input, result, turnNumber)
+    } catch { /* best-effort */ }
 
     // runtime invariants §四: update WorkingState from the structured tool
     // result. Best-effort — a WorkingState bug must never break the

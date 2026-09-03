@@ -265,7 +265,7 @@ export class ToolScheduler {
     // executeWithClaims even on throw.
     let results: Awaited<ReturnType<ToolExecutor['execute']>>[]
     try {
-      results = await Promise.all(
+      const settled = await Promise.allSettled(
         batch.calls.map(({ tc, input }) =>
           this.executeWithClaims(
             tc.id, tc.name, input, toolContext, planMode, turnNumber,
@@ -273,6 +273,19 @@ export class ToolScheduler {
           ).then(r => r.result),
         ),
       )
+      // Tool-protocol invariant: EVERY call in the batch must produce a
+      // tool message. Promise.all used to drop the results of ALL calls
+      // when one sibling escaped (throwing hook / permission prompt /
+      // module listener) — the next llm_call would then send tool_calls
+      // with no matching tool messages, which providers hard-reject.
+      results = settled.map((s, i) => {
+        if (s.status === 'fulfilled') return s.value
+        const name = batch.calls[i].tc.name
+        return {
+          content: `[${name}] tool execution failed: ${(s.reason as Error)?.message ?? String(s.reason)}`,
+          isError: true,
+        }
+      })
     } finally {
       // Clear ALL entries this batch created, even on throw — the
       // caller (coordinator) converts thrown tool errors into a
@@ -352,6 +365,13 @@ export class ToolScheduler {
           this.resolveClaimRunId(toolContext, tc.id),
         )
         result = wrapped.result
+      } catch (err) {
+        // Same protocol invariant as the parallel path: a throw becomes a
+        // structured error result, never a missing tool message.
+        result = {
+          content: `[${tc.name}] tool execution failed: ${(err as Error)?.message ?? String(err)}`,
+          isError: true,
+        }
       } finally {
         sharedState.activeToolCalls.delete(tc.id)
       }

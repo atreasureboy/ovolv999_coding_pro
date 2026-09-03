@@ -95,12 +95,15 @@ describe('P0-9.1: ToolScheduler.executeSerialBatch clears activeToolCalls in fin
     const toolContext = {} as never
     const messages: OpenAIMessage[] = []
     const turnAbort = new AbortController()
-    // Single-call batch (executor throws synchronously-ish).
+    // Single-call batch (executor throws synchronously-ish). The throw
+    // becomes a structured error tool result (protocol invariant: every
+    // call gets a tool message) — schedule() resolves.
     const calls = [{ tc: { id: 'tc1', name: 'T', arguments: '{}' }, input: {} }]
-    await expect(
-      scheduler.schedule(calls, toolContext, false, turnAbort, messages, 1),
-    ).rejects.toThrow('boom')
+    await scheduler.schedule(calls, toolContext, false, turnAbort, messages, 1)
     expect(sharedState.activeToolCalls.size).toBe(0)
+    const toolMsgs = messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs).toHaveLength(1)
+    expect(String(toolMsgs[0].content)).toContain('boom')
   })
 
   it('parallel batch: executor throwing in one branch clears all entries', async () => {
@@ -114,19 +117,19 @@ describe('P0-9.1: ToolScheduler.executeSerialBatch clears activeToolCalls in fin
     const messages: OpenAIMessage[] = []
     const turnAbort = new AbortController()
     // Two safe calls in one parallel batch — both must be tracked,
-    // and both must be cleared even though only one threw.
+    // and both must be cleared even though only one threw. The thrown
+    // call becomes an error result; the sibling's real result survives
+    // (no dropped tool messages).
     const calls = [
       { tc: { id: 'tc1', name: 'Read', arguments: '{}' }, input: {} },
       { tc: { id: 'tc2', name: 'Glob', arguments: '{}' }, input: {} },
     ]
-    // ToolScheduler clears entries in finally even on throw, but
-    // throws back to the caller. The caller (coordinator) is what
-    // converts that into a terminal transition — we just need to
-    // assert the Map is empty afterward.
-    await expect(
-      scheduler.schedule(calls, toolContext, false, turnAbort, messages, 1),
-    ).rejects.toThrow('parallel boom')
+    await scheduler.schedule(calls, toolContext, false, turnAbort, messages, 1)
     expect(sharedState.activeToolCalls.size).toBe(0)
+    const toolMsgs = messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs).toHaveLength(2)
+    expect(String(toolMsgs.find((m) => m.tool_call_id === 'tc1')?.content)).toContain('ok')
+    expect(String(toolMsgs.find((m) => m.tool_call_id === 'tc2')?.content)).toContain('parallel boom')
   })
 })
 
