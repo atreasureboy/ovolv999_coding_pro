@@ -64,9 +64,17 @@ export async function runInkRepl(opts: InkReplOptions): Promise<void> {
   const slashCtx: SlashCommandContext = {
     engine,
     renderer: opts.inkRenderer,
-    history,
+    // Getters, not snapshots: runOneTurn rebinds `history` to a new array
+    // every turn and /resume rebinds currentSessionDir — a one-time
+    // property copy would leave every command reading pre-first-turn
+    // state (/fork even persisted that stale array over the live file).
+    get history() {
+      return history
+    },
     cwd: opts.cwd,
-    sessionDir: opts.sessionDir,
+    get sessionDir() {
+      return currentSessionDir
+    },
     setHistory: (msgs: OpenAIMessage[]) => {
       history.length = 0
       history.push(...msgs)
