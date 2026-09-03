@@ -13,6 +13,19 @@
 
 export type TaskKind = 'informational' | 'analysis' | 'mutation'
 
+/**
+ * English interrogative leads — "how do I…", "what does…", "explain…".
+ * Shared by classifyTaskIntent (mutation suppression) and the execution-
+ * verification gates (prematureHandoff, coordinator): a question that
+ * CONTAINS an execution verb is still a question, so it must not be
+ * demanded commands or file changes.
+ */
+const QUESTION_LEAD = /^\s*(?:please\s+)?(?:explain|describe|clarify|tell\s+me|show\s+me|walk\s+me\s+through)\b|^\s*(?:how\s+(?:do|does|did|can|could|would|should|to)\b|what\s+(?:is|are|was|were|does|do|did)\b|why\s+(?:is|are|was|were|does|do|did|would|should)\b|where\s+(?:is|are|was|were|does|do|did|can|would)\b|whether\b)/i
+
+export function isInterrogativeLead(message: string): boolean {
+  return QUESTION_LEAD.test(message)
+}
+
 export interface AcceptanceCriterion {
   id?: string
   description: string
@@ -68,6 +81,13 @@ export function classifyTaskIntent(userMessage: string, options: {
   const analysisKeywords = /\b(audit|analyze|review|design|architect|investigate|examine|explore|inspect|evaluate|assess|describe|explain|plan|verify|validate|check|test|diagnose|troubleshoot)\b|(审计|分析|检查|评估|设计|给出方案|研究|对比|解释架构|验证|测试|诊断|排查)/
   const mutationStartsWith = /^\s*(fix|implement|refactor|rewrite|write|add|remove|delete|rename|edit|modify|patch|change|update|build|create|install|configure|set up|polish|redesign|修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化)/i.test(text)
   const mutationAfterAnalysis = /\b(?:and|then|after(?:wards)?)\s+(?:fix|implement|refactor|rewrite|add|remove|edit|modify|patch|change|update|build|create|install|configure)\b|(?:并|然后|之后|后|并且|且)[，,\s]*(?:修复|修改|实现|增加|新增|删除|重构|迁移|替换|优化|补充测试|改造|接入|完善)/i
+  // An interrogative lead asks ABOUT the verbs rather than requesting them
+  // ("how do I configure X", "what does the update script do") — the same
+  // subject-vs-request distinction as mutationWordIsAnalysisSubject, for
+  // questions. An explicit connector re-fires mutation ("…and then fix it").
+  // Chinese how-words are excluded deliberately: 怎么/如何 in a coding
+  // request are usually imperative ("怎么修复登录bug" = fix it).
+  const questionOverridesMutation = QUESTION_LEAD.test(text) && !mutationAfterAnalysis.test(text)
   // The mutation word appears only as the OBJECT of analysis/deliberation
   // (“评估迁移风险”, "assess whether to refactor", "…before you implement
   // anything") — suppress mutation UNLESS an explicit connector re-fires
@@ -81,6 +101,7 @@ export function classifyTaskIntent(userMessage: string, options: {
   ).test(text)
   const requestsMutation = mutationKeywords.test(text)
     && (!mutationWordIsAnalysisSubject || mutationAfterAnalysis.test(text))
+    && !questionOverridesMutation
 
   // Highest priority: explicit user-stated kind.
   if (explicit) {
@@ -154,7 +175,7 @@ export function classifyTaskIntent(userMessage: string, options: {
       userMessage,
     }
   }
-  if (mutationKeywords.test(text)) {
+  if (mutationKeywords.test(text) && !questionOverridesMutation) {
     return {
       kind: 'mutation',
       requestedOutcomes: extractOutcomes(userMessage),

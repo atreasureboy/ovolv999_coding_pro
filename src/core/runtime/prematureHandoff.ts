@@ -1,4 +1,4 @@
-import type { TaskIntent } from './taskIntent.js'
+import { isInterrogativeLead, type TaskIntent } from './taskIntent.js'
 
 const CONTINUATION_QUESTION = /\b(?:would|do)\s+you\s+(?:like|want)\s+me\s+to\s+(?:continue|proceed|go\s+deeper|investigate|implement|fix|review)|\bshould\s+i\s+(?:continue|proceed|investigate|implement|fix)|\bif\s+you(?:'d|\s+would)?\s+like[,\s]+i\s+can\s+(?:continue|proceed|investigate|implement|fix)|(?:要不要|是否需要|需不需要|是否要|要我|需要我)(?:再|继续|进一步|深入)?(?:读取|查看|分析|审计|检查|修复|实现|处理|继续)|(?:如果你愿意|如果需要)[，,\s]*(?:我可以|可以再)(?:继续|进一步|深入)/i
 const PROPOSAL_ONLY = /\b(?:next|then)\s+i\s+(?:would|could)\s+(?:inspect|implement|fix)|\bi\s+can\s+(?:next\s+)?(?:inspect|implement|fix)\b|下一步(?:可以|将会|我会)(?:读取|检查|修复|实现)/i
@@ -44,6 +44,7 @@ export function detectPrematureHandoff(input: PrematureHandoffInput): PrematureH
   if (
     input.intent.kind === 'analysis'
     && requiresExecutionVerification(input.intent.userMessage)
+    && !isInterrogativeLead(input.intent.userMessage)
     && input.verificationCount === 0
   ) {
     return {

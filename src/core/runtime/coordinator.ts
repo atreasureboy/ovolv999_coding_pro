@@ -80,7 +80,7 @@ import {
   type RunScopedRuntimeContext,
   type RunScopedRuntimeContextStore,
 } from './runScopedContext.js'
-import { classifyTaskIntent, type TaskIntent } from './taskIntent.js'
+import { classifyTaskIntent, isInterrogativeLead, type TaskIntent } from './taskIntent.js'
 import { EXECUTION_PROFILES, resolveExecutionProfile } from '../effort.js'
 import {
   assessProjectExploration,
@@ -682,7 +682,8 @@ export class RuntimeCoordinator {
       }
     }
     const genericAnalysisReadTarget = explorationProfile ? 0 : workspaceAnalysisReadTarget(intentMessage)
-    const executionVerificationRequired = requiresExecutionVerification(intentMessage)
+    const executionVerificationRequired =
+      requiresExecutionVerification(intentMessage) && !isInterrogativeLead(intentMessage)
 
     // Phase 2: adaptive model routing — runs AFTER context creation so
     // signals include the per-run taskGraph + TaskIntent. v0.3.1 signals
