@@ -10,11 +10,33 @@
  *    the aggregate fits.
  */
 
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'fs'
 import { join } from 'path'
 
 const MAX_TOOL_RESULT_LENGTH = 20_000
 const MAX_AGGREGATE_TOOL_RESULTS = 60_000
+/** Upper bound on spill files kept per session. Spills were referenced in
+ *  model messages and never cleaned, so a long-running session (e.g. an
+ *  autonomous loop) grew tool-results/ without limit. The newest files —
+ *  the ones the model is plausibly still referencing — survive; ancient
+ *  ones are evicted at write time. */
+const MAX_SPILL_FILES = 100
+
+/** Best-effort eviction of the oldest spill files beyond MAX_SPILL_FILES.
+ *  File names are `result_<Date.now()>_<rand>.txt`, so lexicographic
+ *  order is chronological order. */
+function pruneSpillFiles(dir: string): void {
+  try {
+    const entries = readdirSync(dir).filter((f) => f.startsWith('result_'))
+    if (entries.length <= MAX_SPILL_FILES) return
+    const sorted = entries.sort()
+    for (const name of sorted.slice(0, sorted.length - MAX_SPILL_FILES)) {
+      try { unlinkSync(join(dir, name)) } catch { /* already gone */ }
+    }
+  } catch {
+    /* pruning must never break the spill path */
+  }
+}
 
 export function truncateToolResult(result: string, sessionDir?: string): string {
   if (result.length <= MAX_TOOL_RESULT_LENGTH) return result
@@ -26,6 +48,7 @@ export function truncateToolResult(result: string, sessionDir?: string): string 
       const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
       const filePath = join(dir, fileName)
       writeFileSync(filePath, result, 'utf8')
+      pruneSpillFiles(dir)
       const preview = result.slice(0, 2000)
       return `${preview}\n\n[... Full output (${result.length} chars) saved to: ${filePath} ...]`
     } catch {
@@ -68,6 +91,7 @@ export function enforceAggregateToolResultBudget(
         const fileName = `result_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
         const filePath = join(dir, fileName)
         writeFileSync(filePath, original, 'utf8')
+        pruneSpillFiles(dir)
         const preview = original.slice(0, 2000)
         const replacement =
           `${preview}\n\n[... Full output (${original.length} chars) saved to: ${filePath} ...]`
