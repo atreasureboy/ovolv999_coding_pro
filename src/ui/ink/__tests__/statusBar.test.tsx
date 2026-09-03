@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { StatusBar } from '../components/StatusBar.js'
 
 function frame(props: Partial<Parameters<typeof StatusBar>[0]>): string {
-  return render(<StatusBar model="gpt-4o" messageCount={4} contextPct={0.3} cost={0} apiCalls={0} planMode={false} {...props} />).lastFrame() ?? ''
+  return render(<StatusBar contextPct={0.3} planMode={false} {...props} />).lastFrame() ?? ''
 }
 
 describe('StatusBar (codex-style footer, Round 46)', () => {
@@ -39,8 +39,7 @@ describe('StatusBar (codex-style footer, Round 46)', () => {
   })
 
   it('keeps the line quiet: no model, cost, or banner text', () => {
-    const f = frame({ contextPct: 0.2, cost: 3.5, apiCalls: 9 })
-    expect(f).not.toContain('gpt-4o')
+    const f = frame({ contextPct: 0.2 })
     expect(f).not.toContain('$')
     expect(f).not.toContain('BUILD')
     expect(f).not.toContain('ready')

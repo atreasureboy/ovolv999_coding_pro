@@ -646,17 +646,10 @@ export function App({
 
       {/* Status bar */}
       <StatusBar
-        model={state.banner?.model ?? model}
-        messageCount={historyRef.current.length}
         contextPct={contextPct}
-        tokenCount={tokens}
-        maxTokens={maxContextTokens}
-        cost={state.cost}
-        apiCalls={state.apiCalls}
         planMode={state.planMode}
         verbose={state.verbose}
         profile={state.profile}
-        gitBranch={getGitBranch(cwd)}
         terminalWidth={terminalWidth}
       />
     </Box>

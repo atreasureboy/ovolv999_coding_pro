@@ -13,17 +13,11 @@ import { Text, Box } from 'ink'
 import { t, pressureColor } from '../../theme.js'
 
 export interface StatusBarProps {
-  model: string
-  messageCount: number
-  contextPct: number // 0..1
-  tokenCount?: number
-  maxTokens?: number
-  cost: number
-  apiCalls: number
+  /** 0..1 fraction of the context window in use. */
+  contextPct: number
   planMode: boolean
   verbose?: boolean
   profile?: 'fast' | 'standard' | 'deep' | 'autonomous' | null
-  gitBranch?: string | null
   terminalWidth?: number
 }
 
