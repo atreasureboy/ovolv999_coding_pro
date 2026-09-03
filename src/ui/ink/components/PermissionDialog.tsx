@@ -11,6 +11,7 @@
 import { Text, Box, useInput } from 'ink'
 import { t } from '../../theme.js'
 import { useState } from 'react'
+import { prevCursor } from '../textCursor.js'
 
 export interface PermissionRequest {
   toolName: string
@@ -39,7 +40,7 @@ export function PermissionDialog({
         return
       }
       if (key.backspace || key.delete) {
-        setFeedback((f) => f.slice(0, -1))
+        setFeedback((f) => f.slice(0, prevCursor(f, f.length)))
         return
       }
       if (input && !key.ctrl && !key.meta && input !== '\r' && input !== '\n') {

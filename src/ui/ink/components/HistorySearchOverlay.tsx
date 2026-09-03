@@ -8,6 +8,7 @@
 import { Text, Box, useInput } from 'ink'
 import { t } from '../../theme.js'
 import { useState, useMemo } from 'react'
+import { prevCursor } from '../textCursor.js'
 
 export interface HistorySearchProps {
   history: string[]
@@ -45,7 +46,7 @@ export function HistorySearchOverlay({ history, onSelect, onCancel }: HistorySea
       return
     }
     if (key.backspace || key.delete) {
-      setQuery((q) => q.slice(0, -1))
+      setQuery((q) => q.slice(0, prevCursor(q, q.length)))
       setSelected(0)
       return
     }

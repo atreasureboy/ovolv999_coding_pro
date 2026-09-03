@@ -22,6 +22,7 @@ import { FileSuggestMenu } from './FileSuggestMenu.js'
 import { HistorySearchOverlay } from './HistorySearchOverlay.js'
 import { suggestFiles } from '../fileSuggest.js'
 import { pasteStore } from '../pasteStore.js'
+import { prevCursor, nextCursor } from '../textCursor.js'
 import { openInEditor } from '../../../utils/editor.js'
 import { listCommands } from '../../../commands/index.js'
 import { normalizeSlashCommandInput } from '../../../commands/index.js'
@@ -328,19 +329,20 @@ export function PromptInput({
     // ── Text editing ─────────────────────────────────────────────────────
     if (key.backspace || key.delete) {
       if (cursor > 0) {
-        setText(text.slice(0, cursor - 1) + text.slice(cursor))
-        setCursor(cursor - 1)
+        const prev = prevCursor(text, cursor)
+        setText(text.slice(0, prev) + text.slice(cursor))
+        setCursor(prev)
       }
       return
     }
 
     if (key.leftArrow) {
-      setCursor(Math.max(0, cursor - 1))
+      setCursor(prevCursor(text, cursor))
       return
     }
 
     if (key.rightArrow) {
-      setCursor(Math.min(text.length, cursor + 1))
+      setCursor(nextCursor(text, cursor))
       return
     }
 
@@ -372,6 +374,17 @@ export function PromptInput({
   // ── Render ────────────────────────────────────────────────────────────────
 
   const hasNewline = text.includes('\n')
+  const lines = hasNewline ? text.split('\n') : []
+  const lineStarts: number[] = []
+  if (hasNewline) {
+    let start = 0
+    for (const line of lines) {
+      lineStarts.push(start)
+      start += line.length + 1
+    }
+  }
+  const tailStart = prevCursor(text, text.length)
+  const cursorCharEnd = nextCursor(text, cursor)
 
   // Round 46 (codex layout language): no chrome. A bare `›` prompt on a
   // quiet line — no heading banner, no border box. Codex's whole composer
@@ -386,21 +399,22 @@ export function PromptInput({
         <Box width={terminalWidth} flexDirection="column">
           <Box>
             <Text color={t.primary}>› </Text>
-            <Text>{text.split('\n')[0]}</Text>
+            <Text>{lines[0]}</Text>
           </Box>
-          {text.split('\n').slice(1).map((line, i, arr) => {
-            const lineStart = text.split('\n').slice(0, i + 1).join('\n').length + 1
+          {lines.slice(1).map((line, i) => {
+            const lineStart = lineStarts[i + 1] ?? 0
             const relCursor = cursor - lineStart
             const isCursorLine = relCursor >= 0 && relCursor <= line.length
+            const cellEnd = nextCursor(line, relCursor)
             return (
               <Box key={i} paddingLeft={2}>
                 {isCursorLine ? (
                   <>
                     <Text>{line.slice(0, Math.max(0, relCursor))}</Text>
                     <Text backgroundColor={t.primary} color="#1a1a1a">
-                      {relCursor < line.length ? line[relCursor] : ' '}
+                      {relCursor < line.length ? line.slice(relCursor, cellEnd) : ' '}
                     </Text>
-                    {relCursor < line.length ? <Text>{line.slice(relCursor + 1)}</Text> : null}
+                    {cellEnd < line.length ? <Text>{line.slice(cellEnd)}</Text> : null}
                   </>
                 ) : (
                   <Text>{line || ' '}</Text>
@@ -421,14 +435,14 @@ export function PromptInput({
             </Text>
           ) : cursor === text.length && text.length > 0 ? (
             <>
-              <Text>{text.slice(0, -1)}</Text>
-              <Text backgroundColor={t.primary} color="#1a1a1a">{text.at(-1)}</Text>
+              <Text>{text.slice(0, tailStart)}</Text>
+              <Text backgroundColor={t.primary} color="#1a1a1a">{text.slice(tailStart)}</Text>
             </>
           ) : (
             <>
               <Text>{text.slice(0, cursor)}</Text>
-              <Text backgroundColor={t.primary} color="#1a1a1a">{cursor < text.length ? text[cursor] : ' '}</Text>
-              {cursor < text.length ? <Text>{text.slice(cursor + 1)}</Text> : null}
+              <Text backgroundColor={t.primary} color="#1a1a1a">{cursor < text.length ? text.slice(cursor, cursorCharEnd) : ' '}</Text>
+              {cursorCharEnd < text.length ? <Text>{text.slice(cursorCharEnd)}</Text> : null}
             </>
           )}
         </Box>
