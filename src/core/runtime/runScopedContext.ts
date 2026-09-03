@@ -165,6 +165,11 @@ export interface RunScopedRuntimeContextStore {
   }): RunScopedRuntimeContext
   get(runId: string): RunScopedRuntimeContext | undefined
   getLatest(): RunScopedRuntimeContext | undefined
+  /** The most recently closed context, if any. The Coordinator reads its
+   *  completionVerdict to seed the NEXT run's ControlMessageLog — a
+   *  per-run log dies with its run, so without this hand-off a rejected
+   *  completion never reaches a provider. */
+  getLastClosed(): RunScopedRuntimeContext | undefined
   restore(runId: string, snapshot: SerializedRunContext): RunScopedRuntimeContext
   close(runId: string): void
   list(): string[]
@@ -251,6 +256,10 @@ export class InMemoryRunScopedRuntimeContextStore implements RunScopedRuntimeCon
     let latest: RunScopedRuntimeContext | undefined
     for (const context of this.contexts.values()) latest = context
     return latest ?? this.lastClosed
+  }
+
+  getLastClosed(): RunScopedRuntimeContext | undefined {
+    return this.lastClosed
   }
 
   restore(runId: string, snapshot: SerializedRunContext): RunScopedRuntimeContext {

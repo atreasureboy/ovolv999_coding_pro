@@ -204,6 +204,27 @@ function extractTaskIntentText(userMessage: string): string {
   return userMessage.slice(idx + marker.length).trim()
 }
 
+/**
+ * Extract the "your stop was not accepted" payload from a verdict — the
+ * single source for both the in-run COMPLETION_REJECTED append and the
+ * cross-run seed. Only statuses that mean a completion CLAIM was evaluated
+ * and rejected qualify: cancelled/failed/exhausted describe how the run
+ * ENDED (interrupt, engine error, budget ceiling), not a rejected stop, so
+ * they are not carried into the next run. Null = nothing to carry.
+ */
+export function completionRejection(verdict: CompletionVerdict): { verdict: string; blockers: string[] } | null {
+  switch (verdict.status) {
+    case 'partial':
+      return { verdict: verdict.status, blockers: verdict.remaining }
+    case 'blocked':
+      return { verdict: verdict.status, blockers: verdict.blockers }
+    case 'incomplete':
+      return { verdict: verdict.status, blockers: verdict.remaining }
+    default:
+      return null
+  }
+}
+
 export class RuntimeCoordinator {
   private readonly deps: CoordinatorDeps
   /** v0.3.2 (run-scoped runtime contract §Phase 7): per-turn model call attempts so
@@ -877,6 +898,24 @@ export class RuntimeCoordinator {
     // Round 32: keep a live reference so engine.steer() can land
     // instructions mid-run (cleared when the run loop exits).
     this.liveControlLog = controlMessageLog
+    // Contract §七 (completion_rejected is KEEP_ACROSS_COMPACTION — "they
+    // describe the run state"): the append happens AFTER the state machine
+    // loop exits, and this log is fresh per run, so a rejected completion
+    // would otherwise never reach any provider. Carry the previous run's
+    // rejection into THIS run's first render: a resumed run sees its own
+    // verdict, a follow-up turn sees the last closed run's verdict.
+    try {
+      const previousVerdict = runContext?.completionVerdict
+        ?? this.deps.runContextStore?.getLastClosed()?.completionVerdict
+      const rejection = previousVerdict ? completionRejection(previousVerdict) : null
+      if (rejection) {
+        controlMessageLog.append({
+          kind: 'completion_rejected',
+          verdict: rejection.verdict,
+          blockers: rejection.blockers,
+        })
+      }
+    } catch { /* best-effort: seeding must never break the turn */ }
 
     // R6: inject `<available-deferred-tools>` so the model knows it can
     // call search_extra_tools("select:<name>") to load them. Borrowed
@@ -1579,11 +1618,11 @@ export class RuntimeCoordinator {
           type: 'COMPLETION_REJECTED',
           verdict: serializeVerdict(v),
         })
+        const rejection = completionRejection(v)
         controlMessageLog.append({
           kind: 'completion_rejected',
           verdict: v.status,
-          blockers: 'blockers' in v && v.blockers ? v.blockers :
-                     'remaining' in v && v.remaining ? v.remaining : ['completion not accepted'],
+          blockers: rejection?.blockers ?? ['completion not accepted'],
         })
       }
     }

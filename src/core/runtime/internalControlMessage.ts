@@ -113,7 +113,7 @@ export function formatControlMessage(msg: InternalControlMessage): string {
     case 'tool_recovery':
       return `[runtime control · tool_recovery] ${msg.tool} failed: ${msg.error}. Diagnose the root cause before retrying with different args.`
     case 'completion_rejected':
-      return `[runtime control · completion_rejected · ${msg.verdict}] ${msg.blockers.join('; ')}`
+      return `[runtime control · completion_rejected · ${msg.verdict}] A completion claim was evaluated and NOT accepted. Outstanding: ${msg.blockers.join('; ')}. Close these gaps with real evidence, or state the concrete blocker that prevents it — do not simply repeat the completion claim.`
     case 'provider_fallback':
       return `[runtime control · provider_fallback] Switched from ${msg.from} to ${msg.to} (${msg.reason}). Tools executed before the switch remain — do not re-run them.`
     case 'project_exploration_continue':
