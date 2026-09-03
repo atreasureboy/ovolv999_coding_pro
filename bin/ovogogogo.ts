@@ -689,6 +689,7 @@ OPTIONS
   --profile <name>          Execution profile: fast | standard | deep | autonomous  (default: auto per task)
   --serve [port]            Start the local observability server (default port 7717, binds 127.0.0.1)
   --serve-bind <host>       Bind address for --serve (default: 127.0.0.1)
+  task-server [port]        Start the durable task control plane (default port 7727, binds 127.0.0.1)
   --cwd <path>              Working directory  (env: OVOGO_CWD, default: cwd, supports ~/)
   --loop                    Activate loop mode (reads .loop/ configuration)
   --loop-init <goal>        Create a safe .loop/ workspace without overwriting existing files
@@ -719,6 +720,8 @@ ENVIRONMENT
   OVOGO_MAX_CONTEXT_TOKENS  Context window size (default: 200000)
   OVOGO_TEMPERATURE         Sampling temperature
   OVOGO_MAX_OUTPUT_TOKENS   Cap on completion tokens
+  OVOGO_TASK_PORT           Port used by task-server (default: 7727)
+  OVOGO_TASK_STORE          Event-log path used by task-server
 
 TOOLS
   Bash          Execute shell commands
@@ -1781,6 +1784,13 @@ async function main(): Promise<void> {
   // Routed before parseArgs because bare subcommands would otherwise be
   // swallowed as the task argument.
   const sub = process.argv[2]
+  if (sub === 'task-server') {
+    const rawPort = process.argv[3] ?? process.env.OVOGO_TASK_PORT ?? '7727'
+    const port = Number(rawPort)
+    const { startTaskControlPlane } = await import('../src/cli/taskControlPlane.js')
+    await startTaskControlPlane(process.cwd(), port)
+    return
+  }
   if (sub === 'ps' || sub === 'sessions') {
     await handleSessionSubcommand('ps', process.argv.slice(3))
     return
