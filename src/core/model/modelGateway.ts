@@ -287,6 +287,10 @@ export class ModelGateway {
       || /rate[\s_-]?limit/i.test(errMsg)
       || /\bserver[\s_-]?error\b/i.test(errMsg)
       || /\bunavailable\b/i.test(errMsg)
+      // Anthropic's mid-stream SSE failure surfaces as
+      // {"type":"overloaded_error"} with no status code — a transient
+      // blip must fall back, not burn circuit-budget as a hard failure.
+      || /\boverloaded\b/i.test(errMsg)
     )
   }
 

@@ -171,7 +171,10 @@ export class StreamConsumer {
             }
             const acc = toolCallsMap.get(idx)!
             if (tc.id) acc.id = tc.id
-            if (tc.function?.name) acc.name += tc.function.name
+            // Name is assigned, not concatenated: gateways that repeat the
+            // full name in every delta (llama.cpp-derived) would otherwise
+            // yield "read_fileread_file" and fail tool resolution.
+            if (tc.function?.name && !acc.name) acc.name = tc.function.name
             if (tc.function?.arguments) acc.arguments += tc.function.arguments
           }
         }
@@ -185,6 +188,9 @@ export class StreamConsumer {
       const trailingThinking = thinkingTagFilter.drainThinking()
       if (trailingThinking) {
         this.deps.renderer.streamReasoning?.(trailingThinking)
+        // Accumulate like the in-loop path — history replay (DeepSeek R1
+        // flavor) would otherwise carry a truncated reasoning block.
+        reasoningText += trailingThinking
       }
       if (trailingContent) {
         if (firstToken) {

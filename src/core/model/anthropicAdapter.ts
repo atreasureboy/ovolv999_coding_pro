@@ -163,9 +163,20 @@ function convertOpenAIMessages(
   systemPrompt: string,
 ): { system: string; messages: Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> } {
   const converted: Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> = []
+  // Array-carried system messages are runtime control messages (the
+  // coordinator prepends them before each call) — dropping them voids the
+  // control-message contract on this transport, so fold them into `system`.
+  const systemExtras: string[] = []
   for (const msg of messages) {
     const role = (msg as { role: string }).role
-    if (role === 'system') continue
+    if (role === 'system' || role === 'developer') {
+      const content = (msg as { content?: unknown }).content
+      const text = typeof content === 'string' ? content : Array.isArray(content)
+        ? content.map((p) => isOpenAITextPart(p) ? p.text : '').join('\n')
+        : ''
+      if (text) systemExtras.push(text)
+      continue
+    }
     if (role === 'tool') {
       const toolCallId = (msg as { tool_call_id?: string }).tool_call_id
       const content = (msg as { content?: unknown }).content
@@ -231,13 +242,18 @@ function convertOpenAIMessages(
         })
       }
       if (blocks.length === 0) {
-        converted.push({ role: 'assistant', content: '' })
-      } else {
-        converted.push({ role: 'assistant', content: blocks })
+        // The Messages API rejects empty assistant content. An assistant
+        // turn with neither text nor tool calls carries no tool_use
+        // pairing either — drop it rather than poison the request.
+        continue
       }
+      converted.push({ role: 'assistant', content: blocks })
     }
   }
-  return { system: systemPrompt, messages: converted }
+  return {
+    system: [systemPrompt, ...systemExtras].filter(Boolean).join('\n\n'),
+    messages: converted,
+  }
 }
 
 type AdaptedEvent = Parameters<AnthropicChunkTranslator['push']>[0]

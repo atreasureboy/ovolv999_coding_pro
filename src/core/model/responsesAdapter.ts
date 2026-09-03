@@ -26,7 +26,14 @@ function contentText(content: unknown): string {
 function responseInput(messages: ProviderStreamRequest['messages']): unknown[] {
   const input: unknown[] = []
   for (const message of messages) {
-    if (message.role === 'system' || message.role === 'developer') continue
+    if (message.role === 'system' || message.role === 'developer') {
+      // Keep array-carried system messages: the coordinator prepends
+      // runtime control messages ([runtime control · …]) this way —
+      // dropping them voids the control-message contract on this
+      // transport. `instructions` alone is not enough.
+      input.push({ role: message.role, content: contentText(message.content) })
+      continue
+    }
     if (message.role === 'tool') {
       input.push({
         type: 'function_call_output',
@@ -111,7 +118,11 @@ async function* translateResponseStream(stream: AsyncIterable<unknown>): AsyncIt
     }
     if (type === 'response.function_call_arguments.delta' && typeof event.delta === 'string') {
       const key = stringValue(event.item_id) || stringValue(event.call_id)
-      const index = callIndexes.get(key) ?? 0
+      const index = callIndexes.get(key)
+      // Unknown id (relay omitted output_item.added, or reordered events):
+      // appending to index 0 would merge two parallel calls' JSON into one
+      // broken argument string — drop the fragment instead.
+      if (index === undefined) continue
       yield chatChunk({ tool_calls: [{ index, function: { arguments: event.delta } }] })
       continue
     }
@@ -153,9 +164,14 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
   markStreamUsageUnsupported(): void {}
 
   async stream(req: ProviderStreamRequest): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>> {
-    const reasoning = req.reasoning?.effort
-      ? { effort: req.reasoning.effort }
-      : undefined
+    // Mirror buildReasoningParams' openai-effort semantics: enabled:false
+    // omits reasoning entirely (OpenAI models can't turn it off via the
+    // body), and budgetTokens is effort-flavor only.
+    const reasoning = req.reasoning?.enabled === false
+      ? undefined
+      : req.reasoning?.effort
+        ? { effort: req.reasoning.effort }
+        : undefined
     const stream = await this.client.responses.create({
       model: req.model,
       instructions: req.systemPrompt,
@@ -163,6 +179,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
       tools: req.tools.length ? responseTools(req.tools) as never : undefined,
       tool_choice: req.tools.length ? 'auto' : undefined,
       max_output_tokens: req.maxOutputTokens,
+      temperature: req.temperature,
       reasoning,
       stream: true,
     }, { signal: req.signal })

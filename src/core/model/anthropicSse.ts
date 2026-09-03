@@ -106,7 +106,9 @@ export function buildAnthropicRequest(input: {
     model: input.model,
     system: systemBlocks,
     messages,
-    tools: anthropicTools,
+    // Omit when empty — the Messages API rejects a zero-length tools array
+    // (minItems 1), and chat-completions/Responses both omit the field too.
+    ...(anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
     max_tokens: input.maxTokens,
     temperature: input.temperature,
   }

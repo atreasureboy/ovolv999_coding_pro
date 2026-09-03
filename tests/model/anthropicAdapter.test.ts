@@ -43,7 +43,8 @@ describe('buildAnthropicRequest (R8: SDK type)', () => {
       tools: [],
       maxTokens: 1024,
     })
-    expect(body.tools).toEqual([])
+    // Empty tools must OMIT the field — the Messages API rejects [].
+    expect(body.tools).toBeUndefined()
   })
 
   it('emits thinking block when thinkingBudget > 0', () => {

@@ -14,7 +14,8 @@ describe('buildAnthropicRequest providerOptions (R8)', () => {
       maxTokens: 1024,
     })
     expect(body.system).toBe('You are helpful.')
-    expect(body.tools).toEqual([])
+    // Empty tools must OMIT the field — the Messages API rejects [].
+    expect(body.tools).toBeUndefined()
   })
 
   it('wraps system in cache_control block when cacheSystem is true', () => {

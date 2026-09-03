@@ -152,23 +152,28 @@ export class RunEventEmitter {
 
   /** Emit an event to all subscribers of that type. */
   emit(event: RunEvent): void {
-    // Round 41 audit fix: iterate a COPY — a handler unsubscribing another
-    // handler of the same event used to skip it via live-array mutation.
-    for (const handler of [...this.anyHandlers]) {
+    // Contain async subscribers too: a returned rejected promise would
+    // escape the try/catch below as an unhandledRejection (process-fatal
+    // per cleanup.ts) — the containment contract covers the whole handler.
+    const contained = (handler: (event: RunEvent) => void): void => {
       try {
-        handler(event)
+        const result = handler(event) as unknown
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          (result as Promise<void>).catch(() => { /* subscriber failures must never break the runtime loop */ })
+        }
       } catch {
         // subscriber failures must never break the runtime loop
       }
     }
+    // Round 41 audit fix: iterate a COPY — a handler unsubscribing another
+    // handler of the same event used to skip it via live-array mutation.
+    for (const handler of [...this.anyHandlers]) {
+      contained(handler)
+    }
     const list = this.handlers[event.type] as Array<(event: RunEvent) => void> | undefined
     if (!list) return
     for (const handler of [...list]) {
-      try {
-        handler(event)
-      } catch {
-        // subscriber failures must never break the runtime loop
-      }
+      contained(handler)
     }
   }
 
