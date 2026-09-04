@@ -256,7 +256,7 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 - **命令历史 + 书签** — 跨 session 命令历史 + 位置书签
 - **文件历史 / Rewind** — 每次编辑快照，可回滚
 - **ACP 协议** — Agent Communication Protocol server
-- **Vim 模式** — normal/insert/visual 模式，keybinding 可定制
+- **可定制键位** — `.ovolv999/keybindings.json` 重绑定 composer / 全局快捷键，帮助卡与提示随绑定派生
 - **Ink/React UI** — 默认富终端 UI，实时多行输入、补全与交互式面板
 - **零领域绑定** — 核心是 Agent 基础设施，业务逻辑通过 Module + Tool 插件注入
 
@@ -317,8 +317,8 @@ user input → CLI/REPL (bin/ovogogogo.ts)
 ║  │                                                                     │   ║
 ║  │  Shared state: SharedRuntimeState (planMode, abort, allTools,      │   ║
 ║  │    activeToolCalls, activeSubtasks)                                 │   ║
-║  │  Events: RunEventEmitter (16 typed event variants, pub/sub)        │   ║
-║  │  Abort: softAbort(ESC) / hardAbort(Ctrl+C)                        │   ║
+║  │  Events: RunEventEmitter (56 typed event variants, pub/sub)        │   ║
+║  │  Abort: softAbort(ESC) / hardAbort(ESC ×2)                       │   ║
 ║  └─────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                           ║
 ║  ┌─ Modules ──────┐  ┌─ Tools ─────────────┐  ┌─ Memory (3 层) ──────┐  ║
