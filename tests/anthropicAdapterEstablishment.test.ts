@@ -30,10 +30,15 @@ function failingSdkStream(error: string): unknown {
   return {
     controller: { abort: () => {} },
     [Symbol.asyncIterator]() {
-      return (async function* () {
-        throw new Error(error)
-        // biome-ignore lint/style/noUselessLoneBlockStatements: generator must not yield
-      })()
+      // Manual async iterator, not an async generator: the failure must
+      // land on the FIRST next() pull, and a generator that only throws
+      // can't express that without a bogus yield.
+      const iterator = {
+        next: () => Promise.reject(new Error(error)),
+        return: (value?: unknown) => Promise.resolve({ value, done: true } as IteratorResult<unknown>),
+        throw: (e: unknown) => Promise.reject(e instanceof Error ? e : new Error(String(e))),
+      }
+      return { ...iterator, [Symbol.asyncIterator]() { return iterator } }
     },
   }
 }

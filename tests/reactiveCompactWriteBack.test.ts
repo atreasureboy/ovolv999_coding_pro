@@ -83,7 +83,7 @@ function makeEngine(client: unknown) {
     cwd: '/tmp',
     permissionMode: 'bypassPermissions',
     enabledModules: [],
-  } as never, fakeRenderer(), client as unknown as OpenAI)
+  }, fakeRenderer(), client as OpenAI)
 }
 
 /** Pre-compaction filler head: enough messages for maybeCompact to have

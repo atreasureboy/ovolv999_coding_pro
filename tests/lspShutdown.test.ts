@@ -21,7 +21,7 @@ interface RegistryEntry {
 }
 
 function registry(): Map<string, RegistryEntry> {
-  return _lspRegistryForTests() as unknown as Map<string, RegistryEntry>
+  return _lspRegistryForTests()
 }
 
 describe('LSP shutdown', () => {

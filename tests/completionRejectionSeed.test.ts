@@ -63,7 +63,7 @@ function makeEngine(client: unknown) {
     cwd: '/tmp',
     permissionMode: 'bypassPermissions',
     enabledModules: [],
-  } as never, fakeRenderer(), client as unknown as OpenAI)
+  }, fakeRenderer(), client as OpenAI)
 }
 
 function rejectionSeenIn(calls: OpenAI.Chat.ChatCompletionMessageParam[][]): boolean {

@@ -1734,7 +1734,8 @@ export class RuntimeCoordinator {
     // 'blocked': the previous `as CompletionStatus ?? 'completed'`
     // cast let 'incomplete' leak into outcome.completion.status, a
     // value outside the documented union that no downstream switch
-    // handles. The cast below is guarded by the exhaustive enumeration.
+    // handles. The enumeration below narrows to the literal union, so no
+    // assertion is needed.
     const verdictStatus: string | undefined = result.completionStatus
     const status: CompletionStatus =
       result.reason === 'error' ? 'failed'
@@ -1745,7 +1746,7 @@ export class RuntimeCoordinator {
         || verdictStatus === 'failed'
         || verdictStatus === 'cancelled'
         || verdictStatus === 'exhausted'
-        ? verdictStatus as CompletionStatus
+        ? verdictStatus
       : verdictStatus === undefined || verdictStatus === 'completed' ? 'completed'
       : 'blocked'
     const outcome: TurnOutcome = {
