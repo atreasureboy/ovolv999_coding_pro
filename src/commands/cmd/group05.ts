@@ -179,7 +179,7 @@ registerCommand({
     }
 
     if (sub === 'list' || !sub) {
-      const filter: any = {}
+      const filter: { favoriteOnly?: boolean } = {}
       if (parts[1] === '--fav' || parts[1] === '-f') filter.favoriteOnly = true
       return text(formatSnippetList(listSnippets(ctx.cwd, filter)))
     }
