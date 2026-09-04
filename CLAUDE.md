@@ -217,6 +217,35 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
     assertion 修复(`pnpm check` 在 main 上因这 5 个 error 已红),警告
     79 → 21(余下均为接口形状 require-await / 测试调试 no-console /
     终端 ESC 控制字符正则)
+- ~~P2.11 夜间审计轮(Rounds 41-46,2026-09-04)~~ → **已完成(6 commits,94ffc30..d1c2c8e)**:
+  - **DaemonClient 提前断连检测(94ffc30)**:daemon accept 后中途死掉时,
+    client 此前要耗尽整个超时并误报 "timed out" — EPIPE/ECONNRESET 与干净
+    close 均立即以 "closed the connection before responding" 返回
+  - **commandRunner stdin 合同修复(94ffc30)**:async 路径 `child.stdin.end()`
+    无 error 守卫 — 子进程不读 stdin 即退出时 EPIPE 未处理流错误直接崩进程
+    (hookExecutor 早有同款守卫,此处漏);runCommandSync 此前静默丢弃
+    spec.stdin(共享 CommandSpec 合同谎言),现经 spawnSync input 交付;
+    timedOut 检测优先 error.code ETIMEDOUT(SIGTERM 启发式保留为后备);
+    头注释 "spawn 失败会 throw" 与实现(resolve exitCode -1)矛盾已修正
+  - **task control plane 加固(be77483)**:load() 的 shape gate 此前只查
+    `task?.id` — 可解析但字段为垃圾的行会进入状态图(NaN 排序、statusless
+    任务被 /tasks 提供);现在核验 status/priority/attempt 等 load-bearing
+    字段(逐行跳过而非隔离 — append log 撕裂尾行是崩溃后正常态);
+    taskEvents 内存环封顶 5 万(构造可覆写),store 文件保留全史,/events
+    服务内存尾部 — 长驻 task-server 不再无界增长;enqueue 非字符串
+    goal/cwd 给出明确报错(此前 HTTP 层暴露 "x.trim is not a function")
+  - **ACP-WS 会话连续性(53d7244)**:传输层此前每条消息新建 ExecutionEngine
+    并传空 history — 每个 WS prompt 都是无上下文单 turn,与 REPL/pipe/loop
+    传输及 ACP 会话式协议均不一致;现在 engine + history 每连接一份
+    (首消息懒建,history 经 runTurn 线程化,连接关闭时 dispose),images
+    映射到 boot 图像形状(boot.ts 只读 dataUrl,path 仅元数据)
+  - shellQuote 收尾(9395b56):tmuxSession 的 shellEsc 是最后一份分叉
+    引号实现,折叠进 canonical;task-server 非整数端口改为单行报错退出 1
+    (此前经 crash handler 打栈)(e24aad5)
+  - teamMemory 清理(d1c2c8e):loadMemoryFiles 每文件读盘两次(内容+hash)
+    改单次;readTeamMemoryFile 零调用方删除。**权威枚举复检**:全部
+    `JSON.parse(readFileSync)` 27 处逐一复核,round 3 覆盖确认完整
+    (loopSupervisor lease 读失败→null 是正确的租约语义,非销毁路径)
 
 **路由信号状态(2026-08-05 核实)**:
 - `repoFileCount`:已真实化 — v0.5.3 移除 `filesTouched×10` 代理,现使用 `RepoStatsService.walkRepo()` 真实文件系统遍历
