@@ -16,10 +16,10 @@
  * Special: @hourly, @daily, @weekly, @monthly, @yearly, @every <duration>
  */
 
-import { copyFileSync, existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join, resolve } from 'path'
 
-import { atomicWrite } from './atomicWrite.js'
+import { atomicWrite, preserveCorruptFile } from './atomicWrite.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -324,7 +324,10 @@ export function loadSchedules(cwd: string): ScheduleStore {
     }
     return { tasks: parsed.tasks.filter(isShapedTask) }
   } catch {
-    preserveCorruptStore(path)
+    // Runtime truth contract §schedule-store: schedules.json holds real user
+    // data — preserve the corrupt bytes before the store resets to empty, or
+    // the next save destroys the only copy of the task list.
+    preserveCorruptFile(path)
     return { tasks: [] }
   }
 }
@@ -342,21 +345,6 @@ function isShapedTask(t: unknown): t is ScheduledTask {
     && typeof task.prompt === 'string'
     && typeof task.enabled === 'boolean'
     && typeof task.runCount === 'number'
-}
-
-/**
- * Runtime truth contract §schedule-store: schedules.json holds real user
- * data. A store that fails to parse or violates the shape is preserved
- * verbatim at schedules.json.corrupt before the store resets to empty —
- * silently swapping an unreadable store for an empty one destroys the only
- * copy of the task list. First corruption wins: the backup is never
- * clobbered by a later corrupt state.
- */
-function preserveCorruptStore(path: string): void {
-  const backup = `${path}.corrupt`
-  try {
-    if (!existsSync(backup)) copyFileSync(path, backup)
-  } catch { /* best-effort — a failed backup must not break the reader */ }
 }
 
 export async function saveSchedules(cwd: string, store: ScheduleStore): Promise<void> {

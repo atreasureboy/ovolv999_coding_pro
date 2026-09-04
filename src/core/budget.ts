@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs'
-import { atomicWriteSync } from './atomicWrite.js'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -82,6 +82,9 @@ export function loadBudgetStore(cwd: string): BudgetStore {
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as BudgetStore
   } catch {
+    // Preserve the corrupt bytes before resetting — usage history and period
+    // resets are real accounting data, and the next save would destroy them.
+    preserveCorruptFile(path)
     return { budgets: {}, usage: {}, resets: {} }
   }
 }

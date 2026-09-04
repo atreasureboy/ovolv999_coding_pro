@@ -65,8 +65,8 @@
 import { rename, unlink, stat, mkdir, lstat, realpath, open } from 'fs/promises'
 import type { FileHandle } from 'fs/promises'
 import {
-  closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, renameSync, lstatSync,
-  realpathSync, statSync, unlinkSync, writeSync,
+  closeSync, copyFileSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync,
+  renameSync, lstatSync, realpathSync, statSync, unlinkSync, writeSync,
 } from 'fs'
 import { dirname } from 'path'
 import { randomBytes } from 'crypto'
@@ -363,4 +363,23 @@ export function atomicWriteSync(target: string, content: string | Buffer): void 
     try { unlinkSync(tmpPath) } catch { /* original error is more informative */ }
     throw err
   }
+}
+
+/**
+ * Read-side companion to the atomic writers. When a persisted store fails
+ * to load — torn write from a pre-atomic era, disk corruption, a hand edit
+ * — callers reset the store to empty and keep going. Without this guard the
+ * next save then destroys the only copy of the data. Preserve the raw bytes
+ * verbatim at `<path>.corrupt` first.
+ *
+ * First corruption wins: an existing backup is never clobbered by a later
+ * corrupt state. Best-effort by contract: a failed backup must never break
+ * the caller's fallback path, so all errors are swallowed.
+ */
+export function preserveCorruptFile(path: string): void {
+  const backup = `${path}.corrupt`
+  try {
+    if (existsSync(backup)) return
+    copyFileSync(path, backup)
+  } catch { /* best-effort — the caller's empty-store fallback proceeds */ }
 }

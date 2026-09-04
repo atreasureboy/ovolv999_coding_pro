@@ -8,7 +8,7 @@ import {
   getPeriodKey, getPeriodStart, getPeriodEnd,
   loadBudgetStore,
 } from '../src/core/budget.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -414,5 +414,36 @@ describe('Token Budget Management', () => {
     it('BUDGET_PRESETS has all presets', () => {
       expect(Object.keys(BUDGET_PRESETS)).toEqual(['conservative', 'moderate', 'heavy'])
     })
+  })
+})
+
+describe('budget store corruption guard', () => {
+  let cwd: string
+
+  beforeEach(() => {
+    cwd = makeTempDir()
+  })
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('preserves a corrupt budgets.json before resetting', () => {
+    const path = join(cwd, '.ovolv999', 'budgets.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(cwd, '.ovolv999'), { recursive: true })
+    writeFileSync(path, '{"budgets": torn', 'utf8')
+
+    expect(loadBudgetStore(cwd)).toEqual({ budgets: {}, usage: {}, resets: {} })
+    expect(readFileSync(backup, 'utf8')).toBe('{"budgets": torn')
+
+    // The store is usable again afterwards and the forensic backup survives.
+    setBudget(cwd, { name: 'b1', type: 'tokens', period: 'daily', limit: 1000 })
+    expect(readFileSync(backup, 'utf8')).toBe('{"budgets": torn')
+  })
+
+  it('returns defaults for a missing budgets.json without creating a backup', () => {
+    expect(loadBudgetStore(cwd)).toEqual({ budgets: {}, usage: {}, resets: {} })
+    expect(existsSync(join(cwd, '.ovolv999', 'budgets.json.corrupt'))).toBe(false)
   })
 })

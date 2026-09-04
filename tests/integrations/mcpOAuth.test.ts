@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -145,6 +145,37 @@ describe('Token store', () => {
 
   it('returns empty map when store does not exist', () => {
     expect(loadTokenStore().size).toBe(0)
+  })
+
+  it('preserves a corrupt token store before resetting', () => {
+    const path = join(dir, '.ovogo', 'mcp-tokens.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(dir, '.ovogo'), { recursive: true })
+    writeFileSync(path, '{"tokens": [torn', 'utf8')
+
+    expect(loadTokenStore().size).toBe(0)
+    expect(readFileSync(backup, 'utf8')).toBe('{"tokens": [torn')
+
+    // The store is usable again afterwards and the forensic backup survives.
+    saveTokenStore(new Map([['a', { serverId: 'a', accessToken: 'at', acquiredAt: 1 }]]))
+    expect(loadTokenStore().get('a')?.accessToken).toBe('at')
+    expect(readFileSync(backup, 'utf8')).toBe('{"tokens": [torn')
+  })
+
+  it('drops a malformed token entry without nuking the well-formed ones', () => {
+    const path = join(dir, '.ovogo', 'mcp-tokens.json')
+    mkdirSync(join(dir, '.ovogo'), { recursive: true })
+    writeFileSync(path, JSON.stringify({
+      tokens: [
+        { serverId: 'good', accessToken: 'ok', acquiredAt: 1 },
+        { broken: true },
+        'garbage',
+      ],
+    }), 'utf8')
+
+    const store = loadTokenStore()
+    expect(store.has('good')).toBe(true)
+    expect(store.size).toBe(1)
   })
 })
 

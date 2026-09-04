@@ -13,7 +13,7 @@
 
 import { readFileSync, existsSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { atomicWriteSync } from '../core/atomicWrite.js'
+import { atomicWriteSync, preserveCorruptFile } from '../core/atomicWrite.js'
 import { homedir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
 
@@ -152,9 +152,22 @@ export function loadTokenStore(): Map<string, OAuthTokenSet> {
   if (!existsSync(path)) return new Map()
   try {
     const raw = readFileSync(path, 'utf8')
-    const parsed = JSON.parse(raw) as { tokens: OAuthTokenSet[] }
-    return new Map(parsed.tokens.map((t) => [t.serverId, t]))
+    const parsed = JSON.parse(raw) as { tokens?: OAuthTokenSet[] }
+    if (!parsed || !Array.isArray(parsed.tokens)) {
+      throw new Error('token store shape violation')
+    }
+    // Per-entry tolerance: one malformed token means re-auth for that
+    // server, not losing the others.
+    return new Map(
+      parsed.tokens
+        .filter((t) => t !== null && typeof t === 'object' && typeof t.serverId === 'string')
+        .map((t) => [t.serverId, t]),
+    )
   } catch {
+    // Tokens are expensive to reconstruct (interactive OAuth per server) —
+    // preserve the corrupt bytes before resetting, or the next save
+    // destroys them all.
+    preserveCorruptFile(path)
     return new Map()
   }
 }
