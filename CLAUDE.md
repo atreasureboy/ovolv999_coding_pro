@@ -165,6 +165,27 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
     semanticMemory 按 JSONL 逐行容忍契约不动;inputHistory 只追加无销毁路径
   - 类型真相:生产代码最后一个 `as any`(/snippet list filter)替换为真实类型;
     deadCodeCheck cast 审计归零
+- ~~P2.9 夜间审计轮(Rounds 29-33,2026-09-04)~~ → **已完成(10 commits,2111c51..301fc3e)**:
+  - 损坏保全扩展:ssh-profiles(name/host shape 门)、team-memory config
+    (`/team-memory add` 是 load??default→save 的销毁路径)、ignored-versions
+    三处接入 preserveCorruptFile + atomicWriteSync。JSON 全量重写型 store 的
+    "损坏→静默空→下次保存销毁" 缺陷类已全库扫尽(剩余候选均为 JSONL 逐行
+    容忍契约/线协议解析/只读聚合,逐一核实)
+  - **HookInput 协议补全**:HOOK_EVENTS 9 事件 vs HookInput 联合只建模 5 个 —
+    SessionEnd/Stop/PreCompact/PostCompact 输入此前经 buildInput `as HookInput`
+    强转;4 个 bare member 入联合,defaultRunner 删除 buildInput(10 站点全
+    typed literal),hookProtocol 新增 sampleHookInput;`/hooks test` 的
+    `as never` 消除 + 事件名校验(此前 typo 事件名误导为 "No hooks configured");
+    cast 审计保持 0
+  - `/hooks` handler 去 lazy(hooksConfig/hookExecutor/settings 为小模块 —
+    group04 cron.js 同款 vitest 解析陷阱);死 shadowed import + 失效 eslint-disable 清除
+  - `/schedule show <id|name>` 接线(formatTaskDetail 此前零生产消费方);
+    group04 cron.js 静态导入;自动生成任务名加随机后缀防同 ms 碰撞
+    (name 是 remove/enable 的句柄,碰撞 = remove 误删双任务)
+  - 关机拒绝防护:ACP SIGINT/SIGTERM 的 server.stop() 与 chokidar
+    watcher.close() 的 rejection 均为 unhandled( Node ≥15 即致命)— 加 catch
+  - 验证补全:eval:deterministic(18)+ verify:runtime-static + runtime-behavior(137)
+    + golden-path(14) 全绿 — Responses 传输层改动后 `pnpm check` 全链路闭合
 
 **路由信号状态(2026-08-05 核实)**:
 - `repoFileCount`:已真实化 — v0.5.3 移除 `filesTouched×10` 代理,现使用 `RepoStatsService.walkRepo()` 真实文件系统遍历
