@@ -173,9 +173,8 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
     catch 代码模式 grep — profiles.ts 的对象字面量默认值因此逃过首轮)再查出
     六处:snapshots / bookmarks / timers / command-history / knowledge /
     profiles.json 全部 shape 门 + preserveCorruptFile + atomicWriteSync。
-    **全库 JSON 全量重写型 store 的销毁路径至此穷尽**(判定方法:枚举所有
-    `getXxxPath` 指向的 .json,逐一核对 load/save 配对;剩余 .json 均为
-    JSONL 逐行容忍契约/线协议解析/只读聚合/linter 配置)
+    (注:P2.9 时曾判定"至此穷尽"——该判定被 P2.10 推翻:按 `getXxxPath`
+    枚举会漏掉 getStorePath / getCachePath / getConfigPath 等命名变体)
   - **HookInput 协议补全**:HOOK_EVENTS 9 事件 vs HookInput 联合只建模 5 个 —
     SessionEnd/Stop/PreCompact/PostCompact 输入此前经 buildInput `as HookInput`
     强转;4 个 bare member 入联合,defaultRunner 删除 buildInput(10 站点全
@@ -191,6 +190,33 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
     watcher.close() 的 rejection 均为 unhandled( Node ≥15 即致命)— 加 catch
   - 验证补全:eval:deterministic(18)+ verify:runtime-static + runtime-behavior(137)
     + golden-path(14) 全绿 — Responses 传输层改动后 `pnpm check` 全链路闭合
+- ~~P2.10 夜间审计轮(Rounds 34-40,2026-09-04)~~ → **已完成(9 commits,1279bb5..d730406)**:
+  - **损坏保全 round 3(c9bbfd2,推翻 P2.9"穷尽"判定)**:改用权威枚举法 —
+    列出全部 `JSON.parse(readFileSync)` 与全部 `writeFileSync` 站点逐一分类,
+    查出六处销毁路径:goals.json(目标台账!)、snippets.json、cache-stats.json、
+    sandbox.json、telemetry-config.json(setEnabled/updateConfig 是
+    load→mutate→save,corrupt→defaults→save 会把用户真实配置重写为默认值+
+    开关)、telemetry 事件环;todoStore persist / backgroundSession metadata
+    补原子写。cacheStats 加 OVOLV999_TEST_STORE_DIR 测试缝(此前其测试每次
+    运行都会清空真实台账);sandbox/telemetry 的损坏警告现指向 .corrupt 备份
+  - **shellQuote 单源化(e6a2939)**:sshRemote/sandbox/settingsSync 三份
+    分叉的 POSIX 引号实现收敛到 src/utils/shellQuote.js(取最严格变体);
+    keychain.ts 保留本地实现并注明原因(security -i 私有行协议,非 POSIX shell);
+    tmuxLayout sq() 折叠进 canonical,两处 JSON.stringify 充当 shell 引号的
+    站点改为真引号
+  - 命令参数 cast 收尾:/knowledge add 类别(group04)、/share 格式、
+    /update install 频道均已运行时校验;secretScanner/sessionExport/
+    knowledgeBase 在 group04 去 lazy(vitest 解析陷阱)
+  - 崩溃可诊断性(aa6bf7e):cleanup.ts 与 bin 两处 crash handler 此前
+    吞掉 err 只 exit(1) — 现先写 stderr(用 process.stderr.write)再退出
+  - 死代码清理(b479f15):restoreSnapshot(F11/F12 重构后不可达)、
+    taskIntent mutationStartsWith(每 classify 白算)、LedgerRecord、
+    StatusBar.terminalWidth(flex 布局自测量,prop 两端皆删)、
+    ToolCallView dotColor(被三态内联表达式遮蔽)、no-unused-vars 清零
+  - lint 债务(9c42e7f + d730406):coordinator 等五处 no-unnecessary-
+    assertion 修复(`pnpm check` 在 main 上因这 5 个 error 已红),警告
+    79 → 21(余下均为接口形状 require-await / 测试调试 no-console /
+    终端 ESC 控制字符正则)
 
 **路由信号状态(2026-08-05 核实)**:
 - `repoFileCount`:已真实化 — v0.5.3 移除 `filesTouched×10` 代理,现使用 `RepoStatsService.walkRepo()` 真实文件系统遍历
