@@ -21,6 +21,8 @@ import {
   formatVersionInfo,
   formatUpdateCheckResult,
   getIgnoredVersionsPath,
+  performUpdate,
+  type UpdateChannel,
 } from '../src/utils/autoUpdater.js'
 import { existsSync, rmSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
@@ -228,5 +230,15 @@ describe('ignored-versions corruption guard', () => {
     writeFileSync(path, '["1.0.0", 42]', 'utf8')
     expect(getIgnoredVersions()).toEqual([])
     expect(existsSync(`${path}.corrupt`)).toBe(true)
+  })
+})
+
+describe('performUpdate channel defense', () => {
+  it('rejects a channel outside the union before any shell interpolation', () => {
+    // Simulates a dishonest caller casting an arbitrary string into
+    // UpdateChannel — the guard must fire before the execSync template.
+    const result = performUpdate('latest && touch /tmp/pwned' as UpdateChannel)
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('Invalid update channel')
   })
 })

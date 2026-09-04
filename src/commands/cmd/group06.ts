@@ -16,8 +16,6 @@
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
 import type { WorkerEntry } from '../../core/daemon.js'
 import type { DocSectionType } from '../../core/magicDocs.js'
 import { readHiddenLine, text } from '../shared.js'
@@ -616,8 +614,13 @@ registerCommand({
     }
 
     if (sub === 'install') {
-      const channel = (parts[1] as 'latest' | 'beta') ?? 'latest'
-      const result = upd.performUpdate(channel)
+      const requested = parts[1]
+      const CHANNELS = ['latest', 'beta', 'next'] as const
+      const channel = CHANNELS.find((c) => c === requested)
+      if (requested && !channel) {
+        return text(`Unknown channel "${requested}". Channels: ${CHANNELS.join(', ')}`)
+      }
+      const result = upd.performUpdate(channel ?? 'latest')
       return text(result.message)
     }
 

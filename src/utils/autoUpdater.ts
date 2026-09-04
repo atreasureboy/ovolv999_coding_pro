@@ -193,6 +193,12 @@ export interface InstallResult {
 
 export function performUpdate(channel: UpdateChannel = 'latest'): InstallResult {
   try {
+    // Second layer of defense: the UpdateChannel type is only as honest as
+    // the caller's cast — the interpolated shell string must not trust it.
+    const VALID_CHANNELS: readonly UpdateChannel[] = ['latest', 'beta', 'next']
+    if (!VALID_CHANNELS.includes(channel)) {
+      return { success: false, message: `Invalid update channel: ${String(channel)}` }
+    }
     const tag = channel === 'latest' ? '' : `@${channel}`
     execSync(`npm install -g ${PACKAGE_NAME}${tag} 2>&1`, {
       encoding: 'utf8',
