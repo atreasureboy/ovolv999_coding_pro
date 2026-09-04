@@ -69,8 +69,6 @@ interface MsgRecord {
   msg: OpenAIMessage
 }
 
-type LedgerRecord = MetaRecord | MsgRecord
-
 export interface PageResult {
   messages: OpenAIMessage[]
   /** Cursor for the next page; null when the ledger is exhausted. */

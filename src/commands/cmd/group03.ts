@@ -17,9 +17,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
 import { calculateContextState } from '../../core/compact.js'
-import { join } from 'path'
 import { execFileSync } from 'child_process'
-import { homedir } from 'os'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { text } from '../shared.js'
 

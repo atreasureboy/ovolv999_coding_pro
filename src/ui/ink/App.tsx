@@ -112,7 +112,7 @@ export function App({
   const [showHelp, setShowHelp] = useState(false)
   // Round 46 (codex status line): a 1s heartbeat while a turn runs so
   // `• Working (12s · esc to interrupt)` counts up. No timer when idle.
-  const [nowTick, setNowTick] = useState(0)
+  const [, setNowTick] = useState(0)
   useEffect(() => {
     if (!state.running) return
     const id = setInterval(() => setNowTick((n) => n + 1), 1000)
@@ -650,7 +650,6 @@ export function App({
         planMode={state.planMode}
         verbose={state.verbose}
         profile={state.profile}
-        terminalWidth={terminalWidth}
       />
     </Box>
   )

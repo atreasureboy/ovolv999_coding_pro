@@ -7,7 +7,7 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { relative, isAbsolute, join, basename } from 'path'
+import { relative, isAbsolute, join } from 'path'
 import { readdirSync, readFileSync, statSync } from 'fs'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
@@ -322,7 +322,7 @@ export class GrepTool implements Tool {
             if (ex.includes('/')) {
               // GNU grep's --exclude matches BASENAMES only — a
               // slash-bearing glob like `vendor/**` can never match any
-              // basename, so the directory stayed in the results. Exclude
+              // so the directory stayed in the results. Exclude
               // by directory with the glob's leading path segment.
               const seg = ex.replace(/^\*\*\//, '').split('/')[0]
               if (seg && seg !== '*') grepFlags.push('--exclude-dir', seg)

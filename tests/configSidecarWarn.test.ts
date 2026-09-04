@@ -7,8 +7,8 @@
  * developer's real ~/.ovolv999 files survive the run.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'fs'
-import { tmpdir, homedir } from 'os'
+import {writeFileSync, mkdirSync, rmSync, existsSync, readFileSync} from 'fs'
+import {homedir} from 'os'
 import { join } from 'path'
 import { resetWarnOnce } from '../src/utils/warnOnce.js'
 import { loadConfig as loadSandboxConfig, DEFAULT_CONFIG as SANDBOX_DEFAULTS } from '../src/core/sandbox.js'

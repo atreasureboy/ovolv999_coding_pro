@@ -24,7 +24,7 @@ import { dispatchSlashCommand, type SlashCommandContext } from '../../commands/i
 import { listSessions, loadSession as loadSessionFile, resolveSessionPath } from '../../core/sessionManager.js'
 import { registerCleanup } from '../../utils/cleanup.js'
 import { wireModelBridge } from './modelBridge.js'
-import { formatSessionLoadDiagnostic, saveSession, saveSessionIncremental, summarizeOutcome } from '../../core/sessionManager.js'
+import { formatSessionLoadDiagnostic, saveSessionIncremental, summarizeOutcome } from '../../core/sessionManager.js'
 import { warnOnce } from '../../utils/warnOnce.js'
 
 export interface InkReplOptions {

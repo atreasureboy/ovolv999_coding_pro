@@ -17,13 +17,7 @@ import { execSync, spawnSync } from 'child_process'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
-
-// ─────────────────────────────────────────────────────────────
-// Shell single-quote escape
-// ─────────────────────────────────────────────────────────────
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`
-}
+import { shellQuote } from '../utils/shellQuote.js'
 
 // ─────────────────────────────────────────────────────────────
 // 将 agent label 转为合法的 tmux 窗口名（≤20 chars, 无特殊符号）
@@ -113,7 +107,7 @@ export class TmuxLayout {
         const ageSec = Date.now() / 1000 - parseInt(createdStr, 10)
         if (ageSec > 3600) {
           try {
-            execSync(`tmux kill-session -t ${sq(name)}`, { stdio: 'pipe' })
+            execSync(`tmux kill-session -t ${shellQuote(name)}`, { stdio: 'pipe' })
           } catch { /* skip */ }
         }
       }
@@ -131,14 +125,14 @@ export class TmuxLayout {
     try {
       // 创建后台 tmux session（不 attach，不影响主终端）
       execSync(
-        `tmux new-session -d -s ${sq(this.sessionName)} -x 200 -y 50`,
+        `tmux new-session -d -s ${shellQuote(this.sessionName)} -x 200 -y 50`,
         { stdio: 'pipe' },
       )
 
       // A trailing colon targets the session's current window. Do not assume
       // index 0: users commonly configure tmux base-index to 1 or higher.
       const statusTarget = this.sessionName + ':'
-      execSync(`tmux rename-window -t ${sq(statusTarget)} 'OVOGO-Status'`)
+      execSync(`tmux rename-window -t ${shellQuote(statusTarget)} 'OVOGO-Status'`)
 
       // 在状态窗口写欢迎信息
       const welcome = [
@@ -148,7 +142,7 @@ export class TmuxLayout {
         `echo "\\033[2m  子 agent 窗口将在这里自动出现（Ctrl+B + 数字 切换）\\033[0m"`,
         `echo "\\033[1m\\033[95m${'═'.repeat(60)}\\033[0m"`,
       ].join(' && ')
-      execSync(`tmux send-keys -t ${sq(statusTarget)} ${JSON.stringify(welcome)} Enter`)
+      execSync(`tmux send-keys -t ${shellQuote(statusTarget)} ${shellQuote(welcome)} Enter`)
 
       this.initialized = true
       return true
@@ -183,14 +177,14 @@ export class TmuxLayout {
     try {
       // 在 tmux session 里新建一个窗口
       execSync(
-        `tmux new-window -t ${sq(this.sessionName)} -n ${sq(windowName)}`,
+        `tmux new-window -t ${shellQuote(this.sessionName)} -n ${shellQuote(windowName)}`,
         { stdio: 'pipe' },
       )
 
       // 窗口内运行 tail -f 实时显示 agent 输出
-      const tailCmd = `tail -f ${sq(logFile)}`
+      const tailCmd = `tail -f ${shellQuote(logFile)}`
       execSync(
-        `tmux send-keys -t ${sq(this.sessionName + ':' + windowName)} ${JSON.stringify(tailCmd)} Enter`,
+        `tmux send-keys -t ${shellQuote(this.sessionName + ':' + windowName)} ${shellQuote(tailCmd)} Enter`,
         { stdio: 'pipe' },
       )
 
@@ -221,7 +215,7 @@ export class TmuxLayout {
     try {
       const doneWindowName = `✓-${win.windowName}`.slice(0, 20)
       execSync(
-        `tmux rename-window -t ${sq(this.sessionName + ':' + win.windowName)} ${sq(doneWindowName)}`,
+        `tmux rename-window -t ${shellQuote(this.sessionName + ':' + win.windowName)} ${shellQuote(doneWindowName)}`,
         { stdio: 'pipe' },
       )
     } catch { /* best-effort */ }
@@ -261,7 +255,7 @@ export class TmuxLayout {
       let attached = 0
       try {
         const out = execSync(
-          `tmux display-message -p -t ${sq(this.sessionName)} '#{session_attached}'`,
+          `tmux display-message -p -t ${shellQuote(this.sessionName)} '#{session_attached}'`,
           { stdio: 'pipe' },
         ).toString().trim()
         attached = parseInt(out, 10) || 0
@@ -273,7 +267,7 @@ export class TmuxLayout {
         this.activeWindows = []
         return
       }
-      execSync(`tmux kill-session -t ${sq(this.sessionName)}`, { stdio: 'pipe' })
+      execSync(`tmux kill-session -t ${shellQuote(this.sessionName)}`, { stdio: 'pipe' })
     } catch { /* best-effort */ }
     this.initialized = false
     this.sessionName = ''

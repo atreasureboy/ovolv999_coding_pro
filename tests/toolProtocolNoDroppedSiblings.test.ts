@@ -12,7 +12,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync } from 'fs'
-import { join } from 'path'
 import OpenAI from 'openai'
 
 import { ToolScheduler } from '../src/core/toolRuntime/toolScheduler.js'

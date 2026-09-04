@@ -248,7 +248,7 @@ export class JsonlMemoryBackend implements MemoryBackend {
    */
   private loadCache: { mtimeMs: number; records: MemoryRecord[] } | null = null
 
-  loadCached(now: string): MemoryRecord[] {
+  loadCached(): MemoryRecord[] {
     let mtimeMs = 0
     try {
       mtimeMs = statSync(this.filePath).mtimeMs
@@ -526,7 +526,7 @@ export class LongTermMemory {
     // Round 47: hot-path cached load for the JSONL backend (per-turn
     // boot/query); other backends keep their own semantics.
     let records = backend instanceof JsonlMemoryBackend
-      ? backend.loadCached(now)
+      ? backend.loadCached()
       : backend.load(now)
     // Round 47: TTL is applied at query time (never baked into the cache
     // — the cache is keyed on file mtime, but `now` advances).

@@ -18,10 +18,9 @@ export interface StatusBarProps {
   planMode: boolean
   verbose?: boolean
   profile?: 'fast' | 'standard' | 'deep' | 'autonomous' | null
-  terminalWidth?: number
 }
 
-export function StatusBar({ contextPct, planMode, verbose, profile, terminalWidth = 160 }: StatusBarProps): React.ReactElement {
+export function StatusBar({ contextPct, planMode, verbose, profile }: StatusBarProps): React.ReactElement {
   const pct = Math.round(contextPct * 100)
   const remaining = Math.max(0, 100 - pct)
   const color = pressureColor(contextPct)

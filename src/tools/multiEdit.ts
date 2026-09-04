@@ -18,7 +18,6 @@
 
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
-import { isAbsolute, resolve } from 'path'
 import { AtomicTransaction } from '../core/atomicTransaction.js'
 import { FileEditTool } from './fileEdit.js'
 import { isLoopDriverOwnedPath, containsNullByte } from '../core/pathSecurity.js'

@@ -21,25 +21,24 @@
  *
  * The agent fixture ('agent-fanout') scripts a full multi-Agent turn.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
-import { createServer } from 'node:http'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'child_process'
 import {
-  mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync,
-  readdirSync, statSync, appendFileSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { runCli, isolatedEnv } from './cli/helpers.js'
-import { listCheckpoints, rewindToCheckpoint, isInsideWorkspace, planRewind, appendCheckpoint } from '../src/core/conversationCheckpoints.js'
+import { join } from 'node:path'
+import { rewindToCheckpoint, isInsideWorkspace, appendCheckpoint } from '../src/core/conversationCheckpoints.js'
 import { withGitMutex } from '../src/core/gitMutex.js'
 
 type nonNullableClaims = (i: Record<string, unknown>) => Array<{ key: string; access: string }>
 import { FileHistory } from '../src/core/fileHistory.js'
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-const TIMEOUT = 180_000
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixture: an OpenAI-compatible server that scripts Agent tool-calls.
@@ -47,27 +46,6 @@ const TIMEOUT = 180_000
 // call echoes back a compact digest of the incoming system+control
 // messages so tests can assert what the child SAW (steer verification).
 // ─────────────────────────────────────────────────────────────────────────────
-function sseToolCall(id: string, name: string, args: Record<string, unknown>) {
-  const base = { id: 'chatcmpl-f', object: 'chat.completion.chunk', created: 1, model: 'agent-model' }
-  const payload = JSON.stringify(args)
-  const half = Math.ceil(payload.length / 2)
-  return [
-    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: payload.slice(0, half) } }] } }] })}\n\n`,
-    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: payload.slice(half) } }] } }] })}\n\n`,
-    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`,
-    'data: [DONE]\n\n',
-  ].join('')
-}
-
-function sseText(text: string) {
-  const base = { id: 'chatcmpl-f', object: 'chat.completion.chunk', created: 1, model: 'agent-model' }
-  return [
-    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { content: text } }] })}\n\n`,
-    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
-    'data: [DONE]\n\n',
-  ].join('')
-}
-
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,9 +105,7 @@ describe('R32 unit-blackbox: parallel dispatch + git mutex + steer', () => {
   })
 
   it('engine.steer lands in the in-flight control channel (real coordinator)', async () => {
-    const { ExecutionEngine } = await import('../src/core/engine.js')
     const { ControlMessageLog } = await import('../src/core/runtime/internalControlMessage.js')
-    const { renderInternalControlMessage } = await import('../src/core/runtime/internalControlMessage.js')
     // Structural check of the new plumbing (a full LLM round-trip needs a
     // fixture; covered in E2E-S below at CLI level).
     const log = new ControlMessageLog()
@@ -259,7 +235,6 @@ describe('R32 E2E-M: merge conflict + mutex delivery in a real repo', () => {
 describe('R32 E2E-W: Windows session layout derives the boundary root', () => {
   it('planRewind derives the project root from a backslash sessions path and skips escapes', () => {
     const fakeSession = 'C:\\proj\\sessions\\abc'
-    const fh = new FileHistory(mkdtempSync(join(tmpdir(), 'r32-w-')))
     // planRewind reads from disk via sessionDir — use a POSIX temp dir but
     // verify the derivation helper directly through isInsideWorkspace.
     const root = fakeSession.replaceAll('\\', '/').slice(0, fakeSession.replaceAll('\\', '/').lastIndexOf('/sessions/'))

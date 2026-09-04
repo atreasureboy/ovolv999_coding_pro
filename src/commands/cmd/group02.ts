@@ -418,7 +418,7 @@ registerCommand({
       return text('Nothing to fork — the current session has no messages.')
     }
 
-    const { forkSession, saveSession } =
+    const { forkSession } =
       require('../../core/sessionManager.js') as typeof import('../../core/sessionManager.js')
 
     let atMessage: number | undefined

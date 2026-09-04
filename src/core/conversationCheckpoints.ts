@@ -579,24 +579,6 @@ export interface RewindResult {
   message?: string
 }
 
-/** Restore `snapName` content onto `path` atomically (tmp + rename),
- *  preserving the anchored mode. Boundary check is the caller's. */
-function restoreSnapshot(sessionDir: string, snapName: string, path: string, mode: number | undefined): boolean {
-  try {
-    const src = join(snapshotsDir(sessionDir), snapName)
-    if (!existsSync(src)) return false
-    const tmp = `${path}.rewind-tmp.${process.pid}.${randomBytes(4).toString('hex')}`
-    copyFileSync(src, tmp)
-    if (mode !== undefined) {
-      try { chmodSync(tmp, mode) } catch { /* best-effort */ }
-    }
-    renameSync(tmp, path)
-    return true
-  } catch {
-    return false
-  }
-}
-
 
 /** Phase 2+3 — stage & commit. Runs preflight, materializes restore
  *  payloads into <sessionDir>/rewind-stage/, then applies. Per-file

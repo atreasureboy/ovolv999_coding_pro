@@ -10,10 +10,6 @@
 
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { existsSync, statSync, readdirSync, rmSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { WebFetchTool } from '../src/tools/webFetch.js'
 import { isLoopDriverOwnedPath } from '../src/core/pathSecurity.js'
 import type { ToolContext } from '../src/core/types.js'

@@ -89,7 +89,6 @@ export interface ToolCallProps {
 
 export function ToolCallView({ name, input, result, isError, elapsedMs }: ToolCallProps): React.ReactElement {
   const line = toolLine(name, input)
-  const dotColor = isError ? t.error : t.success
   const stats = diffStats(name, input)
 
   // Show inline diff for Edit/Write tools when result is available

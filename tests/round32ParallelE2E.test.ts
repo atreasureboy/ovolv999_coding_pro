@@ -9,10 +9,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import {mkdtempSync, rmSync, writeFileSync, existsSync} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import {join} from 'node:path'
 import { ExecutionEngine } from '../src/core/engine.js'
 import { Renderer } from '../src/ui/renderer.js'
 import type { EngineConfig } from '../src/core/types.js'
@@ -65,7 +64,6 @@ function startFanoutFixture() {
       const toolResults = msgs.filter((m) => m.role === 'tool').map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)).join(' || ')
       if (process.env.R32_DEBUG) {
         const sys = msgs.find((m) => m.role === 'system')
-        const sysText = typeof sys?.content === 'string' ? sys.content.slice(0, 60) : JSON.stringify(sys?.content).slice(0, 60)
         const wtDir = /Working directory: (\S+)/.exec(typeof sys?.content === 'string' ? sys.content : '')?.[1]
         let lsOut = ''
         if (wtDir) {
