@@ -16,6 +16,10 @@ const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
 import { join } from 'path'
 import type { BudgetType, BudgetPeriod } from '../../core/budget.js'
+import {
+  loadSchedules, addTask, removeTask, enableTask, disableTask,
+  createTask, formatTaskList, formatTaskDetail, parseCron, parseEveryDuration,
+} from '../../core/cron.js'
 import type { KnowledgeCategory } from '../../core/knowledgeBase.js'
 import { text } from '../shared.js'
 import { truncate } from './common.js'
@@ -165,19 +169,22 @@ registerCommand({
 registerCommand({
   name: 'schedule',
   aliases: ['cron'],
-  description: 'Manage scheduled tasks. Usage: /schedule [list|create <cron> <prompt>|remove <id>|enable <id>|disable <id>]',
+  description: 'Manage scheduled tasks. Usage: /schedule [list|show <id>|create <cron> <prompt>|remove <id>|enable <id>|disable <id>]',
   handler: async (args, ctx) => {
     const parts = args.trim().split(/\s+/)
     const subcommand = parts[0] ?? 'list'
 
-    const {
-      loadSchedules, addTask, removeTask, enableTask, disableTask,
-      createTask, formatTaskList, parseCron, parseEveryDuration,
-    } = require('../../core/cron.js') as typeof import('../../core/cron.js')
-
     if (subcommand === 'list' || !subcommand) {
       const store = loadSchedules(ctx.cwd)
       return text(formatTaskList(store.tasks))
+    }
+
+    if (subcommand === 'show' || subcommand === 'info') {
+      const id = parts[1]
+      if (!id) return text('Usage: /schedule show <id or name>')
+      const task = loadSchedules(ctx.cwd).tasks.find(t => t.id === id || t.name === id)
+      if (!task) return text(`⚠ Task not found: ${id}`)
+      return text(formatTaskDetail(task))
     }
 
     if (subcommand === 'create' || subcommand === 'add') {
@@ -251,7 +258,7 @@ registerCommand({
       return text(success ? `✓ Disabled task: ${id}` : `⚠ Task not found: ${id}`)
     }
 
-    return text(`Unknown subcommand: ${subcommand}\nUsage: /schedule [list|create|remove|enable|disable]`)
+    return text(`Unknown subcommand: ${subcommand}\nUsage: /schedule [list|show|create|remove|enable|disable]`)
   },
 })
 

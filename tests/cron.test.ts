@@ -21,6 +21,8 @@ import {
 import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { dispatchSlashCommand } from '../src/commands/index.js'
+import '../src/commands/builtin.js'
 
 describe('cron', () => {
   let tmpDir: string
@@ -468,5 +470,44 @@ describe('cron', () => {
       expect(out).toContain('5')
       expect(out).toContain('All tests passed')
     })
+  })
+})
+
+describe('/schedule show — wired formatTaskDetail contract', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cron-show-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const ctx = (cwd: string): Parameters<typeof dispatchSlashCommand>[1] =>
+    ({ cwd, history: [], setHistory: () => {}, runPrompt: () => {} } as unknown as Parameters<typeof dispatchSlashCommand>[1])
+
+  it('renders detail for an existing task by name', async () => {
+    const task = createTask('showme', '0 9 * * *', 'daily thing')
+    await addTask(dir, task)
+    const r = await dispatchSlashCommand('/schedule show showme', ctx(dir))
+    if (!r || r.type !== 'text') throw new Error('expected text result')
+    expect(r.value).toContain('Task: showme')
+    expect(r.value).toContain('daily thing')
+    expect(r.value).toContain('0 9 * * *')
+  })
+
+  it('renders detail by id', async () => {
+    const task = createTask('byname', '@daily', 'other thing')
+    await addTask(dir, task)
+    const r = await dispatchSlashCommand(`/schedule show ${task.id}`, ctx(dir))
+    if (!r || r.type !== 'text') throw new Error('expected text result')
+    expect(r.value).toContain('Task: byname')
+  })
+
+  it('reports a missing task', async () => {
+    const r = await dispatchSlashCommand('/schedule show nope', ctx(dir))
+    if (!r || r.type !== 'text') throw new Error('expected text result')
+    expect(r.value).toContain('not found')
   })
 })
