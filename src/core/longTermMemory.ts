@@ -249,7 +249,7 @@ export class JsonlMemoryBackend implements MemoryBackend {
   private loadCache: { mtimeMs: number; records: MemoryRecord[] } | null = null
 
   loadCached(): MemoryRecord[] {
-    let mtimeMs = 0
+    let mtimeMs: number
     try {
       mtimeMs = statSync(this.filePath).mtimeMs
     } catch {

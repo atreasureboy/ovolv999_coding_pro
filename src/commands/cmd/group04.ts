@@ -21,6 +21,8 @@ import {
   formatKnowledgeList, formatSearchResults, formatStats,
   extractKnowledgeFromText, KNOWLEDGE_CATEGORIES,
 } from '../../core/knowledgeBase.js'
+import { maskSecrets, formatScanSummary } from '../../utils/secretScanner.js'
+import { exportSessionToFile, defaultFilename } from '../../utils/sessionExport.js'
 import {
   loadSchedules, addTask, removeTask, enableTask, disableTask,
   createTask, formatTaskList, formatTaskDetail, parseCron, parseEveryDuration,
@@ -35,8 +37,6 @@ registerCommand({
     if (ctx.history.length === 0) {
       return text('No conversation to scan.')
     }
-    const { maskSecrets, formatScanSummary } =
-      require('../../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
     const allText = ctx.history.map(m => {
       if (typeof m.content === 'string') return m.content
       return JSON.stringify(m.tool_calls ?? '')
@@ -56,12 +56,13 @@ registerCommand({
     if (ctx.history.length === 0) {
       return text('No conversation to share.')
     }
-    const { maskSecrets } =
-      require('../../utils/secretScanner.js') as typeof import('../../utils/secretScanner.js')
-    const { exportSessionToFile, defaultFilename } =
-      require('../../utils/sessionExport.js') as typeof import('../../utils/sessionExport.js')
 
-    const format = args.trim() || 'markdown'
+    const requested = args.trim() || 'markdown'
+    const FORMATS = ['markdown', 'json', 'text'] as const
+    const format = FORMATS.find((f) => f === requested)
+    if (requested && !format) {
+      return text(`Unknown format "${requested}". Formats: ${FORMATS.join(', ')}`)
+    }
     const maskedHistory = ctx.history.map(msg => {
       if (typeof msg.content === 'string') {
         return { ...msg, content: maskSecrets(msg.content).masked }
@@ -69,14 +70,14 @@ registerCommand({
       return msg
     })
 
-    const filename = defaultFilename(format as 'markdown' | 'json' | 'text')
+    const filename = defaultFilename(format ?? 'markdown')
     const exportPath = ctx.sessionDir
       ? join(ctx.sessionDir, filename)
       : join(ctx.cwd, filename)
 
     try {
       exportSessionToFile(maskedHistory, ctx.cwd, filename, {
-        format: format as 'markdown' | 'json' | 'text',
+        format: format ?? 'markdown',
         includeReasoning: false,
       })
       return text(`✓ Shared (secrets masked): ${exportPath}\nReview the file before sharing externally.`)

@@ -291,3 +291,26 @@ describe('defaultFilename', () => {
     })
   }, 10_000)
 })
+
+describe('/share format validation', () => {
+  it('rejects an unknown format without writing a file', async () => {
+    const { dispatchSlashCommand } = await import('../src/commands/index.js')
+    await import('../src/commands/builtin.js')
+    const dir = mkdtempSync(join(tmpdir(), 'share-dispatch-'))
+    try {
+      const ctx = {
+        engine: {} as never,
+        renderer: {} as never,
+        history: [{ role: 'user', content: 'hello' }],
+        cwd: dir,
+        setHistory: () => undefined,
+        runPrompt: () => undefined,
+      }
+      const result = await dispatchSlashCommand('/share xml', ctx as never)
+      if (!result || result.type !== 'text') throw new Error('expected text result')
+      expect(result.value).toContain('Unknown format "xml"')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
