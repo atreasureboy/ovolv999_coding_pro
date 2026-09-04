@@ -23,6 +23,7 @@ import { join } from 'path'
 import { homedir, tmpdir } from 'os'
 import { execSync } from 'child_process'
 import { warnConfigOnce } from '../config/diagnostics.js'
+import { shellQuote } from '../utils/shellQuote.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -430,11 +431,6 @@ export function formatProfile(profile: SandboxProfile): string {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function shellQuote(s: string): string {
-  if (/^[A-Za-z0-9_:.@/=-]+$/.test(s)) return s
-  return `'${s.replace(/'/g, "'\\''")}'`
-}
 
 // ── v0.5.3 (P0.5) — HONEST BACKEND DECLARATION ────────────────────────────
 

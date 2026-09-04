@@ -178,6 +178,10 @@ function keychainSet(key: string, value: string): boolean {
   }
 }
 
+// Deliberately NOT utils/shellQuote.js: `security -i` consumes a private
+// line protocol with its own tokenizer (double quotes + backslash escapes,
+// no variable expansion), not a POSIX shell. Values travel on the NEXT
+// stdin line, never through this quoter.
 function shellQuote(s: string): string {
   return `"${s.replace(/(["\\])/g, '\\$1')}"`
 }

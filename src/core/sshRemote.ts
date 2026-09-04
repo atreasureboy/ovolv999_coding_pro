@@ -19,6 +19,7 @@
 import { execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
+import { shellQuote } from '../utils/shellQuote.js'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -402,12 +403,4 @@ export function formatExecResult(result: SshExecResult): string {
   if (result.stdout) lines.push('', 'stdout:', result.stdout.trimEnd())
   if (result.stderr) lines.push('', 'stderr:', result.stderr.trimEnd())
   return lines.join('\n')
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function shellQuote(s: string): string {
-  if (s === '') return "''"
-  if (/^[A-Za-z0-9_:.@/=-]+$/.test(s)) return s
-  return `'${s.replace(/'/g, "'\\''")}'`
 }

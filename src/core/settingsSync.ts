@@ -24,6 +24,7 @@ import { execSync } from 'child_process'
 import { randomBytes, createHash, createCipheriv, createDecipheriv, scryptSync } from 'crypto'
 import { warnConfigOnce } from '../config/diagnostics.js'
 import { scanText } from '../utils/secretScanner.js'
+import { shellQuote } from '../utils/shellQuote.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -483,8 +484,3 @@ export function formatSyncResult(result: SyncResult): string {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function shellQuote(s: string): string {
-  if (/^[A-Za-z0-9_:.@/-]+$/.test(s)) return s
-  return `'${s.replace(/'/g, "'\\''")}'`
-}
