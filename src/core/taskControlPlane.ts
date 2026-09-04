@@ -49,16 +49,50 @@ export interface ControlTaskEvent {
 
 export class TaskOwnershipError extends Error {}
 
+/** Runtime-truth: shape gate for events replayed from the store. A
+ * jsonl line that parses but doesn't carry a well-formed task would
+ * poison the in-memory state (NaN sorts, garbage served by /tasks),
+ * so replay skips it — per-line skip, not file quarantine, because a
+ * torn trailing line is normal for an append log after a crash. */
+function isShapedControlTaskEvent(value: unknown): value is ControlTaskEvent {
+  const e = value as ControlTaskEvent
+  return typeof e === 'object' && e !== null
+    && Number.isFinite(e.sequence)
+    && typeof e.taskId === 'string'
+    && typeof e.timestamp === 'string'
+    && ['enqueued', 'claimed', 'heartbeat', 'completed', 'failed', 'requeued', 'cancelled'].includes(e.type)
+    && typeof e.task === 'object' && e.task !== null
+    && typeof e.task.id === 'string'
+    && typeof e.task.goal === 'string'
+    && typeof e.task.cwd === 'string'
+    && ['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(e.task.status)
+    && Number.isFinite(e.task.priority)
+    && Number.isFinite(e.task.attempt)
+    && Number.isFinite(e.task.maxAttempts)
+    && typeof e.task.createdAt === 'string'
+    && typeof e.task.updatedAt === 'string'
+}
+
+const DEFAULT_MAX_IN_MEMORY_EVENTS = 50_000
+
 export class TaskControlPlane {
   private readonly tasks = new Map<string, ControlTask>()
   private readonly taskEvents: ControlTaskEvent[] = []
   private sequence = 0
+  private readonly maxInMemoryEvents: number
 
-  constructor(private readonly eventFile: string, private readonly now: () => number = Date.now) {
+  constructor(
+    private readonly eventFile: string,
+    private readonly now: () => number = Date.now,
+    maxInMemoryEvents: number = DEFAULT_MAX_IN_MEMORY_EVENTS,
+  ) {
+    this.maxInMemoryEvents = Math.max(1, Math.trunc(maxInMemoryEvents))
     this.load()
   }
 
   enqueue(input: EnqueueControlTask): ControlTask {
+    if (typeof input.goal !== 'string') throw new Error('task goal must be a string')
+    if (typeof input.cwd !== 'string') throw new Error('task cwd must be a string')
     if (!input.goal.trim()) throw new Error('task goal is required')
     if (!input.cwd.trim()) throw new Error('task cwd is required')
     const timestamp = this.timestamp()
@@ -228,6 +262,9 @@ export class TaskControlPlane {
     mkdirSync(dirname(this.eventFile), { recursive: true })
     appendFileSync(this.eventFile, JSON.stringify(event) + '\n', 'utf8')
     this.taskEvents.push(structuredClone(event))
+    // Memory bound: the store file keeps full history; the in-memory log
+    // is a bounded tail so a long-lived server can't grow without limit.
+    while (this.taskEvents.length > this.maxInMemoryEvents) this.taskEvents.shift()
     this.tasks.set(task.id, structuredClone(task))
     return structuredClone(task)
   }
@@ -238,8 +275,10 @@ export class TaskControlPlane {
     for (const line of lines) {
       if (!line.trim()) continue
       try {
-        const event = JSON.parse(line) as ControlTaskEvent
-        if (!event.task?.id || !Number.isFinite(event.sequence)) continue
+        const event: unknown = JSON.parse(line)
+        // Extra fields pass through; only the load-bearing core is gated
+        // so forward-compatible additions never brick a replay.
+        if (!isShapedControlTaskEvent(event)) continue
         this.sequence = Math.max(this.sequence, event.sequence)
         this.taskEvents.push(structuredClone(event))
         this.tasks.set(event.task.id, event.task)
@@ -247,6 +286,7 @@ export class TaskControlPlane {
         continue
       }
     }
+    while (this.taskEvents.length > this.maxInMemoryEvents) this.taskEvents.shift()
   }
 }
 

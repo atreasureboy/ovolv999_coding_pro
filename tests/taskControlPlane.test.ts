@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TaskControlPlane, TaskOwnershipError, TaskWorker } from '../src/core/taskControlPlane.js'
@@ -78,5 +78,37 @@ describe('TaskControlPlane', () => {
     const outcome = await worker.runOnce()
     expect(outcome?.status).toBe('cancelled')
     expect(value.events(task.id).map((event) => event.type)).toEqual(['enqueued', 'claimed', 'cancelled'])
+  })
+
+  it('skips malformed store lines instead of poisoning state', () => {
+    const { value, file } = plane()
+    const task = value.enqueue({ goal: 'real', cwd: '/tmp' })
+    // A line that parses but carries a garbage task must not enter the
+    // replayed state (NaN sorts, /tasks serving a statusless task).
+    appendFileSync(file, JSON.stringify({ sequence: 999, taskId: 'bogus', type: 'enqueued', timestamp: 'x', task: { id: 'bogus', goal: 7, cwd: null, status: 42, priority: 'high', createdAt: 1 } }) + '\n')
+    appendFileSync(file, 'not json at all\n')
+    const restored = new TaskControlPlane(file)
+    expect(restored.list().map((entry) => entry.id)).toEqual([task.id])
+    expect(restored.events()).toHaveLength(1)
+  })
+
+  it('bounds the in-memory event tail while the store keeps full history', () => {
+    const { file } = plane()
+    const capped = new TaskControlPlane(file, Date.now, 2)
+    capped.enqueue({ goal: 'one', cwd: '/tmp' })
+    capped.enqueue({ goal: 'two', cwd: '/tmp' })
+    const three = capped.enqueue({ goal: 'three', cwd: '/tmp' })
+    expect(capped.events()).toHaveLength(2)
+    expect(capped.events().at(-1)?.taskId).toBe(three.id)
+    // Sequence continuity survives the trim.
+    expect(capped.enqueue({ goal: 'four', cwd: '/tmp' }).id).toBeTruthy()
+    // An uncapped reader replays the complete store history.
+    expect(new TaskControlPlane(file).events()).toHaveLength(4)
+  })
+
+  it('rejects non-string goal/cwd with a clear error', () => {
+    const { value } = plane()
+    expect(() => value.enqueue({ goal: 42 as unknown as string, cwd: '/tmp' })).toThrow('task goal must be a string')
+    expect(() => value.enqueue({ goal: 'x', cwd: 7 as unknown as string })).toThrow('task cwd must be a string')
   })
 })

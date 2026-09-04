@@ -48,6 +48,6 @@ curl -X POST http://127.0.0.1:7727/tasks/<task-id>/fail \
 
 Tasks whose leases expire are requeued until `maxAttempts` is exhausted. `POST /tasks/recover` performs an explicit recovery pass; claiming work also recovers expired leases automatically.
 
-`GET /events` returns the durable transition log. Pass `taskId` to filter it to one task. Completion results can include a summary, output, changed files, artifacts, and metadata.
+`GET /events` returns the durable transition log. Pass `taskId` to filter it to one task. Completion results can include a summary, output, changed files, artifacts, and metadata. The store file keeps full history; the server holds a bounded in-memory tail (last 50,000 events) so a long-lived process cannot grow without limit — `GET /events` serves that tail, and the file remains the complete record. Store lines that fail the event shape gate are skipped at replay (a torn trailing line after a crash is normal for an append log).
 
 The TypeScript `TaskWorker` class connects an executor callback to the same claim, heartbeat, completion, and retry lifecycle. A later worker process can use that adapter to invoke `ExecutionEngine` in a worktree or container without changing the queue protocol.
