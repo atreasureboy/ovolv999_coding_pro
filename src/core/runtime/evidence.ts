@@ -37,7 +37,7 @@ export interface TaskEvidence {
   invalidReason?: string
 }
 
-export type CriterionStatus = 'pending' | 'satisfied' | 'failed' | 'stale' | 'waived'
+export type CriterionStatus = 'pending' | 'satisfied' | 'failed' | 'stale'
 
 export interface CriterionState {
   id: string

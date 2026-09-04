@@ -218,7 +218,7 @@ export class TaskPlanTool implements Tool {
           if (evidence && node.acceptanceCriteria.length > 0) {
             const criteria = node.acceptanceCriteria.map((desc, i) => ({ id: `${id}::${i}`, description: desc }))
             const states = evidence.computeAllCriteria(id, criteria)
-            const unsatisfied = states.filter((s) => s.status !== 'satisfied' && s.status !== 'waived')
+            const unsatisfied = states.filter((s) => s.status !== 'satisfied')
             if (unsatisfied.length > 0) {
               const detail = unsatisfied.map((s) => `  ✗ [${s.status}] ${s.description}`).join('\n')
               return err(`Cannot complete "${id}" — ${unsatisfied.length} criteria not satisfied:\n${detail}\nRecord evidence (record_evidence) for each criterion.`)

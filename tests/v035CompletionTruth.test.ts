@@ -28,7 +28,7 @@ describe('v0.3.5 Evidence System — anti-false-success', () => {
     const criteria = [{ id: 'impl::0', description: 'tests pass' }]
     const states = store.computeAllCriteria('impl', criteria)
     expect(states[0]?.status).toBe('pending')
-    const unsatisfied = states.filter((s) => s.status !== 'satisfied' && s.status !== 'waived')
+    const unsatisfied = states.filter((s) => s.status !== 'satisfied')
     expect(unsatisfied.length).toBe(1)
   })
 

@@ -20,7 +20,7 @@ export interface ReviewInput {
   verificationPassed: boolean
   unhandledFailures: number
   unresolvedBlockers: number
-  /** Criteria with status not 'satisfied' or 'waived'. */
+  /** Criteria with status not 'satisfied'. */
   unsatisfiedCriteria: string[]
   /** Criteria with stale evidence (revision mismatch). */
   staleEvidence: string[]
