@@ -5,7 +5,8 @@
  * different API providers, different permission levels).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -60,22 +61,34 @@ export function getProfilePath(cwd: string): string {
   return join(resolve(cwd), '.ovolv999', 'profiles.json')
 }
 
+function isShapedProfileStore(parsed: unknown): parsed is ProfileStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const store = parsed as ProfileStore
+  if (typeof store.profiles !== 'object' || store.profiles === null || Array.isArray(store.profiles)) return false
+  if (store.activeProfile !== null && typeof store.activeProfile !== 'string') return false
+  return Object.values(store.profiles).every((p) => typeof p === 'object' && p !== null)
+}
+
 export function loadProfiles(cwd: string): ProfileStore {
   const path = getProfilePath(cwd)
   if (!existsSync(path)) {
     return { profiles: {}, activeProfile: null }
   }
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as ProfileStore
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    // §profiles store: CRUD is load→mutate→save — a half-written store must
+    // not load, or the next create/remove replaces every profile with the
+    // empty default.
+    if (!isShapedProfileStore(parsed)) throw new Error('profile store shape violation')
+    return parsed
   } catch {
+    preserveCorruptFile(path)
     return { profiles: {}, activeProfile: null }
   }
 }
 
 export function saveProfiles(cwd: string, store: ProfileStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(getProfilePath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getProfilePath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────

@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   createProfile, removeProfile, getProfile, getActiveProfile,
   setActiveProfile, listProfiles, updateProfile, cloneProfile,
-  exportProfile, importProfile, getEffectiveConfig,
+  exportProfile, importProfile, getEffectiveConfig, loadProfiles,
   initializeBuiltinProfiles, BUILTIN_PROFILES,
   formatProfile, formatProfileList, formatEffectiveConfig,
 } from '../src/core/profiles.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -289,5 +289,36 @@ describe('Profile Manager', () => {
       expect(out).toContain('0.7')
       expect(out).toContain('normal')
     })
+  })
+})
+
+describe('profile store corruption guard', () => {
+  let cwd: string
+
+  beforeEach(() => { cwd = makeTempDir() })
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store before resetting, and CRUD still works', () => {
+    const path = join(cwd, '.ovolv999', 'profiles.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(cwd, '.ovolv999'), { recursive: true })
+    writeFileSync(path, '{"profiles": {"work": torn', 'utf8')
+
+    expect(loadProfiles(cwd)).toEqual({ profiles: {}, activeProfile: null })
+    expect(readFileSync(backup, 'utf8')).toBe('{"profiles": {"work": torn')
+
+    createProfile(cwd, 'after')
+    expect(getProfile(cwd, 'after')).not.toBeNull()
+    expect(readFileSync(backup, 'utf8')).toBe('{"profiles": {"work": torn')
+  })
+
+  it('treats a shape-violating store as corrupt', () => {
+    const path = join(cwd, '.ovolv999', 'profiles.json')
+    mkdirSync(join(cwd, '.ovolv999'), { recursive: true })
+    // profiles as an array would make store.profiles[name] assignment blow up
+    // in createProfile; activeProfile of the wrong type breaks setActive.
+    writeFileSync(path, '{"profiles": [], "activeProfile": 7}', 'utf8')
+    expect(loadProfiles(cwd)).toEqual({ profiles: {}, activeProfile: null })
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })
