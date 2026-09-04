@@ -51,7 +51,12 @@ export function registerCleanup(opts: CleanupOptions = {}): () => void {
     process.on(sig, handlers[sig])
   }
 
-  const crashHandler = (): void => {
+  // Print before exiting: a crash handler that only exit(1)s discards the
+  // diagnostic — the process dies with no trace of what threw.
+  const crashHandler = (err: unknown): void => {
+    try {
+      process.stderr.write((err instanceof Error && err.stack ? err.stack : String(err)) + '\n')
+    } catch { /* stderr unavailable */ }
     cleanup()
     process.exit(1)
   }

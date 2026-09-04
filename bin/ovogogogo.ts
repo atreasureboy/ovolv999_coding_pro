@@ -58,7 +58,8 @@ import { fileURLToPath, pathToFileURL } from 'url'
 }
 import { ExecutionEngine } from '../src/core/engine.js'
 import { assembleEngine } from '../src/cli/engineAssembly.js'
-import { ObservabilityServer, getSharedObservabilityServer } from '../src/server/httpServer.js'
+import { getSharedObservabilityServer } from '../src/server/httpServer.js'
+import type { ObservabilityServer } from '../src/server/httpServer.js'
 import type { AssemblySession } from '../src/cli/engineAssembly.js'
 import { isExecutionProfile, type ExecutionProfile } from '../src/core/effort.js'
 import { Renderer } from '../src/ui/renderer.js'
@@ -2279,7 +2280,13 @@ async function main(): Promise<void> {
   // worker, and skipping the session save. Wire them unconditionally;
   // they are idempotent alongside the Ink registration (both call into
   // the same best-effort `cleanup`, which early-returns once cleanedUp).
-  const crashHandler = (): void => { cleanup(); process.exit(1) }
+  const crashHandler = (err: unknown): void => {
+    try {
+      process.stderr.write((err instanceof Error && err.stack ? err.stack : String(err)) + '\n')
+    } catch { /* stderr unavailable */ }
+    cleanup()
+    process.exit(1)
+  }
   process.on('uncaughtException', crashHandler)
   process.on('unhandledRejection', crashHandler)
 
