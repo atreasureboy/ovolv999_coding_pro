@@ -392,7 +392,11 @@ export function App({
     }
 
     if (state.running) {
-      if (key.escape || input === '\x1b') {
+      // ESC interrupts the turn — unless a modal overlay owns the keyboard
+      // (permission / plan / select). There ESC means "dismiss that
+      // dialog"; the dialog's own handler resolves it and the turn
+      // continues. Firing both denied the tool AND aborted the run.
+      if ((key.escape || input === '\x1b') && !store.hasOverlay()) {
         if (abortCount.current === 0) {
           abortCount.current = 1
           store.setSpinner(true, 'Cancelling turn...')
