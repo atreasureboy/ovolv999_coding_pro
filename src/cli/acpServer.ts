@@ -13,6 +13,8 @@ import type { WebSocketACPTransport } from '../integrations/acpWebSocket.js';
 import { AcpWebSocketServer } from '../integrations/acpWebSocket.js'
 import { ACPServer } from '../integrations/acp.js'
 import type { ACPHandlers } from '../integrations/acp.js'
+import type { ExecutionEngine } from '../core/engine.js'
+import type { OpenAIMessage } from '../core/types.js'
 import { loadHookConfig } from '../core/hooks/hooksConfig.js'
 
 export interface AcpWsCliOptions {
@@ -59,47 +61,16 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
   }
 
   const authToken = process.env.OVOGO_ACP_WS_TOKEN?.trim() || randomBytes(32).toString('hex')
-  const handlers: ACPHandlers = {
-    onMessage: async (text: string) => {
-      const { ExecutionEngine } = await import('../core/engine.js')
-      const { Renderer } = await import('../ui/renderer.js')
-      const { DefaultHookRunner } = await import('../core/hooks/defaultRunner.js')
-      const hookRunner = new DefaultHookRunner({
-        cwd: opts.cwd,
-        includeProject: process.env.OVOGO_TRUST_PROJECT_CODE === '1',
-        configOverride: loadHookConfig(opts.cwd, process.env.OVOGO_TRUST_PROJECT_CODE === '1') ?? {},
-      })
-      const renderer = new Renderer({ stream: process.stderr })
-      const engine = new ExecutionEngine(
-        {
-          cwd: opts.cwd,
-          apiKey: opts.apiKey!,
-          baseURL: opts.baseURL,
-          provider: opts.provider,
-          model: opts.model ?? 'gpt-4o',
-          permissionMode: 'auto',
-          maxIterations: 50,
-          hookRunner,
-        },
-        renderer,
-      )
-      try {
-        const { result } = await engine.runTurn(text, [])
-        return result.output ?? ''
-      } finally {
-        if (engine.dispose) engine.dispose()
-      }
-    },
-    onInterrupt: () => {
-      process.stderr.write('[acp-ws] interrupt received\n')
-    },
-    onFileRead: (path: string) => {
-      try { return readFileSync(path, 'utf8') } catch { return '' }
-    },
-    onFileWrite: (path: string, content: string) => {
-      try { writeFileSync(path, content, 'utf8') }
-      catch (err) { process.stderr.write(`[acp-ws] file/write failed: ${(err as Error).message}\n`) }
-    },
+
+  const onInterrupt = (): void => {
+    process.stderr.write('[acp-ws] interrupt received\n')
+  }
+  const onFileRead = (path: string): string => {
+    try { return readFileSync(path, 'utf8') } catch { return '' }
+  }
+  const onFileWrite = (path: string, content: string): void => {
+    try { writeFileSync(path, content, 'utf8') }
+    catch (err) { process.stderr.write(`[acp-ws] file/write failed: ${(err as Error).message}\n`) }
   }
 
   const server = new AcpWebSocketServer({
@@ -107,6 +78,49 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
     host: opts.host,
     authToken,
     onConnection: (transport: WebSocketACPTransport) => {
+      // Per-connection engine + history: ACP is session-oriented, so
+      // successive messages on one connection must see prior turns. A
+      // fresh engine per message made every prompt a context-free
+      // single turn — inconsistent with every other transport.
+      let engine: { runTurn: ExecutionEngine['runTurn']; dispose?: () => void } | null = null
+      const history: OpenAIMessage[] = []
+
+      const handlers: ACPHandlers = {
+        onMessage: async (text: string, images?: string[]) => {
+          if (!engine) {
+            const { ExecutionEngine } = await import('../core/engine.js')
+            const { Renderer } = await import('../ui/renderer.js')
+            const { DefaultHookRunner } = await import('../core/hooks/defaultRunner.js')
+            const hookRunner = new DefaultHookRunner({
+              cwd: opts.cwd,
+              includeProject: process.env.OVOGO_TRUST_PROJECT_CODE === '1',
+              configOverride: loadHookConfig(opts.cwd, process.env.OVOGO_TRUST_PROJECT_CODE === '1') ?? {},
+            })
+            const renderer = new Renderer({ stream: process.stderr })
+            engine = new ExecutionEngine(
+              {
+                cwd: opts.cwd,
+                apiKey: opts.apiKey!,
+                baseURL: opts.baseURL,
+                provider: opts.provider,
+                model: opts.model ?? 'gpt-4o',
+                permissionMode: 'auto',
+                maxIterations: 50,
+                hookRunner,
+              },
+              renderer,
+            )
+          }
+          const imageInput = images?.map((dataUrl, i) => ({ path: `acp-image-${i}`, dataUrl }))
+          const { result, newHistory } = await engine.runTurn(text, history, imageInput)
+          history.splice(0, history.length, ...newHistory)
+          return result.output ?? ''
+        },
+        onInterrupt,
+        onFileRead,
+        onFileWrite,
+      }
+
       const acpServer = new ACPServer(handlers, {
         cwd: opts.cwd,
         write: (data: string) => transport.send(data),
@@ -118,6 +132,8 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
       })
       transport.onClose(() => {
         acpServer.stop()
+        try { engine?.dispose?.() } catch { /* best-effort teardown */ }
+        engine = null
       })
     },
   })
