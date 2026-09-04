@@ -50,8 +50,9 @@ export function HistorySearchOverlay({ history, onSelect, onCancel }: HistorySea
       setSelected(0)
       return
     }
-    // Ctrl+R again — cycle to next match
-    if (input === '\x12') {
+    // Ctrl+R again — cycle to next match. Ink reports ctrl combos as the
+    // plain letter with key.ctrl set, not as the raw control byte.
+    if (key.ctrl && input === 'r') {
       setSelected((s) => Math.min(matches.length - 1, s + 1))
       return
     }

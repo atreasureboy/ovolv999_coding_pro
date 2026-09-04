@@ -237,6 +237,14 @@ export function PromptInput({
   }, [text, normalizedCommandText, showMenu, menuEntries, autocomplete, fileContext, fileSuggestions, autocompleteFile, onSubmit])
 
   useInput((input, key) => {
+    // ── Reverse-search owns the keyboard while open ─────────────────────
+    // useInput is broadcast: without this guard every keystroke would be
+    // handled TWICE — query edit here + composer edit in the overlay's
+    // parent handler, Enter both selecting the match and submitting the
+    // pre-search draft, Up/Down moving the selection while rewriting the
+    // composer from history.
+    if (searchMode) return
+
     // ── ESC: interrupt ───────────────────────────────────────────────────
     if (key.escape) {
       if (disabled) onInterrupt?.()
