@@ -358,7 +358,7 @@ function checkEnvironment(cwd: string, results: CheckResult[]): void {
       category: 'env',
       item: 'editor',
       level: 'warning',
-      message: 'No $EDITOR or $VISUAL set (Ctrl+G will use vim as fallback)',
+      message: 'No $EDITOR or $VISUAL set (Ctrl+G will use vi as fallback)',
     })
   } else {
     results.push({
