@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { join, basename } from 'path'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { warnConfigOnce } from '../config/diagnostics.js'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -64,8 +65,19 @@ export function loadTeamConfig(): TeamMemoryConfig | null {
   const path = getTeamMemoryConfigPath()
   if (!existsSync(path)) return null
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as TeamMemoryConfig
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as TeamMemoryConfig
+    if (
+      !parsed || typeof parsed !== 'object' ||
+      typeof parsed.remoteUrl !== 'string' || !Array.isArray(parsed.files)
+    ) {
+      throw new Error('team-memory config shape violation')
+    }
+    return parsed
   } catch (err) {
+    // §team-memory config: `/team-memory add` does loadTeamConfig() ??
+    // default → save — the corrupt bytes must survive that path or the
+    // real config (remoteUrl, file list) is silently replaced by defaults.
+    preserveCorruptFile(path)
     warnConfigOnce({
       file: path, severity: 'warning',
       message: `team-memory config corrupt — treating as unconfigured (${(err as Error).message.split('\n')[0]})`,
@@ -76,10 +88,7 @@ export function loadTeamConfig(): TeamMemoryConfig | null {
 }
 
 export function saveTeamConfig(config: TeamMemoryConfig): void {
-  const path = getTeamMemoryConfigPath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(config, null, 2))
+  atomicWriteSync(getTeamMemoryConfigPath(), JSON.stringify(config, null, 2))
 }
 
 // ── Memory File Discovery ───────────────────────────────────────────────────

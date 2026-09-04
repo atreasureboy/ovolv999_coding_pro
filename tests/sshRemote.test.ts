@@ -15,7 +15,7 @@ import {
   type SshExecResult,
   type SshConnectionTest,
 } from '../src/core/sshRemote.js'
-import { existsSync, rmSync, mkdtempSync } from 'fs'
+import { existsSync, rmSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -182,5 +182,35 @@ describe('sshRemote', () => {
       const out = formatExecResult(result)
       expect(out).toContain('error msg')
     })
+  })
+})
+
+describe('ssh profile store corruption guard', () => {
+  it('preserves a corrupt store before resetting, and the store stays usable', () => {
+    const dir = join(homedir(), '.ovolv999')
+    const path = join(dir, 'ssh-profiles.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path, '[{"name": "torn"', 'utf8')
+
+    expect(loadProfiles()).toEqual([])
+    expect(readFileSync(backup, 'utf8')).toBe('[{"name": "torn"')
+
+    // addProfile must not wipe the forensic backup on the recovery save.
+    addProfile(sampleProfile)
+    expect(getProfile('test')!.host).toBe('example.com')
+    expect(readFileSync(backup, 'utf8')).toBe('[{"name": "torn"')
+  })
+
+  it('treats an entry missing name/host as corrupt', () => {
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'ssh-profiles.json'),
+      '[{"identityFile": "/tmp/k"}]',
+      'utf8',
+    )
+    expect(loadProfiles()).toEqual([])
+    expect(existsSync(join(dir, 'ssh-profiles.json.corrupt'))).toBe(true)
   })
 })

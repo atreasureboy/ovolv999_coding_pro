@@ -22,7 +22,7 @@ import {
   formatUpdateCheckResult,
   getIgnoredVersionsPath,
 } from '../src/utils/autoUpdater.js'
-import { existsSync, rmSync, mkdtempSync } from 'fs'
+import { existsSync, rmSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -204,5 +204,29 @@ describe('autoUpdater', () => {
       })
       expect(out).toContain('offline')
     })
+  })
+})
+
+describe('ignored-versions corruption guard', () => {
+  it('preserves a corrupt list before resetting, and ignoring still works', () => {
+    const path = getIgnoredVersionsPath()
+    const backup = `${path}.corrupt`
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '["9.9.9"', 'utf8')
+
+    expect(getIgnoredVersions()).toEqual([])
+    expect(readFileSync(backup, 'utf8')).toBe('["9.9.9"')
+
+    ignoreVersion('8.8.8')
+    expect(getIgnoredVersions()).toEqual(['8.8.8'])
+    expect(readFileSync(backup, 'utf8')).toBe('["9.9.9"')
+  })
+
+  it('treats a non-string entry as corrupt', () => {
+    const path = getIgnoredVersionsPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '["1.0.0", 42]', 'utf8')
+    expect(getIgnoredVersions()).toEqual([])
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })

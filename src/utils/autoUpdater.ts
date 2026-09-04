@@ -6,7 +6,8 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from '../core/atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 import { createRequire } from 'module'
@@ -159,8 +160,13 @@ export function getIgnoredVersions(): string[] {
   const path = getIgnoredVersionsPath()
   if (!existsSync(path)) return []
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as string[]
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === 'string')) {
+      throw new Error('ignored-versions store shape violation')
+    }
+    return parsed
   } catch {
+    preserveCorruptFile(path)
     return []
   }
 }
@@ -169,10 +175,7 @@ export function ignoreVersion(version: string): void {
   const ignored = getIgnoredVersions()
   if (!ignored.includes(version)) {
     ignored.push(version)
-    const path = getIgnoredVersionsPath()
-    const dir = join(path, '..')
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(path, JSON.stringify(ignored, null, 2))
+    atomicWriteSync(getIgnoredVersionsPath(), JSON.stringify(ignored, null, 2))
   }
 }
 

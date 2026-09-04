@@ -7,7 +7,7 @@ import {
   formatTeamMemoryStatus,
   getTeamMemoryConfigPath,
 } from '../src/core/teamMemory.js'
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -108,5 +108,31 @@ describe('teamMemory', () => {
       expect(status).toContain('Team Memory Status')
       expect(status).toContain('example.com')
     })
+  })
+})
+
+describe('team-memory config corruption guard', () => {
+  it('preserves a corrupt config before resetting', () => {
+    const path = getTeamMemoryConfigPath()
+    const backup = `${path}.corrupt`
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"remoteUrl": "git@torn"', 'utf8')
+
+    expect(loadTeamConfig()).toBeNull()
+    expect(readFileSync(backup, 'utf8')).toBe('{"remoteUrl": "git@torn"')
+
+    // /team-memory add does loadTeamConfig() ?? default → save; the
+    // forensic backup must survive that replacement.
+    saveTeamConfig({ remoteUrl: 'https://x.git', files: [] })
+    expect(loadTeamConfig()!.remoteUrl).toBe('https://x.git')
+    expect(readFileSync(backup, 'utf8')).toBe('{"remoteUrl": "git@torn"')
+  })
+
+  it('treats a config missing files array as corrupt', () => {
+    const path = getTeamMemoryConfigPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"remoteUrl": "https://x.git"}', 'utf8')
+    expect(loadTeamConfig()).toBeNull()
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })

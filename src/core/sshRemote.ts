@@ -17,7 +17,8 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -74,21 +75,36 @@ function getProfilesPath(): string {
   return join(homedir(), '.ovolv999', 'ssh-profiles.json')
 }
 
+function isShapedProfile(p: unknown): p is SshProfile {
+  return (
+    typeof p === 'object' && p !== null &&
+    typeof (p as SshProfile).name === 'string' &&
+    typeof (p as SshProfile).host === 'string'
+  )
+}
+
 export function loadProfiles(): SshProfile[] {
   const path = getProfilesPath()
   if (!existsSync(path)) return []
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as SshProfile[]
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    // name/host are dereferenced unguarded by buildSshArgs and the remove
+    // filter — a half-written entry must not load.
+    if (!Array.isArray(parsed) || !parsed.every(isShapedProfile)) {
+      throw new Error('ssh profile store shape violation')
+    }
+    return parsed
   } catch {
+    // §ssh-profiles: profiles are user-configured host definitions
+    // (identity paths, jump hosts) — preserve the corrupt bytes before
+    // resetting, or the next addProfile/removeProfile destroys them all.
+    preserveCorruptFile(path)
     return []
   }
 }
 
 export function saveProfiles(profiles: SshProfile[]): void {
-  const path = getProfilesPath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(profiles, null, 2))
+  atomicWriteSync(getProfilesPath(), JSON.stringify(profiles, null, 2))
 }
 
 export function getProfile(name: string): SshProfile | undefined {
