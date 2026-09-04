@@ -17,10 +17,14 @@ import { registerCommand } from '../index.js'
 import { join } from 'path'
 import type { BudgetType, BudgetPeriod } from '../../core/budget.js'
 import {
+  loadKnowledge, addEntry, removeEntry, searchKnowledge,
+  formatKnowledgeList, formatSearchResults, formatStats,
+  extractKnowledgeFromText, KNOWLEDGE_CATEGORIES,
+} from '../../core/knowledgeBase.js'
+import {
   loadSchedules, addTask, removeTask, enableTask, disableTask,
   createTask, formatTaskList, formatTaskDetail, parseCron, parseEveryDuration,
 } from '../../core/cron.js'
-import type { KnowledgeCategory } from '../../core/knowledgeBase.js'
 import { text } from '../shared.js'
 import { truncate } from './common.js'
 
@@ -299,12 +303,6 @@ registerCommand({
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'list'
 
-    const {
-      loadKnowledge, addEntry, removeEntry, searchKnowledge,
-      formatKnowledgeList, formatSearchResults, formatStats,
-      extractKnowledgeFromText,
-    } = require('../../core/knowledgeBase.js') as typeof import('../../core/knowledgeBase.js')
-
     if (sub === 'list' || !sub) {
       const store = loadKnowledge(ctx.cwd)
       return text(formatKnowledgeList(store.entries))
@@ -316,10 +314,13 @@ registerCommand({
     }
 
     if (sub === 'add') {
-      const category = parts[1] as KnowledgeCategory
+      const category = KNOWLEDGE_CATEGORIES.find((c) => c === parts[1])
       const key = parts[2]
       const value = parts.slice(3).join(' ')
       if (!category || !key || !value) {
+        if (parts[1] && !category) {
+          return text(`Unknown category "${parts[1]}". Categories: ${KNOWLEDGE_CATEGORIES.join(', ')}`)
+        }
         return text('Usage: /knowledge add <category> <key> <value>\nCategories: file, pattern, decision, gotcha, dependency, convention, architecture, general')
       }
       const entry = addEntry(ctx.cwd, category, key, value)

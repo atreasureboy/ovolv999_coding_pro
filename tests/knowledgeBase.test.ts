@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import type { SlashCommandContext } from '../src/commands/index.js'
 import {
   loadKnowledge,
   saveKnowledge,
@@ -325,5 +326,39 @@ describe('knowledge store corruption guard', () => {
     addEntry(dir, 'general', 'after-crash', 'value')
     expect(loadKnowledge(dir).entries.length).toBe(1)
     expect(readFileSync(backup, 'utf8')).toBe('{"entries": [{"id": "torn"}')
+  })
+})
+
+describe('/knowledge add category validation', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'kb-dispatch-')) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  async function run(args: string): Promise<string> {
+    const { dispatchSlashCommand } = await import('../src/commands/index.js')
+    await import('../src/commands/builtin.js')
+    const ctx = {
+      engine: {} as SlashCommandContext['engine'],
+      renderer: {} as SlashCommandContext['renderer'],
+      history: [],
+      cwd: dir,
+      setHistory: () => undefined,
+      runPrompt: () => undefined,
+    }
+    const result = await dispatchSlashCommand(`/knowledge ${args}`.trim(), ctx)
+    if (!result || result.type !== 'text') throw new Error('expected text result')
+    return result.value
+  }
+
+  it('rejects a typo category without polluting the store', async () => {
+    const out = await run('add notacat k v')
+    expect(out).toContain('Unknown category "notacat"')
+    expect(loadKnowledge(dir).entries).toEqual([])
+  })
+
+  it('accepts a canonical category', async () => {
+    const out = await run('add general after-crash works')
+    expect(out).toContain('general entry saved: after-crash')
+    expect(loadKnowledge(dir).entries.length).toBe(1)
   })
 })

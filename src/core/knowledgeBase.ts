@@ -29,6 +29,10 @@ export type KnowledgeCategory =
   | 'architecture'
   | 'general'
 
+export const KNOWLEDGE_CATEGORIES: readonly KnowledgeCategory[] = [
+  'file', 'pattern', 'decision', 'gotcha', 'dependency', 'convention', 'architecture', 'general',
+]
+
 export interface KnowledgeEntry {
   /** Unique ID */
   id: string
