@@ -1788,6 +1788,10 @@ async function main(): Promise<void> {
   if (sub === 'task-server') {
     const rawPort = process.argv[3] ?? process.env.OVOGO_TASK_PORT ?? '7727'
     const port = Number(rawPort)
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      process.stderr.write(`Error: invalid task-server port "${rawPort}" (expected an integer 1-65535)\n`)
+      process.exit(1)
+    }
     const { startTaskControlPlane } = await import('../src/cli/taskControlPlane.js')
     await startTaskControlPlane(process.cwd(), port)
     return
