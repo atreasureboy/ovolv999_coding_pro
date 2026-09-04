@@ -26,7 +26,7 @@ import { prevCursor, nextCursor } from '../textCursor.js'
 import { openInEditor } from '../../../utils/editor.js'
 import { listCommands } from '../../../commands/index.js'
 import { normalizeSlashCommandInput } from '../../../commands/index.js'
-import { DEFAULT_BINDINGS, resolveComposerAction, type KeyAction } from '../../keybindings.js'
+import { DEFAULT_BINDINGS, actionToCombo, formatCombo, resolveComposerAction, type KeyAction } from '../../keybindings.js'
 
 const DEFAULT_KEYMAP: Map<string, KeyAction> = new Map(
   Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
@@ -397,6 +397,12 @@ export function PromptInput({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Multi-line hint tracks the live binding instead of hardcoding Ctrl+J,
+  // so a rebind in keybindings.json can't leave the card stale. Unbound →
+  // no key shown at all (never advertise a key that isn't bound).
+  const newlineCombo = actionToCombo(keymap, 'newline')
+  const newlineHint = newlineCombo === null ? null : formatCombo(newlineCombo)
+
   const hasNewline = text.includes('\n')
   const lines = hasNewline ? text.split('\n') : []
   const lineStarts: number[] = []
@@ -446,7 +452,7 @@ export function PromptInput({
               </Box>
             )
           })}
-          <Text color={t.faint}>  Ctrl+J newline · Enter submit</Text>
+          <Text color={t.faint}>  {newlineHint !== null ? `${newlineHint} newline · ` : ''}Enter submit</Text>
         </Box>
       ) : (
         <Box paddingLeft={1}>
