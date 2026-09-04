@@ -113,11 +113,10 @@ export function findMemoryFiles(cwd: string): string[] {
 export function loadMemoryFiles(files: string[]): MemoryFile[] {
   return files
     .filter(f => existsSync(f))
-    .map(f => ({
-      path: f,
-      content: readFileSync(f, 'utf8'),
-      hash: simpleHash(readFileSync(f, 'utf8')),
-    }))
+    .map(f => {
+      const content = readFileSync(f, 'utf8')
+      return { path: f, content, hash: simpleHash(content) }
+    })
 }
 
 function simpleHash(s: string): string {
@@ -306,12 +305,6 @@ export function listTeamMemoryFiles(): string[] {
   } catch {
     return []
   }
-}
-
-export function readTeamMemoryFile(filename: string): string | null {
-  const path = join(getTeamMemoryDir(), filename)
-  if (!existsSync(path)) return null
-  return readFileSync(path, 'utf8')
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
