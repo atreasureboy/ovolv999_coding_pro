@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from 'child_process'
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, rmSync, existsSync } from 'fs'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -53,8 +53,9 @@ export function openInEditor(initialContent?: string): string | null {
     return null
   } finally {
     try {
-      if (existsSync(tmpFile)) unlinkSync(tmpFile)
-      unlinkSync(tmpDir)
+      // rmSync, not unlinkSync: unlink throws EISDIR on the directory and
+      // the best-effort catch swallowed it, leaking a temp dir per use.
+      rmSync(tmpDir, { recursive: true, force: true })
     } catch {
       // Best-effort cleanup
     }
