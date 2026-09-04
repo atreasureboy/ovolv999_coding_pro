@@ -17,6 +17,38 @@ import {
   type KeyAction,
 } from '../src/ui/keybindings.js'
 
+/**
+ * Reproduces the transform ink/build/hooks/use-input.js applies before
+ * invoking a useInput handler (ink's exports map blocks deep imports, so
+ * the transform is mirrored here): parse-keypress maps ctrl bytes to
+ * key.name with ctrl=true, and use-input then reports
+ * `input = keypress.ctrl ? keypress.name : keypress.sequence` — so ctrl+l
+ * arrives as input='l', while ctrl+j (the LF byte) arrives as input='\n'
+ * with ctrl=false, named 'enter'.
+ */
+function inkEvent(data: string): { input: string; key: { ctrl: boolean; meta: boolean; shift: boolean } } {
+  let keypress: { name?: string; sequence?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }
+  if (data.length === 1 && data >= '\x01' && data <= '\x1a' && data !== '\r' && data !== '\n' && data !== '\t' && data !== '\x1b') {
+    keypress = { name: String.fromCharCode(96 + data.charCodeAt(0)), ctrl: true, sequence: data }
+  } else if (data === '\r') {
+    keypress = { name: 'return', ctrl: false, sequence: data }
+  } else if (data === '\n') {
+    keypress = { name: 'enter', ctrl: false, sequence: data }
+  } else {
+    keypress = { name: data, ctrl: false, sequence: data }
+  }
+  let input = keypress.ctrl ? (keypress.name ?? '') : (keypress.sequence ?? '')
+  if (input.startsWith('\x1b')) input = input.slice(1)
+  return {
+    input,
+    key: {
+      ctrl: keypress.ctrl === true,
+      meta: keypress.meta === true || keypress.name === 'escape',
+      shift: keypress.shift === true,
+    },
+  }
+}
+
 describe('parseKeyCombo', () => {
   it('parses simple ctrl combo', () => {
     expect(parseKeyCombo('ctrl+l')).toEqual({ ctrl: true, key: 'l' })
@@ -101,7 +133,12 @@ describe('comboToString', () => {
 })
 
 describe('matchCombo', () => {
-  it('matches ctrl+l via control character', () => {
+  it('matches ctrl+l in the form Ink delivers (letter + ctrl flag)', () => {
+    // Ink use-input.js: input = keypress.ctrl ? keypress.name : sequence
+    expect(matchCombo('l', { ctrl: true }, 'ctrl+l')).toBe(true)
+  })
+
+  it('matches ctrl+l via raw control character (terminal-byte form)', () => {
     expect(matchCombo('\x0c', { ctrl: true }, 'ctrl+l')).toBe(true)
   })
 
@@ -113,20 +150,38 @@ describe('matchCombo', () => {
     expect(matchCombo('l', {}, 'ctrl+l')).toBe(false)
   })
 
-  it('does not match wrong ctrl letter', () => {
+  it('does not match wrong ctrl letter (either form)', () => {
     expect(matchCombo('\x0c', { ctrl: true }, 'ctrl+k')).toBe(false)
+    expect(matchCombo('k', { ctrl: true }, 'ctrl+l')).toBe(false)
   })
 
-  it('matches ctrl+a through ctrl+z', () => {
+  it('matches ctrl+a through ctrl+z in both real forms', () => {
     for (let i = 0; i < 26; i++) {
       const letter = String.fromCharCode(97 + i)
       const ctrlChar = String.fromCharCode(1 + i)
+      expect(matchCombo(letter, { ctrl: true }, `ctrl+${letter}`)).toBe(true)
       expect(matchCombo(ctrlChar, { ctrl: true }, `ctrl+${letter}`)).toBe(true)
     }
   })
 
+  it('matches ctrl+j via the bare LF byte (no ctrl flag)', () => {
+    // Terminals transmit ctrl+j as "\n"; parse-keypress names it 'enter'
+    // and use-input passes it through with ctrl=false.
+    expect(matchCombo('\n', {}, 'ctrl+j')).toBe(true)
+  })
+
+  it('does not match LF against a different ctrl combo', () => {
+    expect(matchCombo('\n', {}, 'ctrl+k')).toBe(false)
+  })
+
+  it('does not match LF with extra modifiers', () => {
+    expect(matchCombo('\n', { meta: true }, 'ctrl+j')).toBe(false)
+    expect(matchCombo('\n', { shift: true }, 'ctrl+j')).toBe(false)
+  })
+
   it('does not match when extra modifiers present', () => {
     expect(matchCombo('\x0c', { ctrl: true, meta: true }, 'ctrl+l')).toBe(false)
+    expect(matchCombo('l', { ctrl: true, meta: true }, 'ctrl+l')).toBe(false)
   })
 
   it('returns false for malformed combo string', () => {
@@ -266,9 +321,9 @@ describe('loadKeybindings', () => {
 })
 
 describe('lookupAction', () => {
-  it('finds action for ctrl+l', () => {
+  it('finds action for ctrl+l as Ink delivers it', () => {
     const bindings = new Map([['ctrl+l', 'clear-screen' as const]])
-    expect(lookupAction('\x0c', { ctrl: true }, bindings)).toBe('clear-screen')
+    expect(lookupAction('l', { ctrl: true }, bindings)).toBe('clear-screen')
   })
 
   it('returns null for unbound key', () => {
@@ -277,7 +332,7 @@ describe('lookupAction', () => {
   })
 
   it('returns null for empty bindings', () => {
-    expect(lookupAction('\x0c', { ctrl: true }, new Map())).toBeNull()
+    expect(lookupAction('l', { ctrl: true }, new Map())).toBeNull()
   })
 })
 
@@ -333,28 +388,34 @@ describe('resolveComposerAction', () => {
   const defaultKeymap = new Map<string, KeyAction>(
     Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
   )
-  const ctrlChar = (letter: string): string =>
-    String.fromCharCode(letter.toUpperCase().charCodeAt(0) - 64)
+  // The form Ink's useInput actually delivers for a ctrl combo: the plain
+  // letter with the ctrl flag set.
+  const inkCtrl = (letter: string): [string, { ctrl: boolean }] => [letter, { ctrl: true }]
 
-  it('resolves the composer-owned defaults from raw control chars', () => {
+  it('resolves the composer-owned defaults from Ink ctrl presses', () => {
     const cases: Array<[string, KeyAction]> = [
-      [ctrlChar('r'), 'search-history'],
-      [ctrlChar('y'), 'copy-reply'],
-      [ctrlChar('g'), 'open-editor'],
-      [ctrlChar('a'), 'cursor-home'],
-      [ctrlChar('e'), 'cursor-end'],
-      [ctrlChar('u'), 'clear-line'],
-      [ctrlChar('j'), 'newline'],
+      ['r', 'search-history'],
+      ['y', 'copy-reply'],
+      ['g', 'open-editor'],
+      ['a', 'cursor-home'],
+      ['e', 'cursor-end'],
+      ['u', 'clear-line'],
     ]
-    for (const [input, expected] of cases) {
-      expect(resolveComposerAction(input, { ctrl: true }, defaultKeymap)).toBe(expected)
+    for (const [letter, expected] of cases) {
+      const [input, key] = inkCtrl(letter)
+      expect(resolveComposerAction(input, key, defaultKeymap)).toBe(expected)
       expect(COMPOSER_ACTIONS.has(expected)).toBe(true)
     }
   })
 
+  it('resolves newline from the bare LF byte (ctrl+j)', () => {
+    expect(resolveComposerAction('\n', {}, defaultKeymap)).toBe('newline')
+  })
+
   it('lets App-owned actions fall through (App dispatches them)', () => {
-    expect(resolveComposerAction(ctrlChar('l'), { ctrl: true }, defaultKeymap)).toBeNull() // clear-screen
-    expect(resolveComposerAction(ctrlChar('o'), { ctrl: true }, defaultKeymap)).toBeNull() // toggle-verbose
+    expect(resolveComposerAction('l', { ctrl: true }, defaultKeymap)).toBeNull() // clear-screen
+    expect(resolveComposerAction('o', { ctrl: true }, defaultKeymap)).toBeNull() // toggle-verbose
+    expect(resolveComposerAction('c', { ctrl: true }, defaultKeymap)).toBeNull() // exit
     expect(resolveComposerAction('?', {}, defaultKeymap)).toBeNull() // toggle-help
     expect(resolveComposerAction('x', {}, defaultKeymap)).toBeNull() // unbound printable
   })
@@ -364,7 +425,54 @@ describe('resolveComposerAction', () => {
     rebound.delete('ctrl+g')
     rebound.set('ctrl+k', 'open-editor')
     // Old binding no longer fires; the new one does.
-    expect(resolveComposerAction(ctrlChar('g'), { ctrl: true }, rebound)).toBeNull()
-    expect(resolveComposerAction(ctrlChar('k'), { ctrl: true }, rebound)).toBe('open-editor')
+    expect(resolveComposerAction('g', { ctrl: true }, rebound)).toBeNull()
+    expect(resolveComposerAction('k', { ctrl: true }, rebound)).toBe('open-editor')
+  })
+})
+
+describe('Ink keypress round trip', () => {
+  const defaultKeymap = new Map<string, KeyAction>(
+    Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
+  )
+
+  it('resolves App-owned actions from real terminal bytes', () => {
+    const cases: Array<[string, KeyAction]> = [
+      ['\x0c', 'clear-screen'],   // ctrl+l
+      ['\x0f', 'toggle-verbose'], // ctrl+o
+      ['\x03', 'exit'],           // ctrl+c (double-press logic lives in App)
+      ['\x10', 'toggle-plan-mode'], // ctrl+p
+      ['\x1a', 'undo-edit'],      // ctrl+z
+      ['?', 'toggle-help'],       // printable binding, gated on empty composer
+    ]
+    for (const [byte, expected] of cases) {
+      const { input, key } = inkEvent(byte)
+      expect(lookupAction(input, key, defaultKeymap)).toBe(expected)
+      expect(resolveComposerAction(input, key, defaultKeymap)).toBeNull()
+    }
+  })
+
+  it('resolves composer-owned actions from real terminal bytes', () => {
+    const cases: Array<[string, KeyAction]> = [
+      ['\x12', 'search-history'], // ctrl+r
+      ['\x19', 'copy-reply'],     // ctrl+y
+      ['\x07', 'open-editor'],    // ctrl+g
+      ['\x01', 'cursor-home'],    // ctrl+a
+      ['\x05', 'cursor-end'],     // ctrl+e
+      ['\x15', 'clear-line'],     // ctrl+u
+      ['\n', 'newline'],          // ctrl+j — LF byte, arrives with no ctrl flag
+    ]
+    for (const [byte, expected] of cases) {
+      const { input, key } = inkEvent(byte)
+      expect(lookupAction(input, key, defaultKeymap)).toBe(expected)
+      expect(resolveComposerAction(input, key, defaultKeymap)).toBe(expected)
+    }
+  })
+
+  it('never resolves plain typing into an action', () => {
+    for (const ch of 'hello world 42') {
+      const { input, key } = inkEvent(ch)
+      if (input === undefined || input === ' ') continue
+      expect(lookupAction(input, key, defaultKeymap)).toBeNull()
+    }
   })
 })

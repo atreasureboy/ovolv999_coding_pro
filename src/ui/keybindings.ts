@@ -138,6 +138,17 @@ export function comboToString(combo: KeyCombo): string {
  * Match an Ink-style input/key pair against a combo string.
  * Ink provides: key.ctrl (Ctrl), key.meta (Alt/Option), key.shift (Shift).
  * Note: Ink does NOT expose the Super/Command key separately.
+ *
+ * Ctrl combos arrive in TWO real-world forms and both must match:
+ *  - Ink's useInput reports the plain letter with key.ctrl set
+ *    (input = keypress.ctrl ? keypress.name : keypress.sequence), so
+ *    ctrl+l is input='l' — this is what every live handler sees.
+ *  - The raw control character ('\x0c') when a caller reads terminal
+ *    bytes directly.
+ * ctrl+J is physically the LF byte: terminals send it as "\n" and Ink
+ * reports input='\n' with key.ctrl=false (parse-keypress names it
+ * 'enter', not a ctrl letter), so ctrl+j additionally matches the bare
+ * "\n" byte — no terminal can send ctrl+j any other way.
  */
 export function matchCombo(
   input: string,
@@ -153,7 +164,6 @@ export function matchCombo(
     return false
   }
 
-  // For ctrl combos, input is the control character (e.g. '\x0c' for ctrl+l)
   if (combo.ctrl) {
     return matchCtrlCombo(combo, key, input)
   }
@@ -173,13 +183,22 @@ function matchCtrlCombo(
   key: { ctrl?: boolean; meta?: boolean; shift?: boolean },
   input: string,
 ): boolean {
+  // The ctrl+J ⟺ LF equivalence: terminals transmit the ctrl+j key as the
+  // bare "\n" byte with no ctrl flag, so the byte itself identifies the
+  // key. Only match it for an unmodified ctrl+j — meta/shift variants are
+  // different presses.
+  if (input === '\n' && combo.key === 'j' && !combo.meta && !combo.alt && !combo.shift) {
+    return !key.meta && !key.shift
+  }
   if (!key.ctrl) return false
   if (combo.meta && !key.meta) return false
   if (key.meta && !combo.meta && !combo.alt) return false
   if (key.shift && !combo.shift) return false
+  // Ink's live form: input is the plain letter, key.ctrl is set.
+  if (input.length === 1 && input.toLowerCase() === combo.key) return true
+  // Raw terminal byte form: '\x0c' for ctrl+l.
   const letter = ctrlCharToLetter(input)
-  if (letter === null) return false
-  return letter === combo.key
+  return letter !== null && letter === combo.key
 }
 
 /** Convert a control character (e.g. '\x0c') to its letter ('l') */

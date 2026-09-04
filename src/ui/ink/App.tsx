@@ -431,7 +431,7 @@ export function App({
       return
     }
 
-    if ((input === '\x04' || (key.ctrl && input === 'd')) && !state.running && !store.hasOverlay()) {
+    if (key.ctrl && input === 'd' && !state.running && !store.hasOverlay()) {
       exit()
       return
     }

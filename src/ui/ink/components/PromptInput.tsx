@@ -364,8 +364,11 @@ export function PromptInput({
     if (action === 'cursor-end') { setCursor(text.length); return }
     if (action === 'clear-line') { setText(''); setCursor(0); return }
 
-    // Newline (multi-line input)
-    if (action === 'newline') {
+    // Newline (multi-line input). The bare "\n" byte always inserts — the
+    // terminal transmits the ctrl+j key as LF with no ctrl flag, so if the
+    // registry didn't resolve it (newline rebound elsewhere) the byte is
+    // still unambiguously "newline" to the composer.
+    if (action === 'newline' || input === '\n') {
       const newText = text.slice(0, cursor) + '\n' + text.slice(cursor)
       setText(newText)
       setCursor(cursor + 1)
