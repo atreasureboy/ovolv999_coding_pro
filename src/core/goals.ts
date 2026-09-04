@@ -14,7 +14,8 @@
  *   - attempts: iteration count
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -60,26 +61,45 @@ function getStorePath(): string {
   return join(homedir(), '.ovolv999', 'goals.json')
 }
 
+function isShapedGoal(g: unknown): g is Goal {
+  if (typeof g !== 'object' || g === null) return false
+  const goal = g as Goal
+  return typeof goal.id === 'string' &&
+    typeof goal.objective === 'string' &&
+    typeof goal.status === 'string' &&
+    Array.isArray(goal.subtasks) &&
+    Array.isArray(goal.context) &&
+    typeof goal.createdAt === 'string'
+}
+
+// §goals store: CRUD is load→mutate→save — a torn or corrupt store must not
+// load as empty, or the next create/update replaces the goal ledger (the
+// loop's directive history) with just the new entry.
+function isShapedGoalStore(parsed: unknown): parsed is GoalStore {
+  return typeof parsed === 'object' && parsed !== null &&
+    Array.isArray((parsed as GoalStore).goals) &&
+    (parsed as GoalStore).goals.every(isShapedGoal)
+}
+
 function loadStore(): void {
   if (initialized) return
   initialized = true
   const path = getStorePath()
   if (!existsSync(path)) return
   try {
-    const raw = readFileSync(path, 'utf8')
-    const store = JSON.parse(raw) as GoalStore
-    for (const g of store.goals ?? []) {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isShapedGoalStore(parsed)) throw new Error('goal store shape violation')
+    for (const g of parsed.goals) {
       goals.set(g.id, g)
     }
-  } catch { /* corrupt store */ }
+  } catch {
+    preserveCorruptFile(path)
+  }
 }
 
 function saveStore(): void {
-  const path = getStorePath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const store: GoalStore = { goals: Array.from(goals.values()) }
-  writeFileSync(path, JSON.stringify(store, null, 2))
+  atomicWriteSync(getStorePath(), JSON.stringify(store, null, 2))
 }
 
 export function resetGoalStore(): void {
@@ -90,7 +110,7 @@ export function resetGoalStore(): void {
     try {
       const path = getStorePath()
       if (existsSync(path)) {
-        writeFileSync(path, JSON.stringify({ goals: [] }, null, 2))
+        atomicWriteSync(path, JSON.stringify({ goals: [] }, null, 2))
       }
     } catch { /* ignore */ }
   }

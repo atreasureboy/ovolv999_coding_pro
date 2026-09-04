@@ -16,6 +16,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 import { warnConfigOnce } from '../config/diagnostics.js'
@@ -89,26 +90,38 @@ function getConfigPath(): string {
   return join(homedir(), '.ovolv999', 'telemetry-config.json')
 }
 
+// §telemetry-config store: setEnabled is load→mutate→save — a torn or corrupt
+// file must not fall back to defaults inside the load, or the next
+// /telemetry toggle silently rewrites the user's real preferences.
+function isShapedTelemetryConfig(parsed: unknown): parsed is Partial<TelemetryConfig> {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const raw = parsed as Partial<TelemetryConfig>
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') return false
+  if (raw.detailed !== undefined && typeof raw.detailed !== 'boolean') return false
+  if (raw.maxEvents !== undefined && typeof raw.maxEvents !== 'number') return false
+  return true
+}
+
 export function loadConfig(): TelemetryConfig {
   const path = getConfigPath()
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }
   try {
-    return { ...DEFAULT_CONFIG, ...(JSON.parse(readFileSync(path, 'utf8')) as Partial<TelemetryConfig>) }
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isShapedTelemetryConfig(parsed)) throw new Error('telemetry config shape violation')
+    return { ...DEFAULT_CONFIG, ...parsed }
   } catch (err) {
+    preserveCorruptFile(path)
     warnConfigOnce({
       file: path, severity: 'warning',
-      message: `telemetry config corrupt — using defaults (${(err as Error).message.split('\n')[0]})`,
-      fix: `fix or remove "${path}"`,
+      message: `telemetry config corrupt — backed up and reset to defaults (${(err as Error).message.split('\n')[0]})`,
+      fix: `restore from "${path}.corrupt" or reconfigure /telemetry`,
     })
     return { ...DEFAULT_CONFIG }
   }
 }
 
 export function saveConfig(config: TelemetryConfig): void {
-  const path = getConfigPath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(config, null, 2))
+  atomicWriteSync(getConfigPath(), JSON.stringify(config, null, 2))
 }
 
 export function setEnabled(enabled: boolean): TelemetryConfig {
@@ -133,8 +146,19 @@ function loadBuffer(): void {
   const path = getLogPath()
   if (!existsSync(path)) return
   try {
-    eventBuffer = JSON.parse(readFileSync(path, 'utf8')) as TelemetryEvent[]
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    // §telemetry events: same destroy path as the config — a corrupt load
+    // followed by flushBuffer() would replace the whole event history.
+    const isEvent = (e: unknown): e is TelemetryEvent =>
+      typeof e === 'object' && e !== null &&
+      typeof (e as TelemetryEvent).type === 'string' &&
+      typeof (e as TelemetryEvent).timestamp === 'string'
+    if (!Array.isArray(parsed) || !parsed.every(isEvent)) {
+      throw new Error('telemetry events shape violation')
+    }
+    eventBuffer = parsed
   } catch {
+    preserveCorruptFile(path)
     eventBuffer = []
   }
 }
@@ -151,7 +175,7 @@ function flushBuffer(): void {
     eventBuffer = eventBuffer.slice(-config.maxEvents)
   }
 
-  writeFileSync(path, JSON.stringify(eventBuffer, null, 2))
+  atomicWriteSync(path, JSON.stringify(eventBuffer, null, 2))
 }
 
 // ── Recording ───────────────────────────────────────────────────────────────

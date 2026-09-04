@@ -5,7 +5,8 @@
  * Warns when cache hit-rate drops below threshold.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from '../core/atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -51,7 +52,20 @@ let entries: CacheEntry[] = []
 let initialized = false
 
 function getCachePath(): string {
+  // Same test seam as goals.ts — tests must never touch the real ledger.
+  const override = process.env.OVOLV999_TEST_STORE_DIR
+  if (override) return join(override, 'cache-stats.json')
   return join(homedir(), '.ovolv999', 'cache-stats.json')
+}
+
+// §cache-stats store: the ledger is append-only history — a torn or corrupt
+// file must not load as empty, or the next save replaces the whole history.
+function isShapedEntries(parsed: unknown): parsed is CacheEntry[] {
+  return Array.isArray(parsed) && parsed.every((e) =>
+    typeof e === 'object' && e !== null &&
+    typeof (e as CacheEntry).timestamp === 'string' &&
+    typeof (e as CacheEntry).model === 'string' &&
+    typeof (e as CacheEntry).cacheHit === 'boolean')
 }
 
 function loadEntries(): void {
@@ -60,17 +74,17 @@ function loadEntries(): void {
   const path = getCachePath()
   if (!existsSync(path)) return
   try {
-    entries = JSON.parse(readFileSync(path, 'utf8')) as CacheEntry[]
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isShapedEntries(parsed)) throw new Error('cache-stats store shape violation')
+    entries = parsed
   } catch {
+    preserveCorruptFile(path)
     entries = []
   }
 }
 
 function saveEntries(): void {
-  const path = getCachePath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(entries, null, 2))
+  atomicWriteSync(getCachePath(), JSON.stringify(entries, null, 2))
 }
 
 export function resetCacheStats(): void {

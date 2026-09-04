@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -312,5 +312,41 @@ afterAll(() => {
       const out = formatGoalList(listGoals())
       expect(out).toContain('[1/2]')
     })
+  })
+})
+
+describe('goal store corruption guard', () => {
+  let guardDir: string
+  beforeAll(() => {
+    guardDir = mkdtempSync(join(tmpdir(), 'ovolv999-goals-guard-'))
+    process.env.OVOLV999_TEST_STORE_DIR = guardDir
+  })
+  afterAll(() => {
+    rmSync(guardDir, { recursive: true, force: true })
+    delete process.env.OVOLV999_TEST_STORE_DIR
+  })
+
+  it('preserves a corrupt ledger, then the next create rewrites real data', async () => {
+    const path = join(guardDir, 'goals.json')
+    const backup = `${path}.corrupt`
+    writeFileSync(path, '{"goals": [{"id": torn', 'utf8')
+
+    // Fresh module instance — loadStore latches `initialized` on first read.
+    vi.resetModules()
+    const mod = await import('../src/core/goals.js')
+    expect(mod.listGoals()).toEqual([])
+    expect(readFileSync(backup, 'utf8')).toBe('{"goals": [{"id": torn')
+
+    mod.createGoal('after-crash objective')
+    expect(mod.listGoals().length).toBe(1)
+    expect(readFileSync(backup, 'utf8')).toBe('{"goals": [{"id": torn')
+  })
+
+  it('rejects shape-violating goals (missing objective)', async () => {
+    const path = join(guardDir, 'goals.json')
+    writeFileSync(path, JSON.stringify({ goals: [{ id: 'g1', status: 'pending' }] }), 'utf8')
+    vi.resetModules()
+    const mod = await import('../src/core/goals.js')
+    expect(mod.listGoals()).toEqual([])
   })
 })

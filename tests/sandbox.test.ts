@@ -11,7 +11,7 @@ import {
   formatConfig, formatProfile,
   type SandboxConfig,
 } from '../src/core/sandbox.js'
-import { existsSync, rmSync, mkdtempSync } from 'fs'
+import { existsSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -282,5 +282,31 @@ describe('sandbox', () => {
       expect(out).toContain('strict')
       expect(out).toContain('/path/to/profile.sb')
     })
+  })
+})
+
+describe('sandbox config corruption guard', () => {
+  it('backs up a corrupt config, then updateConfig rewrites real values', () => {
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, 'sandbox.json')
+    const backup = `${path}.corrupt`
+    writeFileSync(path, '{"enabled": torn', 'utf8')
+
+    expect(loadConfig()).toEqual({ ...DEFAULT_CONFIG })
+    expect(readFileSync(backup, 'utf8')).toBe('{"enabled": torn')
+
+    const updated = updateConfig({ enabled: true, level: 'strict' })
+    expect(updated.enabled).toBe(true)
+    expect(loadConfig().level).toBe('strict')
+    expect(readFileSync(backup, 'utf8')).toBe('{"enabled": torn')
+  })
+
+  it('rejects shape-violating configs (non-boolean enabled)', () => {
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, 'sandbox.json')
+    writeFileSync(path, JSON.stringify({ enabled: 'yes', level: 'standard' }), 'utf8')
+    expect(loadConfig()).toEqual({ ...DEFAULT_CONFIG })
   })
 })

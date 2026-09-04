@@ -11,7 +11,7 @@
  */
 
 import { createServer, type Server, Socket } from 'net'
-import { existsSync, unlinkSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
+import { existsSync, unlinkSync, mkdirSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import { createHash } from 'crypto'
 import { homedir } from 'os'
@@ -808,13 +808,9 @@ export class Daemon {
   private log(message: string): void {
     try {
       const timestamp = new Date().toISOString()
-      const line = `[${timestamp}] ${message}\n`
-      if (existsSync(this.logPath)) {
-        const existing = readFileSync(this.logPath, 'utf8')
-        writeFileSync(this.logPath, existing + line)
-      } else {
-        writeFileSync(this.logPath, line)
-      }
+      // appendFileSync, not read-modify-write: the old form re-read the whole
+      // log on every line — O(n²) over a daemon's lifetime.
+      appendFileSync(this.logPath, `[${timestamp}] ${message}\n`)
     } catch { /* ignore log errors */ }
   }
 }

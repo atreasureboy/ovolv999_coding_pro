@@ -10,7 +10,7 @@ import {
   formatAggregates, formatConfig, formatEvent,
   type TelemetryEvent,
 } from '../src/core/telemetry.js'
-import { existsSync, rmSync, mkdtempSync } from 'fs'
+import { existsSync, rmSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -238,5 +238,47 @@ describe('telemetry', () => {
       expect(out).toContain('Bash')
       expect(out).toContain('1500ms')
     })
+  })
+})
+
+describe('telemetry store corruption guards', () => {
+  it('config: backs up a corrupt file, then setEnabled rewrites real values', () => {
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, 'telemetry-config.json')
+    const backup = `${path}.corrupt`
+    writeFileSync(path, '{"enabled": torn', 'utf8')
+
+    expect(loadConfig()).toEqual({ ...DEFAULT_CONFIG })
+    expect(readFileSync(backup, 'utf8')).toBe('{"enabled": torn')
+
+    setEnabled(true)
+    expect(loadConfig().enabled).toBe(true)
+    expect(readFileSync(backup, 'utf8')).toBe('{"enabled": torn')
+  })
+
+  it('config: rejects shape-violating values (string enabled)', () => {
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'telemetry-config.json'), JSON.stringify({ enabled: 'yes' }), 'utf8')
+    expect(loadConfig()).toEqual({ ...DEFAULT_CONFIG })
+  })
+
+  it('events: corrupt event history is backed up, not silently discarded', async () => {
+    const { vi } = await import('vitest')
+    const dir = join(homedir(), '.ovolv999')
+    mkdirSync(dir, { recursive: true })
+    const eventsPath = join(dir, 'telemetry.json')
+    const backup = `${eventsPath}.corrupt`
+    writeFileSync(eventsPath, '[{"type": torn', 'utf8')
+
+    // Fresh module instance — loadBuffer latches `bufferLoaded`.
+    vi.resetModules()
+    const mod = await import('../src/core/telemetry.js')
+    mod.setEnabled(true)
+    mod.record({ type: 'tool_call', timestamp: new Date().toISOString(), tool: 'Bash', durationMs: 1 })
+
+    expect(readFileSync(backup, 'utf8')).toBe('[{"type": torn')
+    expect(mod.getEvents().length).toBe(1)
   })
 })

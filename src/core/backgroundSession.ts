@@ -23,6 +23,7 @@ import {
   existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync,
   readdirSync, statSync, appendFileSync, openSync, closeSync, fstatSync,
 } from 'fs'
+import { atomicWriteSync } from './atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
@@ -120,7 +121,7 @@ export function generateSessionId(): string {
 
 export function saveMetadata(meta: SessionMetadata): void {
   ensureSessionsDir()
-  writeFileSync(getMetadataPath(meta.id), JSON.stringify(meta, null, 2))
+  atomicWriteSync(getMetadataPath(meta.id), JSON.stringify(meta, null, 2))
 }
 
 export function loadMetadata(id: string): SessionMetadata | null {

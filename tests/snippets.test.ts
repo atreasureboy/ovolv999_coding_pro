@@ -5,8 +5,9 @@ import {
   getCategories, getAllTags, getSnippetStats,
   extractVariables, fillSnippet,
   formatSnippet, formatSnippetList, formatSnippetStats,
+  loadSnippets, getSnippetPath,
 } from '../src/core/snippets.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -300,5 +301,31 @@ describe('Snippet Manager', () => {
       expect(out).toContain('util')
       expect(out).toContain('#quick')
     })
+  })
+})
+
+describe('snippet store corruption guard', () => {
+  let cwd: string
+  beforeEach(() => { cwd = makeTempDir() })
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store, then addSnippet rewrites usable data', () => {
+    const path = getSnippetPath(cwd)
+    const backup = `${path}.corrupt`
+    mkdirSync(join(cwd, '.ovolv999'), { recursive: true })
+    writeFileSync(path, '{"snippets": [{"id": torn', 'utf8')
+
+    expect(loadSnippets(cwd)).toEqual({ snippets: [] })
+    expect(readFileSync(backup, 'utf8')).toBe('{"snippets": [{"id": torn')
+
+    addSnippet(cwd, { name: 'after-crash', language: 'ts', body: 'x' })
+    expect(loadSnippets(cwd).snippets.length).toBe(1)
+    expect(readFileSync(backup, 'utf8')).toBe('{"snippets": [{"id": torn')
+  })
+
+  it('rejects shape-violating snippets (missing body)', () => {
+    mkdirSync(join(cwd, '.ovolv999'), { recursive: true })
+    writeFileSync(getSnippetPath(cwd), JSON.stringify({ snippets: [{ id: 's1', name: 'n' }] }), 'utf8')
+    expect(loadSnippets(cwd)).toEqual({ snippets: [] })
   })
 })

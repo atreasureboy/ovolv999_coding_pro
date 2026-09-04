@@ -2,7 +2,7 @@
  * Tests for src/utils/cacheStats.ts
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest'
 import {
   resetCacheStats,
   recordCacheEntry,
@@ -12,6 +12,25 @@ import {
   formatCacheStats,
   formatCacheWarning,
 } from '../src/utils/cacheStats.js'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+
+let storeDir: string
+let origStoreDir: string | undefined
+
+beforeAll(() => {
+  // Never touch the real ~/.ovolv999 ledger from tests.
+  storeDir = mkdtempSync(join(tmpdir(), 'ovolv999-cache-stats-'))
+  origStoreDir = process.env.OVOLV999_TEST_STORE_DIR
+  process.env.OVOLV999_TEST_STORE_DIR = storeDir
+})
+
+afterAll(() => {
+  if (origStoreDir !== undefined) process.env.OVOLV999_TEST_STORE_DIR = origStoreDir
+  else delete process.env.OVOLV999_TEST_STORE_DIR
+  rmSync(storeDir, { recursive: true, force: true })
+})
 
 beforeEach(() => {
   resetCacheStats()
@@ -153,5 +172,32 @@ describe('cacheStats', () => {
       const out = formatCacheWarning(warning!)
       expect(out.length).toBeGreaterThan(0)
     })
+  })
+})
+
+describe('cache-stats store corruption guard', () => {
+  it('preserves a corrupt ledger, then the next record rebuilds it', async () => {
+    const path = join(storeDir, 'cache-stats.json')
+    const backup = `${path}.corrupt`
+    writeFileSync(path, '[{"timestamp": torn', 'utf8')
+
+    // Fresh module instance — loadEntries latches `initialized` on first read.
+    vi.resetModules()
+    const mod = await import('../src/utils/cacheStats.js')
+    mod.recordCacheEntry('m', true, { inputTokens: 100, outputTokens: 10 })
+
+    expect(readFileSync(backup, 'utf8')).toBe('[{"timestamp": torn')
+    const stats = mod.getCacheStats()
+    expect(stats.totalRequests).toBe(1)
+    expect(mod.recordCacheEntry('m', true, { inputTokens: 100, outputTokens: 10 }))
+    expect(readFileSync(backup, 'utf8')).toBe('[{"timestamp": torn')
+  })
+
+  it('rejects shape-violating entries (non-boolean cacheHit)', async () => {
+    const path = join(storeDir, 'cache-stats.json')
+    writeFileSync(path, JSON.stringify([{ timestamp: 't', model: 'm', cacheHit: 'yes' }]), 'utf8')
+    vi.resetModules()
+    const mod = await import('../src/utils/cacheStats.js')
+    expect(mod.getCacheStats().totalRequests).toBe(0)
   })
 })

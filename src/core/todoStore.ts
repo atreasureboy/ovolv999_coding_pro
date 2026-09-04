@@ -22,7 +22,8 @@
  * plan survives context compaction because it is re-stated every turn.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync } from 'fs'
+import { atomicWriteSync } from './atomicWrite.js'
 import { join } from 'path'
 
 export interface TodoItem {
@@ -89,7 +90,7 @@ function persist(scopeKey: string, persistDir: string | undefined): void {
   if (!persistDir) return
   try {
     mkdirSync(persistDir, { recursive: true })
-    writeFileSync(todoPath(persistDir), JSON.stringify(bucket(scopeKey).items, null, 2) + '\n', 'utf8')
+    atomicWriteSync(todoPath(persistDir), JSON.stringify(bucket(scopeKey).items, null, 2) + '\n')
   } catch { /* best-effort persistence */ }
 }
 

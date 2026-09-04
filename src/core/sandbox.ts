@@ -69,31 +69,46 @@ export const DEFAULT_CONFIG: SandboxConfig = {
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
+
 function getConfigPath(): string {
   return join(homedir(), '.ovolv999', 'sandbox.json')
+}
+
+// §sandbox store: updateConfig is load→mutate→save — a torn or corrupt file
+// must not fall back to defaults inside the load, or the next /sandbox toggle
+// silently rewrites the user's real config as defaults + the toggle.
+function isShapedSandboxConfig(parsed: unknown): parsed is Partial<SandboxConfig> {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const raw = parsed as Partial<SandboxConfig>
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') return false
+  if (raw.level !== undefined && !['permissive', 'standard', 'strict'].includes(raw.level)) return false
+  for (const key of ['readOnlyPaths', 'writablePaths', 'deniedPaths'] as const) {
+    if (raw[key] !== undefined && !Array.isArray(raw[key])) return false
+  }
+  return true
 }
 
 export function loadConfig(): SandboxConfig {
   const path = getConfigPath()
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Partial<SandboxConfig>
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isShapedSandboxConfig(raw)) throw new Error('sandbox config shape violation')
     return { ...DEFAULT_CONFIG, ...raw }
   } catch (err) {
+    preserveCorruptFile(path)
     warnConfigOnce({
       file: path, severity: 'warning',
-      message: `sandbox config corrupt — using defaults (${(err as Error).message.split('\n')[0]})`,
-      fix: `fix or remove "${path}"`,
+      message: `sandbox config corrupt — backed up and reset to defaults (${(err as Error).message.split('\n')[0]})`,
+      fix: `restore from "${path}.corrupt" or reconfigure /sandbox`,
     })
     return { ...DEFAULT_CONFIG }
   }
 }
 
 export function saveConfig(config: SandboxConfig): void {
-  const path = getConfigPath()
-  const dir = join(path, '..')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(config, null, 2))
+  atomicWriteSync(getConfigPath(), JSON.stringify(config, null, 2))
 }
 
 export function updateConfig(patch: Partial<SandboxConfig>): SandboxConfig {

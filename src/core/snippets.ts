@@ -5,7 +5,8 @@
  * Supports categories, tags, variables/placeholders, and search.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -47,20 +48,38 @@ export function getSnippetPath(cwd: string): string {
   return join(resolve(cwd), '.ovolv999', 'snippets.json')
 }
 
+function isShapedSnippet(sn: unknown): sn is Snippet {
+  if (typeof sn !== 'object' || sn === null) return false
+  const s = sn as Snippet
+  return typeof s.id === 'string' &&
+    typeof s.name === 'string' &&
+    typeof s.body === 'string' &&
+    Array.isArray(s.variables)
+}
+
+// §snippets store: CRUD is load→mutate→save — a torn or corrupt store must
+// not load as empty, or the next save replaces every user snippet.
+function isShapedSnippetStore(parsed: unknown): parsed is SnippetStore {
+  return typeof parsed === 'object' && parsed !== null &&
+    Array.isArray((parsed as SnippetStore).snippets) &&
+    (parsed as SnippetStore).snippets.every(isShapedSnippet)
+}
+
 export function loadSnippets(cwd: string): SnippetStore {
   const path = getSnippetPath(cwd)
   if (!existsSync(path)) return { snippets: [] }
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as SnippetStore
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isShapedSnippetStore(parsed)) throw new Error('snippet store shape violation')
+    return parsed
   } catch {
+    preserveCorruptFile(path)
     return { snippets: [] }
   }
 }
 
 export function saveSnippets(cwd: string, store: SnippetStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(getSnippetPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getSnippetPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── Variable Extraction ─────────────────────────────────────────────────────
