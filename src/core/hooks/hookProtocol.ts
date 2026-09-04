@@ -73,12 +73,36 @@ export interface SessionStartInput extends HookInputBase {
   source?: 'startup' | 'resume' | 'clear' | 'compact'
 }
 
+export interface SessionEndInput extends HookInputBase {
+  hook_event_name: 'SessionEnd'
+  reason?: string
+}
+
+export interface StopInput extends HookInputBase {
+  hook_event_name: 'Stop'
+  reason?: string
+}
+
+export interface PreCompactInput extends HookInputBase {
+  hook_event_name: 'PreCompact'
+  trigger?: 'auto' | 'manual'
+}
+
+export interface PostCompactInput extends HookInputBase {
+  hook_event_name: 'PostCompact'
+  trigger?: 'auto' | 'manual'
+}
+
 export type HookInput =
   | PreToolUseInput
   | PostToolUseInput
   | PostToolUseFailureInput
   | UserPromptSubmitInput
   | SessionStartInput
+  | SessionEndInput
+  | StopInput
+  | PreCompactInput
+  | PostCompactInput
 
 export type HookOutput =
   | HookBaseOutput
@@ -147,6 +171,28 @@ export interface PostToolUseOutcome {
 
 export const HOOK_DEFAULT_TIMEOUT_MS = 60_000
 export const HOOK_OUTPUT_MAX_BYTES = 1_000_000
+
+/**
+ * Representative payload for `/hooks test` — fires the configured command
+ * with plausible stdin for the requested event.
+ */
+export function sampleHookInput(
+  event: HookEvent,
+  cwd: string,
+  sessionId = 'hooks-test',
+  toolName = 'Bash',
+): HookInput {
+  const base = { session_id: sessionId, cwd }
+  if (event === 'PreToolUse') return { ...base, hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: {}, tool_use_id: sessionId }
+  if (event === 'PostToolUse') return { ...base, hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: {}, tool_result: { content: 'hooks-test', is_error: false }, tool_use_id: sessionId }
+  if (event === 'PostToolUseFailure') return { ...base, hook_event_name: 'PostToolUseFailure', tool_name: toolName, tool_input: {}, error: 'hooks-test failure', tool_use_id: sessionId }
+  if (event === 'UserPromptSubmit') return { ...base, hook_event_name: 'UserPromptSubmit', prompt: 'hooks-test prompt' }
+  if (event === 'SessionStart') return { ...base, hook_event_name: 'SessionStart', source: 'startup' }
+  if (event === 'SessionEnd') return { ...base, hook_event_name: 'SessionEnd', reason: 'hooks-test' }
+  if (event === 'Stop') return { ...base, hook_event_name: 'Stop', reason: 'hooks-test' }
+  if (event === 'PreCompact') return { ...base, hook_event_name: 'PreCompact', trigger: 'manual' }
+  return { ...base, hook_event_name: 'PostCompact', trigger: 'manual' }
+}
 
 export function isPreToolUseInput(input: HookInput): input is PreToolUseInput {
   return input.hook_event_name === 'PreToolUse'

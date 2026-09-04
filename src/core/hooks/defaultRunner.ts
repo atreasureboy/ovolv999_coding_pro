@@ -15,8 +15,16 @@ import type {
 import { executeHooksParallel } from './hookExecutor.js'
 import { loadHookConfig, matchersForEvent, type HookConfig, type HookCommandConfig } from './hooksConfig.js'
 import {
-  type HookInput,
   type HookEvent,
+  type HookInput,
+  type PreToolUseInput,
+  type PostToolUseInput,
+  type UserPromptSubmitInput,
+  type SessionStartInput,
+  type SessionEndInput,
+  type StopInput,
+  type PreCompactInput,
+  type PostCompactInput,
 } from './hookProtocol.js'
 
 export interface DefaultHookRunnerOptions {
@@ -28,10 +36,6 @@ export interface DefaultHookRunnerOptions {
 
 function genSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function buildInput(event: HookEvent, fields: Record<string, unknown>, cwd: string, sessionId: string): HookInput {
-  return { session_id: sessionId, cwd, hook_event_name: event, ...fields } as HookInput
 }
 
 function execToHookResult(exec: {
@@ -103,12 +107,10 @@ export class DefaultHookRunner implements IHookRunner {
     if (!this.config) return []
     const cmds = this.getCommandsFor('PreToolUse', toolName)
     if (cmds.length === 0) return []
-    const ev = buildInput(
-      'PreToolUse',
-      { tool_name: toolName, tool_input: input, tool_use_id: `legacy-${Date.now()}` },
-      this.cwd,
-      this.sessionId,
-    )
+    const ev: PreToolUseInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PreToolUse',
+      tool_name: toolName, tool_input: input, tool_use_id: `legacy-${Date.now()}`,
+    }
     const execs = await executeHooksParallel(cmds, ev, { cwd: this.cwd })
     return execs.map(execToHookResult)
   }
@@ -117,17 +119,12 @@ export class DefaultHookRunner implements IHookRunner {
     if (!this.config) return []
     const cmds = this.getCommandsFor('PostToolUse', toolName)
     if (cmds.length === 0) return []
-    const ev = buildInput(
-      'PostToolUse',
-      {
-        tool_name: toolName,
-        tool_input: {},
-        tool_result: { content: result, is_error: isError },
-        tool_use_id: `legacy-${Date.now()}`,
-      },
-      this.cwd,
-      this.sessionId,
-    )
+    const ev: PostToolUseInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PostToolUse',
+      tool_name: toolName, tool_input: {},
+      tool_result: { content: result, is_error: isError },
+      tool_use_id: `legacy-${Date.now()}`,
+    }
     const execs = await executeHooksParallel(cmds, ev, { cwd: this.cwd })
     return execs.map(execToHookResult)
   }
@@ -136,7 +133,10 @@ export class DefaultHookRunner implements IHookRunner {
     if (!this.config) return []
     const cmds = this.getCommandsFor('UserPromptSubmit', prompt)
     if (cmds.length === 0) return []
-    const ev = buildInput('UserPromptSubmit', { prompt }, this.cwd, this.sessionId)
+    const ev: UserPromptSubmitInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'UserPromptSubmit',
+      prompt,
+    }
     const execs = await executeHooksParallel(cmds, ev, { cwd: this.cwd })
     return execs.map(execToHookResult)
   }
@@ -145,12 +145,11 @@ export class DefaultHookRunner implements IHookRunner {
     if (!this.config) return []
     const cmds = this.getCommandsFor('PreToolUse', toolName)
     if (cmds.length === 0) return []
-    const ev = buildInput(
-      'PreToolUse',
-      { tool_name: toolName, tool_input: input, tool_use_id: `pre-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
-      this.cwd,
-      this.sessionId,
-    )
+    const ev: PreToolUseInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PreToolUse',
+      tool_name: toolName, tool_input: input,
+      tool_use_id: `pre-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    }
     const execs = await executeHooksParallel(cmds, ev, { signal, cwd: this.cwd })
     return execs.map((exec) => {
       const specific = exec.output?.hookSpecificOutput
@@ -176,17 +175,12 @@ export class DefaultHookRunner implements IHookRunner {
     if (!this.config) return []
     const cmds = this.getCommandsFor('PostToolUse', toolName)
     if (cmds.length === 0) return []
-    const ev = buildInput(
-      'PostToolUse',
-      {
-        tool_name: toolName,
-        tool_input: {},
-        tool_result: { content, is_error: isError },
-        tool_use_id: `post-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      },
-      this.cwd,
-      this.sessionId,
-    )
+    const ev: PostToolUseInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PostToolUse',
+      tool_name: toolName, tool_input: {},
+      tool_result: { content, is_error: isError },
+      tool_use_id: `post-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    }
     const execs = await executeHooksParallel(cmds, ev, { signal, cwd: this.cwd })
     return execs.map((exec) => {
       const specific = exec.output?.hookSpecificOutput
@@ -200,33 +194,52 @@ export class DefaultHookRunner implements IHookRunner {
   }
 
   /** R7: dispatch a session/start/end/stop/compact event with no candidate matcher. */
-  private async dispatchSessionEvent(event: HookEvent, fields: Record<string, unknown>): Promise<void> {
+  private async dispatchSessionEvent(ev: HookInput): Promise<void> {
     if (!this.config) return
-    const cmds = this.getCommandsFor(event, '')
+    const cmds = this.getCommandsFor(ev.hook_event_name, '')
     if (cmds.length === 0) return
-    const ev = buildInput(event, fields, this.cwd, this.sessionId)
     await executeHooksParallel(cmds, ev, { cwd: this.cwd })
   }
 
   async runSessionStart(source: 'startup' | 'resume' | 'clear' | 'compact'): Promise<void> {
     if (this.sessionStartFired && source === 'startup') return
     this.sessionStartFired = true
-    await this.dispatchSessionEvent('SessionStart', { source })
+    const ev: SessionStartInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'SessionStart',
+      source,
+    }
+    await this.dispatchSessionEvent(ev)
   }
 
   async runSessionEnd(reason: string): Promise<void> {
-    await this.dispatchSessionEvent('SessionEnd', { reason })
+    const ev: SessionEndInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'SessionEnd',
+      reason,
+    }
+    await this.dispatchSessionEvent(ev)
   }
 
   async runStop(reason: string): Promise<void> {
-    await this.dispatchSessionEvent('Stop', { reason })
+    const ev: StopInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'Stop',
+      reason,
+    }
+    await this.dispatchSessionEvent(ev)
   }
 
   async runPreCompact(trigger: 'auto' | 'manual'): Promise<void> {
-    await this.dispatchSessionEvent('PreCompact', { trigger })
+    const ev: PreCompactInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PreCompact',
+      trigger,
+    }
+    await this.dispatchSessionEvent(ev)
   }
 
   async runPostCompact(trigger: 'auto' | 'manual'): Promise<void> {
-    await this.dispatchSessionEvent('PostCompact', { trigger })
+    const ev: PostCompactInput = {
+      session_id: this.sessionId, cwd: this.cwd, hook_event_name: 'PostCompact',
+      trigger,
+    }
+    await this.dispatchSessionEvent(ev)
   }
 }

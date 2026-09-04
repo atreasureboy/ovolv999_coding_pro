@@ -11,17 +11,20 @@
 /* eslint-disable @typescript-eslint/consistent-type-imports,
    @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment,
    @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument,
-   @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return */
+   @typescript-eslint/no-unsafe-return */
 
 
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
-import { saveProjectSettings } from '../../config/settings.js'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { text } from '../shared.js'
 import { loadProfilesRaw } from './common.js'
+import { loadProjectSettings, saveProjectSettings } from '../../config/settings.js'
+import { loadHookConfig } from '../../core/hooks/hooksConfig.js'
+import { executeHookCommand } from '../../core/hooks/hookExecutor.js'
+import { HOOK_EVENTS as PROTOCOL_EVENTS, sampleHookInput } from '../../core/hooks/hookProtocol.js'
 
 registerCommand({
   name: 'snapshot',
@@ -333,11 +336,6 @@ registerCommand({
   name: 'hooks',
   description: 'Manage lifecycle hooks (.ovogo/settings.json, CC-compatible). Usage: /hooks [list | add <event> <matcher> <command> | remove <event> <index> | clear <event> | test <event> <tool>]',
   handler: (args, ctx) => {
-    const { loadHookConfig } = require('../../core/hooks/hooksConfig.js') as typeof import('../../core/hooks/hooksConfig.js')
-    const { executeHookCommand } = require('../../core/hooks/hookExecutor.js') as typeof import('../../core/hooks/hookExecutor.js')
-    const { loadProjectSettings, saveProjectSettings } = require('../../config/settings.js') as typeof import('../../config/settings.js')
-    const { HOOK_EVENTS: PROTOCOL_EVENTS } = require('../../core/hooks/hookProtocol.js') as typeof import('../../core/hooks/hookProtocol.js')
-
     const formatConfig = (projHooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout?: number }> }>>): string => {
       const lines: string[] = []
       const projectEvents = Object.keys(projHooks)
@@ -423,16 +421,18 @@ registerCommand({
     }
 
     if (sub === 'test') {
-      const event = (parts[1] ?? 'PreToolUse')
+      const requested = parts[1]
+      const matched = PROTOCOL_EVENTS.find((e) => e === requested)
+      if (requested && !matched) {
+        return text(`Unknown hook event "${requested}". Events: ${PROTOCOL_EVENTS.join(', ')}`)
+      }
+      const event = matched ?? 'PreToolUse'
       const toolName = parts[2] ?? 'Bash'
       const matchers = merged[event] ?? []
       if (matchers.length === 0) return text(`No hooks configured for ${event}`)
       const cmds = matchers.flatMap(m => m.hooks ?? [])
       if (cmds.length === 0) return text(`No commands under ${event}`)
-      const input = {
-        session_id: 'hooks-test', cwd: ctx.cwd, hook_event_name: event,
-        tool_name: toolName, tool_input: {},
-      } as never
+      const input = sampleHookInput(event, ctx.cwd, 'hooks-test', toolName)
       const lines: string[] = []
       for (let i = 0; i < cmds.length; i++) {
         void executeHookCommand(
