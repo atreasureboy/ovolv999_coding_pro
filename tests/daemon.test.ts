@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { Daemon, DaemonClient, formatDaemonInfo, formatWorkers, type WorkerEntry } from '../src/core/daemon.js'
+import { Daemon, DaemonClient, formatDaemonInfo, formatWorkers, toSocketPath, type WorkerEntry } from '../src/core/daemon.js'
 import { mkdtempSync, rmSync } from 'fs'
+import { createServer } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync } from 'fs'
@@ -140,6 +141,23 @@ describe('daemon', () => {
       // Should still respond quickly with a well-formed result
       expect(res).toBeDefined()
       expect(typeof res.ok).toBe('boolean')
+    })
+
+    it('fails fast when the daemon closes before responding', async () => {
+      // A bare server that accepts and immediately destroys the socket —
+      // the "daemon died mid-request" shape. The client must report the
+      // premature close instead of hanging until the timeout.
+      const deadPath = join(testDir, 'dead.sock')
+      const dead = createServer((socket) => { socket.destroy() })
+      await new Promise<void>((resolve) => { dead.listen(toSocketPath(deadPath), () => resolve()) })
+      try {
+        const client = new DaemonClient(deadPath)
+        const res = await client.send({ action: 'ping' }, 10_000)
+        expect(res.ok).toBe(false)
+        expect(res.error).toContain('before responding')
+      } finally {
+        await new Promise<void>((resolve) => { dead.close(() => resolve()) })
+      }
     })
   })
 

@@ -865,7 +865,23 @@ export class DaemonClient {
         if (!settled) {
           settled = true
           clearTimeout(timer)
-          resolve({ ok: false, error: err.message })
+          // EPIPE/ECONNRESET after connect means the daemon accepted and
+          // then died mid-request — name that instead of surfacing the
+          // raw write error.
+          const code = (err as NodeJS.ErrnoException).code
+          const premature = code === 'EPIPE' || code === 'ECONNRESET'
+          resolve({ ok: false, error: premature ? 'Daemon closed the connection before responding' : err.message })
+        }
+      })
+
+      // A daemon that accepts and then dies mid-request closes the socket
+      // without data — fail fast with the real cause instead of burning
+      // the whole timeout and reporting a misleading "timed out".
+      socket.on('close', (hadError: boolean) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve({ ok: false, error: hadError ? 'Daemon connection error' : 'Daemon closed the connection before responding' })
         }
       })
 

@@ -50,9 +50,10 @@ export const DEFAULT_OUTPUT_LIMIT_BYTES = 256 * 1024
 
 /**
  * Run a command per `spec`. Never throws on non-zero exit — returns a
- * CommandResult with exitCode (null if killed by signal). Throws only
- * on spawn failure (ENOENT etc.) so callers can distinguish "command
- * didn't run" from "command ran and failed".
+ * CommandResult with exitCode (null if killed by signal). Spawn failure
+ * (ENOENT etc.) is also a result, not a throw: exitCode -1 with the
+ * error message in stderr, so "command didn't run" and "command ran
+ * and failed" are distinguished by exitCode/stderr, not exceptions.
  */
 export async function runCommand(spec: CommandSpec): Promise<CommandResult> {
   const {
@@ -119,6 +120,10 @@ export async function runCommand(spec: CommandSpec): Promise<CommandResult> {
     child.stderr?.on('data', (d: Buffer) => append('stderr', d))
 
     if (stdin !== undefined && child.stdin) {
+      // The child may exit (or fail to spawn) without ever reading stdin —
+      // that surfaces as an 'error' (EPIPE) on the pipe, and an unhandled
+      // stream error would crash the process. Same guard as hookExecutor.
+      child.stdin.on('error', () => { /* child did not read stdin — non-fatal */ })
       child.stdin.end(stdin)
     }
 
@@ -193,10 +198,13 @@ function zeroResult(p: { cancelled?: boolean; timedOut?: boolean; durationMs: nu
  * for new code. Provides the SAME structured-result contract (timeout,
  * bounded output, exit/signal) minus AbortSignal/streaming (which need
  * an event loop). Output is truncated to outputLimitBytes per stream.
+ * stdin is delivered via spawnSync's input option (unlike the async
+ * path there is no pipe to EPIPE — a child that never reads it just
+ * gets the data discarded).
  */
 export function runCommandSync(spec: CommandSpec): CommandResult {
   const {
-    executable, args, cwd, env, timeoutMs,
+    executable, args, cwd, env, timeoutMs, stdin,
     outputLimitBytes = DEFAULT_OUTPUT_LIMIT_BYTES, shell = false,
   } = spec
   const start = Date.now()
@@ -207,9 +215,16 @@ export function runCommandSync(spec: CommandSpec): CommandResult {
     timeout: timeoutMs,
     encoding: 'utf8',
     maxBuffer: outputLimitBytes,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    input: stdin,
+    stdio: [stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   })
-  const timedOut = r.signal === 'SIGTERM' && !!timeoutMs // spawnSync sends SIGTERM on timeout
+  // spawnSync flags a timeout via error.code ETIMEDOUT (and SIGTERM).
+  // Keep the SIGTERM heuristic as a fallback for runtimes that don't
+  // set the errno — an externally SIGTERM'd child with a timeout set
+  // is indistinguishable either way and misreporting it as a timeout
+  // is the existing, accepted behavior.
+  const timedOut = r.error !== undefined && 'code' in r.error && r.error.code === 'ETIMEDOUT'
+    || (r.signal === 'SIGTERM' && !!timeoutMs)
   const stdoutRaw = r.stdout ?? ''
   const stderrRaw = r.stderr ?? ''
   const truncate = (s: string): string => s.length > outputLimitBytes ? s.slice(0, outputLimitBytes) : s

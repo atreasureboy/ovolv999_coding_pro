@@ -70,4 +70,29 @@ describe('CommandRunner (Phase 2)', () => {
     const fail = runCommandSync({ executable: 'node', args: ['-e', 'process.exit(7)'], cwd: process.cwd() })
     expect(fail.exitCode).toBe(7)
   })
+
+  it('delivers stdin to a child that reads it (async)', async () => {
+    const r = await runCommand({
+      executable: 'node', args: ['-e', 'let d=""; process.stdin.on("data", c => d += c); process.stdin.on("end", () => process.stdout.write("got:" + d))'],
+      cwd: process.cwd(), stdin: 'payload',
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toBe('got:payload')
+  })
+
+  it('survives a child that exits without reading stdin', async () => {
+    // `true` never reads stdin — the write EPIPEs. Before the stdin
+    // error guard this crashed the process with an unhandled 'error'.
+    const r = await runCommand({ executable: 'true', args: [], cwd: process.cwd(), stdin: 'unread' })
+    expect(r.exitCode).toBe(0)
+  })
+
+  it('delivers stdin synchronously', () => {
+    const r = runCommandSync({
+      executable: 'node', args: ['-e', 'let d=""; process.stdin.on("data", c => d += c); process.stdin.on("end", () => console.log("got:" + d))'],
+      cwd: process.cwd(), stdin: 'sync-payload',
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toBe('got:sync-payload\n')
+  })
 })
