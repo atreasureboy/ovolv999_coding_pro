@@ -289,7 +289,7 @@ registerCommand({
 
     if (trimmed === 'reset' || trimmed === 'default') {
       const path = writeDefaultConfig(ctx.cwd)
-      return text(`✓ Reset keybindings to defaults.\nWritten to: ${path}`)
+      return text(`✓ Reset keybindings to defaults.\nWritten to: ${path}\nBindings load at startup — restart ovolv999 for this to apply.`)
     }
 
     const result = loadKeybindings(ctx.cwd)
@@ -326,7 +326,7 @@ registerCommand({
 
     lines.push('')
     lines.push(result.hasUserConfig
-      ? '* = user override (from .ovolv999/keybindings.json)'
+      ? '* = user override (from .ovolv999/keybindings.json)\nBindings load at startup — restart ovolv999 after editing.'
       : 'Edit .ovolv999/keybindings.json to customize. Run /keybindings reset to create a template.')
 
     return text(lines.join('\n'))
