@@ -108,7 +108,7 @@ export class WorkspaceWatcher {
     if (!this.running) return
     this.running = false
     if (this.watcher) {
-      void this.watcher.close()
+      void this.watcher.close().catch(() => { /* best-effort: an in-flight watch error must not crash shutdown */ })
       this.watcher = null
     }
     if (this.debounceTimer) {

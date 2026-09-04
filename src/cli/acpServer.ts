@@ -128,7 +128,7 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
   process.stderr.write(`[acp-ws] health check: http://${opts.host}:${port}/health\n`)
 
   const shutdown = (): void => {
-    void server.stop().finally(() => process.exit(0))
+    void server.stop().catch(() => { /* best-effort shutdown */ }).finally(() => process.exit(0))
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
