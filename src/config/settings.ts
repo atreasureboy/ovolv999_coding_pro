@@ -31,9 +31,8 @@
  *   all events:        OVOGO_HOOK_EVENT, OVOGO_SESSION_ID
  */
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
-import { randomBytes } from 'crypto'
-import { resolve, join, dirname } from 'path'
+import { readFileSync, existsSync } from 'fs'
+import { resolve, join } from 'path'
 import { homedir } from 'os'
 import type { PermissionMode, PermissionProfile, PermissionRule } from '../core/permissionSystem.js'
 import type { McpServerConfig } from '../core/mcpClient.js'
@@ -41,6 +40,7 @@ import { normalizeHooksSection, type HookConfig } from '../core/hooks/hooksConfi
 import { parseJsonSyntaxError, warnConfigOnce } from './diagnostics.js'
 import type { ConfigDiagnostic } from './diagnostics.js'
 import { parseJsonc } from '../utils/jsonc.js'
+import { atomicWriteSync } from '../core/atomicWrite.js'
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk', 'bubble'])
 const PERMISSION_PROFILES = new Set(['safe', 'standard', 'autonomous'])
@@ -505,27 +505,7 @@ export function saveProjectSettings(cwd: string, patch: OvogoSettings): OvogoSet
       : current.permissions,
   }
 
-  mkdirSync(dirname(projectPath), { recursive: true })
-  // Unique tmp name (pid + ms + 8 random bytes) so concurrent saves
-  // can't race on a fixed `.tmp` suffix. The earlier fixed tmp could
-  // collide when two writers fired in the same ms: writer A's rename
-  // would steal writer B's half-written tmp mid-flight, leaving B's
-  // data overwritten or its tmp clobbered. With a unique suffix each
-  // call gets its own tmp and only the last rename survives. We clean
-  // up OUR tmp on failure — other concurrent writers' tmps are left
-  // alone, mirroring the convention used by saveSession.
-  const tmpPath = `${projectPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
-  try {
-    writeFileSync(tmpPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
-    renameSync(tmpPath, projectPath)
-  } catch (err) {
-    try {
-      if (existsSync(tmpPath)) unlinkSync(tmpPath)
-    } catch {
-      /* swallow cleanup failure — the write error is the important one */
-    }
-    throw err
-  }
+  atomicWriteSync(projectPath, JSON.stringify(next, null, 2) + '\n')
   return next
 }
 
@@ -584,6 +564,5 @@ export function saveGlobalProvider(provider: ProviderConfig): void {
   const path = getGlobalSettingsPath()
   const current = existsSync(path) ? tryParse(path) : {}
   const next: OvogoSettings = { ...current, provider }
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(next, null, 2) + '\n', 'utf8')
+  atomicWriteSync(path, JSON.stringify(next, null, 2) + '\n')
 }

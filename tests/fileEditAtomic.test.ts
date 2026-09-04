@@ -1217,3 +1217,82 @@ describePosix('FileEdit / FileWrite — symlink-at-write-path interaction', () =
     expect(existsSync(fp)).toBe(false)
   })
 })
+
+// ─── 6. atomicWriteSync — sync twin contract ───────────────────────────────
+
+import { atomicWriteSync } from '../src/core/atomicWrite.js'
+
+describe('atomicWriteSync — writes content exactly, no leftovers', () => {
+  it('writes string content and leaves no .tmp files', () => {
+    const dir = newDir('sync-str')
+    const fp = join(dir, 'data.json')
+    atomicWriteSync(fp, '{"a":1}\n')
+    expect(readFileSync(fp, 'utf8')).toBe('{"a":1}\n')
+    expect(listTmpLeftovers(dir)).toEqual([])
+  })
+
+  it('writes Buffer content byte-exactly, including a zero-length payload', () => {
+    const dir = newDir('sync-buf')
+    const fp = join(dir, 'blob.bin')
+    atomicWriteSync(fp, Buffer.from([0x00, 0xff, 0x10]))
+    expect(readFileSync(fp)).toEqual(Buffer.from([0x00, 0xff, 0x10]))
+
+    const empty = join(dir, 'empty.bin')
+    atomicWriteSync(empty, Buffer.alloc(0))
+    expect(statSync(empty).size).toBe(0)
+    expect(listTmpLeftovers(dir)).toEqual([])
+  })
+
+  it('creates parent directories recursively', () => {
+    const dir = newDir('sync-deep')
+    const fp = join(dir, 'a', 'b', 'c', 'f.txt')
+    atomicWriteSync(fp, 'buried')
+    expect(readFileSync(fp, 'utf8')).toBe('buried')
+  })
+
+  it('overwrites an existing file atomically', () => {
+    const dir = newDir('sync-overwrite')
+    const fp = join(dir, 'f.txt')
+    writeFileSync(fp, 'old content', 'utf8')
+    atomicWriteSync(fp, 'new content')
+    expect(readFileSync(fp, 'utf8')).toBe('new content')
+    expect(listTmpLeftovers(dir)).toEqual([])
+  })
+})
+
+describePosix('atomicWriteSync — POSIX semantics', () => {
+  it('preserves 0755 mode on an existing file', () => {
+    const dir = newDir('sync-mode')
+    const fp = join(dir, 'script.sh')
+    writeFileSync(fp, '#!/bin/sh\n', { mode: 0o755 })
+
+    atomicWriteSync(fp, '#!/bin/sh\nexit 0\n')
+
+    expect(statSync(fp).mode & 0o777).toBe(0o755)
+  })
+
+  it('writes through a symlink and preserves the link', () => {
+    const dir = newDir('sync-symlink')
+    const real = join(dir, 'real.txt')
+    writeFileSync(real, 'original', 'utf8')
+    const link = join(dir, 'link.txt')
+    symlinkSync(real, link)
+
+    atomicWriteSync(link, 'updated')
+
+    expect(readFileSync(real, 'utf8')).toBe('updated')
+    expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    expect(readlinkSync(link)).toBe(real)
+    expect(listTmpLeftovers(dir)).toEqual([])
+  })
+
+  it('refuses a broken symlink and leaves the link in place', () => {
+    const dir = newDir('sync-broken')
+    const link = join(dir, 'dangling.txt')
+    symlinkSync(join(dir, 'missing.txt'), link)
+
+    expect(() => atomicWriteSync(link, 'x')).toThrow(/broken symlink/)
+    expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    expect(existsSync(join(dir, 'dangling.txt.tmp.1'))).toBe(false)
+  })
+})

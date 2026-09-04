@@ -35,6 +35,7 @@
 import { existsSync, readFileSync, mkdirSync, statSync, copyFileSync, chmodSync, closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync, writeFileSync, readdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
+import { atomicWriteSync } from './atomicWrite.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -188,9 +189,8 @@ export class FileHistory {
   /**
    * Atomically persist the in-memory edit map to `<historyDir>/index.json`.
    *
-   * Uses the same fd+fsync+rename convention as the rest of this codebase
-   * (see sessionManager.saveSession, semanticMemory.persistAll) so the
-   * index survives a crash mid-write without losing the entire history.
+   * Goes through atomicWriteSync (tmp + fsync + rename) so the index
+   * survives a crash mid-write without losing the entire history.
    *
    * Failure is swallowed: a missing index is recoverable by rebuildIndex
    * on the next construction, so we'd rather keep the in-memory state
@@ -203,20 +203,9 @@ export class FileHistory {
       entries[filePath] = versions.slice()
     }
     const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
-    const tmpPath = `${this.indexPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
-    let tmpFd: number | null = null
     try {
-      tmpFd = openSync(tmpPath, 'w')
-      writeSync(tmpFd, payload, 0, payload.length, 0)
-      fsyncSync(tmpFd)
-      closeSync(tmpFd)
-      tmpFd = null
-      renameSync(tmpPath, this.indexPath)
+      atomicWriteSync(this.indexPath, payload)
     } catch {
-      if (tmpFd !== null) {
-        try { closeSync(tmpFd) } catch { /* swallow */ }
-      }
-      try { if (existsSync(tmpPath)) unlinkSync(tmpPath) } catch { /* swallow */ }
       /* swallow — in-memory state is the source of truth */
     }
   }
@@ -382,9 +371,8 @@ export class FileHistory {
    * the backup tree alone — without it the rebuild would see only the
    * SHA-256 bucket name and have to guess.
    *
-   * Uses the same fd + writeSync + fsyncSync + closeSync + renameSync
-   * convention as the index write so a crash mid-write never leaves a
-   * torn JSON object on disk that could be read back as garbage.
+   * Uses atomicWriteSync (tmp + fsync + rename) so a crash mid-write never
+   * leaves a torn JSON object on disk that could be read back as garbage.
    * Best-effort: failures are swallowed because the primary index also
    * records the path, so a missing sidecar only matters in the rebuild
    * path. We'd rather skip a backup's metadata than block the edit.
@@ -395,27 +383,9 @@ export class FileHistory {
       JSON.stringify(sidecar),
       'utf8',
     )
-    // Same-directory tmp so the rename is atomic on POSIX. The suffix
-    // combines pid + ms + 8 random bytes — collision-free under any
-    // realistic concurrency.
-    const tmpPath = `${sidecarPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
-    let tmpFd: number | null = null
     try {
-      tmpFd = openSync(tmpPath, 'w')
-      writeSync(tmpFd, payload, 0, payload.length, 0)
-      fsyncSync(tmpFd)
-      closeSync(tmpFd)
-      tmpFd = null
-      renameSync(tmpPath, sidecarPath)
+      atomicWriteSync(sidecarPath, payload)
     } catch {
-      if (tmpFd !== null) {
-        try { closeSync(tmpFd) } catch { /* swallow */ }
-      }
-      try {
-        if (existsSync(tmpPath)) unlinkSync(tmpPath)
-      } catch {
-        /* swallow */
-      }
       /* swallow — primary index is still authoritative for the in-memory
          state, and a missing sidecar only degrades the rebuild path */
     }
@@ -887,9 +857,9 @@ export class FileHistory {
   }
 
   /**
-   * Persist the redo stacks to `<historyDir>/redo-index.json`. Same
-   * fd+fsync+rename convention as the version index. Failures are
-   * swallowed: the in-memory stack stays authoritative for this process.
+   * Persist the redo stacks to `<historyDir>/redo-index.json` via
+   * atomicWriteSync (tmp + fsync + rename). Failures are swallowed: the
+   * in-memory stack stays authoritative for this process.
    */
   private saveRedoIndexToDisk(): void {
     const entries: Record<string, string[]> = {}
@@ -897,21 +867,9 @@ export class FileHistory {
       entries[filePath] = stack.slice()
     }
     const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
-    const tmpPath = `${this.redoIndexPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
-    let tmpFd: number | null = null
     try {
-      tmpFd = openSync(tmpPath, 'w')
-      writeSync(tmpFd, payload, 0, payload.length, 0)
-      fsyncSync(tmpFd)
-      closeSync(tmpFd)
-      tmpFd = null
-      renameSync(tmpPath, this.redoIndexPath)
-    } catch {
-      if (tmpFd !== null) {
-        try { closeSync(tmpFd) } catch { /* swallow */ }
-      }
-      try { if (existsSync(tmpPath)) unlinkSync(tmpPath) } catch { /* swallow */ }
-    }
+      atomicWriteSync(this.redoIndexPath, payload)
+    } catch { /* swallow — in-memory stack is authoritative */ }
   }
 
   /**

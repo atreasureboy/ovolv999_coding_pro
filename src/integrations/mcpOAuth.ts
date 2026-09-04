@@ -11,8 +11,9 @@
  * bearer profile, resource indicators (RFC 8707).
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, existsSync, chmodSync } from 'node:fs'
+import { join } from 'node:path'
+import { atomicWriteSync } from '../core/atomicWrite.js'
 import { homedir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
 
@@ -160,9 +161,7 @@ export function loadTokenStore(): Map<string, OAuthTokenSet> {
 
 export function saveTokenStore(store: Map<string, OAuthTokenSet>): void {
   const path = getTokenStorePath()
-  const dir = dirname(path)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify({ tokens: Array.from(store.values()) }, null, 2))
+  atomicWriteSync(path, JSON.stringify({ tokens: Array.from(store.values()) }, null, 2))
   try { chmodSync(path, 0o600) } catch { /* best-effort */ }
 }
 

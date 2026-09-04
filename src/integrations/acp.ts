@@ -17,7 +17,8 @@
 
 import { createInterface, type Interface as ReadlineInterface } from 'readline'
 import { EventEmitter } from 'events'
-import { writeFileSync, readFileSync, realpathSync, existsSync } from 'fs'
+import { readFileSync, realpathSync, existsSync } from 'fs'
+import { atomicWriteSync } from '../core/atomicWrite.js'
 import { resolve, relative, normalize, dirname, basename, join } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -372,7 +373,7 @@ export class ACPServer extends EventEmitter {
       if (this.handlers.onFileWrite) {
         this.handlers.onFileWrite(canonicalPath, content)
       } else {
-        writeFileSync(canonicalPath, content, 'utf8')
+        atomicWriteSync(canonicalPath, content)
       }
     } catch (err) {
       this.respondError(id, RPC_ERRORS.INTERNAL_ERROR.code, `Failed to write: ${(err as Error).message}`)

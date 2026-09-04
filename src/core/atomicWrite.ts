@@ -64,6 +64,10 @@
 
 import { rename, unlink, stat, mkdir, lstat, realpath, open } from 'fs/promises'
 import type { FileHandle } from 'fs/promises'
+import {
+  closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, renameSync, lstatSync,
+  realpathSync, statSync, unlinkSync, writeSync,
+} from 'fs'
 import { dirname } from 'path'
 import { randomBytes } from 'crypto'
 
@@ -265,6 +269,98 @@ export async function statSafely(filePath: string): Promise<{ mtimeMs: number; s
     return { mtimeMs: s.mtimeMs, size: s.size }
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+/**
+ * Sync twin of atomicWrite — same contract, blocking implementation: unique
+ * tmp in the target's directory, partial-write-safe loop, fd chmod + fsync
+ * before rename (see the durability rationale on atomicWrite), write-through
+ * symlinks, mode preservation, no tmp leftovers on any failure.
+ *
+ * Keep the semantics in lockstep with atomicWrite. The codebase's synchronous
+ * persistence paths (settings, semantic memory, file history, budgets, the
+ * token/vault stores, ACP file writes) cannot await — before this existed
+ * they each carried a private copy of this pattern at varying durability
+ * levels (some without fsync), which is why the twin lives here instead of
+ * letting those copies multiply. sessionManager.saveSession intentionally
+ * stays bespoke: it wraps the same core in a .bak copy plus an append-only
+ * ledger delta, which is session-specific orchestration, not a different
+ * write primitive.
+ */
+export function atomicWriteSync(target: string, content: string | Buffer): void {
+  const payload = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
+
+  let realTarget = target
+  let isSymlink = false
+  try {
+    if (lstatSync(target).isSymbolicLink()) isSymlink = true
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  if (isSymlink) {
+    try {
+      realTarget = realpathSync(target)
+    } catch (err: unknown) {
+      throw new Error(
+        `atomicWriteSync: target ${target} is a broken symlink ` +
+          `(cannot resolve: ${(err as Error).message}); fix the link before writing`,
+        { cause: err },
+      )
+    }
+    try {
+      if (statSync(realTarget).isDirectory()) {
+        throw new Error(
+          `atomicWriteSync: target ${target} is a symlink to a directory ` +
+            `(${realTarget}); refusing to write through`,
+        )
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(
+          `atomicWriteSync: target ${target} is a broken symlink ` +
+            `(points to ${realTarget} which does not exist); fix the link before writing`,
+          { cause: err },
+        )
+      }
+      throw err
+    }
+  }
+
+  mkdirSync(dirname(realTarget), { recursive: true })
+
+  let existingMode: number | undefined
+  try {
+    existingMode = statSync(realTarget).mode
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  const counter = (_tmpCounter = (_tmpCounter + 1) | 0)
+  const tmpPath = `${realTarget}.tmp.${process.pid}.${Date.now()}.${counter}.${randomBytes(6).toString('hex')}`
+
+  let fd: number | null = null
+  try {
+    fd = openSync(tmpPath, 'w')
+    // writeSync may legally write fewer bytes than asked — loop until the
+    // payload is fully out, mirroring what a partial write on a full disk
+    // or a signal interruption would otherwise silently truncate.
+    let written = 0
+    while (written < payload.length) {
+      written += writeSync(fd, payload, written, payload.length - written, written)
+    }
+    if (existingMode !== undefined) fchmodSync(fd, existingMode)
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = null
+    renameSync(tmpPath, realTarget)
+  } catch (err) {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* original error is more informative */ }
+    }
+    try { unlinkSync(tmpPath) } catch { /* original error is more informative */ }
     throw err
   }
 }

@@ -5,7 +5,8 @@
  * Provides warnings when approaching limits and hard stops when exceeded.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -86,11 +87,7 @@ export function loadBudgetStore(cwd: string): BudgetStore {
 }
 
 export function saveBudgetStore(cwd: string, store: BudgetStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  writeFileSync(getBudgetPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getBudgetPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── Period Helpers ──────────────────────────────────────────────────────────

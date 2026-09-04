@@ -7,6 +7,7 @@
  */
 
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
+import { atomicWriteSync } from '../core/atomicWrite.js'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -92,7 +93,7 @@ function compactIfNeeded(): void {
 
     // Keep last MAX_HISTORY lines
     const kept = lines.slice(-MAX_HISTORY)
-    writeFileSync(HISTORY_FILE, kept.join('\n') + '\n', 'utf-8')
+    atomicWriteSync(HISTORY_FILE, kept.join('\n') + '\n')
   } catch {
     // Best-effort
   }

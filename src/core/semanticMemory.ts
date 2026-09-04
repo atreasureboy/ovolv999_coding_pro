@@ -18,9 +18,10 @@
  * Storage: ~/.ovogo/projects/{slug}/memory/semantic.jsonl
  */
 
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { createHash, randomBytes, randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
+import { atomicWriteSync } from './atomicWrite.js'
 
 export interface SemanticMemoryEntry {
   id: string
@@ -240,23 +241,8 @@ export class SemanticMemory {
   /**
    * Persist all entries to disk (rewrite entire file for consistency).
    *
-   * Uses an atomic tmp + flush + rename pattern so a crash mid-write
-   * can never leave a half-written semantic.jsonl on disk:
-   *
-   *   1. Write payload to a uniquely-suffixed tmp file IN THE SAME
-   *      directory as the target (cross-directory rename is not atomic
-   *      on POSIX, so the same-directory requirement is load-bearing).
-   *      The suffix combines pid + Date.now() + 8 random bytes so two
-   *      concurrent rewrites (from this process or another process
-   *      racing on the same projectDir) can never collide on the tmp
-   *      name — only the LAST successful rename wins.
-   *   2. fsync the tmp file so its bytes are on stable storage before
-   *      the rename publishes it.
-   *   3. rename tmp → target. Atomic on POSIX within the same FS.
-   *   4. Always unlink the tmp in a `finally`, whether the write /
-   *      fsync / rename succeeded or failed — otherwise a failed
-   *      rewrite leaks the tmp onto disk forever.
-   *
+   * The write goes through atomicWriteSync (tmp + fsync + rename), so a
+   * crash mid-write can never leave a half-written semantic.jsonl on disk.
    * The whole operation is synchronous and inline — by the time
    * persistAll() returns, the bytes are on disk. No Promise queue is
    * involved (deferred writes would change the API and lose data on
@@ -264,25 +250,11 @@ export class SemanticMemory {
    * these sync calls against each other).
    */
   private persistAll(): void {
-    const tmpPath = `${this.filePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}`
-    let tmpFd: number | null = null
     try {
       const lines = Array.from(this.entries.values())
         .map((e) => JSON.stringify(e))
         .join('\n')
-      const payload = Buffer.from(lines + '\n', 'utf8')
-
-      // Open + write + fsync + close. Going through the fd directly
-      // (instead of writeFileSync) gives us an explicit fsync so the
-      // rename that follows is guaranteed to publish fully-committed
-      // bytes.
-      tmpFd = openSync(tmpPath, 'w')
-      writeSync(tmpFd, payload, 0, payload.length, 0)
-      fsyncSync(tmpFd)
-      closeSync(tmpFd)
-      tmpFd = null
-
-      renameSync(tmpPath, this.filePath)
+      atomicWriteSync(this.filePath, Buffer.from(lines + '\n', 'utf8'))
       // Refresh the (mtime, size) cache so the next ensureLoaded()
       // sees the file as "freshly loaded" and doesn't reload what we
       // just rewrote. Without this, every search()/readAll() after a
@@ -296,20 +268,6 @@ export class SemanticMemory {
       }
     } catch {
       /* best-effort — do not let a write failure escape this method */
-    } finally {
-      // Best-effort cleanup of the tmp file (and its fd) so a failed
-      // rewrite does not leak the tmp onto disk and a half-open fd
-      // does not survive past this call. unlinkSync on an already-
-      // renamed (i.e. missing) path is a no-op ENOENT — safe to call
-      // unconditionally after a successful rename.
-      if (tmpFd !== null) {
-        try { closeSync(tmpFd) } catch { /* swallow */ }
-      }
-      try {
-        if (existsSync(tmpPath)) unlinkSync(tmpPath)
-      } catch {
-        /* swallow */
-      }
     }
   }
 

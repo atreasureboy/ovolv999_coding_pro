@@ -11,9 +11,10 @@
  *   - Fallback: AES-256-GCM encrypted JSON file (scrypt-derived key)
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { atomicWriteSync } from '../core/atomicWrite.js'
 import { execFileSync, execSync } from 'child_process'
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto'
 
@@ -131,10 +132,8 @@ function loadFileVault(passphrase: string): FileVault {
 }
 
 function saveFileVault(vault: FileVault, passphrase: string): void {
-  const dir = getVaultDir()
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const encrypted = encrypt(JSON.stringify(vault), passphrase)
-  writeFileSync(getVaultFilePath(), encrypted, 'utf8')
+  atomicWriteSync(getVaultFilePath(), encrypted)
 }
 
 // ── macOS Keychain Backend ──────────────────────────────────────────────────
