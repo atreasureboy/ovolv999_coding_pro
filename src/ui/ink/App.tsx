@@ -636,7 +636,7 @@ export function App({
 
       {/* Help overlay (? key) */}
       {showHelp && !store.hasOverlay() ? (
-        <HelpOverlay onDismiss={() => setShowHelp(false)} />
+        <HelpOverlay onDismiss={() => setShowHelp(false)} bindings={keybindings.bindings} />
       ) : null}
 
       {/* Input — stays visible DURING a turn (codex queue behavior):

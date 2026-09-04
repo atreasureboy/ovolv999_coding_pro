@@ -340,6 +340,24 @@ export function writeDefaultConfig(cwd: string): string {
   return configPath
 }
 
+/** Format a combo string for display: 'ctrl+l' → 'Ctrl+L', '?' → '?',
+ * 'shift+tab' → 'Shift+Tab'. */
+export function formatCombo(combo: string): string {
+  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean)
+  const key = parts.pop() ?? ''
+  const keyDisplay = key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1)
+  return [...parts.map((m) => m.charAt(0).toUpperCase() + m.slice(1)), keyDisplay].join('+')
+}
+
+/** Invert the bindings map for one action — the combo a given action is
+ * currently bound to, or null when unbound. */
+export function actionToCombo(bindings: Map<string, KeyAction>, action: KeyAction): string | null {
+  for (const [combo, a] of bindings) {
+    if (a === action) return combo
+  }
+  return null
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Human-readable description of an action */

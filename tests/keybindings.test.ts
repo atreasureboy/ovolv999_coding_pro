@@ -14,6 +14,8 @@ import {
   ACTION_DESCRIPTIONS,
   COMPOSER_ACTIONS,
   resolveComposerAction,
+  formatCombo,
+  actionToCombo,
   type KeyAction,
 } from '../src/ui/keybindings.js'
 
@@ -427,6 +429,38 @@ describe('resolveComposerAction', () => {
     // Old binding no longer fires; the new one does.
     expect(resolveComposerAction('g', { ctrl: true }, rebound)).toBeNull()
     expect(resolveComposerAction('k', { ctrl: true }, rebound)).toBe('open-editor')
+  })
+})
+
+describe('formatCombo + actionToCombo', () => {
+  const defaultKeymap = new Map<string, KeyAction>(
+    Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
+  )
+
+  it('formats combos for display', () => {
+    expect(formatCombo('ctrl+l')).toBe('Ctrl+L')
+    expect(formatCombo('?')).toBe('?')
+    expect(formatCombo('shift+tab')).toBe('Shift+Tab')
+    expect(formatCombo('ctrl+enter')).toBe('Ctrl+Enter')
+    expect(formatCombo('alt+meta+k')).toBe('Alt+Meta+K')
+  })
+
+  it('inverts the bindings map per action', () => {
+    expect(actionToCombo(defaultKeymap, 'clear-screen')).toBe('ctrl+l')
+    expect(actionToCombo(defaultKeymap, 'toggle-help')).toBe('?')
+  })
+
+  it('returns null for an unbound action', () => {
+    const withoutVerbose = new Map([...defaultKeymap].filter(([, a]) => a !== 'toggle-verbose'))
+    expect(actionToCombo(withoutVerbose, 'toggle-verbose')).toBeNull()
+  })
+
+  it('reflects a user rebinding', () => {
+    const rebound = new Map(defaultKeymap)
+    rebound.delete('ctrl+g')
+    rebound.set('ctrl+k', 'open-editor')
+    expect(actionToCombo(rebound, 'open-editor')).toBe('ctrl+k')
+    expect(formatCombo(actionToCombo(rebound, 'open-editor')!)).toBe('Ctrl+K')
   })
 })
 
