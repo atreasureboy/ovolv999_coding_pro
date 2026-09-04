@@ -23,8 +23,8 @@ function contentText(content: unknown): string {
   }).join('')
 }
 
-function responseInput(messages: ProviderStreamRequest['messages']): unknown[] {
-  const input: unknown[] = []
+function responseInput(messages: ProviderStreamRequest['messages']): OpenAI.Responses.ResponseInput {
+  const input: OpenAI.Responses.ResponseInputItem[] = []
   for (const message of messages) {
     if (message.role === 'system' || message.role === 'developer') {
       // Keep array-carried system messages: the coordinator prepends
@@ -56,12 +56,20 @@ function responseInput(messages: ProviderStreamRequest['messages']): unknown[] {
       }
       continue
     }
+    if (message.role === 'function') {
+      // Legacy chat-completions-only role: no producer in this codebase,
+      // and Responses has no valid item for it without a paired
+      // function_call. Surface the text as a user message rather than
+      // dropping it or sending an item the API would 400.
+      input.push({ role: 'user', content: contentText(message.content) })
+      continue
+    }
     input.push({ role: message.role, content: contentText(message.content) })
   }
   return input
 }
 
-function responseTools(tools: ToolDefinition[]): unknown[] {
+function responseTools(tools: ToolDefinition[]): OpenAI.Responses.Tool[] {
   return tools.map((tool) => ({
     type: 'function',
     name: tool.function.name,
@@ -175,8 +183,8 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     const stream = await this.client.responses.create({
       model: req.model,
       instructions: req.systemPrompt,
-      input: responseInput(req.messages) as never,
-      tools: req.tools.length ? responseTools(req.tools) as never : undefined,
+      input: responseInput(req.messages),
+      tools: req.tools.length ? responseTools(req.tools) : undefined,
       tool_choice: req.tools.length ? 'auto' : undefined,
       max_output_tokens: req.maxOutputTokens,
       temperature: req.temperature,

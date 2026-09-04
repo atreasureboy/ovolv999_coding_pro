@@ -49,6 +49,40 @@ describe('OpenAIResponsesAdapter', () => {
     expect(chunks[2].usage?.prompt_tokens).toBe(12)
   })
 
+  it('maps every chat-completions role to a valid Responses input item', async () => {
+    let request: Record<string, unknown> | undefined
+    const client = {
+      responses: {
+        create: async (body: Record<string, unknown>) => {
+          request = body
+          return (async function* () {})()
+        },
+      },
+    }
+    const adapter = new OpenAIResponsesAdapter(client as never)
+    await adapter.stream({
+      model: 'gpt-test',
+      systemPrompt: 'system',
+      // role 'function' is legacy chat-completions vocabulary with zero
+      // producers here — but the request type admits it, and the typed
+      // builder must stay total over the union (previously papered over
+      // with `as never`, which is exactly the drift this pins).
+      messages: [
+        { role: 'system', content: '[runtime control · test]' },
+        { role: 'user', content: 'go' },
+        { role: 'function', name: 'Read', content: 'legacy tool output' },
+      ] as never,
+      tools: [],
+      maxOutputTokens: 10,
+      signal: new AbortController().signal,
+    })
+    expect(request?.input).toEqual([
+      { role: 'system', content: '[runtime control · test]' },
+      { role: 'user', content: 'go' },
+      { role: 'user', content: 'legacy tool output' },
+    ])
+  })
+
   it('translates text and failures', async () => {
     const client = {
       responses: {
