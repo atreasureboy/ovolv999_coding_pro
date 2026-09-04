@@ -58,7 +58,7 @@ registerCommand({
     }
 
     const requested = args.trim() || 'markdown'
-    const FORMATS = ['markdown', 'json', 'text'] as const
+    const FORMATS = ['markdown', 'json', 'text', 'transcript'] as const
     const format = FORMATS.find((f) => f === requested)
     if (requested && !format) {
       return text(`Unknown format "${requested}". Formats: ${FORMATS.join(', ')}`)
