@@ -474,6 +474,19 @@ export function App({
       store.toggleVerbose()
       return
     }
+
+    // Plan/permission-mode cycle (same machinery as Shift+Tab)
+    if (action === 'toggle-plan-mode' && !store.hasOverlay()) {
+      void dispatchSlash('/permissions cycle')
+      return
+    }
+
+    // Undo the most recent file edit (same path as /undo; gated on an
+    // idle turn — restoring files mid-run would interleave with the agent)
+    if (action === 'undo-edit' && !state.running) {
+      void dispatchSlash('/undo')
+      return
+    }
   })
 
   // ── Context state for StatusBar ───────────────────────────────────────────
@@ -638,6 +651,7 @@ export function App({
             skills={skills}
             history={inputHistory.current}
             cwd={cwd}
+            bindings={keybindings.bindings}
             onCopy={handleCopy}
             onComposerEmptyChange={(empty) => store.setComposerEmpty(empty)}
             terminalWidth={terminalWidth}

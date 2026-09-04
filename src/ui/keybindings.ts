@@ -339,3 +339,31 @@ export const ACTION_DESCRIPTIONS: Record<KeyAction, string> = {
   'undo-edit':        'Undo last file edit',
   'toggle-plan-mode': 'Toggle plan mode',
 }
+
+/** Actions dispatched by the composer itself. Every other action in the
+ * registry is handled by App — Ink's useInput is broadcast, so the
+ * composer must let those fall through untouched or they'd double-fire. */
+export const COMPOSER_ACTIONS: ReadonlySet<KeyAction> = new Set<KeyAction>([
+  'search-history',
+  'copy-reply',
+  'open-editor',
+  'cursor-home',
+  'cursor-end',
+  'clear-line',
+  'newline',
+])
+
+/**
+ * Resolve a key press to the composer-owned action it triggers, or null
+ * when the press is unbound or belongs to an App-dispatched action.
+ * This is what makes rebinding composer keys work: without it the
+ * composer's raw control-char checks ignore keybindings.json entirely.
+ */
+export function resolveComposerAction(
+  input: string,
+  key: { ctrl?: boolean; meta?: boolean; shift?: boolean },
+  bindings: Map<string, KeyAction>,
+): KeyAction | null {
+  const action = lookupAction(input, key, bindings)
+  return action !== null && COMPOSER_ACTIONS.has(action) ? action : null
+}

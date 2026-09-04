@@ -2277,8 +2277,8 @@ async function main(): Promise<void> {
   process.on('SIGHUP',  () => { cleanup(); process.exit(0) })
 
   // Crash handlers for non-Ink modes. The Ink REPL registers its own
-  // comprehensive set via registerCleanup(); pipe, single-shot, loop, and
-  // the vim REPL do not. Without these, an unhandled rejection (e.g. a
+  // comprehensive set via registerCleanup(); pipe, single-shot, and loop
+  // do not. Without these, an unhandled rejection (e.g. a
   // daemon socket error, a stream consumer race) would tear the process
   // down without running `cleanup()` — leaking background tasks, the tmux
   // worker, and skipping the session save. Wire them unconditionally;

@@ -12,6 +12,9 @@ import {
   DEFAULT_BINDINGS,
   ALL_KEY_ACTIONS,
   ACTION_DESCRIPTIONS,
+  COMPOSER_ACTIONS,
+  resolveComposerAction,
+  type KeyAction,
 } from '../src/ui/keybindings.js'
 
 describe('parseKeyCombo', () => {
@@ -323,5 +326,45 @@ describe('ACTION_DESCRIPTIONS', () => {
       expect(ACTION_DESCRIPTIONS[action]).toBeDefined()
       expect(ACTION_DESCRIPTIONS[action].length).toBeGreaterThan(5)
     }
+  })
+})
+
+describe('resolveComposerAction', () => {
+  const defaultKeymap = new Map<string, KeyAction>(
+    Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
+  )
+  const ctrlChar = (letter: string): string =>
+    String.fromCharCode(letter.toUpperCase().charCodeAt(0) - 64)
+
+  it('resolves the composer-owned defaults from raw control chars', () => {
+    const cases: Array<[string, KeyAction]> = [
+      [ctrlChar('r'), 'search-history'],
+      [ctrlChar('y'), 'copy-reply'],
+      [ctrlChar('g'), 'open-editor'],
+      [ctrlChar('a'), 'cursor-home'],
+      [ctrlChar('e'), 'cursor-end'],
+      [ctrlChar('u'), 'clear-line'],
+      [ctrlChar('j'), 'newline'],
+    ]
+    for (const [input, expected] of cases) {
+      expect(resolveComposerAction(input, { ctrl: true }, defaultKeymap)).toBe(expected)
+      expect(COMPOSER_ACTIONS.has(expected)).toBe(true)
+    }
+  })
+
+  it('lets App-owned actions fall through (App dispatches them)', () => {
+    expect(resolveComposerAction(ctrlChar('l'), { ctrl: true }, defaultKeymap)).toBeNull() // clear-screen
+    expect(resolveComposerAction(ctrlChar('o'), { ctrl: true }, defaultKeymap)).toBeNull() // toggle-verbose
+    expect(resolveComposerAction('?', {}, defaultKeymap)).toBeNull() // toggle-help
+    expect(resolveComposerAction('x', {}, defaultKeymap)).toBeNull() // unbound printable
+  })
+
+  it('honors a user rebinding of a composer action', () => {
+    const rebound = new Map(defaultKeymap)
+    rebound.delete('ctrl+g')
+    rebound.set('ctrl+k', 'open-editor')
+    // Old binding no longer fires; the new one does.
+    expect(resolveComposerAction(ctrlChar('g'), { ctrl: true }, rebound)).toBeNull()
+    expect(resolveComposerAction(ctrlChar('k'), { ctrl: true }, rebound)).toBe('open-editor')
   })
 })

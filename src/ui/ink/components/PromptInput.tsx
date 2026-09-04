@@ -26,6 +26,11 @@ import { prevCursor, nextCursor } from '../textCursor.js'
 import { openInEditor } from '../../../utils/editor.js'
 import { listCommands } from '../../../commands/index.js'
 import { normalizeSlashCommandInput } from '../../../commands/index.js'
+import { DEFAULT_BINDINGS, resolveComposerAction, type KeyAction } from '../../keybindings.js'
+
+const DEFAULT_KEYMAP: Map<string, KeyAction> = new Map(
+  Object.entries(DEFAULT_BINDINGS).map(([action, combo]) => [combo, action as KeyAction]),
+)
 
 export interface PromptInputProps {
   /** Called when the user presses Enter with non-empty text. */
@@ -40,6 +45,9 @@ export interface PromptInputProps {
   history: string[]
   /** Working directory for @-mention file autocomplete. */
   cwd: string
+  /** Resolved keybindings (user overrides + defaults); composer-owned
+   * actions are dispatched through this, so rebinding them works. */
+  bindings?: Map<string, KeyAction>
   /** Called when user presses Ctrl+Y (copy last reply). */
   onCopy?: () => void
   /**
@@ -66,11 +74,13 @@ export function PromptInput({
   skills,
   history,
   cwd,
+  bindings,
   onCopy,
   onComposerEmptyChange,
   terminalWidth = 80,
 }: PromptInputProps): React.ReactElement {
   const { setRawMode } = useStdin()
+  const keymap = bindings ?? DEFAULT_KEYMAP
   const [text, setText] = useState('')
   const [cursor, setCursor] = useState(0)
   const [histIdx, setHistIdx] = useState(-1)
@@ -252,20 +262,23 @@ export function PromptInput({
       return
     }
 
-    // ── Ctrl+R: reverse history search ───────────────────────────────────
-    if (input === '\x12') {
+    // ── Composer actions via the keybinding registry (rebindable) ────────
+    const action = resolveComposerAction(input, key, keymap)
+
+    // Reverse history search
+    if (action === 'search-history') {
       if (history.length > 0) setSearchMode(true)
       return
     }
 
-    // ── Ctrl+Y: copy last assistant reply ────────────────────────────────
-    if (input === '\x19') {
+    // Copy last assistant reply
+    if (action === 'copy-reply') {
       onCopy?.()
       return
     }
 
-    // ── Ctrl+G: open external editor ─────────────────────────────────────
-    if (input === '\x07') {
+    // Open external editor
+    if (action === 'open-editor') {
       // Suspend raw mode so the editor can take over the terminal
       if (setRawMode) setRawMode(false)
       const edited = openInEditor(text)
@@ -346,13 +359,13 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+A = Home, Ctrl+E = End, Ctrl+U = clear line
-    if (input === '\x01') { setCursor(0); return }
-    if (input === '\x05') { setCursor(text.length); return }
-    if (input === '\x15') { setText(''); setCursor(0); return }
+    // Home / End / clear line (rebindable via the registry)
+    if (action === 'cursor-home') { setCursor(0); return }
+    if (action === 'cursor-end') { setCursor(text.length); return }
+    if (action === 'clear-line') { setText(''); setCursor(0); return }
 
-    // Ctrl+J = newline (multi-line input)
-    if (input === '\x0a') {
+    // Newline (multi-line input)
+    if (action === 'newline') {
       const newText = text.slice(0, cursor) + '\n' + text.slice(cursor)
       setText(newText)
       setCursor(cursor + 1)
