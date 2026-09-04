@@ -109,6 +109,41 @@ describe('WorkspaceWatcherModule (P2.2)', () => {
     await module.dispose?.()
   })
 
+  it('re-arms the reminder after onComplete (per-run, not per-process)', async () => {
+    const dir = mkdtempSync(join(baseDir, 'ovogo-watcher-'))
+    dirs.push(dir)
+    const target = join(dir, 'c.txt')
+    writeFileSync(target, '1')
+
+    const module = new WorkspaceWatcherModule()
+    await module.boot(makeBootCtx(dir))
+    await waitForReady(module)
+
+    writeFileSync(target, '2')
+    await new Promise((resolve) => setTimeout(resolve, 800))
+
+    const iterCtx: ModuleIterationContext = {
+      iteration: 1,
+      messages: [],
+      abortSignal: new AbortController().signal,
+    }
+    const first = await module.onIteration?.(iterCtx)
+    expect(first?.injectMessage).toContain('workspace files changed')
+
+    // Run completes: lifecycle resets, so a NEW change in a later run is
+    // eligible for a fresh reminder.
+    module.onComplete?.(makeRunCtx())
+
+    writeFileSync(target, '3')
+    await new Promise((resolve) => setTimeout(resolve, 800))
+
+    const nextRun: ModuleIterationContext = { ...iterCtx, iteration: 1 }
+    const reArmed = await module.onIteration?.(nextRun)
+    expect(reArmed?.injectMessage).toContain('workspace files changed')
+
+    await module.dispose?.()
+  })
+
   it('appends workspace_change to eventLog onComplete', async () => {
     const dir = mkdtempSync(join(baseDir, 'ovogo-watcher-'))
     dirs.push(dir)

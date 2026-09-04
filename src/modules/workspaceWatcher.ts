@@ -153,8 +153,7 @@ export class WorkspaceWatcherModule implements AgentModule {
   }
 
   onComplete(ctx: ModuleRunContext): void {
-    if (this.lastChanges.length === 0) return
-    if (ctx.eventLog) {
+    if (ctx.eventLog && this.lastChanges.length > 0) {
       ctx.eventLog.append(
         'workspace_change',
         'workspace_watcher',
@@ -166,6 +165,12 @@ export class WorkspaceWatcherModule implements AgentModule {
         },
       )
     }
+    // Per-run lifecycle: without this reset the reminder fired at most
+    // once per PROCESS (injectedForRun was never cleared), and the sample
+    // kept mixing in changes from earlier runs.
+    this.lastChanges = []
+    this.lastChangeAt = 0
+    this.injectedForRun = false
   }
 
   async dispose(): Promise<void> {
