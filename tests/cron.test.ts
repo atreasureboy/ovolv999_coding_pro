@@ -18,7 +18,7 @@ import {
   formatTaskDetail,
   type ScheduledTask,
 } from '../src/core/cron.js'
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -258,77 +258,77 @@ describe('cron', () => {
       expect(task.nextRun).toBeNull()
     })
 
-    it('addTask persists to disk', () => {
+    it('addTask persists to disk', async () => {
       const task = createTask('test', '0 9 * * *', 'run tests')
-      addTask(tmpDir, task)
+      await addTask(tmpDir, task)
       const store = loadSchedules(tmpDir)
       expect(store.tasks.length).toBe(1)
     })
 
-    it('removeTask by id', () => {
+    it('removeTask by id', async () => {
       const task = createTask('test', '0 9 * * *', 'run tests')
-      addTask(tmpDir, task)
-      expect(removeTask(tmpDir, task.id)).toBe(true)
+      await addTask(tmpDir, task)
+      expect(await removeTask(tmpDir, task.id)).toBe(true)
       expect(loadSchedules(tmpDir).tasks.length).toBe(0)
     })
 
-    it('removeTask by name', () => {
+    it('removeTask by name', async () => {
       const task = createTask('test', '0 9 * * *', 'run tests')
-      addTask(tmpDir, task)
-      expect(removeTask(tmpDir, 'test')).toBe(true)
+      await addTask(tmpDir, task)
+      expect(await removeTask(tmpDir, 'test')).toBe(true)
       expect(loadSchedules(tmpDir).tasks.length).toBe(0)
     })
 
-    it('removeTask returns false for unknown', () => {
-      expect(removeTask(tmpDir, 'nonexistent')).toBe(false)
+    it('removeTask returns false for unknown', async () => {
+      expect(await removeTask(tmpDir, 'nonexistent')).toBe(false)
     })
 
-    it('enableTask', () => {
+    it('enableTask', async () => {
       const task = createTask('test', '0 9 * * *', 'run tests')
       task.enabled = false
-      addTask(tmpDir, task)
-      expect(enableTask(tmpDir, 'test')).toBe(true)
+      await addTask(tmpDir, task)
+      expect(await enableTask(tmpDir, 'test')).toBe(true)
       const store = loadSchedules(tmpDir)
       expect(store.tasks[0].enabled).toBe(true)
     })
 
-    it('disableTask', () => {
+    it('disableTask', async () => {
       const task = createTask('test', '0 9 * * *', 'run tests')
-      addTask(tmpDir, task)
-      expect(disableTask(tmpDir, 'test')).toBe(true)
+      await addTask(tmpDir, task)
+      expect(await disableTask(tmpDir, 'test')).toBe(true)
       const store = loadSchedules(tmpDir)
       expect(store.tasks[0].enabled).toBe(false)
     })
 
-    it('enableTask returns false for unknown', () => {
-      expect(enableTask(tmpDir, 'unknown')).toBe(false)
+    it('enableTask returns false for unknown', async () => {
+      expect(await enableTask(tmpDir, 'unknown')).toBe(false)
     })
 
-    it('getDueTasks returns enabled tasks with past nextRun', () => {
+    it('getDueTasks returns enabled tasks with past nextRun', async () => {
       const task = createTask('past', '@every 1s', 'do thing')
       // Force nextRun to be in the past
       task.nextRun = new Date(Date.now() - 60000).toISOString()
-      addTask(tmpDir, task)
+      await addTask(tmpDir, task)
 
       const due = getDueTasks(tmpDir)
       expect(due.length).toBe(1)
       expect(due[0].name).toBe('past')
     })
 
-    it('getDueTasks excludes disabled tasks', () => {
+    it('getDueTasks excludes disabled tasks', async () => {
       const task = createTask('disabled', '@every 1s', 'do thing')
       task.enabled = false
       task.nextRun = new Date(Date.now() - 60000).toISOString()
-      addTask(tmpDir, task)
+      await addTask(tmpDir, task)
 
       expect(getDueTasks(tmpDir).length).toBe(0)
     })
 
-    it('markTaskRun updates lastRun and nextRun', () => {
+    it('markTaskRun updates lastRun and nextRun', async () => {
       const task = createTask('test', '0 9 * * *', 'do thing')
-      addTask(tmpDir, task)
+      await addTask(tmpDir, task)
 
-      markTaskRun(tmpDir, task.id, 'result text')
+      await markTaskRun(tmpDir, task.id, 'result text')
 
       const store = loadSchedules(tmpDir)
       const updated = store.tasks[0]
@@ -344,16 +344,16 @@ describe('cron', () => {
       expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
     })
 
-    it('round-trips data', () => {
+    it('round-trips data', async () => {
       const store = { tasks: [createTask('t1', '0 9 * * *', 'p1')] }
-      saveSchedules(tmpDir, store)
+      await saveSchedules(tmpDir, store)
       const loaded = loadSchedules(tmpDir)
       expect(loaded.tasks.length).toBe(1)
       expect(loaded.tasks[0].name).toBe('t1')
     })
 
-    it('creates .ovolv999 directory', () => {
-      saveSchedules(tmpDir, { tasks: [] })
+    it('creates .ovolv999 directory', async () => {
+      await saveSchedules(tmpDir, { tasks: [] })
       expect(existsSync(join(tmpDir, '.ovolv999'))).toBe(true)
     })
 
@@ -361,6 +361,70 @@ describe('cron', () => {
       mkdirSync(join(tmpDir, '.ovolv999'), { recursive: true })
       writeFileSync(join(tmpDir, '.ovolv999', 'schedules.json'), 'not json{')
       expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
+    })
+
+    it('preserves a corrupt store verbatim before resetting', () => {
+      const dir = join(tmpDir, '.ovolv999')
+      const path = join(dir, 'schedules.json')
+      const backup = join(dir, 'schedules.json.corrupt')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path, 'not json{')
+
+      expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
+      expect(existsSync(backup)).toBe(true)
+      expect(readFileSync(backup, 'utf8')).toBe('not json{')
+
+      // The store is writable again afterwards.
+      return saveSchedules(tmpDir, { tasks: [createTask('after', '0 9 * * *', 'p')] }).then(() => {
+        expect(loadSchedules(tmpDir).tasks[0].name).toBe('after')
+        // The forensic backup survives later saves.
+        expect(readFileSync(backup, 'utf8')).toBe('not json{')
+      })
+    })
+
+    it('treats a shape-violating store as corrupt (tasks not an array)', () => {
+      const dir = join(tmpDir, '.ovolv999')
+      const path = join(dir, 'schedules.json')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path, '{"tasks": null}')
+
+      expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
+      expect(readFileSync(join(dir, 'schedules.json.corrupt'), 'utf8')).toBe('{"tasks": null}')
+    })
+
+    it('treats an entry missing read-path fields as corrupt', () => {
+      const dir = join(tmpDir, '.ovolv999')
+      const path = join(dir, 'schedules.json')
+      mkdirSync(dir, { recursive: true })
+      // id/name/cron/prompt/enabled/runCount are dereferenced unguarded by
+      // formatTaskList — a half-written entry must not load.
+      writeFileSync(path, '{"tasks":[{"id":"x"}]}')
+
+      expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
+      expect(existsSync(join(dir, 'schedules.json.corrupt'))).toBe(true)
+    })
+
+    it('loads an entry that only omits display-only fields', () => {
+      const dir = join(tmpDir, '.ovolv999')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'schedules.json'),
+        '{"tasks":[{"id":"i","name":"n","cron":"0 9 * * *","prompt":"p","enabled":true,"runCount":0}]}',
+      )
+      const store = loadSchedules(tmpDir)
+      expect(store.tasks.length).toBe(1)
+      expect(store.tasks[0].id).toBe('i')
+    })
+
+    it('never clobbers an existing corrupt backup', () => {
+      const dir = join(tmpDir, '.ovolv999')
+      const backup = join(dir, 'schedules.json.corrupt')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(backup, 'first corruption')
+
+      writeFileSync(join(dir, 'schedules.json'), 'second corruption{')
+      expect(loadSchedules(tmpDir)).toEqual({ tasks: [] })
+      expect(readFileSync(backup, 'utf8')).toBe('first corruption')
     })
   })
 

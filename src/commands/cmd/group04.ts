@@ -166,7 +166,7 @@ registerCommand({
   name: 'schedule',
   aliases: ['cron'],
   description: 'Manage scheduled tasks. Usage: /schedule [list|create <cron> <prompt>|remove <id>|enable <id>|disable <id>]',
-  handler: (args, ctx) => {
+  handler: async (args, ctx) => {
     const parts = args.trim().split(/\s+/)
     const subcommand = parts[0] ?? 'list'
 
@@ -204,28 +204,47 @@ registerCommand({
 
       const name = `task_${Date.now().toString(36)}`
       const task = createTask(name, cronExpr, prompt)
-      addTask(ctx.cwd, task)
+      try {
+        await addTask(ctx.cwd, task)
+      } catch (err) {
+        return text(`✗ Schedule store error: ${(err as Error).message}`)
+      }
       return text(`✓ Scheduled task created: ${name}\n  Cron: ${cronExpr}\n  Prompt: "${prompt}"\n  Next: ${task.nextRun ?? 'N/A'}`)
     }
 
     if (subcommand === 'remove' || subcommand === 'delete' || subcommand === 'rm') {
       const id = parts[1]
       if (!id) return text('Usage: /schedule remove <id or name>')
-      const success = removeTask(ctx.cwd, id)
+      let success: boolean
+      try {
+        success = await removeTask(ctx.cwd, id)
+      } catch (err) {
+        return text(`✗ Schedule store error: ${(err as Error).message}`)
+      }
       return text(success ? `✓ Removed task: ${id}` : `⚠ Task not found: ${id}`)
     }
 
     if (subcommand === 'enable') {
       const id = parts[1]
       if (!id) return text('Usage: /schedule enable <id or name>')
-      const success = enableTask(ctx.cwd, id)
+      let success: boolean
+      try {
+        success = await enableTask(ctx.cwd, id)
+      } catch (err) {
+        return text(`✗ Schedule store error: ${(err as Error).message}`)
+      }
       return text(success ? `✓ Enabled task: ${id}` : `⚠ Task not found: ${id}`)
     }
 
     if (subcommand === 'disable') {
       const id = parts[1]
       if (!id) return text('Usage: /schedule disable <id or name>')
-      const success = disableTask(ctx.cwd, id)
+      let success: boolean
+      try {
+        success = await disableTask(ctx.cwd, id)
+      } catch (err) {
+        return text(`✗ Schedule store error: ${(err as Error).message}`)
+      }
       return text(success ? `✓ Disabled task: ${id}` : `⚠ Task not found: ${id}`)
     }
 

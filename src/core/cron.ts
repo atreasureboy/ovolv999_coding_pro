@@ -16,8 +16,10 @@
  * Special: @hourly, @daily, @weekly, @monthly, @yearly, @every <duration>
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { copyFileSync, existsSync, readFileSync } from 'fs'
 import { join, resolve } from 'path'
+
+import { atomicWrite } from './atomicWrite.js'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -306,20 +308,59 @@ export function loadSchedules(cwd: string): ScheduleStore {
   if (!existsSync(path)) {
     return { tasks: [] }
   }
+  let raw: string
   try {
-    const raw = readFileSync(path, 'utf8')
-    return JSON.parse(raw) as ScheduleStore
+    raw = readFileSync(path, 'utf8')
   } catch {
+    return { tasks: [] }
+  }
+  try {
+    const parsed = JSON.parse(raw) as { tasks?: unknown } | null
+    if (!parsed || !Array.isArray(parsed.tasks)) {
+      throw new Error('store shape violation')
+    }
+    if (!parsed.tasks.every(isShapedTask)) {
+      throw new Error('store shape violation')
+    }
+    return { tasks: parsed.tasks.filter(isShapedTask) }
+  } catch {
+    preserveCorruptStore(path)
     return { tasks: [] }
   }
 }
 
-export function saveSchedules(cwd: string, store: ScheduleStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  writeFileSync(getSchedulesPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+/** Fields the read paths dereference without guarding (formatTaskList does
+ *  `prompt.slice`, getDueTasks reads `enabled`/`nextRun`). An entry missing
+ *  any of them makes the whole store unusable — it fails the shape gate and
+ *  the file is preserved as corrupt rather than partially loaded. */
+function isShapedTask(t: unknown): t is ScheduledTask {
+  if (t === null || typeof t !== 'object') return false
+  const task = t as Partial<ScheduledTask>
+  return typeof task.id === 'string'
+    && typeof task.name === 'string'
+    && typeof task.cron === 'string'
+    && typeof task.prompt === 'string'
+    && typeof task.enabled === 'boolean'
+    && typeof task.runCount === 'number'
+}
+
+/**
+ * Runtime truth contract §schedule-store: schedules.json holds real user
+ * data. A store that fails to parse or violates the shape is preserved
+ * verbatim at schedules.json.corrupt before the store resets to empty —
+ * silently swapping an unreadable store for an empty one destroys the only
+ * copy of the task list. First corruption wins: the backup is never
+ * clobbered by a later corrupt state.
+ */
+function preserveCorruptStore(path: string): void {
+  const backup = `${path}.corrupt`
+  try {
+    if (!existsSync(backup)) copyFileSync(path, backup)
+  } catch { /* best-effort — a failed backup must not break the reader */ }
+}
+
+export async function saveSchedules(cwd: string, store: ScheduleStore): Promise<void> {
+  await atomicWrite(getSchedulesPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── Task Management ─────────────────────────────────────────────────────────
@@ -356,36 +397,36 @@ export function createTask(
   }
 }
 
-export function addTask(cwd: string, task: ScheduledTask): void {
+export async function addTask(cwd: string, task: ScheduledTask): Promise<void> {
   const store = loadSchedules(cwd)
   store.tasks.push(task)
-  saveSchedules(cwd, store)
+  await saveSchedules(cwd, store)
 }
 
-export function removeTask(cwd: string, idOrName: string): boolean {
+export async function removeTask(cwd: string, idOrName: string): Promise<boolean> {
   const store = loadSchedules(cwd)
   const before = store.tasks.length
   store.tasks = store.tasks.filter(t => t.id !== idOrName && t.name !== idOrName)
   if (store.tasks.length === before) return false
-  saveSchedules(cwd, store)
+  await saveSchedules(cwd, store)
   return true
 }
 
-export function enableTask(cwd: string, idOrName: string): boolean {
+export async function enableTask(cwd: string, idOrName: string): Promise<boolean> {
   const store = loadSchedules(cwd)
   const task = store.tasks.find(t => t.id === idOrName || t.name === idOrName)
   if (!task) return false
   task.enabled = true
-  saveSchedules(cwd, store)
+  await saveSchedules(cwd, store)
   return true
 }
 
-export function disableTask(cwd: string, idOrName: string): boolean {
+export async function disableTask(cwd: string, idOrName: string): Promise<boolean> {
   const store = loadSchedules(cwd)
   const task = store.tasks.find(t => t.id === idOrName || t.name === idOrName)
   if (!task) return false
   task.enabled = false
-  saveSchedules(cwd, store)
+  await saveSchedules(cwd, store)
   return true
 }
 
@@ -401,7 +442,7 @@ export function getDueTasks(cwd: string, now: Date = new Date()): ScheduledTask[
   })
 }
 
-export function markTaskRun(cwd: string, id: string, result: string): void {
+export async function markTaskRun(cwd: string, id: string, result: string): Promise<void> {
   const store = loadSchedules(cwd)
   const task = store.tasks.find(t => t.id === id)
   if (!task) return
@@ -423,7 +464,7 @@ export function markTaskRun(cwd: string, id: string, result: string): void {
     task.nextRun = null
   }
 
-  saveSchedules(cwd, store)
+  await saveSchedules(cwd, store)
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
