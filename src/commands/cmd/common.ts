@@ -8,14 +8,11 @@
  * require rarely-used modules at dispatch time to keep CLI startup lean.
  * The pattern is intentional; these rules would fire on every require.
  */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access,
-   @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+ 
 
 
-import { createRequire } from 'node:module'
 import type { OpenAIMessage } from '../../core/types.js'
-
-const require = createRequire(import.meta.url)
+import { loadProfiles } from '../../core/profiles.js'
 
 export function previewMessage(msg: OpenAIMessage, max: number): string {
   const raw = typeof msg.content === 'string'
@@ -39,5 +36,5 @@ export function truncate(s: string, max: number): string {
 }
 
 export function loadProfilesRaw(cwd: string) {
-  return require('../../core/profiles.js').loadProfiles(cwd)
+  return loadProfiles(cwd)
 }

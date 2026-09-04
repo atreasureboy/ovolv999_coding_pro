@@ -16,6 +16,7 @@
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { getCommand, registerCommand } from '../index.js'
+import { formatCacheStats, getCacheStats, resetCacheStats, checkCacheHealth, formatCacheWarning } from '../../utils/cacheStats.js'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { text } from '../shared.js'
@@ -26,26 +27,25 @@ registerCommand({
   name: 'cache',
   description: 'Prompt cache statistics. Usage: /cache [stats | reset | health]',
   handler: (args) => {
-    const cs = require('../../utils/cacheStats.js') as typeof import('../../utils/cacheStats.js')
     const parts = args.trim().split(/\s+/)
     const sub = parts[0] ?? 'stats'
 
     if (sub === 'stats') {
-      return text(cs.formatCacheStats(cs.getCacheStats()))
+      return text(formatCacheStats(getCacheStats()))
     }
 
     if (sub === 'reset') {
-      cs.resetCacheStats()
+      resetCacheStats()
       return text('Cache statistics reset.')
     }
 
     if (sub === 'health') {
-      const warning = cs.checkCacheHealth()
+      const warning = checkCacheHealth()
       if (!warning) return text('Cache health: OK')
-      return text(cs.formatCacheWarning(warning))
+      return text(formatCacheWarning(warning))
     }
 
-    return text(cs.formatCacheStats(cs.getCacheStats()))
+    return text(formatCacheStats(getCacheStats()))
   },
 })
 

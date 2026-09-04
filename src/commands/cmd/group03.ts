@@ -8,11 +8,10 @@
  * require rarely-used modules at dispatch time to keep CLI startup lean.
  * The pattern is intentional; these rules would fire on every require.
  */
-/* eslint-disable @typescript-eslint/consistent-type-imports,
-   @typescript-eslint/no-unsafe-member-access,
-   @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/consistent-type-imports */
 
 
+import { homedir } from 'os'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
@@ -561,7 +560,7 @@ registerCommand({
     initBuiltinPlugins()
 
     if (subcommand === 'list' || subcommand === '' || !subcommand) {
-      const home = require('os').homedir() as string
+      const home = homedir()
       const registry = loadPlugins(ctx.cwd, home)
       return text(formatPluginList(registry))
     }

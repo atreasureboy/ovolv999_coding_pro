@@ -8,16 +8,13 @@
  * require rarely-used modules at dispatch time to keep CLI startup lean.
  * The pattern is intentional; these rules would fire on every require.
  */
-/* eslint-disable @typescript-eslint/consistent-type-imports,
-   @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment,
-   @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument,
-   @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/consistent-type-imports */
 
 
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { existsSync } from 'fs'
 import { text } from '../shared.js'
 import { loadProfilesRaw } from './common.js'
@@ -294,7 +291,7 @@ registerCommand({
     if (sub === 'file') {
       const filePath = parts[1]
       if (!filePath) return text('Usage: /metrics file <path>')
-      const resolved = require('path').resolve(ctx.cwd, filePath)
+      const resolved = resolve(ctx.cwd, filePath)
       const m = analyzeFile(resolved)
       if (!m) return text('File not found')
       return text(formatFileMetrics(m))
@@ -303,14 +300,14 @@ registerCommand({
     if (sub === 'health') {
       const filePath = parts[1]
       if (!filePath) return text('Usage: /metrics health <path>')
-      const resolved = require('path').resolve(ctx.cwd, filePath)
+      const resolved = resolve(ctx.cwd, filePath)
       const m = analyzeFile(resolved)
       if (!m) return text('File not found')
       return text(formatHealthAssessment(assessHealth(m)))
     }
 
     if (sub === 'project') {
-      const paths = parts.slice(1).map((p: string) => require('path').resolve(ctx.cwd, p))
+      const paths = parts.slice(1).map((p: string) => resolve(ctx.cwd, p))
       if (paths.length === 0) return text('Usage: /metrics project <file1> [file2...]')
       const metrics = analyzeProjectFiles(paths)
       return text(formatProjectMetrics(metrics))

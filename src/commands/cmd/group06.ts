@@ -8,9 +8,7 @@
  * require rarely-used modules at dispatch time to keep CLI startup lean.
  * The pattern is intentional; these rules would fire on every require.
  */
-/* eslint-disable @typescript-eslint/consistent-type-imports,
-   @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment,
-   @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/consistent-type-imports */
 
 
 import { createRequire } from 'node:module'
@@ -18,6 +16,7 @@ const require = createRequire(import.meta.url)
 import { registerCommand } from '../index.js'
 import type { WorkerEntry } from '../../core/daemon.js'
 import type { DocSectionType } from '../../core/magicDocs.js'
+import { resolve } from 'path'
 import { readHiddenLine, text } from '../shared.js'
 
 // ── /effort ─────────────────────────────────────────────────────────────────
@@ -98,7 +97,7 @@ registerCommand({
       const file = parts[1]
       if (!file) return text('Usage: /team-memory add <file-path>')
       const config = loadTeamConfig() ?? { remoteUrl: '', files: [] }
-      const resolved = require('path').resolve(ctx.cwd, file)
+      const resolved = resolve(ctx.cwd, file)
       if (!config.files.includes(resolved)) {
         config.files.push(resolved)
         saveTeamConfig(config)
