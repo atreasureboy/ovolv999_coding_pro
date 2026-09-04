@@ -82,7 +82,7 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
       // successive messages on one connection must see prior turns. A
       // fresh engine per message made every prompt a context-free
       // single turn — inconsistent with every other transport.
-      let engine: { runTurn: ExecutionEngine['runTurn']; dispose?: () => void } | null = null
+      let engine: ExecutionEngine | null = null
       const history: OpenAIMessage[] = []
 
       const handlers: ACPHandlers = {
@@ -119,6 +119,14 @@ export async function startAcpWebSocketServer(opts: AcpWsCliOptions): Promise<vo
         onInterrupt,
         onFileRead,
         onFileWrite,
+        onCost: () => {
+          const tracker = engine?.getCostTracker()
+          return {
+            inputTokens: tracker?.getTotalInputTokens() ?? 0,
+            outputTokens: tracker?.getTotalOutputTokens() ?? 0,
+            totalCost: tracker?.getTotalCost() ?? 0,
+          }
+        },
       }
 
       const acpServer = new ACPServer(handlers, {
