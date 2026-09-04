@@ -168,9 +168,14 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
 - ~~P2.9 夜间审计轮(Rounds 29-33,2026-09-04)~~ → **已完成(10 commits,2111c51..301fc3e)**:
   - 损坏保全扩展:ssh-profiles(name/host shape 门)、team-memory config
     (`/team-memory add` 是 load??default→save 的销毁路径)、ignored-versions
-    三处接入 preserveCorruptFile + atomicWriteSync。JSON 全量重写型 store 的
-    "损坏→静默空→下次保存销毁" 缺陷类已全库扫尽(剩余候选均为 JSONL 逐行
-    容忍契约/线协议解析/只读聚合,逐一核实)
+    三处接入 preserveCorruptFile + atomicWriteSync
+  - 损坏保全扩展(round 2,c86654b):按持久化 .json 路径逐一枚举(而非按
+    catch 代码模式 grep — profiles.ts 的对象字面量默认值因此逃过首轮)再查出
+    六处:snapshots / bookmarks / timers / command-history / knowledge /
+    profiles.json 全部 shape 门 + preserveCorruptFile + atomicWriteSync。
+    **全库 JSON 全量重写型 store 的销毁路径至此穷尽**(判定方法:枚举所有
+    `getXxxPath` 指向的 .json,逐一核对 load/save 配对;剩余 .json 均为
+    JSONL 逐行容忍契约/线协议解析/只读聚合/linter 配置)
   - **HookInput 协议补全**:HOOK_EVENTS 9 事件 vs HookInput 联合只建模 5 个 —
     SessionEnd/Stop/PreCompact/PostCompact 输入此前经 buildInput `as HookInput`
     强转;4 个 bare member 入联合,defaultRunner 删除 buildInput(10 站点全
