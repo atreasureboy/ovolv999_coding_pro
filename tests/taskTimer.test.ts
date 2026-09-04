@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  startTimer, stopTimer, pauseTimer, resumeTimer, removeTimer, getTimer,
+  startTimer, stopTimer, pauseTimer, resumeTimer, removeTimer, getTimer, loadTimers,
   getElapsedMs,
   getRunningTimers, getStoppedTimers, getAllTimers, getTimersByCategory,
   getTimerStats,
   formatDuration, formatTimer, formatTimerList, formatTimerStats,
 } from '../src/core/taskTimer.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -302,5 +302,33 @@ describe('Task Timer', () => {
       expect(out).toContain('By tag')
       expect(out).toContain('#review')
     })
+  })
+})
+
+describe('timer store corruption guard', () => {
+  let cwd: string
+  beforeEach(() => { cwd = makeTempDir() })
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store before resetting, and timers still work', () => {
+    const path = join(cwd, '.ovolv999', 'timers.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"timers": [{"id": "torn"}', 'utf8')
+
+    expect(loadTimers(cwd)).toEqual({ timers: [] })
+    expect(readFileSync(backup, 'utf8')).toBe('{"timers": [{"id": "torn"}')
+
+    startTimer(cwd, 'after-crash')
+    expect(loadTimers(cwd).timers.length).toBe(1)
+    expect(readFileSync(backup, 'utf8')).toBe('{"timers": [{"id": "torn"}')
+  })
+
+  it('treats an entry missing read-path fields as corrupt', () => {
+    const path = join(cwd, '.ovolv999', 'timers.json')
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"timers": [{"id": "x"}]}', 'utf8')
+    expect(loadTimers(cwd)).toEqual({ timers: [] })
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })

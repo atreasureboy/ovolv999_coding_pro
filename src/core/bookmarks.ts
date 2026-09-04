@@ -8,7 +8,8 @@
  * and jump back to it later.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve, relative, isAbsolute } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -52,18 +53,28 @@ export function loadBookmarks(cwd: string): BookmarkStore {
     return { bookmarks: [] }
   }
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as BookmarkStore
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as BookmarkStore
+    if (!isShapedBookmarkStore(parsed)) throw new Error('bookmark store shape violation')
+    return parsed
   } catch {
+    // §bookmark store: preserve the corrupt bytes before resetting — CRUD
+    // is load→mutate→save, so the next add would destroy every bookmark.
+    preserveCorruptFile(path)
     return { bookmarks: [] }
   }
 }
 
+function isShapedBookmarkStore(parsed: unknown): parsed is BookmarkStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const bookmarks = (parsed as BookmarkStore).bookmarks
+  if (!Array.isArray(bookmarks)) return false
+  return bookmarks.every((b) =>
+    typeof b === 'object' && b !== null &&
+    typeof b.id === 'string' && typeof b.path === 'string' && typeof b.line === 'number')
+}
+
 export function saveBookmarks(cwd: string, store: BookmarkStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  writeFileSync(getBookmarksPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getBookmarksPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────

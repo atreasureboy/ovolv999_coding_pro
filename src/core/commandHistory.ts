@@ -8,7 +8,8 @@
  * .ovolv999/command-history.json (project-level).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 
@@ -64,18 +65,26 @@ export function loadHistory(path: string): HistoryStore {
   }
   try {
     const raw = readFileSync(path, 'utf8')
-    return JSON.parse(raw) as HistoryStore
+    const parsed = JSON.parse(raw) as HistoryStore
+    if (!isShapedHistoryStore(parsed)) throw new Error('command history shape violation')
+    return parsed
   } catch {
+    preserveCorruptFile(path)
     return { entries: [] }
   }
 }
 
+function isShapedHistoryStore(parsed: unknown): parsed is HistoryStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const entries = (parsed as HistoryStore).entries
+  if (!Array.isArray(entries)) return false
+  return entries.every((e) =>
+    typeof e === 'object' && e !== null &&
+    typeof e.text === 'string' && typeof e.timestamp === 'string')
+}
+
 export function saveHistory(path: string, store: HistoryStore): void {
-  const dir = resolve(path, '..')
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  writeFileSync(path, JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(path, JSON.stringify(store, null, 2))
 }
 
 // ── Entry Management ────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ import {
   getBookmarksPath,
   
 } from '../src/core/bookmarks.js'
-import { mkdtempSync, rmSync, existsSync } from 'fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -297,5 +297,33 @@ describe('Bookmark System', () => {
       const out = formatBookmarkStats(store)
       expect(out).toContain('Total visits: 2')
     })
+  })
+})
+
+describe('bookmark store corruption guard', () => {
+  let cwd: string
+  beforeEach(() => { cwd = makeTempDir() })
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store before resetting, and bookmarks still work', () => {
+    const path = join(cwd, '.ovolv999', 'bookmarks.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"bookmarks": [{"id": "torn"}', 'utf8')
+
+    expect(loadBookmarks(cwd)).toEqual({ bookmarks: [] })
+    expect(readFileSync(backup, 'utf8')).toBe('{"bookmarks": [{"id": "torn"}')
+
+    addBookmark(cwd, '/tmp/a.ts', 12, 'note-a')
+    expect(getBookmarksByFile(cwd, '/tmp/a.ts').length).toBe(1)
+    expect(readFileSync(backup, 'utf8')).toBe('{"bookmarks": [{"id": "torn"}')
+  })
+
+  it('treats an entry missing read-path fields as corrupt', () => {
+    const path = join(cwd, '.ovolv999', 'bookmarks.json')
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"bookmarks": [{"id": "x"}]}', 'utf8')
+    expect(loadBookmarks(cwd)).toEqual({ bookmarks: [] })
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })

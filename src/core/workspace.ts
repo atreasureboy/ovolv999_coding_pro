@@ -5,7 +5,8 @@
  * Captures: open files, git state, todos, env vars, custom metadata.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 import { execSync } from 'child_process'
 
@@ -52,16 +53,30 @@ export function loadSnapshots(cwd: string): SnapshotStore {
   const path = getSnapshotPath(cwd)
   if (!existsSync(path)) return { snapshots: [] }
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as SnapshotStore
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as SnapshotStore
+    // §snapshot store: id/name/files/todos are dereferenced unguarded by the
+    // formatters — a half-written store must not load, or the next
+    // create/remove replaces every snapshot.
+    if (!isShapedSnapshotStore(parsed)) throw new Error('snapshot store shape violation')
+    return parsed
   } catch {
+    preserveCorruptFile(path)
     return { snapshots: [] }
   }
 }
 
+function isShapedSnapshotStore(parsed: unknown): parsed is SnapshotStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const snapshots = (parsed as SnapshotStore).snapshots
+  if (!Array.isArray(snapshots)) return false
+  return snapshots.every((s) =>
+    typeof s === 'object' && s !== null &&
+    typeof s.id === 'string' && typeof s.name === 'string' &&
+    Array.isArray(s.files) && Array.isArray(s.todos))
+}
+
 export function saveSnapshots(cwd: string, store: SnapshotStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(getSnapshotPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getSnapshotPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── Git State ───────────────────────────────────────────────────────────────

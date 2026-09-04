@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  createSnapshot, removeSnapshot, getSnapshot, listSnapshots,
+  createSnapshot, removeSnapshot, getSnapshot, listSnapshots, loadSnapshots,
   updateSnapshot, addFileToSnapshot, addTodoToSnapshot, toggleTodoInSnapshot,
   diffSnapshots,
   formatSnapshot, formatSnapshotList, formatSnapshotDiff,
   getGitState,
   type WorkspaceSnapshot,
 } from '../src/core/workspace.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -312,5 +312,33 @@ describe('Workspace Snapshot Manager', () => {
       const out = formatSnapshotDiff(diff, 'v1', 'v2')
       expect(out).toContain('No changes')
     })
+  })
+})
+
+describe('snapshot store corruption guard', () => {
+  let cwd: string
+  beforeEach(() => { cwd = makeTempDir() })
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store before resetting, and snapshots still work', () => {
+    const path = join(cwd, '.ovolv999', 'snapshots.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"snapshots": [{"id": "torn"}', 'utf8')
+
+    expect(loadSnapshots(cwd)).toEqual({ snapshots: [] })
+    expect(readFileSync(backup, 'utf8')).toBe('{"snapshots": [{"id": "torn"}')
+
+    createSnapshot(cwd, 'after-crash')
+    expect(getSnapshot(cwd, 'after-crash')).not.toBeNull()
+    expect(readFileSync(backup, 'utf8')).toBe('{"snapshots": [{"id": "torn"}')
+  })
+
+  it('treats an entry missing formatter fields as corrupt', () => {
+    const path = join(cwd, '.ovolv999', 'snapshots.json')
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '{"snapshots": [{"id": "x"}]}', 'utf8')
+    expect(loadSnapshots(cwd)).toEqual({ snapshots: [] })
+    expect(existsSync(`${path}.corrupt`)).toBe(true)
   })
 })

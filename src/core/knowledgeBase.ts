@@ -13,7 +13,8 @@
  * Stored in .ovolv999/knowledge.json
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -66,18 +67,28 @@ export function loadKnowledge(cwd: string): KnowledgeStore {
   }
   try {
     const raw = readFileSync(path, 'utf8')
-    return JSON.parse(raw) as KnowledgeStore
+    const parsed = JSON.parse(raw) as KnowledgeStore
+    if (!isShapedKnowledgeStore(parsed)) throw new Error('knowledge store shape violation')
+    return parsed
   } catch {
+    // §knowledge store: preserve the corrupt bytes before resetting — the
+    // /knowledge extract/add cycle rewrites the whole file.
+    preserveCorruptFile(path)
     return { entries: [] }
   }
 }
 
+function isShapedKnowledgeStore(parsed: unknown): parsed is KnowledgeStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const entries = (parsed as KnowledgeStore).entries
+  if (!Array.isArray(entries)) return false
+  return entries.every((e) =>
+    typeof e === 'object' && e !== null &&
+    typeof e.id === 'string' && typeof e.key === 'string' && typeof e.value === 'string')
+}
+
 export function saveKnowledge(cwd: string, store: KnowledgeStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  writeFileSync(getKnowledgePath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getKnowledgePath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── CRUD Operations ─────────────────────────────────────────────────────────

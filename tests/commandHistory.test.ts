@@ -14,7 +14,7 @@ import {
   getProjectHistoryPath,
   type HistoryStore,
 } from '../src/core/commandHistory.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -334,5 +334,26 @@ describe('commandHistory', () => {
     it('getProjectHistoryPath returns a path', () => {
       expect(getProjectHistoryPath('/test')).toContain('command-history.json')
     })
+  })
+})
+
+describe('command history corruption guard', () => {
+  it('preserves a corrupt history before resetting, and recording still works', () => {
+    const path = join(tmpdir(), `hist-corrupt-${Date.now().toString(36)}.json`)
+    try {
+      const backup = `${path}.corrupt`
+      mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true })
+      writeFileSync(path, '{"entries": [{"text": "torn"}', 'utf8')
+
+      expect(loadHistory(path)).toEqual({ entries: [] })
+      expect(readFileSync(backup, 'utf8')).toBe('{"entries": [{"text": "torn"}')
+
+      addEntry(path, 'npm test', 'prompt')
+      expect(loadHistory(path).entries.length).toBe(1)
+      expect(readFileSync(backup, 'utf8')).toBe('{"entries": [{"text": "torn"}')
+    } finally {
+      rmSync(path, { force: true })
+      rmSync(`${path}.corrupt`, { force: true })
+    }
   })
 })

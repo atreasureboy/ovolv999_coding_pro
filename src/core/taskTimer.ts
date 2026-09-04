@@ -5,7 +5,8 @@
  * Persisted to .ovolv999/timers.json.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { atomicWriteSync, preserveCorruptFile } from './atomicWrite.js'
 import { join, resolve } from 'path'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -45,16 +46,28 @@ export function loadTimers(cwd: string): TimerStore {
   const path = getTimerPath(cwd)
   if (!existsSync(path)) return { timers: [] }
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as TimerStore
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as TimerStore
+    if (!isShapedTimerStore(parsed)) throw new Error('timer store shape violation')
+    return parsed
   } catch {
+    // §timer store: preserve the corrupt bytes before resetting — timers
+    // accumulate tracked time that a silent reset would destroy.
+    preserveCorruptFile(path)
     return { timers: [] }
   }
 }
 
+function isShapedTimerStore(parsed: unknown): parsed is TimerStore {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+  const timers = (parsed as TimerStore).timers
+  if (!Array.isArray(timers)) return false
+  return timers.every((t) =>
+    typeof t === 'object' && t !== null &&
+    typeof t.id === 'string' && typeof t.name === 'string' && typeof t.running === 'boolean')
+}
+
 export function saveTimers(cwd: string, store: TimerStore): void {
-  const dir = join(resolve(cwd), '.ovolv999')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(getTimerPath(cwd), JSON.stringify(store, null, 2), 'utf8')
+  atomicWriteSync(getTimerPath(cwd), JSON.stringify(store, null, 2))
 }
 
 // ── Timer Operations ────────────────────────────────────────────────────────

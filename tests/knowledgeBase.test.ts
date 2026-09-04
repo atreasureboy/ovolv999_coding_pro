@@ -15,7 +15,7 @@ import {
   CATEGORY_ICONS,
   type KnowledgeCategory,
 } from '../src/core/knowledgeBase.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -305,5 +305,25 @@ describe('knowledgeBase', () => {
         expect(CATEGORY_ICONS[cat].length).toBeGreaterThan(0)
       }
     })
+  })
+})
+
+describe('knowledge store corruption guard', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'kb-corrupt-')) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  it('preserves a corrupt store before resetting, and entries still work', () => {
+    const path = join(dir, '.ovolv999', 'knowledge.json')
+    const backup = `${path}.corrupt`
+    mkdirSync(join(dir, '.ovolv999'), { recursive: true })
+    writeFileSync(path, '{"entries": [{"id": "torn"}', 'utf8')
+
+    expect(loadKnowledge(dir)).toEqual({ entries: [] })
+    expect(readFileSync(backup, 'utf8')).toBe('{"entries": [{"id": "torn"}')
+
+    addEntry(dir, 'general', 'after-crash', 'value')
+    expect(loadKnowledge(dir).entries.length).toBe(1)
+    expect(readFileSync(backup, 'utf8')).toBe('{"entries": [{"id": "torn"}')
   })
 })
