@@ -202,7 +202,10 @@ registerCommand({
         return text(`Invalid cron expression: ${(err as Error).message}`)
       }
 
-      const name = `task_${Date.now().toString(36)}`
+      // The name doubles as a removal/enable handle, so it must be unique —
+      // two creates in the same millisecond would otherwise collide and a
+      // remove-by-name would take out both tasks.
+      const name = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`
       const task = createTask(name, cronExpr, prompt)
       try {
         await addTask(ctx.cwd, task)
