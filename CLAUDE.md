@@ -10,7 +10,7 @@ TypeScript 5.7 strict ESM,Node ≥ 20,~82k 行 src,测试套件全绿。运行�
 openai / glob / zod / ink / react(零原生依赖是硬约束,保 `curl|sh` 安装,见 ADR-006)。
 定位是 **Agent 基础设施**:统一 Harness + 配置驱动角色(无 agent_type)+ 模块注入,零领域绑定。
 当前版本:**0.6.1**(package.json / CHANGELOG / VERSION / README 一致)。
-> 本 CLAUDE.md 最后核实: 2026-09-03 (v0.6.1;Rounds 6-14 + 夜间审计 Rounds 17-22 完成)。
+> 本 CLAUDE.md 最后核实: 2026-09-04 (v0.6.1;Rounds 6-14 + 夜间审计 Rounds 17-28 完成)。
 
 v0.6.1 关键不变量(延续 v0.5.3):
 
@@ -143,6 +143,28 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
   - Evidence revision 真实化:`bumpRevision()` 由 coordinator 在工具批次改变 filesChanged 时调用;getValidEvidence 只认当前 revision;stale 分支可达(complete_node 拒绝过期证据)
   - 疑问句意图:`QUESTION_LEAD`(英文疑问开头)抑制 mutation 关键词误分类;isInterrogativeLead 门控 analysis 验证催逼与 post-loop execution-verification 准则("how do I configure X" 不再被要求改文件/跑命令;中文 怎么/如何 保持 imperative)
   - StatusBar 死 props 移除(7 个不再渲染的 props);/vim stub 删除(Round 26 已删引擎,stub 谎称 Ctrl+\);命令别名折叠(aliasOf,listCommands 143→93);CLAUDE.md/README/AGENTS vim 与命令数漂移收敛
+- ~~P2.8 夜间审计轮(Rounds 23-28,2026-09-04)~~ → **已完成(8 commits,483fe84..9c9f5ad)**:
+  - Responses 传输类型化:`responseInput`/`responseTools` 以 SDK 真实类型约束,暴露并修复
+    隐藏的 legacy `role:'function'` 无映射缺口(无 producer,降级为 user 消息而非 API 400);
+    CriterionStatus 不可达的 `'waived'` 移除(taskPlan filter/reviewer/测试三处)
+  - Schedule store 加固:`saveSchedules` 走 canonical atomicWrite(async 化,唯一生产消费方
+    /schedule handler 本就支持 Promise);损坏的 schedules.json 先保全到 `.corrupt` 再清空
+    (首次损坏优先,备份永不覆盖);entry 缺读路径字段(formatTaskList 裸解引用 `prompt.slice`)
+    整文件判损坏,不做静默部分加载
+  - **atomicWriteSync 收敛**:async atomicWrite 的 sync 孪生(唯一 tmp/部分写循环/fd chmod+
+    fsync 先于 rename/符号链接 write-through/模式保留/失败无残留);迁移 8 个手写站点:
+    settings.saveSettings(原无 fsync,家族最弱)、saveGlobalProvider(裸 writeFileSync 写全局
+    provider 配置)、mcpOAuth token store(重写保持 0600 不再暴露默认权限窗口)、keychain
+    vault、budget store、inputHistory 压缩、ACP `write` RPC(外部 IDE 写文件获得与
+    FileWriteTool 同级崩溃安全)、fileHistory index/sidecar/redoIndex(restore 保留定制——
+    需显式 mode 覆盖)。sessionManager.saveSession 有意保留定制(.bak+ledger 编排)。
+    遥测/导出/临时文件保持裸写(自愈或一次性)
+  - **损坏保全统一**:`preserveCorruptFile`(atomicWrite.ts)统一"损坏→静默空→下次保存销毁"
+    缺陷类的读侧防御;mcpOAuth.loadTokenStore(token 全毁→逐 server 重新 OAuth)与
+    budget.loadBudgetStore(usage 历史+周期重置)接入;tokens 数组 shape 校验+单条容错。
+    semanticMemory 按 JSONL 逐行容忍契约不动;inputHistory 只追加无销毁路径
+  - 类型真相:生产代码最后一个 `as any`(/snippet list filter)替换为真实类型;
+    deadCodeCheck cast 审计归零
 
 **路由信号状态(2026-08-05 核实)**:
 - `repoFileCount`:已真实化 — v0.5.3 移除 `filesTouched×10` 代理,现使用 `RepoStatsService.walkRepo()` 真实文件系统遍历
