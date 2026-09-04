@@ -245,6 +245,31 @@ Critic 风险门控(宣称完成+未达标→block)→ Loop 的 **Driver/Model �
   - teamMemory 清理(d1c2c8e):loadMemoryFiles 每文件读盘两次(内容+hash)
     改单次;readTeamMemoryFile 零调用方删除。**权威枚举复检**:全部
     `JSON.parse(readFileSync)` 27 处逐一复核,round 3 覆盖确认完整
+- ~~P2.12 Ink 按键形态收敛(Rounds 47-49,2026-09-04)~~ → **已完成(5 commits,4c733d9..43a4167)**:
+  - **Ink ctrl 组合键形态真相(4c733d9,经验证)**:Ink `use-input.js` 上报
+    `input = keypress.ctrl ? keypress.name : keypress.sequence` — ctrl 组合
+    到达 handler 时是**字母 + key.ctrl**(ctrl+l → input='l'),不是原始控制
+    字节。matchCtrlCombo 只认控制字节(\x0c)→ **生产环境全部 ctrl 绑定
+    (clear-screen/verbose/exit/undo/plan-mode/全部 composer 键)是死的**,
+    而单测喂原始字节全绿 — 测试测的是 Ink 永不产生的形态。ctrl+j 特例:
+    终端把该键物理发为 LF 字节('\n',parse-keypress 命名 'enter',无 ctrl
+    flag),故 ctrl+j ⟺ '\n'。现两种形态都匹配;'\n' 字节恒插入换行
+    (字节本身无歧义,重绑后亦然);App 的死 '\x04' 检查删除。
+    **教训:涉及 Ink useInput 的测试必须用 Ink 变换后的形态**
+  - **HistorySearchOverlay 键盘独占(e106f02)**:该 overlay 渲染在
+    PromptInput **内部**,而 useInput 广播给所有挂载 hook — 搜索打开时每次
+    击键被处理两次:字符同时进 query 和 composer、Enter 同时选中匹配和
+    经 handleSubmit 提交搜索前草稿、↑↓ 移动选中项同时经 history 导航重写
+    composer。现 searchMode 时 PromptInput 让出键盘。(其余 overlay 安全:
+    App 在其渲染期间卸载 composer)。同 commit:overlay 的 "Ctrl+R=next"
+    检查原始 \x12 字节,从未生效 — 改 Ink 字母形态
+  - editor.ts 清理(37ece1f):`unlinkSync(tmpDir)` 对目录抛 EISDIR 被
+    best-effort catch 吞掉 → 每次 Ctrl+G 泄漏一个 /tmp 临时目录;改
+    rmSync(recursive, force)
+  - 帮助卡与提示行绑定感知(32f9280, 43a4167):HelpOverlay 此前硬编码全部
+    键名,重绑后即漂移;现经新增 formatCombo/actionToCombo 从 App 装载的
+    bindings 派生,并补上从未列出的 undo-edit/toggle-plan-mode;composer
+    多行提示行同步派生(未绑定时不再显示任何键名)
     (loopSupervisor lease 读失败→null 是正确的租约语义,非销毁路径)
 
 **路由信号状态(2026-08-05 核实)**:
