@@ -18,6 +18,7 @@ import { promisify } from 'util'
 import type { Tool, ToolContext, ToolDefinition, ToolResult } from '../core/types.js'
 import type { ResourceClaim } from '../core/executionRun.js'
 import { str } from '../core/strings.js'
+import { shellQuote } from '../utils/shellQuote.js'
 
 const exec = promisify(execCb)
 
@@ -36,16 +37,11 @@ async function tmux(args: string): Promise<string> {
 /** Check if a tmux session exists */
 async function sessionExists(name: string): Promise<boolean> {
   try {
-    await exec(`tmux has-session -t ${shellEsc(name)} 2>/dev/null`)
+    await exec(`tmux has-session -t ${shellQuote(name)} 2>/dev/null`)
     return true
   } catch {
     return false
   }
-}
-
-/** Shell-escape a single argument (wrap in single quotes, escape internal single quotes) */
-function shellEsc(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`
 }
 
 /** Whitelist of tmux key names accepted by the `keys` action.
@@ -174,10 +170,10 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
     try {
       if (command) {
         // new-session -d (detached), -s name, then run command in the shell
-        await tmux(`new-session -d -s ${shellEsc(name)}`)
-        await tmux(`send-keys -t ${shellEsc(name)} ${shellEsc(command)} Enter`)
+        await tmux(`new-session -d -s ${shellQuote(name)}`)
+        await tmux(`send-keys -t ${shellQuote(name)} ${shellQuote(command)} Enter`)
       } else {
-        await tmux(`new-session -d -s ${shellEsc(name)}`)
+        await tmux(`new-session -d -s ${shellQuote(name)}`)
       }
 
       return {
@@ -214,10 +210,10 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
       // Split into chunks to avoid paste overflow
       const chunks = chunkText(text)
       for (const chunk of chunks) {
-        await tmux(`send-keys -t ${shellEsc(name)} -l -- ${shellEsc(chunk)}`)
+        await tmux(`send-keys -t ${shellQuote(name)} -l -- ${shellQuote(chunk)}`)
       }
       // Send Enter separately
-      await tmux(`send-keys -t ${shellEsc(name)} Enter`)
+      await tmux(`send-keys -t ${shellQuote(name)} Enter`)
 
       return {
         content: `Sent to "${name}": ${text.length > 80 ? text.slice(0, 80) + '…' : text}\nUse capture to see output.`,
@@ -245,7 +241,7 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
     }
 
     try {
-      await tmux(`send-keys -t ${shellEsc(name)} ${key}`)
+      await tmux(`send-keys -t ${shellQuote(name)} ${key}`)
       return { content: `Sent key "${key}" to "${name}".`, isError: false }
     } catch (e) {
       return { content: `Failed to send keys to "${name}": ${(e as Error).message}`, isError: true }
@@ -268,10 +264,10 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
       let output: string
       if (lines === 0) {
         // Full history
-        output = await tmux(`capture-pane -t ${shellEsc(name)} -p -S -`)
+        output = await tmux(`capture-pane -t ${shellQuote(name)} -p -S -`)
       } else {
         // Last N lines — capture only what we need (avoid pulling full history)
-        output = await tmux(`capture-pane -t ${shellEsc(name)} -p -S -${lines}`)
+        output = await tmux(`capture-pane -t ${shellQuote(name)} -p -S -${lines}`)
       }
 
       return {
@@ -329,7 +325,7 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
       }
 
       try {
-        const raw = await tmux(`capture-pane -t ${shellEsc(name)} -p -S -`)
+        const raw = await tmux(`capture-pane -t ${shellQuote(name)} -p -S -`)
         lastOutput = raw
 
         if (regex.test(raw)) {
@@ -418,7 +414,7 @@ TmuxSession({ action: "capture", session: "py", lines: 5 })
     }
 
     try {
-      await tmux(`kill-session -t ${shellEsc(name)}`)
+      await tmux(`kill-session -t ${shellQuote(name)}`)
       return { content: `Session "${name}" killed.`, isError: false }
     } catch (e) {
       return { content: `Failed to kill "${name}": ${(e as Error).message}`, isError: true }
