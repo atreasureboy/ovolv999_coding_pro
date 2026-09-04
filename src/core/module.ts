@@ -12,6 +12,7 @@
  *   onComplete()  — called after the engine loop finishes
  */
 
+import type { MemoryCandidate } from './memoryCandidate.js'
 import type OpenAI from 'openai'
 import type { Tool, ToolContext, ToolResult, OpenAIMessage, TurnResult, EngineConfig } from './types.js'
 import type { TurnOutcome } from './runtime/turnOutcome.js'
@@ -188,6 +189,6 @@ export interface MemoryModuleControl {
     sourceRunId?: string
     verified?: boolean
   }): void
-  publishCandidateSink(runId: string, sink: (c: import('./memoryCandidate.js').MemoryCandidate) => void): void
+  publishCandidateSink(runId: string, sink: (c: MemoryCandidate) => void): void
   closeCandidateSink(runId: string): void
 }

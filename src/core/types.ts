@@ -1,5 +1,6 @@
 // Core types for ovolv999 execution engine
 
+import type { ReasoningRequestOptions } from './model/reasoningTransform.js'
 import type { EventLog } from './eventLog.js'
 import type { SemanticMemory } from './semanticMemory.js'
 import type { EpisodicMemory } from './episodicMemory.js'
@@ -568,7 +569,7 @@ export interface EngineConfig {
    * translated per provider by the adapter layer (effort/budget/disable).
    * Undefined = provider defaults.
    */
-  reasoning?: import('./model/reasoningTransform.js').ReasoningRequestOptions
+  reasoning?: ReasoningRequestOptions
   /**
    * Continuation nudging — when the LLM stops (finish_reason=stop) but output
    * token budget remains, inject a "continue" nudge instead of completing.

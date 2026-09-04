@@ -14,6 +14,7 @@
  * to UIStore for display state, and drives the engine via async turn execution.
  */
 
+import type { ExecutionEngine } from '../../core/engine.js'
 import { Text, Box, Static, useApp, useInput, useStdout } from 'ink'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
@@ -58,7 +59,7 @@ export function safeTerminalWidth(columns: number | undefined): number {
 export interface AppProps {
   store: UIStore
   /** Round 48: engine access for `!` bash passthrough (tool execution). */
-  engine?: import('../../core/engine.js').ExecutionEngine
+  engine?: ExecutionEngine
   _version: string
   model: string
   skills: Array<{ name: string; description: string }>

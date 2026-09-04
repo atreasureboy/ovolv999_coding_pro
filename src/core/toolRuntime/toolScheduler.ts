@@ -73,7 +73,7 @@ export function partitionToolCalls(calls: ParsedToolCall[], tools?: Tool[], cwd?
     // claims() is model-input-derived and must never be able to kill the run:
     // a throw here escapes schedule() with NO tool result for ANY call in the
     // batch. Failure degrades to [] (documented serial fallback).
-    let claims: ResourceClaim[] = []
+    let claims: ResourceClaim[]
     try {
       claims = tool?.metadata?.claims ? tool.metadata.claims(call.input) : []
     } catch {
@@ -193,7 +193,7 @@ export class ToolScheduler {
     // Same containment as partitionToolCalls: a throwing claims() degrades
     // to no-claims (serial) instead of escaping before acquire(). Keys are
     // canonicalized identically so the gate agrees with the partition plan.
-    let claims: ResourceClaim[] = []
+    let claims: ResourceClaim[]
     try {
       claims = tool?.metadata?.claims ? tool.metadata.claims(input) : []
     } catch {

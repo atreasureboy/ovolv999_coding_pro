@@ -21,7 +21,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
-import { RunEventEmitter } from '../core/runtime/events.js'
+import type { RunEventEmitter } from '../core/runtime/events.js'
 import { listSessionsDetailed, resolveSessionPath, loadSessionEnvelope } from '../core/sessionManager.js'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'

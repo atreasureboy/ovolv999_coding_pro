@@ -20,6 +20,7 @@
  *                       (functional loading is unchanged).
  */
 
+import type { ReasoningRequestOptions } from '../core/model/reasoningTransform.js'
 import { join } from 'path'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
@@ -30,11 +31,11 @@ import { tmpdir, homedir } from 'os'
  *   OVOGO_REASONING_BUDGET=<tokens>   (anthropic-style thinking budget)
  * Invalid values are ignored (warn-once style) — never fatal.
  */
-function parseReasoningEnv(): import('../core/model/reasoningTransform.js').ReasoningRequestOptions | undefined {
+function parseReasoningEnv(): ReasoningRequestOptions | undefined {
   const effortRaw = process.env.OVOGO_REASONING?.trim().toLowerCase()
   const budgetRaw = process.env.OVOGO_REASONING_BUDGET
   if (!effortRaw && !budgetRaw) return undefined
-  const opts: import('../core/model/reasoningTransform.js').ReasoningRequestOptions = {}
+  const opts: ReasoningRequestOptions = {}
   if (effortRaw === 'off' || effortRaw === 'none' || effortRaw === 'disabled') {
     opts.enabled = false
   } else if (effortRaw === 'minimal' || effortRaw === 'low' || effortRaw === 'medium' || effortRaw === 'high') {
